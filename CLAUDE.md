@@ -19,6 +19,21 @@ python docs/build_gallery.py --ucrm9 <coarse run deck> --mystran tools/mystran-1
 .venv/Scripts/python -m sphinx -W -b html docs docs/_build/html   # docs site (pip install -r docs/requirements.txt into .venv)
 ```
 
+## Skills
+
+Project skills in `.claude/skills/` hold the task workflows. Load the matching one before you start:
+
+| Task | Skill |
+|---|---|
+| Deck → `.vtm`/VTKHDF, fields (`--derive/--map/--calc`), `stats`, model mass/CG/load sets | `converting-nastran-decks` (its `summary.py` prints a `.vtm`'s root summary) |
+| Screenshots, `render`/`view`, cameras, custom pvpython scripts | `rendering-nastran-views` |
+| Comparing runs or meshes, the SQLite run store | `comparing-nastran-runs` |
+| Missing mass/MID, "(partial)" arrays, empty views, import or locate errors | `troubleshooting-nastran-models` |
+| Code changes: new card, block, array, view, flag or format | `extending-nastran-pv` |
+| Gallery assets, Sphinx site, `sphinx -W` failures | `regenerating-nastran-gallery` |
+
+## Data
+
 The real datasets live in gitignored folders at the repo root: `gpk4zn73xn-1/` (uCRM-9, shells)
 and `Linderholt_Files_v2/` (solid models). They are used for manual verification only. Tests use
 the synthetic decks in `tests/data/` or tables and decks written to `tmp_path`. The expected values
@@ -48,6 +63,8 @@ free of pytest imports). pytest gets `src` on its path from `pyproject.toml`, so
   - `README.md` is only the front page.
   - When you change CLI flags, views, plugin proxies, blocks/arrays or output formats, update the
     matching doc in the same change (the sync table in `development.md` maps code to doc).
+- `.claude/skills/`: the project skills listed under Skills. When a workflow, CLI flag or gotcha
+  changes, update the skill that quotes it in the same change.
 - Root: no generated output and no datasets. Scratch output goes to `out/` or `shots/` (both
   gitignored).
 
