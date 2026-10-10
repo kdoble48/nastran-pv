@@ -29,7 +29,8 @@ points within one block and know nothing about RBEs, bushes or MPCs.
 | Interactivity | Live panel controls with Auto Apply, plus one-click toolbar macros that seed from the ParaView selection | The user's choice. Live picking (no click) would need a C++/Qt plugin |
 | Liveness | Graph cached per input MTime; control changes re-run only the BFS or components | Slider and checkbox changes must feel instant |
 | Path | Included | Selection seeding makes it a two-click feature |
-| Out of v1 | Feature-angle stops; unreferenced grids; CWELD/CFAST patch forms | A different graph; not present in VTK blocks; complex card layouts |
+| Selection seeding | Macros read the selected EIDs/NIDs and write them into the filter's Seed IDs (or From/To grid) | A `Seeds` input port wired from a selection made on the filter's own output would be a pipeline cycle; values work from any downstream object |
+| Out of v1 | Feature-angle stops; unreferenced grids; CFAST patch form; CWELD (pyNastran 1.4.1 cannot read it) | A different graph; not present in VTK blocks; complex card layouts |
 
 ## Components
 
@@ -42,15 +43,20 @@ Legs for the connections that are not built today, as `vtkPolyData` lines:
 | MPC | First term's grid (dependent) → each other term's grid |
 | CELAS1/2, CDAMP1/2 | GA → GB. Grounded (no GB) is skipped: it connects nothing |
 | CGAP | GA → GB |
-| CWELD, CFAST | GA → GB for the point-to-point forms. Patch forms (ELPAT/PARTPAT/ELEM/PROP) are skipped with a `Deck.warnings` entry |
+| CFAST | GA → GB when both are given. The patch form (no GA/GB) is skipped with a `Deck.warnings` entry |
+| CWELD | Not drawn: pyNastran 1.4.1 rejects the card. The builder warns with the count from `model.card_count` |
 
-- Arrays: cell `EID ConnectorType DOF` (DOF is the component code where the card has one, else 0),
-  point `NID`; field `ConnectorTypeNames`.
+- Arrays: cell `EID ConnectorType DOF PID` (DOF is the component code where the card has one, else
+  0; PID is 0 where the card has none), point `NID`; field `ConnectorTypeNames`.
 - `CONNECTOR_TYPES` is a new global code table in `categories.py`, so `ConnectorType` gets indexed
   colors like `RigidType`.
-- Legs referencing unknown grids are dropped with one aggregated warning, as in `rigid.py`.
-- MPCs are listed per MPC set. All sets are drawn; a `MPCSet` cell array records the set id.
-- `BushLines` gains a `NID` point array, so CBUSH legs join the graph.
+- Legs referencing unknown grids (or scalar points) are dropped with one aggregated warning, as in
+  `rigid.py`.
+- All MPC sets are drawn. An MPC has no element id, so MPC legs carry their set id in `EID`; EID
+  seeds skip MPC legs, so a set id never collides with an element id.
+- `BushLines` gains a `NID` point array and a `PID` cell array, so CBUSH legs join the graph and
+  PID rules apply to them.
+- `store.py` resolves `ConnectorType` through `ConnectorTypeNames`, like `RigidType`.
 - `assemble.Options` gains `connectors=True`; the block sits after `Rigid` in the multiblock.
 
 ### 2. `topology.py`: graph and rules
@@ -104,30 +110,33 @@ result object (counts and warnings) for the CLI.
   block and point arrays on the point-only blocks. With `extract=True` it returns a new multiblock
   holding only reached cells (through `vtkExtractCells`), leaving the input intact.
 - **`parts(mb, rules)`**: writes `PartId` cell and point arrays. Parts are the connected components
-  of the masked graph, numbered by cell count, largest first. Cells excluded by the rules get
-  `PartId` −1. Root field tables:
-  - `PartSummary`: `PartId Cells Grids Mass PIDs`. Mass sums `ElementMass` over the part's cells
-    and `Mass` over the `Masses` points on its grids. `PIDs` is a string column.
-  - `PartLinks`: `EID CardType PartA PartB`, one row per excluded cell whose grids touch two or
-    more different parts (one row per part pair). This is the part-to-part graph.
+  of the masked graph, numbered by cell count, largest first, ties by the first cell in block
+  order. Cells excluded by the rules get `PartId` −1. Root field tables, stored as prefixed column
+  arrays like `MAT_*`:
+  - `PartSummary` (`PART_Id PART_Cells PART_Grids PART_Mass PART_PIDs`). Mass sums `ElementMass`
+    over the part's cells and `Mass` over the `Masses` points on its grids. `PART_PIDs` is a
+    string column of the part's PIDs above 0.
+  - `PartLinks` (`LINK_EID LINK_CardType LINK_PartA LINK_PartB`), one row per excluded element
+    whose grids touch two or more different parts (one row per part pair). This is the
+    part-to-part graph.
 - **`path(mb, grid_a, grid_b, rules)`**: the shortest path in the bipartite graph
   (`scipy.sparse.csgraph.shortest_path` with predecessors, from one source). Writes `OnPath` cell and
   point arrays (1 or 0) and root field `PathLength` in elements (−1 when unreachable, with a
   warning).
 - **`check(mb, rules, tol=1e-6, checks=ALL)`**: returns a new multiblock of findings plus a
-  `CheckSummary` root table (`Check Count Severity`):
+  `CheckSummary` root table (`CHECK_Name CHECK_Count CHECK_Severity`):
 
 | Check | Severity | Output block |
 |---|---|---|
-| `FreeEdges` | error | Shell boundary edges (`vtkFeatureEdges`, boundary edges only) as lines |
+| `FreeEdges` | info | Shell boundary edges (`vtkFeatureEdges`, boundary edges only) as lines |
 | `FreeFaces` | info | Solid boundary faces (`vtkDataSetSurfaceFilter` on `Solids`) |
-| `CoincidentGrids` | error | Points with `NID OtherNID Distance`; pairs of distinct NIDs closer than `tol` × model diagonal (`scipy.spatial.cKDTree`) |
-| `DuplicateElements` | error | Cells with `EID DuplicateOf`; cells in one block with the same sorted grid set |
-| `DanglingConnectors` | error | Legs from `Rigid`, `BushLines` or `Connectors` whose far grid touches no mesh cell, mass or SPC |
+| `CoincidentGrids` | error | Points with `NID OtherNID Distance`; pairs of distinct NIDs closer than `tol` × model diagonal (`scipy.spatial.cKDTree`), except pairs joined directly by a rigid, bush or connector leg (zero-length springs are normal) |
+| `DuplicateElements` | error | Cells with `EID DuplicateOf`; cells in one mesh block (`Shells`, `Solids`, `Lines`) with the same sorted grid set |
+| `DanglingConnectors` | error | Rigid, bush or connector legs with a grid that nothing else uses: no other element, mass, SPC or load |
 | `FloatingParts` | info | Cells of each part (under `rules`) with no SPC grid, with `PartId` |
 
-  Info checks never fail `--strict`: free faces are normal, and floating parts are expected for
-  free-free modal runs.
+  Info checks never fail `--strict`: plate boundaries are free edges, free faces are normal, and
+  floating parts are expected for free-free modal runs.
 
 ### 4. ParaView plugin (`paraview/nastran_bdf_reader.py`)
 
@@ -137,9 +146,12 @@ Four new proxies built on a shared `_TopologyFilter` base, as `_FieldFilter` is 
 
 **Shared "Traversal" property group** (Grow, Parts, Path; Model check uses it for `FloatingParts`):
 
-- **Card types**: a `@smproperty.dataarrayselection` checklist, all checked by default. Unchecked
-  types form `exclude`. Preferred: list only card types present in the input. Fallback if a
-  filter cannot populate the list from upstream data: the full static list from `categories.py`.
+- **Card types**: a `@smproperty.dataarrayselection` checklist, all checked by default, listing
+  only the card types present in the input. Unchecked types form `exclude`. Verified in pvpython
+  6.0: a filter can fill the list in `RequestInformation` from the input's existing data object
+  (the reader has always run by then in the GUI), and unchecking an entry re-runs the filter.
+- The shared setters live in one `_Traversal` holder and are copied into each proxy class by a
+  class decorator, because ParaView's proxy generator only reads a class's own `__dict__`.
 - **Group toggles**: Shells, Solids, Lines, Rigid, Bushes, Connectors checkboxes; a cell is allowed
   only if both its group and its card type are checked.
 - **Exclude PIDs** (text) and **Stay within seed PIDs** (checkbox).
@@ -147,33 +159,39 @@ Four new proxies built on a shared `_TopologyFilter` base, as `_FieldFilter` is 
 
 Filter-specific properties:
 
-- Grow: **Seed IDs** text (`EID 1001 1002; GRID 55; PID 7`), **Extract reached** checkbox, and an
-  optional second input port `Seeds` (any dataset with `NID` or `EID` arrays) that overrides the
-  text when connected.
-- Path: **From grid**, **To grid**, and the same optional `Seeds` port (its first two NIDs).
-- Model check: a checkbox per check and a **Tolerance** field.
+- Grow: **Seed IDs** text (`EID 1001 1002; GRID 55; PID 7`) and an **Extract reached** checkbox.
+- Path: **From grid** and **To grid**.
+- Parts: output 1 is the `PartSummary` table and output 2 the `PartLinks` table.
+- Model check: a checkbox per check and a **Tolerance** field; output 1 is the `CheckSummary`
+  table.
 
 Each filter caches its `Graph` keyed on the input's MTime, so changing a control re-runs only the
 operation. Target: one slider step under 0.2 s on uCRM-9.
 
 ### 5. Views and macros (`paraview/nastran_views.py`, `install_macros.py`)
 
-- Views `parts` (`PartId` through `index_colors`), `grow` (colored by `Hops`; unreached cells
-  translucent gray) and `check` (model translucent gray; each findings block highlighted; the
-  `CheckSummary` table in a spreadsheet view).
-- Macros "Grow from selection" and "Path from selection": take the active selection on the active
-  source, create or update `NPV Seeds [<reader>]` (Extract Selection), and wire it to
-  `NPV Grow [<reader>]` or `NPV Path [<reader>]`. Clicking again reuses both, so panel settings
-  survive. With no selection, the macro creates the filter with an empty seed and says so.
-- Plus macros for the three views, like the existing ones.
+- Views `parts` (indexed `PartId` colors, excluded connectors gray), `grow` (reached cells colored
+  by `Hops` over a translucent gray model), `path` (path cells highlighted over a translucent gray
+  model) and `check` (model translucent gray; each findings block in its own color; the
+  `CheckSummary` counts as on-screen text, with the full table on the filter's second output).
+- Macros "Grow from Selection" and "Path from Selection": run Extract Selection on the active
+  source with the active selection (verified in pvpython 6.0), fetch the selected `EID`s (cell
+  selection) or `NID`s (point selection), delete the temporary extract, and write the ids into
+  `NPV grow [<reader>]` Seed IDs or `NPV path [<reader>]` From/To grid, then apply the view.
+  Because ids are values, the selection can be made on any object, including the grow view's own
+  output. Path needs exactly two selected grids. With no selection the macro reports what to do.
+- Plus macros for the `parts`, `grow` and `check` views, like the existing ones.
+- Gallery: `parts` and `check` on uCRM-9 and the demo deck. `grow` and `path` need seeds, so they
+  stay out of the gallery.
 
 ### 6. CLI and Python API
 
 - `nastran_pv.topology` exports `Graph`, `Rules`, `grow`, `parts`, `path`, `check`.
 - `nastran-pv check <deck|.vtm> [--rules TEXT] [--tol 1e-6] [-o out/check.vtm] [--strict]` prints
   `CheckSummary`. Exit code 1 under `--strict` when any error-severity check is non-zero.
-- `convert` (and therefore `store add`) gains `--parts [RULES]` and `--grow SEEDS` with
-  `--rules TEXT`. `stats --by PartId` then works on the output.
+- The shared field options (`convert`, `stats`, `store add`) gain `--parts`, `--grow SEEDS` and
+  `--rules TEXT` (used by both). They run after `--map` and before `--calc`, so `--calc` can use
+  `PartId` or `Hops`. `stats --by PartId` then works.
 
 ## Error handling
 
@@ -204,19 +222,21 @@ operation. Target: one slider step under 0.2 s on uCRM-9.
   - read-back from a written `.vtm`, where codes come from `*TypeNames`
 - **`tests/test_cli.py`**: `check` output and `--strict` exit codes; `convert --parts/--grow`.
 - **`tests/pv_smoke.py`**:
-  - each proxy through its properties
-  - the checklist population probe
-  - both macros with a programmatic selection
-  - the three views
+  - each proxy through its properties, including the card-type checklist contents
+  - both macros with a programmatic selection (`QuerySelect`)
+  - the four views
   - a timing print for a slider step
 
-## Verify first in the plan
+## Verified during planning (pvpython 6.0)
 
-1. Whether a Python filter's `dataarrayselection` can be populated from upstream data (and when
-   the panel refreshes). Decides the checklist versus the static-list fallback.
-2. How ParaView 6's Extract Selection takes the active selection from Python
-   (`ExtractSelection(Input=src)` versus copying `GetSelectionInput`).
-3. BFS and components timing on uCRM-9 with the cached graph.
+1. A filter's `dataarrayselection` fills from the input's data object in `RequestInformation`
+   once upstream has run, and unchecking an entry re-runs the filter (with a `ModifiedEvent`
+   observer on the `vtkDataArraySelection`). The GUI panel refresh is checked by hand in the
+   final task.
+2. `ExtractSelection(Input=src)` picks up the active selection; `e.Selection =
+   src.GetSelectionInput(src.Port)` re-seeds an existing extract.
+3. Still open: BFS and components timing on uCRM-9 with the cached graph (measured in the final
+   task).
 
 ## Docs and skills
 
@@ -226,7 +246,7 @@ operation. Target: one slider step under 0.2 s on uCRM-9.
   `PartSummary PartLinks CheckSummary` tables; CELAS/CDAMP removed from "Not visualized yet".
 - `cli.md`: `check`, `--parts`, `--grow`, `--rules`.
 - `development.md` sync table: the new module and proxies.
-- Gallery: `parts`, `grow` and `check` entries on uCRM-9 and the demo deck.
+- Gallery: `parts` and `check` entries on uCRM-9 and the demo deck.
 - Skills: `converting-nastran-decks` (new flags), `troubleshooting-nastran-models` (use `check` for
   disconnected-model symptoms), `extending-nastran-pv` (the `CONNECTOR_TYPES` table and the
   topology filters).
