@@ -79,11 +79,12 @@ def main():
     check(lut.InterpretValuesAsCategories == 1 and "PID 11" in list(lut.Annotations),
           f"index_colors -> {list(lut.Annotations)[:8]}")
 
-    import scene_export as se
+    import importlib.util
 
-    try:
-        import trame_vtk  # noqa: F401  (vendored by install_deps.py --site)
-    except ImportError:
+    import scene_export as se  # puts paraview/_vendor on sys.path
+
+    has_trame = importlib.util.find_spec("trame_vtk") is not None  # vendored by install_deps.py --site
+    if not has_trame:
         print("skip: scene export (python paraview/install_deps.py --site)")
     else:
         sview = pv.CreateRenderView()
