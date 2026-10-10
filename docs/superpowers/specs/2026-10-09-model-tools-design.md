@@ -131,7 +131,7 @@ result object (counts and warnings) for the CLI.
 | `FreeEdges` | info | Shell boundary edges (`vtkFeatureEdges`, boundary edges only) as lines |
 | `FreeFaces` | info | Solid boundary faces (`vtkDataSetSurfaceFilter` on `Solids`) |
 | `CoincidentGrids` | error | Points with `NID OtherNID Distance`; pairs of distinct NIDs closer than `tol` × model diagonal (`scipy.spatial.cKDTree`), except pairs tied by one rigid, bush or connector element (zero-length springs and bolt spiders are normal) |
-| `DuplicateElements` | error | Cells with `EID DuplicateOf`; cells in one mesh block (`Shells`, `Solids`, `Lines`) with the same sorted grid set |
+| `DuplicateElements` | error | Cells with `EID DuplicateOf`; cells in one mesh block (`Shells`, `Solids`, `Lines`) with the same card type, PID and sorted grid set (parallel rod/damper pairs and stacked doublers are intentional) |
 | `DanglingConnectors` | error | Rigid, bush or connector legs with a grid that nothing else uses: no other element, mass, SPC or load. The hub of a multi-leg spider (the grid in every leg, e.g. a bolt's RBE2 center) is exempt |
 | `FloatingParts` | info | Cells of each part (under `rules`) with no SPC grid, with `PartId` |
 

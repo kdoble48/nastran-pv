@@ -69,7 +69,8 @@ nastran-pv stats out/parts.vtm --by PartId --field ElementMass
 
 Path finds the shortest element path between two grids under the rules. It writes `OnPath` (1 on
 the path) cell and point arrays and the root `PathLength` in elements (−1 when there is none). It
-is available from Python and ParaView.
+is available from Python and ParaView. With `max_hops=N` the far grid must be within N hops, as
+in grow from the first grid (at most N + 1 elements).
 
 ## Model check
 
@@ -83,7 +84,7 @@ nastran-pv check run.bdf --strict -o out/findings.vtm  # exit 1 on errors; findi
 | `FreeEdges` | info | Shell boundary edges. Plate boundaries are free edges; a free edge inside a panel is an unmerged seam. |
 | `FreeFaces` | info | Solid boundary faces. Clip the model to see interior cracks. |
 | `CoincidentGrids` | error | Distinct grids closer than `--tol` × the model diagonal (default 1e-6), unless one rigid, bush or connector element ties them (zero-length springs and bolt spiders are normal). |
-| `DuplicateElements` | error | Elements in one mesh block with the same grids (`DuplicateOf` names the first). |
+| `DuplicateElements` | error | Elements in one mesh block with the same card type, PID and grids (`DuplicateOf` names the first). A rod with a parallel damper or a doubler with its own PID is not a duplicate. |
 | `DanglingConnectors` | error | Rigid, bush or connector legs to a grid that nothing else uses: no element, mass, SPC or load. The hub of a multi-leg spider (a bolt's RBE2 center) does not count. |
 | `FloatingParts` | info | Parts with no SPC grid. Expected in free-free modal runs. |
 

@@ -337,3 +337,39 @@ def test_spider_hubs_and_tied_grids_are_not_errors(tmp_path):
     counts = {r["Name"]: r["Count"] for r in res.summary}
     assert (counts["CoincidentGrids"], counts["DanglingConnectors"]) == (0, 1)
     assert arr(get_block(res.findings, "DanglingConnectors"), "EID", "cell").tolist() == [101]
+
+
+PARALLEL = """\
+GRID,1,,0.,0.,0.
+GRID,2,,1.,0.,0.
+GRID,3,,1.,1.,0.
+GRID,4,,0.,1.,0.
+MAT1,1,1.e7,,0.3,1.
+PROD,5,1,0.1
+PVISC,6,1.
+PSHELL,3,1,0.1,1
+PSHELL,4,1,0.05,1
+CROD,1,5,1,2
+CVISC,2,6,1,2
+CQUAD4,10,3,1,2,3,4
+CQUAD4,11,4,1,2,3,4,,0.075
+CQUAD4,12,3,1,2,3,4
+"""
+
+
+def test_parallel_elements_are_not_duplicates(tmp_path):
+    """A rod with a parallel damper and a doubler stacked on the skin (own PID) are intentional;
+    only CQUAD4 12, same card, PID and grids as 10, is a duplicate."""
+    p = tmp_path / "parallel.bdf"
+    p.write_text(PARALLEL)
+    res = check(build_multiblock(load_deck(p, echo=False)), checks=("DuplicateElements",))
+    dup = get_block(res.findings, "DuplicateElements")
+    assert res.summary[0]["Count"] == 1 and arr(dup, "EID", "cell").tolist() == [12]
+
+
+def test_path_max_hops_matches_grow(topo_mb):
+    """Grow from grid 1 reaches grid 3 at hop 1 (2 elements), so path 1 -> 3 fits in max_hops=1."""
+    grow(topo_mb, "GRID 1", Rules(max_hops=1))
+    assert by_point(topo_mb, "Shells", "Hops")[3] == 1
+    assert path(topo_mb, 1, 3, Rules(max_hops=1)).length == 2
+    assert path(topo_mb, 1, 3, Rules(max_hops=0)).length == -1

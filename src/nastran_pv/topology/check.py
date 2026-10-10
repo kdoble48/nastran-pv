@@ -91,7 +91,8 @@ def _coincident(blocks, graph, rules, tol):
 def _duplicates(blocks, graph, rules, tol):
     seen, cells, dup_of = {}, [], []
     for c in np.flatnonzero(graph.group_mask(MESH_GROUPS)):
-        key = (int(graph.group[c]), tuple(sorted(graph.cell_grids(c).tolist())))
+        # same card, PID and grids: a rod with a parallel damper or a stacked doubler is intentional
+        key = (int(graph.group[c]), int(graph.card[c]), int(graph.pid[c]), tuple(sorted(graph.cell_grids(c).tolist())))
         if key in seen:
             cells.append(c)
             dup_of.append(int(graph.eid[seen[key]]))

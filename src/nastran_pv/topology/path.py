@@ -28,7 +28,8 @@ def path(mb, grid_a: int, grid_b: int, rules: Rules | None = None, graph: Graph 
     C = graph.n_cells
     touching = np.unique(graph.incidence[:, ends].nonzero()[0])
     allowed = rules.allowed(graph, {int(p) for p in graph.pid[touching] if p > 0})
-    limit = np.inf if rules.max_hops is None else 2 * rules.max_hops
+    # like grow from grid_a: grid_b is in reach when its hop is <= max_hops (max_hops + 1 elements)
+    limit = np.inf if rules.max_hops is None else 2 * rules.max_hops + 2
     dist, pred = csgraph.dijkstra(graph.adjacency(allowed), directed=False, indices=C + ends[0],
                                   unweighted=True, return_predecessors=True, limit=limit)
     on_cell = np.zeros(C, np.uint8)
