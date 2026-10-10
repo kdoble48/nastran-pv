@@ -1,0 +1,37 @@
+# Datasets (download separately, see README)
+gpk4zn73xn-1/
+Linderholt_Files_v2/
+*.zip
+
+# Generated output
+out/
+shots/
+*.vtm
+*.vtu
+*.vtp
+*.pvsm
+*.png
+!docs/**/*.png
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+
+# Nastran scratch / results
+*.f04
+*.f06
+*.log
+*.op2
+*.xdb
+*.h5
+*.MASTER
+*.DBALL
+
+# ParaView plugin vendored deps (see paraview/install_deps.py)
+paraview/_vendor/

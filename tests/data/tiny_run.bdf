@@ -1,0 +1,15 @@
+$ Synthetic run deck for nastran-pv tests
+SOL 101
+CEND
+TITLE = nastran-pv synthetic deck
+SPC = 1
+LOAD = 1001
+DISP = ALL
+BEGIN BULK
+PARAM,WTMASS,1.0
+INCLUDE 'tiny_bulk.bdf'
+$
+PSOLID,11,1
+PSOLID,12,3
+MAT1,3,2.1e11,,0.3,7850.
+ENDDATA

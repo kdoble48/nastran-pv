@@ -1,0 +1,78 @@
+$ Synthetic bulk-data file for nastran-pv tests (no executive/case control).
+$ Solid properties (PSOLID/MAT) are intentionally NOT in this file: they live in
+$ tiny_run.bdf, so opening this file alone exercises the missing-property path.
+$
+$ CORD2R 10: local x = global +Y, local y = global -X, local z = global +Z
+CORD2R,10,0,0.,0.,0.,0.,0.,1.,
+,0.,1.,0.
+$
+$ ---- shell grids (z = 0 plane)
+GRID,1,,0.,0.,0.
+GRID,2,,1.,0.,0.
+GRID,3,,2.,0.,0.
+GRID,4,,0.,1.,0.
+GRID,5,,1.,1.,0.
+GRID,6,,2.,1.,0.
+GRID*                  7               0             0.5             2.0*G7
+*G7                  0.0               0
+GRID,8,,3.,0.,0.
+GRID,12,,0.,1.,0.
+$
+$ ---- solid grids (unit cube at z = 10, base face numbered clockwise from +z)
+GRID,101,,0.,0.,10.
+GRID,102,,0.,1.,10.
+GRID,103,,1.,1.,10.
+GRID,104,,1.,0.,10.
+GRID,105,,0.,0.,11.
+GRID,106,,0.,1.,11.
+GRID,107,,1.,1.,11.
+GRID,108,,1.,0.,11.
+GRID,109,,2.,0.5,10.
+GRID,110,,2.,0.5,11.
+GRID,111,,1.,0.,12.
+$
+$       Shell element data for family    WING_SKIN/UPPER/SEG.00
+CQUADR,1,1,1,2,5,4,10
+CTRIA3,3,1,4,5,7
+$       Shell element data for family    WING_SPARS/LE_SPAR/SEG.00:IMPDISP0
+CQUAD4,2,2,2,3,6,5,30.
+$
+PSHELL,1,1,0.01,1
+PSHELL,2,2,0.02,2
+MAT1,1,7.0e10,,0.3,2700.
+MAT2,2,1.0e11,3.0e10,0.,1.0e11,0.,3.5e10,2780.
+$
+$ ---- solids
+CHEXA,11,11,101,102,103,104,105,106,
+,107,108
+CPENTA,12,11,103,104,109,107,108,110
+CTETRA,13,12,105,106,108,111
+$
+$ ---- masses
+CONM2,201,5,10,10.,1.,0.,0.,,
+,2.,0.,3.,0.,0.,4.
+CONM2,202,7,,1.25
+$
+$ ---- rigid elements (302 is degenerate: independent node == dependent node)
+RBE2,301,5,123456,2,3,6
+RBE2,302,6,123456,6
+RBE3,401,,7,123,1.0,123,4,5
+$
+$ ---- bushes
+PBUSH,51,K,1.0e6,2.0e6,3.0e6,10.,20.,30.
+CBUSH,501,51,3,8,0.,0.,1.
+CBUSH,502,51,6,,,,,10
+CBUSH,503,51,4,12
+$
+$ ---- constraints
+SPC1,1,123456,1,4
+SPC,1,3,3,0.
+SPC1,2,12,2
+$
+$ ---- loads
+FORCE,1,6,10,100.,1.,0.,0.
+FORCE,1,3,0,50.,0.,0.,1.
+MOMENT,1,6,0,2.,1.,0.,0.
+FORCE,2,6,0,10.,0.,0.,1.
+GRAV,3,0,9.81,0.,0.,-1.
+LOAD,1001,2.0,1.0,1,0.5,2,1.0,3

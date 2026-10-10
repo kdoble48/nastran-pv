@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nastran-pv"
+version = "0.1.0"
+description = "Visualize Nastran decks and results in ParaView: properties, masses, bushes, loads, derived and mapped fields, run store"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+    "pyNastran>=1.4,<1.5",
+    "numpy",
+]
+
+[project.optional-dependencies]
+vtk = ["vtk>=9.3"]
+h5 = ["h5py"]                         # MSC/NX HDF5 results
+tables = ["pandas", "openpyxl"]       # Excel tables for --map
+sql = ["pandas", "sqlalchemy"]        # non-SQLite databases for --map
+all = ["vtk>=9.3", "h5py", "pandas", "openpyxl", "sqlalchemy"]
+test = ["pytest", "vtk>=9.3", "h5py"]
+
+[project.scripts]
+nastran-pv = "nastran_pv.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
