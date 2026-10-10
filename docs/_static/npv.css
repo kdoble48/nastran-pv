@@ -1,0 +1,12 @@
+/* nastran-pv gallery pages */
+.npv-scene { width: 100%; height: 560px; border: 1px solid var(--pst-color-border); border-radius: 6px; background: #fff; }
+.npv-side { display: flex; flex-wrap: wrap; gap: 1.5rem; margin: 1rem 0; }
+.npv-legend { min-width: 260px; }
+.npv-legend-title { font-weight: 600; margin-bottom: .3rem; }
+.npv-bar { height: 14px; border-radius: 3px; }
+.npv-bar-range { display: flex; justify-content: space-between; font-size: .85em; }
+.npv-cats { list-style: none; padding: 0; margin: 0; columns: 2; font-size: .9em; }
+.npv-swatch { display: inline-block; width: .9em; height: .9em; margin-right: .4em; border-radius: 2px; vertical-align: -1px; }
+.npv-summary { font-size: .85em; margin: 0; }
+.npv-static { margin-top: .5rem; font-size: .9em; }
+.npv-static img { max-width: 100%; margin-top: .5rem; }

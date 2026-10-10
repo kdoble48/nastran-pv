@@ -11,6 +11,8 @@ import os
 import sys
 import tempfile
 
+import numpy as np
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "paraview"))
@@ -72,12 +74,51 @@ def main():
     for name in nv.VIEWS:
         nv.apply(name, reader=reader, view=view)
     check(True, f"all views build: {', '.join(nv.VIEWS)}")
+    nloads = rm.Model(reader).block("Loads")
+    npts = max(nloads.GetBlock(i).GetNumberOfPoints() for i in range(nloads.GetNumberOfBlocks()))
+    check(npts > 1, f"tiny deck load set has {npts} points")
+    nv.MAX_LOAD_ARROWS = 1
+    lmodel = nv.apply("loads", reader=reader, view=view)
+    info = pv.FindSource(nv._name(lmodel, "info"))  # this reader's objects: "NPV <what> [<reader>]"
+    tag = nv._name(lmodel, "info")[len("NPV info"):]
+    glyph = next(s for (n, _), s in pv.GetSources().items()
+                 if n.startswith("NPV load arrows") and n.endswith(tag))
+    check(glyph.GlyphMode == "Every Nth Point" and "showing 1 of" in info.Text,
+          f"loads arrow cap: {glyph.GlyphMode!r}, {info.Text!r}")
+    nv.MAX_LOAD_ARROWS = 1500
+    nv.set_camera(view, "showcase")
+    pos, foc = np.array(view.CameraPosition), np.array(view.CameraFocalPoint)
+    d = (pos - foc) / np.linalg.norm(pos - foc)
+    want = np.array(nv.SHOWCASE_DIR) / np.linalg.norm(nv.SHOWCASE_DIR)
+    check(np.allclose(d, want, atol=1e-3) and np.allclose(view.CameraViewUp, [0, 0, 1], atol=1e-3),
+          f"showcase camera direction {d.round(3)}")
     disp = pv.Show(reader, view)
     pv.ColorBy(disp, ("CELLS", "PID"))
     pv.SetActiveSource(reader)
     lut = nv.index_colors(reader, view)
     check(lut.InterpretValuesAsCategories == 1 and "PID 11" in list(lut.Annotations),
           f"index_colors -> {list(lut.Annotations)[:8]}")
+
+    import importlib.util
+
+    import scene_export as se  # puts paraview/_vendor on sys.path
+
+    has_trame = importlib.util.find_spec("trame_vtk") is not None  # vendored by install_deps.py --site
+    if not has_trame:
+        print("skip: scene export (python paraview/install_deps.py --site)")
+    else:
+        sview = pv.CreateRenderView()
+        nv.apply("pid", reader=reader, view=sview)
+        with tempfile.TemporaryDirectory() as tmp:
+            state = se.write_vtksz(sview, os.path.join(tmp, "pid.vtksz"))
+        classes = se.scene_classes(state)
+        check("vtkPolyData" in classes and any(c.endswith("Actor") for c in classes),
+              f"scene has actors and polydata: {sorted(classes)}")
+        check(len(state["hashes"]) > 0, f"scene carries {len(state['hashes'])} data arrays")
+        legends = se.overlays(sview)["legends"]
+        check(any(lg["array"] == "PID" and lg["kind"] == "categorical" for lg in legends),
+              f"PID legend captured: {[lg['array'] for lg in legends]}")
+        pv.Delete(sview)
 
     from paraview import servermanager
 
@@ -126,6 +167,78 @@ def main():
         finally:  # release the file before the temp dir is removed
             pv.Delete(shells)
             pv.Delete(hdf)
+
+    import json
+
+    import export_site as es
+
+    if has_trame:
+        # ParaView keeps result files open on Windows: ignore cleanup errors
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            op2 = make_op2()
+            op2.displacements.clear()  # two eigenvector modes only
+            modes = os.path.join(tmp, "modes.op2")
+            op2.write_op2(modes)
+            single = make_op2()
+            single.eigenvectors.clear()  # one static step, no frequency
+            static = os.path.join(tmp, "static.op2")
+            single.write_op2(static)
+            models = [
+                {"id": "tiny", "title": "Tiny", "deck": DECK, "results": modes,
+                 "views": ["pid", "bushes", "results"], "credit": "test"},
+                {"id": "one", "title": "One", "deck": DECK, "results": static,
+                 "views": ["results"], "credit": "test"},
+                {"id": "gone", "title": "Gone", "deck": os.path.join(tmp, "missing.bdf"),
+                 "results": None, "views": ["pid"], "credit": "test"},
+            ]
+            mj = os.path.join(tmp, "models.json")
+            with open(mj, "w", encoding="utf-8") as f:
+                json.dump(models, f)
+            out = os.path.join(tmp, "out dir")  # spaces in paths must survive
+            check(es.main([mj, out]) == 0, "export_site runs")
+
+            def meta(name):
+                with open(os.path.join(out, name), encoding="utf-8") as f:
+                    return json.load(f)
+
+            pid = meta("tiny-pid.json")
+            check(all(os.path.exists(os.path.join(out, pid[k])) for k in ("png", "scene", "thumb_raw"))
+                  and pid["scene_bytes"] > 0 and pid["legends"][0]["kind"] == "categorical"
+                  and pid["reproduce"][0].startswith("nastran-pv view tiny_run.bdf --view pid"),
+                  "pid view exported with files, legend and reproduce line")
+            check(os.path.exists(os.path.join(out, "tiny-bushes.json")), "bushes view exported")
+            res = meta("tiny-results.json")
+            # the fixture's eigenvectors read back from a written OP2 as a 2-step displacement table
+            # (no frequencies); real modal frequencies are checked on the MYSTRAN demo build
+            check(len(res["frames"]) == 2
+                  and all(os.path.exists(os.path.join(out, fr["scene"])) for fr in res["frames"]),
+                  f"results: one scene per step {[fr['label'] for fr in res['frames']]}")
+            one = meta("one-results.json")
+            check(len(one["frames"]) == 1 and one["frames"][0]["frequency"] is None,
+                  "single static step: one frame, frequency null")
+            check(not os.path.exists(os.path.join(out, "gone-pid.json")), "missing deck skipped")
+            check(all("legends" in fr for fr in res["frames"]) and "--results modes.op2" in res["reproduce"][1],
+                  f"results frames carry their own legends; render line {res['reproduce'][1]!r}")
+
+        from paraview import servermanager as sm
+
+        # pipeline objects a view creates but does not show (e.g. the loads extract) must stay out of
+        # the scene: the export helpers must not give them a (visible) representation
+        xview = pv.CreateRenderView()
+        nv.apply("loads", reader=reader, view=xview)
+        unshown = pv.Sphere()
+        se.overlays(xview)
+        es.has_content(xview)
+        se.hide_overlays(xview)
+        check(sm.GetRepresentation(unshown, xview) is None, "export helpers create no representations")
+        pv.Delete(unshown)
+        pv.Delete(xview)
+
+        reader.Bushes = 0
+        check(es.export_view(reader, {"id": "nb", "title": "", "deck": DECK, "results": None,
+                                      "credit": ""}, "bushes", tempfile.gettempdir()) is None,
+              "view with nothing to show is skipped")
+        reader.Bushes = 1
     print("pv_smoke: all checks passed")
 
 

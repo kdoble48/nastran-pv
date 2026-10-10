@@ -4,6 +4,11 @@ nastran-pv opens Nastran bulk-data decks in ParaView, through a ParaView plugin 
 CLI. Both share one core. Start with [Install](install.md), then pick the guide for the front end
 you use.
 
+## Gallery
+
+- [View gallery](gallery/index.md): every one-click view on the uCRM-9 wingbox and a demo model,
+  interactive in 3D in your browser.
+
 ## Getting started
 
 - [Install](install.md): the Python package, the ParaView-side dependencies, toolbar macros,
@@ -29,3 +34,42 @@ you use.
 
 - [Development](development.md): tests, lint, the pvpython smoke test, and the rules for writing
   these docs.
+
+```{toctree}
+:hidden:
+:caption: Getting started
+
+install
+```
+
+```{toctree}
+:hidden:
+:caption: Guides
+
+paraview
+cli
+fields
+store
+```
+
+```{toctree}
+:hidden:
+:caption: Gallery
+
+gallery/index
+```
+
+```{toctree}
+:hidden:
+:caption: Reference
+
+model
+output-formats
+```
+
+```{toctree}
+:hidden:
+:caption: Development
+
+development
+```

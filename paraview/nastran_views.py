@@ -28,6 +28,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 READER_XML = "NastranPVReader"
 MESH = ("Shells", "Solids", "Lines")
 GHOST_RGB = [0.72, 0.75, 0.80]
+MAX_LOAD_ARROWS = 1500  # above this, glyph every Nth loaded grid (uniform over the mesh)
+SHOWCASE_DIR = (-1.0, -0.35, 0.6)  # "showcase" camera: Z up, looking from ahead and above
 
 # --------------------------------------------------------------- plugin/data
 
@@ -398,11 +400,18 @@ def view_loads(model, view):
     g.OrientationArray = ["POINTS", "Force"]
     g.ScaleArray = ["POINTS", "ForceMagnitude"]
     g.ScaleFactor = 0.08 * model.diag / fmax
+    n = blk.GetNumberOfPoints()
     g.GlyphMode = "All Points"
+    shown = n
+    if n > MAX_LOAD_ARROWS:
+        g.GlyphMode = "Every Nth Point"
+        g.Stride = -(-n // MAX_LOAD_ARROWS)
+        shown = -(-n // g.Stride)
     d = pv.Show(g, view)
     continuous(d, "POINTS", "ForceMagnitude", preset="Inferno (matplotlib)", view=view)
     res = vtk_to_numpy(blk.GetFieldData().GetArray("ResultantForce")).reshape(-1)
-    info_text(model, view, f"{pick}: {blk.GetNumberOfPoints()} loaded grids\n"
+    sampled = f" (showing {shown} of {n} arrows)" if shown < n else ""
+    info_text(model, view, f"{pick}: {n} loaded grids{sampled}\n"
                            f"Resultant force ({res[0]:.4g}, {res[1]:.4g}, {res[2]:.4g})")
 
 
@@ -523,7 +532,12 @@ def apply(name, reader=None, view=None, model=None, reset_camera=True, **kwargs)
 
 
 def set_camera(view, which):
-    if which == "iso":
+    if which == "showcase":
+        view.ResetCamera(False)
+        f = list(view.CameraFocalPoint)
+        view.CameraPosition = [f[i] + SHOWCASE_DIR[i] for i in range(3)]
+        view.CameraViewUp = [0, 0, 1]
+    elif which == "iso":
         view.ApplyIsometricView()
     elif which == "top":
         view.ResetActiveCameraToNegativeZ()

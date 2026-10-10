@@ -37,7 +37,7 @@ summary. Running a view again reuses its pipeline objects, which are named `NPV 
 |---|---|
 | NPV Masses | Mass ellipsoids from mass and inertia, colored by mass; grid→CG offsets; model CG marker; total mass |
 | NPV Bushes | CBUSH stiffness triads (K1/K2/K3 arrows, length ~ log stiffness) and GA–GB lines |
-| NPV Loads | Force arrows for the active LOAD set, scaled by magnitude; resultant force |
+| NPV Loads | Force arrows for the active LOAD set, scaled by magnitude (at most 1,500 arrows, every Nth loaded grid, on large models); resultant force |
 | NPV SPC | Constrained grids colored by DOF code |
 | NPV Rigid | RBE2/RBE3/... spider legs by type |
 | NPV Family / Group / PID / MID / Element Type | Mesh with an indexed color per value, with names in the legend |

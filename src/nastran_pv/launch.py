@@ -101,7 +101,7 @@ def add_parsers(sub) -> None:
     r.add_argument("deck")
     r.add_argument("--preset", nargs="+", default=["family", "masses", "loads", "spc"],
                    choices=[n for n in VIEW_NAMES if n != "none"])
-    r.add_argument("--views", nargs="+", default=["iso"], choices=["iso", "top", "front", "side"])
+    r.add_argument("--views", nargs="+", default=["iso"], choices=["iso", "top", "front", "side", "showcase"])
     r.add_argument("--out", default="shots")
     r.add_argument("--size", nargs=2, type=int, default=[1600, 1000])
     r.add_argument("--results", "--op2", dest="results")

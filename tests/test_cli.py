@@ -66,11 +66,12 @@ def test_store_roundtrip(tmp_path, margins, capsys):
 def test_launchers_dry_run(capsys):
     try:
         assert main(["view", DECK, "--view", "masses", "--dry-run"]) == 0
-        assert main(["render", DECK, "--preset", "pid", "--dry-run"]) == 0
+        assert main(["render", DECK, "--preset", "pid", "--views", "showcase", "--dry-run"]) == 0
     except FileNotFoundError:
         pytest.skip("ParaView not installed")
     out = capsys.readouterr().out
-    assert "--script=" in out and "nv.apply('masses'" in out and "render_model.py" in out
+    assert "--script=" in out and "nv.apply('masses'" in out and "render_model.py" in out \
+        and "--views showcase" in out
 
 
 def test_convert_and_store_vtkhdf(tmp_path, capsys):
