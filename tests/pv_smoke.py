@@ -79,6 +79,26 @@ def main():
     check(lut.InterpretValuesAsCategories == 1 and "PID 11" in list(lut.Annotations),
           f"index_colors -> {list(lut.Annotations)[:8]}")
 
+    import scene_export as se
+
+    try:
+        import trame_vtk  # noqa: F401  (vendored by install_deps.py --site)
+    except ImportError:
+        print("skip: scene export (python paraview/install_deps.py --site)")
+    else:
+        sview = pv.CreateRenderView()
+        nv.apply("pid", reader=reader, view=sview)
+        with tempfile.TemporaryDirectory() as tmp:
+            state = se.write_vtksz(sview, os.path.join(tmp, "pid.vtksz"))
+        classes = se.scene_classes(state)
+        check("vtkPolyData" in classes and any(c.endswith("Actor") for c in classes),
+              f"scene has actors and polydata: {sorted(classes)}")
+        check(len(state["hashes"]) > 0, f"scene carries {len(state['hashes'])} data arrays")
+        legends = se.overlays(sview)["legends"]
+        check(any(lg["array"] == "PID" and lg["kind"] == "categorical" for lg in legends),
+              f"PID legend captured: {[lg['array'] for lg in legends]}")
+        pv.Delete(sview)
+
     from paraview import servermanager
 
     derived = pv.NastranDerivedFields(Input=reader)

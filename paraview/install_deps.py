@@ -24,6 +24,9 @@ PROBE = (
     "'platform': sysconfig.get_platform(), 'numpy': numpy.__version__}))"
 )
 PACKAGES = ["pyNastran==1.4.1", "cpylog>=1.4", "docopt-ng>=0.9", "colorama"]
+# gallery export only (paraview/scene_export.py); pure-Python wheels, pinned because the
+# serializers are trame-vtk internals
+SITE_PACKAGES = ["trame-vtk==2.11.17", "trame-client==4.1.4"]
 
 
 def find_pvpython() -> str | None:
@@ -53,6 +56,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--pvpython", default=None, help="path to pvpython (default: search)")
     ap.add_argument("--target", default=str(HERE / "_vendor"))
+    ap.add_argument("--site", action="store_true",
+                    help="also vendor trame-vtk for the docs gallery export (paraview/export_site.py)")
     args = ap.parse_args()
 
     pvpython = args.pvpython or find_pvpython()
@@ -71,7 +76,7 @@ def main() -> int:
            "--python-version", f"{major}{minor}"]
     for plat in pip_platform(info["platform"]):
         cmd += ["--platform", plat]
-    cmd += PACKAGES + [scipy]
+    cmd += PACKAGES + [scipy] + (SITE_PACKAGES if args.site else [])
     print(" ".join(cmd))
     subprocess.run(cmd, check=True)
     print(f"installed into {args.target}")

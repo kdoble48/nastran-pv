@@ -118,6 +118,11 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
     `NastranMassGlyphs`, `NastranMapTable`, etc.
   - `reader.TimestepValues` is a bare float when there is one step; use `nastran_views.timesteps`.
   - `ColorBy(rep, None)` fails in ParaView 6; use `nastran_views.solid`.
+- Gallery scene export (`paraview/scene_export.py`) calls trame-vtk's serializers directly. ParaView 6
+  mappers take a `vtkPartitionedDataSetCollection`, which trame-vtk 2.11 drops silently unless the
+  `vtkMultiBlockDataSet` serializer is also registered for it (`_init_serializers` does this).
+  trame-vtk is vendored only with `install_deps.py --site`. An open ParaView GUI locks the `.pyd`
+  files in `paraview/_vendor`, so re-vendoring then fails partway and can leave scipy broken.
 - pyNastran quirks:
   - `Subcase.has_parameter` returns a list.
   - Stress tables expose `get_headers()`; von Mises exists only when `stress_bits[4]` is set.
