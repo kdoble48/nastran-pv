@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import html
 import json
+import re
 import shutil
 from pathlib import Path
+from urllib.parse import quote
 
 GALLERY = "gallery"
 ASSETS = "_static/gallery"
@@ -42,20 +44,26 @@ def legend_html(leg) -> str:
     return f'<div class="npv-legend">{title}{body}</div>'
 
 
-def _side(legends, text, static_png=None, alt="") -> str:
+def _side(legends, text, static_png=None, alt="", version="") -> str:
     summary = "\n".join(t for t in text if t).strip()
     parts = "".join(legend_html(lg) for lg in legends)
     if summary:
         parts += f'<pre class="npv-summary">{html.escape(summary)}</pre>'
     if static_png:
         parts += (f'<details class="npv-static"><summary>Static image</summary>'
-                  f'<img src="../{ASSETS}/{static_png}" alt="{html.escape(alt)}"></details>')
+                  f'<img src="../{ASSETS}/{static_png}{_tag(version)}" alt="{html.escape(alt)}"></details>')
     return f'```{{raw}} html\n<div class="npv-side">{parts}</div>\n```\n' if parts else ""
 
 
-def _iframe(scene) -> str:
+def _tag(version) -> str:
+    return f"?v={version}" if version else ""
+
+
+def _iframe(scene, version="") -> str:
+    # the viewer fetches fileURL itself; the per-build tag defeats GitHub Pages' 10-minute cache
+    url = quote(f"gallery/{scene}{_tag(version)}", safe="/")
     return (f'<iframe class="npv-scene" title="3D scene" loading="lazy" '
-            f'src="../_static/viewer.html?fileURL=gallery/{scene}"></iframe>')
+            f'src="../_static/viewer.html?fileURL={url}"></iframe>')
 
 
 def _mode_label(k, frame) -> str:
@@ -67,18 +75,19 @@ def _size(nbytes) -> str:
     return f"{nbytes / 1e6:.1f} MB" if nbytes >= 100_000 else f"{max(1, round(nbytes / 1e3))} KB"
 
 
-def view_page(meta) -> str:
+def view_page(meta, version="") -> str:
     title = meta["title"]
     hint = f'Drag to rotate, scroll to zoom, right-drag to pan. Scene: {_size(meta["scene_bytes"])}.'
     alt = f'{title} view of the {meta["model_title"]}'
     if meta.get("frames"):
         # each mode has its own color range and summary: legend, text and image live in its tab
-        tabs = "".join(f'````{{tab-item}} {_mode_label(k, fr)}\n{_iframe(fr["scene"])}\n\n{hint}\n\n'
-                       f'{_side(fr.get("legends", []), fr.get("text", []), fr["png"], f"{alt}, mode {k}")}````\n'
+        tabs = "".join(f'````{{tab-item}} {_mode_label(k, fr)}\n{_iframe(fr["scene"], version)}\n\n{hint}\n\n'
+                       f'{_side(fr.get("legends", []), fr.get("text", []), fr["png"], f"{alt}, mode {k}", version)}'
+                       f'````\n'
                        for k, fr in enumerate(meta["frames"], start=1))
         side = ""
     else:
-        tabs = (f'````{{tab-item}} Interactive\n{_iframe(meta["scene"])}\n\n{hint}\n````\n'
+        tabs = (f'````{{tab-item}} Interactive\n{_iframe(meta["scene"], version)}\n\n{hint}\n````\n'
                 f'````{{tab-item}} Static\n![{alt}](../{ASSETS}/{meta["png"]})\n````\n')
         side = _side(meta["legends"], meta["text"])
     reproduce = "\n".join(meta["reproduce"])
@@ -124,9 +133,11 @@ def write_pages(manifest, out_dir) -> list[Path]:
     out_dir.mkdir(parents=True)
     written = []
     if manifest:
+        # one tag per gallery build: 2026-10-10T02:29:05+00:00 -> 20261010T022905
+        version = re.sub(r"[^0-9T]", "", manifest.get("generated", ""))[:15]
         for v in manifest["views"]:
             p = out_dir / f"{_doc(v)}.md"
-            p.write_text(view_page(v), encoding="utf-8")
+            p.write_text(view_page(v, version), encoding="utf-8")
             written.append(p)
     index = out_dir / "index.md"
     index.write_text(index_page(manifest) if manifest else PLACEHOLDER, encoding="utf-8")
