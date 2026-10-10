@@ -74,13 +74,16 @@ def validate_scene(path) -> set[str]:
     """Class names in a .vtksz; ValueError unless it has an actor, polydata and data arrays."""
     with zipfile.ZipFile(path) as z:
         state = json.loads(z.read("index.json"))
-    classes, stack = set(), [state["scene"]]
+    classes, indexed, stack = set(), False, [state["scene"]]
     while stack:
         node = stack.pop()
         classes.add(node.get("type"))
+        indexed |= bool(node.get("properties", {}).get("indexedLookup"))
         stack.extend(node.get("dependencies", []))
     if not any(c and c.endswith("Actor") for c in classes):
         raise ValueError(f"{Path(path).name}: no actors in scene")
+    if indexed:
+        raise ValueError(f"{Path(path).name}: indexed lookup in scene (vtk.js cannot render it)")
     if "vtkPolyData" not in classes or not state.get("hashes"):
         raise ValueError(f"{Path(path).name}: no geometry data in scene")
     return classes

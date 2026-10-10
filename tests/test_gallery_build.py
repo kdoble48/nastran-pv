@@ -44,6 +44,19 @@ def test_validate_scene(tmp_path):
         bg.validate_scene(bad)
 
 
+def test_validate_scene_rejects_indexed_lookup(tmp_path):
+    """vtk.js crashes on indexed color transfer functions (mapDataIndexed is not a function)."""
+    path = tmp_path / "indexed.vtksz"
+    lut = {"type": "vtkPVDiscretizableColorTransferFunction", "properties": {"indexedLookup": 1}}
+    scene = {"type": "vtkWin32OpenGLRenderWindow", "dependencies": [
+        {"type": "vtkPVLODActor", "dependencies": [{"type": "vtkMapper", "dependencies": [
+            {"type": "vtkPolyData"}, lut]}]}]}
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("index.json", json.dumps({"hashes": {"h": {}}, "scene": scene}))
+    with pytest.raises(ValueError, match="indexed lookup"):
+        bg.validate_scene(path)
+
+
 def _meta(model, view, frames=()):
     return {"model": model, "view": view, "png": f"{model}-{view}.png", "thumb": f"{model}-{view}-thumb.png",
             "thumb_raw": f"{model}-{view}-thumb-raw.png", "scene": f"{model}-{view}.vtksz",

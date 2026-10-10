@@ -53,10 +53,43 @@ def scene_state(view, orientation_axis=True):
                       "camera": reference_id(view.GetActiveCamera())}
     if orientation_axis:
         scene["behaviors"] = {"autoOrientation": 1}
+    _steps_for_indexed_luts(scene, _categorical_steps(reference_id))
     hashes = {}
     for entry in extract_array_hash(scene):
         hashes[entry["hash"]] = dict(**entry, content=ctx.get_cached_data_array(entry["hash"], False))
     return {"hashes": hashes, "scene": scene}
+
+
+def _categorical_steps(reference_id):
+    """Step nodes ``[x, r, g, b, midpoint, sharpness=1]`` per categorical LUT, by VTK object id."""
+    out = {}
+    for lut in sm.ProxyManager().GetProxiesInGroup("lookup_tables").values():
+        if not lut.InterpretValuesAsCategories:
+            continue
+        ann, cols = list(lut.Annotations), list(lut.IndexedColors)
+        steps = []
+        for i in range(len(ann) // 2):
+            try:
+                x = float(ann[2 * i])
+            except ValueError:
+                continue
+            steps.append([x, *(float(c) for c in (cols[3 * i:3 * i + 3] or [0.5, 0.5, 0.5])), 0.5, 1.0])
+        out[reference_id(lut.GetClientSideObject())] = sorted(steps)
+    return out
+
+
+def _steps_for_indexed_luts(scene, steps):
+    """vtk.js transfer functions have no indexed mode (``mapDataIndexed is not a function``), and the
+    category colors are not serialized: replace them with step nodes, one color per category value."""
+    stack = [scene]
+    while stack:
+        node = stack.pop()
+        stack.extend(node.get("dependencies", []))
+        props = node.get("properties", {})
+        if props.get("indexedLookup"):
+            props["indexedLookup"] = 0
+            if steps.get(node.get("id")):
+                props.update(nodes=steps[node["id"]], discretize=0)
 
 
 def write_vtksz(view, path, orientation_axis=True):
