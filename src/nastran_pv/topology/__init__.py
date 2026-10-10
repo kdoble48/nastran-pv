@@ -4,6 +4,8 @@ Everything works on a nastran-pv multiblock (VTK data only) and writes its resul
 arrays, like :mod:`nastran_pv.fields`.
 """
 from .grow import GrowResult, grow
+from .parts import PartsResult, label_parts, parts
 from .graph import GRAPH_BLOCKS, GROUPS, LINK_GROUPS, MESH_GROUPS, Graph, Rules, Seeds, card_types
 
-__all__ = ["GRAPH_BLOCKS", "GROUPS", "LINK_GROUPS", "MESH_GROUPS", "Graph", "Rules", "Seeds", "card_types", "GrowResult", "grow"]
+__all__ = ["GRAPH_BLOCKS", "GROUPS", "LINK_GROUPS", "MESH_GROUPS", "Graph", "Rules", "Seeds", "card_types", "GrowResult", "grow",
+           "PartsResult", "label_parts", "parts"]
