@@ -36,7 +36,8 @@ gallery) are project skills in
 
 - The site is built with Sphinx from `docs/` (`docs/conf.py`). `docs/gallery/` is generated at
   build time from the gallery assets: never edit or commit it. `docs/models/` (the demo deck) and
-  `docs/superpowers/` (design specs and plans) are not published.
+  `docs/design/` (design specs and the roadmap) are not published. Implementation plans stay local
+  (`docs/design/plans/` is gitignored).
 
 ### Pages
 

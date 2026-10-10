@@ -1,7 +1,7 @@
 # Model tools design
 
 Date: 2026-10-09. Status: approved in brainstorming, pending spec review. Roadmap milestone 0.3
-(`2026-10-09-roadmap-design.md`).
+(`roadmap.md`).
 
 ## Goal
 

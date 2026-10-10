@@ -55,7 +55,7 @@ Open questions for its spec:
 
 Scope: connectivity traversal (grow), part breakdown, shortest element path and model checks, with
 per-card-type traversal rules and live ParaView controls; a `Connectors` block for MPCs, springs,
-dampers, gaps, welds and fasteners. Designed in `2026-10-09-model-tools-design.md`.
+dampers, gaps, welds and fasteners. Designed in `2026-10-09-model-tools.md`.
 
 Exit criteria: the exit criteria in that spec.
 

@@ -43,6 +43,10 @@ free of pytest imports). pytest gets `src` on its path from `pyproject.toml`, so
 
 ## Repository layout
 
+- Design docs: write brainstorming specs to `docs/design/YYYY-MM-DD-<topic>.md` (not
+  `docs/superpowers/specs/`) and implementation plans to `docs/design/plans/` (gitignored, local
+  only). The roadmap is `docs/design/roadmap.md`.
+
 - `src/nastran_pv/`: all importable, reusable code, including any logic the plugin needs. It must
   run in both pip-vtk and pvpython, so use `vtkmodules` and never `paraview.*`.
   - The `src/` layout is deliberate. It keeps `tests/`, `paraview/` and the dataset folders out of
@@ -55,7 +59,7 @@ free of pytest imports). pytest gets `src` on its path from `pyproject.toml`, so
   under pvpython only and is not collected by pytest.
 - `docs/`: user-facing Markdown, indexed by `docs/index.md`.
   - The site is Sphinx (`docs/conf.py`); `docs/gallery/` is generated from release assets by
-    `docs/_ext/npv_gallery.py`; `docs/models/` and `docs/superpowers/` are unpublished. The rules are in
+    `docs/_ext/npv_gallery.py`; `docs/models/` and `docs/design/` are unpublished (specs are committed; `plans/` is gitignored). The rules are in
   `docs/development.md#writing-docs`. In short:
   - Every page is flat in `docs/`, listed once in the index under Getting started, Guides,
     Reference or Development.
