@@ -4,10 +4,12 @@ import numpy as np
 import pytest
 
 from nastran_pv import vtkutil
+from nastran_pv.assemble import Options, block_names, build_multiblock
+from nastran_pv.deck import load_deck
 from nastran_pv.fields.common import replace_array
-from nastran_pv.topology import GROUPS, Graph, Rules, Seeds, card_types, grow, parts, path
+from nastran_pv.topology import GROUPS, Graph, Rules, Seeds, card_types, CHECKS, check, grow, parts, path
 from nastran_pv.vtkio import read_vtm, write_vtm
-from conftest import arr, get_block, strings
+from conftest import DATA, arr, get_block, strings
 
 
 def legs(ds):
@@ -274,3 +276,33 @@ def test_path_unreachable(topo_mb):
 def test_path_unknown_grid(topo_mb):
     with pytest.raises(ValueError, match="999"):
         path(topo_mb, 4, 999)
+
+
+def test_check_counts(topo_mb):
+    res = check(topo_mb)
+    assert {r["Name"]: r["Count"] for r in res.summary} == {
+        "FreeEdges": 20, "FreeFaces": 6, "CoincidentGrids": 1, "DuplicateElements": 1,
+        "DanglingConnectors": 1, "FloatingParts": 1}
+    assert res.errors == 3
+    f = res.findings
+    assert block_names(f) == list(CHECKS)
+    cg = get_block(f, "CoincidentGrids")
+    assert (arr(cg, "NID").tolist(), arr(cg, "OtherNID").tolist()) == ([53], [56])  # 6-7 joined by CELAS2 301
+    dup = get_block(f, "DuplicateElements")
+    assert (arr(dup, "EID", "cell").tolist(), arr(dup, "DuplicateOf", "cell").tolist()) == ([52], [51])
+    assert arr(get_block(f, "DanglingConnectors"), "EID", "cell").tolist() == [301]
+    fl = get_block(f, "FloatingParts")
+    assert sorted(arr(fl, "EID", "cell").tolist()) == [51, 52, 53] and set(arr(fl, "PartId", "cell")) == {1}
+    assert strings(f, "CHECK_Name") == list(CHECKS)
+
+
+def test_check_subset_and_unknown(topo_mb):
+    assert [r["Name"] for r in check(topo_mb, checks=("FreeEdges",)).summary] == ["FreeEdges"]
+    with pytest.raises(ValueError, match="unknown check"):
+        check(topo_mb, checks=("Nope",))
+
+
+def test_check_without_shells_or_solids():
+    mb = build_multiblock(load_deck(DATA / "topology.bdf", echo=False), Options(shells=False, solids=False))
+    counts = {r["Name"]: r["Count"] for r in check(mb).summary}
+    assert counts["FreeEdges"] == 0 and counts["FreeFaces"] == 0 and counts["DuplicateElements"] == 0
