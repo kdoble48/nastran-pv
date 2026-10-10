@@ -21,7 +21,7 @@ and CI proves all of this on every push.
 | Sequencing | Release foundation first, then results in public 0.x betas, then 1.0 hardening | Users start early and their decks steer the results work; CI exists before the results code roughly doubles |
 | 1.0 results scope | Broad: forces, full stress/strain, complex and frequency response, transient, composites | The user's choice; analysts expect these from a post-processor |
 | Audience | GUI and Python/CLI users equally | The user's choice; every milestone ships both front ends |
-| Milestone order | 0.2 foundation, 0.3 static results, 0.4 dynamics, 0.5 composites, 1.0 hardening | Static results define the result registry that dynamics and composites build on |
+| Milestone order | 0.2 foundation, 0.3 model tools, 0.4 static results, 0.5 dynamics and results helpers, 0.6 composites, 1.0 hardening | Model tools need no results, so every beta user benefits; static results define the result registry that dynamics, results helpers and composites build on |
 | Process | Each milestone gets its own spec → plan → build cycle | This document fixes scope and order only, not designs |
 | ParaView | 6.x only | Current target; 5.x quirks are not worth carrying |
 
@@ -51,7 +51,15 @@ Open questions for its spec:
 - Which ParaView build CI downloads, and whether the smoke test runs headless (EGL/OSMesa).
 - Whether the `pyNastran>=1.4,<1.5` pin holds.
 
-### 0.3: Results architecture and static results
+### 0.3: Model tools
+
+Scope: connectivity traversal (grow), part breakdown, shortest element path and model checks, with
+per-card-type traversal rules and live ParaView controls; a `Connectors` block for MPCs, springs,
+dampers, gaps, welds and fasteners. Designed in `2026-10-09-model-tools-design.md`.
+
+Exit criteria: the exit criteria in that spec.
+
+### 0.4: Results architecture and static results
 
 Scope:
 - A result-type registry that replaces the hard-coded `Displacement`/`VonMisesMax` in
@@ -68,22 +76,25 @@ Scope:
 Exit criteria: every result type round-trips from both the synthesized OP2 fixture
 (`tests/op2_fixture.py`) and an H5 file into named arrays, in the CLI, VTKHDF series and the plugin.
 
-### 0.4: Dynamics
+### 0.5: Dynamics and results helpers
 
 Scope:
 - Complex results (SOL 107/108/110/111, skipped today): real/imaginary and magnitude/phase arrays.
 - Frequency sweeps and transient responses (SOL 109/112) as time series in the plugin and VTKHDF,
   with static-array compaction still applying.
 - Phase-angle animation for modes and frequency response.
+- Results helpers as filters: envelopes (max, min, max-abs) over steps or subcases, element-to-node
+  averaging that does not average across PID boundaries, and free-body sums of element and SPC
+  forces across a cut (reusing the 0.3 traversal rules to pick the free body).
 
 Exit criteria: a frequency response and a transient case load as animated series in ParaView and
-convert to VTKHDF.
+convert to VTKHDF; each helper is tested against hand-computed values.
 
 Open question for its spec: MYSTRAN does not solve these solution sequences, so the test and
 gallery data must come from pyNastran's bundled models, synthesized fixtures, or the user's MSC/NX
 runs.
 
-### 0.5: Composites
+### 0.6: Composites
 
 Scope:
 - PCOMP/PCOMPG ply layup on the Shells block (ply thickness, angle and material).
