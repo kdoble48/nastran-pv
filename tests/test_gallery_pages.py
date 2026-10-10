@@ -94,3 +94,17 @@ def test_results_page_legend_and_summary_per_mode():
     assert "x9.15" in tab1 and ">6.328<" in tab1 and "demo-results-m1.png" in tab1
     assert "x2.11" in tab2 and ">0.164<" in tab2 and "demo-results-m2.png" in tab2 and "x9.15" not in tab2
     assert "{tab-item} Static" not in page
+
+
+def test_scene_urls_carry_the_build_version(tmp_path):
+    """Pages serves files with max-age=600: a rebuilt scene keeps its name, so tag it per build."""
+    frames = [{"label": "m1", "frequency": 6.4, "scene": "demo results-m1.vtksz", "png": "demo-results-m1.png",
+               "text": [], "legends": []}]
+    man = {"generated": "2026-10-10T02:29:05+00:00", "commit": "abc",
+           "views": [_view("pid"), dict(_view("results", frames=frames), model="demo")]}
+    g.write_pages(man, tmp_path)
+    pid = (tmp_path / "ucrm9-pid.md").read_text(encoding="utf-8")
+    assert 'fileURL=gallery/ucrm9-pid.vtksz%3Fv%3D20261010T022905"' in pid
+    res = (tmp_path / "demo-results.md").read_text(encoding="utf-8")
+    assert "fileURL=gallery/demo%20results-m1.vtksz%3Fv%3D20261010T022905" in res  # names are URL-encoded
+    assert "demo-results-m1.png?v=20261010T022905" in res
