@@ -82,9 +82,9 @@ nastran-pv check run.bdf --strict -o out/findings.vtm  # exit 1 on errors; findi
 |---|---|---|
 | `FreeEdges` | info | Shell boundary edges. Plate boundaries are free edges; a free edge inside a panel is an unmerged seam. |
 | `FreeFaces` | info | Solid boundary faces. Clip the model to see interior cracks. |
-| `CoincidentGrids` | error | Distinct grids closer than `--tol` × the model diagonal (default 1e-6), unless a rigid, bush or connector leg joins them (zero-length springs are normal). |
+| `CoincidentGrids` | error | Distinct grids closer than `--tol` × the model diagonal (default 1e-6), unless one rigid, bush or connector element ties them (zero-length springs and bolt spiders are normal). |
 | `DuplicateElements` | error | Elements in one mesh block with the same grids (`DuplicateOf` names the first). |
-| `DanglingConnectors` | error | Rigid, bush or connector legs with a grid that nothing else uses: no element, mass, SPC or load. |
+| `DanglingConnectors` | error | Rigid, bush or connector legs to a grid that nothing else uses: no element, mass, SPC or load. The hub of a multi-leg spider (a bolt's RBE2 center) does not count. |
 | `FloatingParts` | info | Parts with no SPC grid. Expected in free-free modal runs. |
 
 `--strict` fails only on error checks. `--rules` decides what a part is for `FloatingParts`;

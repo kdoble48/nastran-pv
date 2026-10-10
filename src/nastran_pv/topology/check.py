@@ -71,9 +71,13 @@ def _free_faces(blocks, graph, rules, tol):
 def _coincident(blocks, graph, rules, tol):
     diag = float(np.linalg.norm(graph.xyz.max(axis=0) - graph.xyz.min(axis=0))) or 1.0
     pairs = cKDTree(graph.xyz).query_pairs(tol * diag, output_type="ndarray")
-    if len(pairs):
-        joined = {tuple(sorted(graph.cell_grids(c).tolist())) for c in np.flatnonzero(graph.group_mask(LINK_GROUPS))}
-        pairs = np.array([p for p in pairs.tolist() if tuple(sorted(p)) not in joined], dtype=np.int64).reshape(-1, 2)
+    if len(pairs):  # grids of one rigid, bush or connector element are tied together, not unmerged
+        owners = {}
+        for c in np.flatnonzero(graph.group_mask(LINK_GROUPS)):
+            for g in graph.cell_grids(c).tolist():
+                owners.setdefault(g, set()).add((int(graph.card[c]), int(graph.eid[c])))
+        pairs = np.array([p for p in pairs.tolist() if not owners.get(p[0], set()) & owners.get(p[1], set())],
+                         dtype=np.int64).reshape(-1, 2)
     if not len(pairs):
         return 0, None
     out = vtkutil.polydata(graph.xyz[pairs[:, 0]])
@@ -114,7 +118,13 @@ def _dangling(blocks, graph, rules, tol):
     per_grid = (graph.incidence.T.tocsr() @ onehot).tocsr()
     per_grid.data[:] = 1
     lonely = (np.asarray(per_grid.sum(axis=1)).ravel() == 1) & ~_used_by_points(blocks, graph)
-    cells = [c for c in np.flatnonzero(graph.group_mask(LINK_GROUPS)) if lonely[graph.cell_grids(c)].any()]
+    link = np.flatnonzero(graph.group_mask(LINK_GROUPS))
+    legs = {}
+    for c in link:
+        legs.setdefault(int(keys[c]), []).append(set(graph.cell_grids(c).tolist()))
+    # the hub of a multi-leg spider (in every leg, e.g. a bolt's RBE2 center) is not a loose end
+    hubs = {k: set.intersection(*v) if len(v) > 1 else set() for k, v in legs.items()}
+    cells = [c for c in link if any(lonely[g] and g not in hubs[int(keys[c])] for g in graph.cell_grids(c).tolist())]
     return len(cells), gather_cells(blocks, graph, cells)
 
 

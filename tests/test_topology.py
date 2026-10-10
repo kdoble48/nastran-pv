@@ -306,3 +306,34 @@ def test_check_without_shells_or_solids():
     mb = build_multiblock(load_deck(DATA / "topology.bdf", echo=False), Options(shells=False, solids=False))
     counts = {r["Name"]: r["Count"] for r in check(mb).summary}
     assert counts["FreeEdges"] == 0 and counts["FreeFaces"] == 0 and counts["DuplicateElements"] == 0
+
+
+SPIDERS = """\
+GRID,1,,0.,0.,0.
+GRID,2,,1.,0.,0.
+GRID,3,,1.,1.,0.
+GRID,4,,0.,1.,0.
+GRID,5,,1.,0.,0.
+GRID,6,,2.,0.,0.
+GRID,7,,2.,1.,0.
+GRID,8,,1.5,1.,0.
+GRID,9,,1.,0.5,1.
+GRID,10,,5.,5.,0.
+MAT1,1,1.e7,,0.3,1.
+PSHELL,1,1,0.1,1
+CQUAD4,1,1,1,2,3,4
+CQUAD4,2,1,5,6,7,8
+RBE2,100,9,123456,2,5
+RBE2,101,3,123456,10
+"""
+
+
+def test_spider_hubs_and_tied_grids_are_not_errors(tmp_path):
+    """A bolt modeled as an RBE2 from a free center grid ties grids 2 and 5 (coincident): neither the
+    hub nor the tied pair is an error. RBE2 101's leg to grid 10, which nothing uses, is dangling."""
+    p = tmp_path / "spiders.bdf"
+    p.write_text(SPIDERS)
+    res = check(build_multiblock(load_deck(p, echo=False)))
+    counts = {r["Name"]: r["Count"] for r in res.summary}
+    assert (counts["CoincidentGrids"], counts["DanglingConnectors"]) == (0, 1)
+    assert arr(get_block(res.findings, "DanglingConnectors"), "EID", "cell").tolist() == [101]
