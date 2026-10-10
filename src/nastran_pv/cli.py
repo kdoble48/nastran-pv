@@ -2,6 +2,7 @@
 
     nastran-pv convert DECK|VTM -o out.vtm [field options]   write a VTK multiblock
     nastran-pv stats DECK|VTM --by PID --field ElementMass   group statistics table
+    nastran-pv check DECK|VTM [--strict] [-o findings.vtm]   model checks
     nastran-pv store add|list|fields|query|compare|open ...  model/results store (SQLite)
     nastran-pv view DECK --view masses                       open the ParaView GUI on a deck
     nastran-pv render DECK --preset ...                      batch screenshots (pvpython)
@@ -11,6 +12,8 @@ Field options (convert, stats, store add):
     --derive [GROUP ...]          material quality size cg pidmass (none given = all)
     --map SOURCE KEY [SHEET|SQL]  CSV/JSON/XLSX/SQLite/SQLAlchemy-URL table by EID|PID|MID|NID|FAMILY|GROUP
     --calc "Name = expression"    numpy expression over existing arrays
+    --parts / --grow SEEDS        PartId / Hops from "EID 1; GRID 5; PID 7",
+                                  under --rules "exclude=rigid max_hops=5"
 """
 from __future__ import annotations
 
@@ -79,6 +82,20 @@ def apply_field_options(mb, args) -> list[str]:
         is_excel = Path(source).suffix.lower() in (".xlsx", ".xlsm", ".xls")
         table = read_table(source, sheet=extra if is_excel else None, query=None if is_excel else extra)
         notes.append(f"{Path(source).name}: {map_table(mb, table, key, prefix=args.map_prefix or '')}")
+    if getattr(args, "parts", False) or getattr(args, "grow", None):
+        from .topology import Graph, Rules, grow, parts
+
+        try:
+            rules = Rules.parse(args.rules)
+            graph = Graph.from_multiblock(mb)
+            if args.parts:
+                res = parts(mb, rules, graph=graph)
+                notes += [f"parts: {res.count} part(s), {len(res.links)} link(s)"] + res.warnings
+            if args.grow:
+                res = grow(mb, args.grow, rules, graph=graph)
+                notes += [f"grow: {res.cells} cell(s) reached, max {res.max_hop} hop(s)"] + res.warnings
+        except ValueError as exc:
+            raise SystemExit(f"nastran-pv: {exc}") from None
     for expr in args.calc or []:
         notes.append(f"calc {expr!r} on {', '.join(calculate(mb, expr))}")
     return notes
@@ -98,6 +115,9 @@ def add_model_arguments(p, results=True):
                    help="map a table: SOURCE KEY [SHEET|SQL]; repeatable")
     p.add_argument("--map-prefix", default="", help="prefix for mapped array names")
     p.add_argument("--calc", action="append", metavar="EXPR", help='"Name = expression"; repeatable')
+    p.add_argument("--parts", action="store_true", help="PartId per cell and grid, PART_*/LINK_* tables (see --rules)")
+    p.add_argument("--grow", metavar="SEEDS", help='Hops from seeds, e.g. "EID 1001; GRID 55; PID 7" (see --rules)')
+    p.add_argument("--rules", metavar="TEXT", help='traversal rules, e.g. "exclude=rigid,CBUSH max_hops=5"')
     p.add_argument("-v", "--verbose", action="store_true", help="echo pyNastran warnings")
 
 
@@ -181,6 +201,23 @@ def cmd_stats(args) -> int:
     return 0
 
 
+def cmd_check(args) -> int:
+    from .topology import CHECKS, Rules, check
+
+    mb, _, _ = load_model(args, args.verbose)
+    try:
+        res = check(mb, Rules.parse(args.rules), tol=args.tol, checks=args.only or CHECKS)
+    except ValueError as exc:
+        raise SystemExit(f"nastran-pv check: {exc}") from None
+    _print_rows(res.summary)
+    if args.output:
+        print(f"wrote {write_vtm(res.findings, Path(args.output))}")
+    if args.strict and res.errors:
+        print(f"{res.errors} error finding(s)")
+        return 1
+    return 0
+
+
 def cmd_store(args) -> int:
     from .store import Store
 
@@ -249,6 +286,18 @@ def main(argv=None) -> int:
     s.add_argument("--limit", type=int, default=None)
     s.add_argument("--csv", help="also write the table to CSV")
     s.set_defaults(func=cmd_stats)
+
+    k = sub.add_parser("check", help="model checks: free edges/faces, coincident grids, duplicates, "
+                                     "dangling connectors, floating parts")
+    k.add_argument("input", help="run deck, bulk-data file, or a .vtm written by nastran-pv")
+    k.add_argument("--rules", metavar="TEXT", help="traversal rules that define a part (FloatingParts)")
+    k.add_argument("--tol", type=float, default=1e-6, help="coincident-grid distance / model diagonal (default 1e-6)")
+    k.add_argument("--only", nargs="+", metavar="CHECK", help="FreeEdges FreeFaces CoincidentGrids "
+                                                             "DuplicateElements DanglingConnectors FloatingParts")
+    k.add_argument("-o", "--output", help="write the findings as a .vtm")
+    k.add_argument("--strict", action="store_true", help="exit 1 when an error-severity check finds anything")
+    k.add_argument("-v", "--verbose", action="store_true", help="echo pyNastran warnings")
+    k.set_defaults(func=cmd_check)
 
     st = sub.add_parser("store", help="model/results store (SQLite + saved .vtm per run)")
     ssub = st.add_subparsers(dest="store_cmd", required=True)

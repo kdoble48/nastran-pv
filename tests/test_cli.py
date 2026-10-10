@@ -88,3 +88,42 @@ def test_convert_and_store_vtkhdf(tmp_path, capsys):
     with Store(db) as st:
         assert st.runs()[0]["vtm"].endswith(".vtkhdf")
         assert st.load(1).IsA("vtkPartitionedDataSetCollection")
+
+
+TOPO = str(DATA / "topology.bdf")
+CLEAN_PLATE = ("GRID,1,,0.,0.,0.\nGRID,2,,1.,0.,0.\nGRID,3,,1.,1.,0.\nGRID,4,,0.,1.,0.\n"
+               "MAT1,1,1.e7,,0.3,1.\nPSHELL,1,1,0.1,1\nCQUAD4,1,1,1,2,3,4\nSPC1,1,123456,1\n")
+
+
+def test_check_command(tmp_path, capsys):
+    out = tmp_path / "check.vtm"
+    assert main(["check", TOPO, "-o", str(out)]) == 0
+    text = capsys.readouterr().out
+    assert "CoincidentGrids" in text and "error" in text and f"wrote {out}" in text
+    assert get_block(read_vtm(out), "DuplicateElements").GetNumberOfCells() == 1
+    assert main(["check", TOPO, "--strict"]) == 1
+    plate = tmp_path / "plate.bdf"
+    plate.write_text(CLEAN_PLATE)
+    assert main(["check", str(plate), "--strict"]) == 0
+
+
+def test_convert_parts_and_grow(tmp_path, capsys):
+    out = tmp_path / "t.vtm"
+    assert main(["convert", TOPO, "-o", str(out), "--parts", "--grow", "EID 1", "--rules", "exclude=rigid",
+                 "--calc", "Twice = 2 * PartId"]) == 0
+    text = capsys.readouterr().out
+    assert "parts: 3 part(s), 1 link(s)" in text and "grow: 5 cell(s) reached, max 2 hop(s)" in text
+    shells = get_block(read_vtm(out), "Shells")
+    assert arr(shells, "PartId", "cell")[row_of(shells, "EID", 1, "cell")] == 1
+    assert arr(shells, "Hops", "cell")[row_of(shells, "EID", 11, "cell")] == -1
+    assert arr(shells, "Twice", "cell")[row_of(shells, "EID", 1, "cell")] == 2
+
+
+def test_stats_by_part(capsys):
+    assert main(["stats", TOPO, "--parts", "--by", "PartId", "--field", "ElementMass"]) == 0
+    assert capsys.readouterr().out.split()[0] == "PartId"
+
+
+def test_bad_rules_exit(tmp_path):
+    with pytest.raises(SystemExit, match="max_hops"):
+        main(["convert", TOPO, "--parts", "--rules", "max_hops=x", "-o", str(tmp_path / "x.vtm")])

@@ -5,6 +5,7 @@ nastran-pv view   DECK [--view masses] [--results run.op2|run.h5]   # opens the 
 nastran-pv render DECK --preset masses loads --views iso top        # batch screenshots
 nastran-pv convert DECK|VTM -o out.vtm [field options] [--results F [--all-steps]]
 nastran-pv stats  DECK|VTM --by PID|MID|FAMILY|GROUP|ELEMENTTYPE --field ElementMass [--csv t.csv]
+nastran-pv check  DECK|VTM [--strict] [--rules TEXT] [-o findings.vtm]
 nastran-pv store  add|list|fields|query|compare|open --db runs.sqlite ...
 nastran-pv setup  [--pvpython PATH] [--no-macros] [--dry-run]
 ```
@@ -13,7 +14,7 @@ nastran-pv setup  [--pvpython PATH] [--no-macros] [--dry-run]
 with `--help` for the full option list.
 
 The field options `--derive`, `--map` and `--calc` (for `convert`, `stats` and `store add`) are
-described in [Fields](fields.md). The `store` commands are described in [Run store](store.md).
+described in [Fields](fields.md); `--parts`, `--grow` and `--rules` in [Model tools](tools.md). The `store` commands are described in [Run store](store.md).
 
 ## Converting
 
@@ -34,6 +35,16 @@ nastran-pv convert run.bdf --no-loads --k-ref 1e5 -o out/model.vtm
 ```bash
 nastran-pv stats out/ucrm.vtm --by GROUP --field ElementMass
 ```
+
+## Model checks
+
+```bash
+nastran-pv check run_deck.bdf                                # summary table
+nastran-pv check run_deck.bdf --strict -o out/findings.vtm   # exit 1 on errors; findings for ParaView
+```
+
+`check` reports free edges and faces, coincident grids, duplicate elements, dangling connectors
+and floating parts. See [Model tools](tools.md#model-check) for what each check means.
 
 ## Opening ParaView
 
