@@ -549,8 +549,7 @@ def view_parts(model, view):
     labels = ["excluded" if v < 0 else f"Part {v}" for v in values]
     categorical(d, "PartId", values, labels, colors=colors, view=view)
     n = sum(v >= 0 for v in values)
-    info_text(model, view, f"{n} part(s). Uncheck card types on 'NPV parts' to split the model there;\n"
-                           "its third output lists the elements that join the parts.")
+    info_text(model, view, f"{n} part(s)\nUncheck card types on 'NPV parts'\nto split the model there")
 
 
 def view_grow(model, view):
@@ -567,8 +566,8 @@ def view_grow(model, view):
     continuous(d, "CELLS", "Hops", preset="Turbo", view=view)
     hops = _gather(servermanager.Fetch(g), "Hops", "CELLS")
     top = int(hops.max()) if hops.size else -1
-    info_text(model, view, f"Grow from {g.SeedIDs}: up to {top} element hops.\n"
-                           "Uncheck card types or limit hops on 'NPV grow'.")
+    seeds = g.SeedIDs if len(g.SeedIDs) <= 40 else g.SeedIDs[:37] + "..."
+    info_text(model, view, f"Grow from {seeds}\nup to {top} element hops")
 
 
 def view_path(model, view):
@@ -587,13 +586,27 @@ def view_path(model, view):
               else f"No path from grid {p.FromGrid} to grid {p.ToGrid} through the checked card types.")
 
 
+INFO_CHECKS = ("FreeEdges", "FreeFaces", "FloatingParts")
+ERROR_CHECKS = ("CoincidentGrids", "DuplicateElements", "DanglingConnectors")
+
+
 def view_check(model, view):
+    """Info findings (free edges/faces, floating parts: often the whole model) translucent orange;
+    error findings opaque on top, one color per check."""
     c = _named(model, "check", lambda: pv.NastranModelCheck(Input=model.reader))
-    ghost_mesh(model, view, opacity=0.25)
-    d = pv.Show(c, view)
+    ghost_mesh(model, view, opacity=0.2)
+    info = _named(model, "check info",
+                  lambda: pv.ExtractBlock(Input=c, Selectors=[f"/Root/{b}" for b in INFO_CHECKS]))
+    di = pv.Show(info, view)
+    solid(di, [0.95, 0.6, 0.2])
+    di.Opacity = 0.3
+    di.LineWidth = 2
+    err = _named(model, "check errors",
+                 lambda: pv.ExtractBlock(Input=c, Selectors=[f"/Root/{b}" for b in ERROR_CHECKS]))
+    d = pv.Show(err, view)
     pv.ColorBy(d, ("FIELD", "vtkBlockColors"))
-    d.LineWidth = 3
-    d.PointSize = 8
+    d.LineWidth = 4
+    d.PointSize = 10
     d.RenderPointsAsSpheres = 1
     fd = servermanager.Fetch(c).GetFieldData()
     names = fd.GetAbstractArray("CHECK_Name")
