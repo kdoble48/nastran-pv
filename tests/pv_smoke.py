@@ -167,6 +167,62 @@ def main():
         finally:  # release the file before the temp dir is removed
             pv.Delete(shells)
             pv.Delete(hdf)
+
+    import json
+
+    import export_site as es
+
+    if has_trame:
+        # ParaView keeps result files open on Windows: ignore cleanup errors
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            op2 = make_op2()
+            op2.displacements.clear()  # two eigenvector modes only
+            modes = os.path.join(tmp, "modes.op2")
+            op2.write_op2(modes)
+            single = make_op2()
+            single.eigenvectors.clear()  # one static step, no frequency
+            static = os.path.join(tmp, "static.op2")
+            single.write_op2(static)
+            models = [
+                {"id": "tiny", "title": "Tiny", "deck": DECK, "results": modes,
+                 "views": ["pid", "bushes", "results"], "credit": "test"},
+                {"id": "one", "title": "One", "deck": DECK, "results": static,
+                 "views": ["results"], "credit": "test"},
+                {"id": "gone", "title": "Gone", "deck": os.path.join(tmp, "missing.bdf"),
+                 "results": None, "views": ["pid"], "credit": "test"},
+            ]
+            mj = os.path.join(tmp, "models.json")
+            with open(mj, "w", encoding="utf-8") as f:
+                json.dump(models, f)
+            out = os.path.join(tmp, "out dir")  # spaces in paths must survive
+            check(es.main([mj, out]) == 0, "export_site runs")
+
+            def meta(name):
+                with open(os.path.join(out, name), encoding="utf-8") as f:
+                    return json.load(f)
+
+            pid = meta("tiny-pid.json")
+            check(all(os.path.exists(os.path.join(out, pid[k])) for k in ("png", "scene", "thumb_raw"))
+                  and pid["scene_bytes"] > 0 and pid["legends"][0]["kind"] == "categorical"
+                  and pid["reproduce"][0].startswith("nastran-pv view tiny_run.bdf --view pid"),
+                  "pid view exported with files, legend and reproduce line")
+            check(os.path.exists(os.path.join(out, "tiny-bushes.json")), "bushes view exported")
+            res = meta("tiny-results.json")
+            # the fixture's eigenvectors read back from a written OP2 as a 2-step displacement table
+            # (no frequencies); real modal frequencies are checked on the MYSTRAN demo build
+            check(len(res["frames"]) == 2
+                  and all(os.path.exists(os.path.join(out, fr["scene"])) for fr in res["frames"]),
+                  f"results: one scene per step {[fr['label'] for fr in res['frames']]}")
+            one = meta("one-results.json")
+            check(len(one["frames"]) == 1 and one["frames"][0]["frequency"] is None,
+                  "single static step: one frame, frequency null")
+            check(not os.path.exists(os.path.join(out, "gone-pid.json")), "missing deck skipped")
+
+        reader.Bushes = 0
+        check(es.export_view(reader, {"id": "nb", "title": "", "deck": DECK, "results": None,
+                                      "credit": ""}, "bushes", tempfile.gettempdir()) is None,
+              "view with nothing to show is skipped")
+        reader.Bushes = 1
     print("pv_smoke: all checks passed")
 
 
