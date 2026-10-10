@@ -15,6 +15,7 @@ python paraview/install_macros.py [--remove]            # NPV toolbar macros in 
 PYTHONPATH=src python -m nastran_pv setup [--dry-run]   # runs both of the above
 python -m pyflakes src paraview/*.py tests              # lint (don't lint paraview/_vendor)
 PYTHONPATH=src python -m nastran_pv convert <deck> --results <op2|h5> --all-steps -o out/x.vtkhdf
+python docs/build_gallery.py --ucrm9 <coarse run deck> --mystran tools/mystran-19.0.0-windows-x86_64.exe [--upload]   # gallery assets (slow: background)
 ```
 
 The real datasets live in gitignored folders at the repo root: `gpk4zn73xn-1/` (uCRM-9, shells)

@@ -55,3 +55,19 @@ The docs describe behavior that lives in code. Update them in the same change wh
 | Builders, `assemble.py`, `results*.py` | [model.md](model.md) |
 | `vtkio.py`, `vtkhdf.py`, `store.py` | [output-formats.md](output-formats.md), [store.md](store.md) |
 | Dependencies, extras, environment variables | [install.md](install.md) |
+
+## Regenerating the gallery
+
+The view gallery's images and 3D scenes are generated locally, because they need ParaView, the
+uCRM-9 dataset (see [Install](install.md#example-datasets)) and the MYSTRAN solver. They're then
+uploaded as the `gallery-assets` release asset, which the docs workflow downloads.
+
+```bash
+python paraview/install_deps.py --site      # once: trame-vtk for pvpython
+python docs/build_gallery.py --ucrm9 gpk4zn73xn-1/uCRM9/uCRM9/Mesh/Coarse/FEM/run_uCRM-9_static_cruise_coarse.bdf \
+    --mystran tools/mystran-19.0.0-windows-x86_64.exe --upload
+```
+
+Get MYSTRAN 19.0.0 from <https://github.com/MYSTRANsolver/MYSTRAN/releases> and put it in
+`tools/` (gitignored). Regenerate whenever a view, `export_site.py` or the demo deck changes. Close
+the ParaView GUI before re-running `install_deps.py`: it locks the files in `paraview/_vendor`.

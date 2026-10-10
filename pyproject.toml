@@ -20,7 +20,8 @@ h5 = ["h5py"]                         # MSC/NX HDF5 results
 tables = ["pandas", "openpyxl"]       # Excel tables for --map
 sql = ["pandas", "sqlalchemy"]        # non-SQLite databases for --map
 all = ["vtk>=9.3", "h5py", "pandas", "openpyxl", "sqlalchemy"]
-test = ["pytest", "vtk>=9.3", "h5py"]
+gallery = ["pillow"]                   # docs/build_gallery.py thumbnails
+test = ["pytest", "vtk>=9.3", "h5py", "pillow"]
 
 [project.scripts]
 nastran-pv = "nastran_pv.cli:main"
