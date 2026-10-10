@@ -35,3 +35,8 @@ dist/
 
 # ParaView plugin vendored deps (see paraview/install_deps.py)
 paraview/_vendor/
+tools/
+# MYSTRAN side files next to the demo deck (keep only the generator and the deck)
+docs/models/*
+!docs/models/make_demo.py
+!docs/models/demo.bdf

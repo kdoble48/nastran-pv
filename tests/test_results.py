@@ -16,8 +16,16 @@ def mb():
 def test_steps_are_listed_in_order():
     res = Op2Results(make_op2())
     assert [s.label for s in res.steps] == [
-        "Subcase 1", "Subcase 2 mode 1 (1.59 Hz)", "Subcase 2 mode 2 (3.18 Hz)"]
+        "Subcase 1", "Subcase 2 mode 1 (1.59155 Hz)", "Subcase 2 mode 2 (3.1831 Hz)"]
     assert res.times == [0.0, 1.0, 2.0]
+
+
+def test_frequency_from_eigenvalue_not_header_cycles():
+    """MYSTRAN's OP2 header holds rad/s where pyNastran reads cycles; sqrt(|lambda|)/2pi is right for both."""
+    op2 = make_op2()
+    op2.eigenvectors[2].mode_cycles = [10.0, 20.0]  # rad/s, as MYSTRAN 19 writes them
+    freqs = [s.frequency for s in Op2Results(op2).steps[1:]]
+    np.testing.assert_allclose(freqs, [10 / (2 * np.pi), 20 / (2 * np.pi)], rtol=1e-9)
 
 
 def test_static_displacement_and_von_mises(mb):
@@ -40,8 +48,8 @@ def test_mode_shape_step(mb):
     res.attach(mb, 2)  # re-attaching replaces arrays and labels
     shells = get_block(mb, "Shells")
     np.testing.assert_allclose(arr(shells, "Displacement")[row_of(shells, "NID", 6)], [0, 6, 0])
-    assert np.isclose(arr(mb, "Frequency", "field")[0], 3.18)
-    assert strings(mb, "ResultLabel") == ["Subcase 2 mode 2 (3.18 Hz)"]
+    assert np.isclose(arr(mb, "Frequency", "field")[0], 20 / (2 * np.pi))
+    assert strings(mb, "ResultLabel") == ["Subcase 2 mode 2 (3.1831 Hz)"]
     assert shells.GetCellData().GetArray("VonMisesMax") is None  # no stress for the modes: stale array removed
 
 

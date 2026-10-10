@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import subprocess
 from pathlib import Path
 
 from pyNastran.bdf.bdf import BDF
@@ -40,13 +41,16 @@ def _box_inertia(m, a, b, c):
     return [m * (b * b + c * c) / 12, 0.0, m * (a * a + c * c) / 12, 0.0, 0.0, m * (a * a + b * b) / 12]
 
 
-def _new(title):
+def _new(title, givens=False):
     model = BDF(debug=None)
     model.sol = 103
     model.executive_control_lines = ["SOL 103", "CEND"]
     model.case_control_deck = _case_control(title)
     model.add_param("POST", [-1])
-    model.add_eigrl(1, nd=6)
+    if givens:  # MYSTRAN's Lanczos (ARPACK) cannot solve very small problems
+        model.add_eigr(1, method="MGIV", nd=6)
+    else:
+        model.add_eigrl(1, nd=6)
     return model
 
 
@@ -85,7 +89,7 @@ def write_bush_check(path) -> Path:
     """One CONM2 on one CBUSH in CID 10 (30 deg about Z): modes must align with the rotated axes."""
     path = Path(path)
     c = BUSH_CHECK
-    model = _new("nastran-pv: CBUSH CID check")
+    model = _new("nastran-pv: CBUSH CID check", givens=True)
     model.add_grid(1, [0.0, 0.0, 0.0])
     model.add_grid(2, [0.0, 0.0, 0.0])  # coincident: no offset coupling translation and rotation
     _rotated_cid(model, 10, c["angle_deg"])
@@ -97,8 +101,20 @@ def write_bush_check(path) -> Path:
     return path
 
 
-def solve(bdf, mystran) -> Path:  # implemented in Task 5
-    raise NotImplementedError
+def solve(bdf, mystran) -> Path:
+    """Run MYSTRAN on ``bdf`` in its folder; return the OP2 it writes (case-insensitive name)."""
+    bdf, mystran = Path(bdf).resolve(), Path(mystran).resolve()
+    for old in bdf.parent.glob(bdf.stem + ".*"):
+        if old.suffix.lower() in (".op2", ".f06"):
+            old.unlink()
+    subprocess.run([str(mystran), bdf.name], cwd=bdf.parent, check=False,
+                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    for cand in bdf.parent.glob(bdf.stem + ".*"):
+        if cand.suffix.lower() == ".op2" and cand.stat().st_size > 0:
+            return cand
+    f06 = next((c for c in bdf.parent.glob(bdf.stem + ".*") if c.suffix.lower() == ".f06"), None)
+    tail = f06.read_text(errors="replace")[-2000:] if f06 else "(no F06 written)"
+    raise RuntimeError(f"MYSTRAN wrote no OP2 for {bdf.name}:\n{tail}")
 
 
 def main(argv=None) -> int:

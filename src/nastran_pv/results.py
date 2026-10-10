@@ -36,6 +36,16 @@ class Step:
     time: float = float("nan")  # OP2 time/load/mode value, used to pair stress tables
 
 
+def _mode_frequency(eigns, cycles, i) -> float:
+    """Hz from the eigenvalue, sqrt(|lambda|)/2pi; the header's cycles only as a fallback.
+
+    MYSTRAN writes rad/s in the OP2 header field that pyNastran reads as ``mode_cycles``.
+    """
+    if eigns is not None and len(eigns) > i and np.isfinite(eigns[i]):
+        return float(np.sqrt(abs(eigns[i])) / (2 * np.pi))
+    return float(cycles[i]) if cycles is not None and len(cycles) > i else float("nan")
+
+
 class Op2Results:
     def __init__(self, op2, path=None):
         """Wrap an already-read pyNastran ``OP2`` object (see :meth:`read`)."""
@@ -68,11 +78,12 @@ class Op2Results:
                 ntimes = res.data.shape[0]
                 times = np.asarray(getattr(res, "_times", []), dtype=float)
                 cycles = getattr(res, "mode_cycles", None)
+                eigns = getattr(res, "eigns", None)
                 modes = getattr(res, "modes", [])
                 for it in range(ntimes):
                     t = float(times[it]) if len(times) > it else float("nan")
                     if kind == "eigenvector":
-                        freq = float(cycles[it]) if cycles is not None and len(cycles) > it else float("nan")
+                        freq = _mode_frequency(eigns, cycles, it)
                         mode = int(modes[it]) if len(modes) > it else it + 1
                         label = f"Subcase {sc} mode {mode} ({freq:.6g} Hz)"
                         steps.append(Step(label, kind, key, it, freq, t))
