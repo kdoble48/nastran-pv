@@ -11,6 +11,8 @@ import os
 import sys
 import tempfile
 
+import numpy as np
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "paraview"))
@@ -72,6 +74,24 @@ def main():
     for name in nv.VIEWS:
         nv.apply(name, reader=reader, view=view)
     check(True, f"all views build: {', '.join(nv.VIEWS)}")
+    nloads = rm.Model(reader).block("Loads")
+    npts = max(nloads.GetBlock(i).GetNumberOfPoints() for i in range(nloads.GetNumberOfBlocks()))
+    check(npts > 1, f"tiny deck load set has {npts} points")
+    nv.MAX_LOAD_ARROWS = 1
+    lmodel = nv.apply("loads", reader=reader, view=view)
+    info = pv.FindSource(nv._name(lmodel, "info"))  # this reader's objects: "NPV <what> [<reader>]"
+    tag = nv._name(lmodel, "info")[len("NPV info"):]
+    glyph = next(s for (n, _), s in pv.GetSources().items()
+                 if n.startswith("NPV load arrows") and n.endswith(tag))
+    check(glyph.GlyphMode == "Every Nth Point" and "showing 1 of" in info.Text,
+          f"loads arrow cap: {glyph.GlyphMode!r}, {info.Text!r}")
+    nv.MAX_LOAD_ARROWS = 1500
+    nv.set_camera(view, "showcase")
+    pos, foc = np.array(view.CameraPosition), np.array(view.CameraFocalPoint)
+    d = (pos - foc) / np.linalg.norm(pos - foc)
+    want = np.array(nv.SHOWCASE_DIR) / np.linalg.norm(nv.SHOWCASE_DIR)
+    check(np.allclose(d, want, atol=1e-3) and np.allclose(view.CameraViewUp, [0, 0, 1], atol=1e-3),
+          f"showcase camera direction {d.round(3)}")
     disp = pv.Show(reader, view)
     pv.ColorBy(disp, ("CELLS", "PID"))
     pv.SetActiveSource(reader)
