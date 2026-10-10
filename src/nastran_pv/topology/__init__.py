@@ -5,7 +5,8 @@ arrays, like :mod:`nastran_pv.fields`.
 """
 from .grow import GrowResult, grow
 from .parts import PartsResult, label_parts, parts
+from .path import PathResult, path
 from .graph import GRAPH_BLOCKS, GROUPS, LINK_GROUPS, MESH_GROUPS, Graph, Rules, Seeds, card_types
 
 __all__ = ["GRAPH_BLOCKS", "GROUPS", "LINK_GROUPS", "MESH_GROUPS", "Graph", "Rules", "Seeds", "card_types", "GrowResult", "grow",
-           "PartsResult", "label_parts", "parts"]
+           "PartsResult", "label_parts", "parts", "PathResult", "path"]

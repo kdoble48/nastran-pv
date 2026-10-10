@@ -5,7 +5,7 @@ import pytest
 
 from nastran_pv import vtkutil
 from nastran_pv.fields.common import replace_array
-from nastran_pv.topology import GROUPS, Graph, Rules, Seeds, card_types, grow, parts
+from nastran_pv.topology import GROUPS, Graph, Rules, Seeds, card_types, grow, parts, path
 from nastran_pv.vtkio import read_vtm, write_vtm
 from conftest import arr, get_block, strings
 
@@ -250,3 +250,27 @@ def test_parts_without_links_writes_vtkhdf(topo_mb, tmp_path):
 
 def test_parts_warn_on_within_pids(topo_mb):
     assert parts(topo_mb, Rules(within_pids=True)).warnings == ["within_pids needs seeds; ignored for parts"]
+
+
+def test_path_through_every_connector_kind(topo_mb):
+    res = path(topo_mb, 4, 42)
+    assert (res.length, res.warnings) == (9, [])
+    on = by_eid(topo_mb, "Shells", "OnPath")
+    assert sorted(e for e, v in on.items() if v) == [1, 2, 11, 12, 21]
+    assert by_eid(topo_mb, "Lines", "OnPath") == {41: 1} and by_eid(topo_mb, "BushLines", "OnPath") == {200: 1}
+    assert by_eid(topo_mb, "Connectors", "OnPath") == {1: 0, 300: 1, 301: 0}
+    assert int(arr(get_block(topo_mb, "Rigid"), "OnPath", "cell").sum()) == 1
+    assert vtkutil.to_numpy(topo_mb.GetFieldData().GetArray("PathLength")).tolist() == [9]
+    assert by_point(topo_mb, "Shells", "OnPath")[4] == 1
+
+
+def test_path_unreachable(topo_mb):
+    res = path(topo_mb, 4, 42, Rules.parse("exclude=rigid"))
+    assert res.length == -1 and "no path from grid 4 to grid 42" in res.warnings[0]
+    assert set(by_eid(topo_mb, "Shells", "OnPath").values()) == {0}
+    assert path(topo_mb, 4, 42, Rules(max_hops=5)).length == -1
+
+
+def test_path_unknown_grid(topo_mb):
+    with pytest.raises(ValueError, match="999"):
+        path(topo_mb, 4, 999)
