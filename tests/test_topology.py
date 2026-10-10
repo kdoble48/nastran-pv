@@ -5,7 +5,7 @@ import pytest
 
 from nastran_pv import vtkutil
 from nastran_pv.fields.common import replace_array
-from nastran_pv.topology import GROUPS, Graph, Rules, Seeds, card_types
+from nastran_pv.topology import GROUPS, Graph, Rules, Seeds, card_types, grow
 from nastran_pv.vtkio import read_vtm, write_vtm
 from conftest import arr, get_block, strings
 
@@ -97,3 +97,91 @@ def test_seeds_parse():
     assert Seeds.parse("EID 1001 1002; grid 55, 56\nPID 7") == Seeds((1001, 1002), (55, 56), (7,))
     assert Seeds.parse("NID 3") == Seeds(grids=(3,))
     assert not Seeds.parse("  ")
+
+
+def by_eid(mb, block, name):
+    ds = get_block(mb, block)
+    return dict(zip(arr(ds, "EID", "cell").tolist(), arr(ds, name, "cell").tolist()))
+
+
+def by_point(mb, block, name, key="NID"):
+    ds = get_block(mb, block)
+    return dict(zip(arr(ds, key).tolist(), arr(ds, name).tolist()))
+
+
+def test_grow_counts_element_hops(topo_mb):
+    res = grow(topo_mb, "EID 1")
+    assert (res.warnings, res.cells, res.max_hop) == ([], 13, 8)
+    assert by_eid(topo_mb, "Shells", "Hops") == {1: 0, 2: 1, 11: 3, 12: 4, 21: 6, 51: -1, 52: -1, 53: -1}
+    assert by_eid(topo_mb, "Solids", "Hops") == {31: 2}
+    assert by_eid(topo_mb, "Lines", "Hops") == {41: 8}
+    assert by_eid(topo_mb, "Rigid", "Hops") == {100: 2}
+    assert by_eid(topo_mb, "Connectors", "Hops") == {1: 1, 300: 7, 301: 2}
+    assert by_eid(topo_mb, "BushLines", "Hops") == {200: 5}
+    grids = by_point(topo_mb, "Shells", "Hops")
+    assert [grids[n] for n in (1, 3, 13, 21, 51)] == [0, 1, 4, 5, -1]
+    assert by_point(topo_mb, "Connectors", "Hops")[7] == 2
+    assert by_point(topo_mb, "Masses", "Hops") == {42: 8}
+    assert by_point(topo_mb, "Constraints", "Hops") == {4: 0}
+    assert by_point(topo_mb, "Bushes", "Hops", key="GA") == {13: 4}
+    assert arr(get_block(topo_mb, "Masses"), "Hops", "cell").tolist() == [8]  # vertex cells too
+
+
+def test_grow_without_rbes(topo_mb):
+    res = grow(topo_mb, "EID 1", Rules.parse("exclude=rigid"))
+    assert res.cells == 5
+    assert by_eid(topo_mb, "Shells", "Hops")[11] == -1
+    assert by_eid(topo_mb, "Connectors", "Hops") == {1: 1, 300: -1, 301: 2}
+
+
+def test_grow_max_hops(topo_mb):
+    grow(topo_mb, "EID 1", Rules(max_hops=1))
+    assert by_eid(topo_mb, "Shells", "Hops") == {1: 0, 2: 1, 11: -1, 12: -1, 21: -1, 51: -1, 52: -1, 53: -1}
+    assert by_eid(topo_mb, "Solids", "Hops") == {31: -1}
+    grids = by_point(topo_mb, "Shells", "Hops")
+    assert [grids[n] for n in (4, 3)] == [0, 1] and by_point(topo_mb, "Connectors", "Hops")[7] == -1
+
+
+def test_grow_from_grid(topo_mb):
+    grow(topo_mb, "GRID 3")
+    assert by_eid(topo_mb, "Shells", "Hops")[2] == 0 and by_eid(topo_mb, "Rigid", "Hops") == {100: 0}
+    assert by_eid(topo_mb, "Shells", "Hops")[1] == 1 and by_eid(topo_mb, "Shells", "Hops")[11] == 1
+    assert by_point(topo_mb, "Shells", "Hops")[3] == 0
+
+
+def test_grow_pid_rules(topo_mb):
+    grow(topo_mb, "EID 11", Rules(within_pids=True))
+    hops = by_eid(topo_mb, "Shells", "Hops")
+    assert (hops[11], hops[12], hops[2]) == (0, 1, -1) and by_eid(topo_mb, "Rigid", "Hops") == {100: -1}
+    grow(topo_mb, "EID 1", Rules(exclude_pids=frozenset({2})))
+    assert by_eid(topo_mb, "Shells", "Hops")[11] == -1 and by_eid(topo_mb, "Rigid", "Hops") == {100: 2}
+    assert by_eid(topo_mb, "BushLines", "Hops") == {200: -1}
+
+
+def test_grow_reports_dropped_seeds(topo_mb):
+    res = grow(topo_mb, "EID 100", Rules.parse("exclude=rigid"))
+    assert res.cells == 0 and any("excluded by the rules: RBE2 100" in w for w in res.warnings)
+    res = grow(topo_mb, "EID 999; GRID 998; PID 77")
+    assert res.cells == 0 and any("not found: EID 999, GRID 998, PID 77" in w for w in res.warnings)
+
+
+@pytest.mark.parametrize("text", ["EID x", "FOO 1"])
+def test_seed_parse_errors(topo_mb, text):
+    with pytest.raises(ValueError, match="expected"):
+        grow(topo_mb, text)
+
+
+def test_grow_extract_keeps_input(topo_mb):
+    res = grow(topo_mb, "EID 1", Rules(max_hops=1), extract=True)
+    out = res.extracted
+    assert get_block(out, "Shells").GetNumberOfCells() == 2 and get_block(out, "Connectors").GetNumberOfCells() == 1
+    assert get_block(out, "Solids").GetNumberOfCells() == 0
+    assert get_block(topo_mb, "Shells").GetNumberOfCells() == 8
+
+
+def test_grow_rerun_replaces_arrays(topo_mb):
+    grow(topo_mb, "EID 1")
+    grow(topo_mb, "EID 51")
+    shells = get_block(topo_mb, "Shells")
+    names = [shells.GetCellData().GetArrayName(i) for i in range(shells.GetCellData().GetNumberOfArrays())]
+    assert names.count("Hops") == 1 and by_eid(topo_mb, "Shells", "Hops")[1] == -1

@@ -135,7 +135,7 @@ class Graph:
 
     def adjacency(self, allowed: np.ndarray) -> sparse.csr_matrix:
         """Bipartite (cells, then grids) adjacency with the disallowed cells cut out."""
-        a = sparse.diags(allowed.astype(np.int8)) @ self.incidence
+        a = sparse.diags(allowed.astype(np.int8), dtype=np.int8) @ self.incidence
         a.eliminate_zeros()
         return sparse.bmat([[None, a], [a.T, None]], format="csr")
 
