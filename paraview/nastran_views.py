@@ -538,8 +538,24 @@ def _root_value(src, name, default=None):
     return vtk_to_numpy(a).tolist()[0] if a is not None else default
 
 
-def view_parts(model, view):
+GROUP_PROPS = {"shells": "TraverseShells", "solids": "TraverseSolids", "lines": "TraverseLines",
+               "rigid": "TraverseRigid", "bushes": "TraverseBushes", "connectors": "TraverseConnectors"}
+
+
+def _exclude(src, names):
+    """Uncheck card types and groups (``rigid``, ``RBE3``, ...) on a topology filter."""
+    for name in names:
+        if name.lower() in GROUP_PROPS:
+            setattr(src, GROUP_PROPS[name.lower()], 0)
+    cards = {n.upper() for n in names if n.lower() not in GROUP_PROPS}
+    if cards:
+        src.UpdatePipelineInformation()
+        src.CardTypes = [c for c in list(src.GetProperty("CardTypesInfo"))[0::2] if c not in cards]
+
+
+def view_parts(model, view, exclude=()):
     p = _named(model, "parts", lambda: pv.NastranParts(Input=model.reader))
+    _exclude(p, exclude)
     d = pv.Show(_topology_blocks(model, p, "parts"), view)
     d.Representation = "Surface"
     d.LineWidth = 2.5
@@ -552,8 +568,11 @@ def view_parts(model, view):
     info_text(model, view, f"{n} part(s)\nUncheck card types on 'NPV parts'\nto split the model there")
 
 
-def view_grow(model, view):
+def view_grow(model, view, seeds=None, exclude=()):
     g = _named(model, "grow", lambda: pv.NastranGrow(Input=model.reader))
+    if seeds:
+        g.SeedIDs = seeds
+    _exclude(g, exclude)
     if not (g.SeedIDs or "").strip():
         ghost_mesh(model, view, opacity=0.35)
         info_text(model, view, "Select cells or grids, then click 'NPV Grow from Selection'\n"
@@ -586,28 +605,37 @@ def view_path(model, view):
               else f"No path from grid {p.FromGrid} to grid {p.ToGrid} through the checked card types.")
 
 
-INFO_CHECKS = ("FreeEdges", "FreeFaces", "FloatingParts")
-ERROR_CHECKS = ("CoincidentGrids", "DuplicateElements", "DanglingConnectors")
+CHECKS = ("FreeEdges", "FreeFaces", "CoincidentGrids", "DuplicateElements", "DanglingConnectors", "FloatingParts")
+CHECK_RGB = {"FreeEdges": (1.0, 0.5, 0.0), "FreeFaces": (0.95, 0.75, 0.35), "CoincidentGrids": (0.89, 0.10, 0.11),
+             "DuplicateElements": (0.80, 0.0, 0.60), "DanglingConnectors": (0.45, 0.10, 0.75),
+             "FloatingParts": (0.22, 0.49, 0.72)}
+SURFACE_INFO_CHECKS = ("FreeFaces", "FloatingParts")  # often the whole model: drawn translucent
+LINE_CHECKS = ("FreeEdges", "CoincidentGrids", "DuplicateElements", "DanglingConnectors")
+
+
+def _check_layer(model, c, view, what, blocks, codes):
+    ex = _named(model, what, lambda: pv.ExtractBlock(Input=c, Selectors=[f"/Root/{b}" for b in blocks]))
+    d = pv.Show(ex, view)
+    # both layers share the "Check" lookup table, so there is one legend naming the checks found
+    lut = categorical(d, "Check", codes, [CHECKS[k] for k in codes],
+                      colors=[CHECK_RGB[CHECKS[k]] for k in codes], view=view)
+    pv.GetScalarBar(lut, view).ComponentTitle = ""  # "Check", not "Check Magnitude"
+    return d
 
 
 def view_check(model, view):
-    """Info findings (free edges/faces, floating parts: often the whole model) translucent orange;
-    error findings opaque on top, one color per check."""
+    """Free faces and floating parts (often the whole model) translucent; free edges and the error
+    findings opaque on top. Colored by the ``Check`` array, one color per check."""
     c = _named(model, "check", lambda: pv.NastranModelCheck(Input=model.reader))
     ghost_mesh(model, view, opacity=0.2)
-    info = _named(model, "check info",
-                  lambda: pv.ExtractBlock(Input=c, Selectors=[f"/Root/{b}" for b in INFO_CHECKS]))
-    di = pv.Show(info, view)
-    solid(di, [0.95, 0.6, 0.2])
-    di.Opacity = 0.3
-    di.LineWidth = 2
-    err = _named(model, "check errors",
-                 lambda: pv.ExtractBlock(Input=c, Selectors=[f"/Root/{b}" for b in ERROR_CHECKS]))
-    d = pv.Show(err, view)
-    pv.ColorBy(d, ("FIELD", "vtkBlockColors"))
-    d.LineWidth = 4
-    d.PointSize = 10
-    d.RenderPointsAsSpheres = 1
+    codes = sorted({int(v) for v in _gather(servermanager.Fetch(c), "Check", "CELLS")})
+    if codes:
+        di = _check_layer(model, c, view, "check surfaces", SURFACE_INFO_CHECKS, codes)
+        di.Opacity = 0.3
+        d = _check_layer(model, c, view, "check findings", LINE_CHECKS, codes)
+        d.LineWidth = 4
+        d.PointSize = 10
+        d.RenderPointsAsSpheres = 1
     fd = servermanager.Fetch(c).GetFieldData()
     names = fd.GetAbstractArray("CHECK_Name")
     counts = fd.GetArray("CHECK_Count")

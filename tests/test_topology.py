@@ -373,3 +373,11 @@ def test_path_max_hops_matches_grow(topo_mb):
     assert by_point(topo_mb, "Shells", "Hops")[3] == 1
     assert path(topo_mb, 1, 3, Rules(max_hops=1)).length == 2
     assert path(topo_mb, 1, 3, Rules(max_hops=0)).length == -1
+
+
+def test_findings_carry_their_check_code(topo_mb):
+    """Each findings block has a Check cell array (index into CHECKS) for categorical coloring."""
+    f = check(topo_mb).findings
+    for name in ("FreeEdges", "CoincidentGrids", "DuplicateElements", "DanglingConnectors"):
+        blk = get_block(f, name)
+        assert set(arr(blk, "Check", "cell").tolist()) == {CHECKS.index(name)}, name

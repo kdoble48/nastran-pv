@@ -39,8 +39,10 @@ VIEW_INFO = {
     "elementtype": ("Element type", "Mesh colored by element type."),
     "thickness": ("Thickness", "Shell thickness."),
     "results": ("Results", "Deformed shape colored by displacement magnitude, one scene per mode."),
-    "parts": ("Parts", "Connected parts in indexed colors, traversing every element, rigid element, bush and "
-                       "connector; one legend entry per part."),
+    "parts": ("Parts", "Connected parts with the rigid elements unchecked: the RBE2/RBE3 spiders turn gray as the "
+                       "links the rules cut, and the part summary shows what they carry."),
+    "grow": ("Grow", "Element hops from the root rib (seed PID 238) through skins, spars, ribs and rigid elements, "
+                     "to the tip."),
     "check": ("Model check", "Free edges and faces, coincident grids, duplicate elements, dangling connectors and "
                              "floating parts, one color per check, with counts."),
 }
@@ -87,7 +89,7 @@ def export_view(reader, model, view_name, out):
         time = t if t is not None else 0.0
         view.ViewTime = time
         state = nv.Model(reader, time)
-        nv.apply(view_name, reader=reader, view=view, model=state)
+        nv.apply(view_name, reader=reader, view=view, model=state, **model.get("view_args", {}).get(view_name, {}))
         nv.set_camera(view, "showcase")
         if not has_content(view):
             pv.Delete(view)
@@ -105,8 +107,9 @@ def export_view(reader, model, view_name, out):
                 "png": f"{stem}.png", "thumb": f"{base}-thumb.png", "thumb_raw": f"{base}-thumb-raw.png",
                 "scene": f"{stem}.vtksz", "scene_bytes": os.path.getsize(os.path.join(out, f"{stem}.vtksz")),
                 "text": over["text"], "legends": over["legends"], "frames": frames,
-                "reproduce": [f"nastran-pv view {deck} --view {view_name}{res}",
-                              f"nastran-pv render {deck} --preset {view_name} --views showcase{res}"],
+                "reproduce": model.get("reproduce", {}).get(view_name) or [
+                    f"nastran-pv view {deck} --view {view_name}{res}",
+                    f"nastran-pv render {deck} --preset {view_name} --views showcase{res}"],
                 "credit": model.get("credit", ""),
             }
             se.hide_overlays(view)

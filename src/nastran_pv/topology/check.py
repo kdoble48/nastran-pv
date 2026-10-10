@@ -12,7 +12,7 @@ from vtkmodules.vtkFiltersCore import vtkFeatureEdges
 from vtkmodules.vtkFiltersGeometry import vtkDataSetSurfaceFilter, vtkGeometryFilter
 
 from .. import vtkutil
-from ..fields.common import get_array, iter_blocks
+from ..fields.common import get_array, iter_blocks, replace_array
 from .common import gather_cells, write_table
 from .graph import LINK_GROUPS, MESH_GROUPS, Graph, Rules
 from .parts import label_parts
@@ -163,6 +163,8 @@ def check(mb, rules: Rules | None = None, tol: float = 1e-6, checks=CHECKS, grap
         count, block = FUNCS[name](blocks, graph, rules, tol)
         rows.append({"Name": name, "Count": int(count), "Severity": SEVERITY[name]})
         if count and block is not None:
+            # the check's code on every cell, for categorical coloring of all findings at once
+            replace_array(block.GetCellData(), "Check", np.full(block.GetNumberOfCells(), CHECKS.index(name), np.int32))
             i = out.GetNumberOfBlocks()
             out.SetBlock(i, block)
             out.GetMetaData(i).Set(vtkMultiBlockDataSet.NAME(), name)

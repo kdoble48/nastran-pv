@@ -119,6 +119,16 @@ def topology_checks(pv, nv):
     for name in ("parts", "grow", "path", "check"):
         nv.apply(name, reader=topo, view=view)
     check(True, "topology views build on the topology deck")
+
+    import export_site as es
+
+    nv.apply("parts", reader=topo, view=view, exclude=["rigid"])
+    parts_src = pv.FindSource(nv._name(nv.Model(topo), "parts"))
+    check(servermanager.Fetch(parts_src, idx=1).GetNumberOfRows() == 3, "parts view exclude=['rigid'] -> 3 parts")
+    nv.apply("grow", reader=topo, view=view, seeds="PID 6")
+    check(grow_src.SeedIDs == "PID 6", "grow view seeds= sets Seed IDs")
+    nv.apply("check", reader=topo, view=view)
+    check(es.has_content(view), "check view counts as content for the gallery exporter")
     return topo
 
 
