@@ -40,3 +40,9 @@ tools/
 docs/models/*
 !docs/models/make_demo.py
 !docs/models/demo.bdf
+
+# Docs site (generated)
+docs/_build/
+docs/gallery/
+docs/_static/gallery/
+docs/_static/viewer.html

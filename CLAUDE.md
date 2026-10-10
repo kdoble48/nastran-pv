@@ -16,6 +16,7 @@ PYTHONPATH=src python -m nastran_pv setup [--dry-run]   # runs both of the above
 python -m pyflakes src paraview/*.py tests              # lint (don't lint paraview/_vendor)
 PYTHONPATH=src python -m nastran_pv convert <deck> --results <op2|h5> --all-steps -o out/x.vtkhdf
 python docs/build_gallery.py --ucrm9 <coarse run deck> --mystran tools/mystran-19.0.0-windows-x86_64.exe [--upload]   # gallery assets (slow: background)
+.venv/Scripts/python -m sphinx -W -b html docs docs/_build/html   # docs site (pip install -r docs/requirements.txt into .venv)
 ```
 
 The real datasets live in gitignored folders at the repo root: `gpk4zn73xn-1/` (uCRM-9, shells)
@@ -37,7 +38,9 @@ free of pytest imports). pytest gets `src` on its path from `pyproject.toml`, so
   because `locate.py` and the plugin's `../src` bootstrap depend on where it sits.
 - `tests/`: `test_<area>.py` files, synthetic inputs in `tests/data/`, and `pv_smoke.py`, which runs
   under pvpython only and is not collected by pytest.
-- `docs/`: user-facing Markdown, indexed by `docs/index.md`. The rules are in
+- `docs/`: user-facing Markdown, indexed by `docs/index.md`.
+  - The site is Sphinx (`docs/conf.py`); `docs/gallery/` is generated from release assets by
+    `docs/_ext/npv_gallery.py`; `docs/models/` and `docs/superpowers/` are unpublished. The rules are in
   `docs/development.md#writing-docs`. In short:
   - Every page is flat in `docs/`, listed once in the index under Getting started, Guides,
     Reference or Development.

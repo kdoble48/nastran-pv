@@ -8,7 +8,7 @@ python -m pyflakes src paraview/*.py tests  # lint (skip paraview/_vendor)
 ```
 
 The architecture, the repository layout and the known VTK, ParaView and pyNastran quirks are
-described in [CLAUDE.md](../CLAUDE.md).
+described in [CLAUDE.md](https://github.com/kdoble48/nastran-pv/blob/main/CLAUDE.md).
 
 ## Writing docs
 
@@ -30,6 +30,10 @@ described in [CLAUDE.md](../CLAUDE.md).
   not in the index does not exist for readers. Add the entry in the same change as the page.
 - One topic per page. If a topic is needed on two pages, it lives on one of them and the other
   links to it (for example, field options live in `fields.md` and `cli.md` links there).
+
+- The site is built with Sphinx from `docs/` (`docs/conf.py`). `docs/gallery/` is generated at
+  build time from the gallery assets: never edit or commit it. `docs/models/` (the demo deck) and
+  `docs/superpowers/` (design specs and plans) are not published.
 
 ### Pages
 
@@ -71,3 +75,13 @@ python docs/build_gallery.py --ucrm9 gpk4zn73xn-1/uCRM9/uCRM9/Mesh/Coarse/FEM/ru
 Get MYSTRAN 19.0.0 from <https://github.com/MYSTRANsolver/MYSTRAN/releases> and put it in
 `tools/` (gitignored). Regenerate whenever a view, `export_site.py` or the demo deck changes. Close
 the ParaView GUI before re-running `install_deps.py`: it locks the files in `paraview/_vendor`.
+
+## Building the site locally
+
+```bash
+python -m venv .venv && .venv/Scripts/python -m pip install -r docs/requirements.txt
+.venv/Scripts/python -m sphinx -W -b html docs docs/_build/html
+```
+
+To include the gallery, unzip `build/gallery-assets.zip` (from `docs/build_gallery.py`) into
+`docs/_static/gallery/` first.
