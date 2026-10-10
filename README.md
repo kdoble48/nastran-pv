@@ -38,7 +38,7 @@ nastran-pv stats out/model.vtm --by PID --field ElementMass
 
 ## Documentation
 
-The full documentation is indexed in [docs/index.md](docs/index.md):
+The full documentation, including an interactive 3D view gallery, is at <https://kdoble48.github.io/nastran-pv/> (sources indexed in [docs/index.md](docs/index.md)):
 
 - [ParaView](docs/paraview.md): the reader, one-click views, glyph filters, indexed colors
 - [CLI](docs/cli.md), [Fields](docs/fields.md), [Run store](docs/store.md)
