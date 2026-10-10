@@ -25,6 +25,19 @@ def run_mb():
     return build_multiblock(load_deck(DATA / "tiny_run.bdf", echo=False))
 
 
+@pytest.fixture(scope="session")
+def topo_base():
+    return build_multiblock(load_deck(DATA / "topology.bdf", echo=False))
+
+
+@pytest.fixture()
+def topo_mb(topo_base):
+    """Fresh attribute containers per test: topology operations add arrays in place."""
+    from nastran_pv.fields.common import shallow_clone
+
+    return shallow_clone(topo_base)
+
+
 def arr(dataset, name, where="point"):
     data = getattr(dataset, {"point": "GetPointData", "cell": "GetCellData", "field": "GetFieldData"}[where])()
     a = data.GetArray(name)

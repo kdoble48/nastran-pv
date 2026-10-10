@@ -30,6 +30,108 @@ def check(cond, msg):
     print(f"ok: {msg}")
 
 
+def _by_eid(src, block, name):
+    import nastran_views as nv
+    from paraview import servermanager
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    data = servermanager.Fetch(src)
+    blk = data.GetBlock(nv.block_names(data).index(block))
+    cd = blk.GetCellData()
+    return dict(zip(vtk_to_numpy(cd.GetArray("EID")).tolist(), vtk_to_numpy(cd.GetArray(name)).tolist()))
+
+
+def _root(src, name, port=0):
+    from paraview import servermanager
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    return vtk_to_numpy(servermanager.Fetch(src, idx=port).GetFieldData().GetArray(name)).tolist()
+
+
+def topology_checks(pv, nv):
+    import time
+
+    from paraview import servermanager
+
+    topo = rm.load_reader(os.path.join(HERE, "data", "topology.bdf"))
+    check("Connectors" in rm.Model(topo).names, "Connectors block on the topology deck")
+    g = pv.NastranGrow(Input=topo, SeedIDs="EID 1")
+    g.UpdatePipeline()
+    g.UpdatePipelineInformation()
+    cards = list(g.GetProperty("CardTypesInfo"))[0::2]
+    check(cards == ["CBAR", "CBUSH", "CELAS2", "CHEXA", "CQUAD4", "MPC", "RBE2"], f"card checklist: {cards}")
+    check(_by_eid(g, "Shells", "Hops")[11] == 3, "Nastran Grow: EID 11 is 3 hops from EID 1")
+    g.CardTypes = [c for c in cards if c != "RBE2"]
+    check(_by_eid(g, "Shells", "Hops")[11] == -1, "unchecking RBE2 stops the traversal")
+    g.CardTypes = cards
+    g.TraverseRigid = 0
+    check(_by_eid(g, "Shells", "Hops")[11] == -1, "the Rigid group toggle stops it too")
+    g.TraverseRigid = 1
+    g.LimitHops = 1
+    times = []
+    for k in range(4):
+        g.MaxHops = k
+        t0 = time.perf_counter()
+        g.UpdatePipeline()
+        times.append(time.perf_counter() - t0)
+    check(_by_eid(g, "Shells", "Hops")[11] == 3, "MaxHops 3 still reaches EID 11")
+    print(f"   slider steps: {', '.join(f'{t * 1000:.0f} ms' for t in times)}")
+    g.LimitHops = 0
+    p = pv.NastranParts(Input=topo)
+    p.UpdatePipeline()
+    check(servermanager.Fetch(p, idx=1).GetNumberOfRows() == 2, "Nastran Parts: 2 parts in the summary table")
+    p.TraverseRigid = 0
+    p.UpdatePipeline()
+    check(servermanager.Fetch(p, idx=2).GetNumberOfRows() == 1, "Nastran Parts: the RBE2 is the one link")
+    path = pv.NastranPath(Input=topo, FromGrid=4, ToGrid=42)
+    path.UpdatePipeline()
+    check(_root(path, "PathLength") == [9], "Nastran Path: 9 elements from grid 4 to grid 42")
+    mc = pv.NastranModelCheck(Input=topo)
+    mc.UpdatePipeline()
+    check(servermanager.Fetch(mc, idx=1).GetNumberOfRows() == 6, "Nastran Model Check: 6 checks in the table")
+    mc.CheckFreeEdges = 0
+    mc.UpdatePipeline()
+    check(servermanager.Fetch(mc, idx=1).GetNumberOfRows() == 5, "check toggles drop a check")
+    g.SeedIDs = "EID x"
+    g.UpdatePipeline()
+    check(True, "bad seed text reports and passes the data through")
+    for src in (g, p, path, mc):
+        pv.Delete(src)
+
+    view = pv.CreateRenderView()
+    pv.Show(topo, view)
+    pv.SetActiveView(view)
+    pv.SetActiveSource(topo)
+    pv.QuerySelect(QueryString="(EID == 11)", FieldType="CELL", InsideOut=False)
+    ids = nv.selected_ids()
+    check(ids == ("EID", [11]) and pv.GetActiveSource() is topo, f"cell selection -> EIDs: {ids}")
+    nv.grow_from_selection()
+    grow_src = pv.FindSource(nv._name(nv.Model(topo), "grow"))
+    check(grow_src is not None and grow_src.SeedIDs == "EID 11", "Grow from Selection writes Seed IDs")
+    pv.SetActiveSource(topo)
+    pv.QuerySelect(QueryString="(NID == 4) | (NID == 42)", FieldType="POINT", InsideOut=False)
+    ids = nv.selected_ids()
+    check(ids == ("GRID", [4, 42]), f"point selection -> grids: {ids}")
+    nv.path_from_selection()
+    path_src = pv.FindSource(nv._name(nv.Model(topo), "path"))
+    check((path_src.FromGrid, path_src.ToGrid) == (4, 42) and _root(path_src, "PathLength") == [9],
+          "Path from Selection: grids 4 -> 42, 9 elements")
+    for name in ("parts", "grow", "path", "check"):
+        nv.apply(name, reader=topo, view=view)
+    check(True, "topology views build on the topology deck")
+
+    import export_site as es
+
+    nv.apply("parts", reader=topo, view=view, exclude=["rigid"])
+    parts_src = pv.FindSource(nv._name(nv.Model(topo), "parts"))
+    check(servermanager.Fetch(parts_src, idx=1).GetNumberOfRows() == 3, "parts view exclude=['rigid'] -> 3 parts")
+    nv.apply("grow", reader=topo, view=view, seeds="PID 6")
+    check(grow_src.SeedIDs == "PID 6", "grow view seeds= sets Seed IDs")
+    nv.apply("check", reader=topo, view=view)
+    check(es.has_content(view), "check view counts as content for the gallery exporter")
+    return topo
+
+
 def main():
     reader = rm.load_reader(DECK)
     model = rm.Model(reader)
@@ -250,6 +352,7 @@ def main():
                                       "credit": ""}, "bushes", tempfile.gettempdir()) is None,
               "view with nothing to show is skipped")
         reader.Bushes = 1
+    topology_checks(pv, nv)
     print("pv_smoke: all checks passed")
 
 

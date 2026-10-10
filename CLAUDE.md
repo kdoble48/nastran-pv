@@ -43,6 +43,10 @@ free of pytest imports). pytest gets `src` on its path from `pyproject.toml`, so
 
 ## Repository layout
 
+- Design docs: write brainstorming specs to `docs/design/YYYY-MM-DD-<topic>.md` (not
+  `docs/superpowers/specs/`) and implementation plans to `docs/design/plans/` (gitignored, local
+  only). The roadmap is `docs/design/roadmap.md`.
+
 - `src/nastran_pv/`: all importable, reusable code, including any logic the plugin needs. It must
   run in both pip-vtk and pvpython, so use `vtkmodules` and never `paraview.*`.
   - The `src/` layout is deliberate. It keeps `tests/`, `paraview/` and the dataset folders out of
@@ -55,7 +59,7 @@ free of pytest imports). pytest gets `src` on its path from `pyproject.toml`, so
   under pvpython only and is not collected by pytest.
 - `docs/`: user-facing Markdown, indexed by `docs/index.md`.
   - The site is Sphinx (`docs/conf.py`); `docs/gallery/` is generated from release assets by
-    `docs/_ext/npv_gallery.py`; `docs/models/` and `docs/superpowers/` are unpublished. The rules are in
+    `docs/_ext/npv_gallery.py`; `docs/models/` and `docs/design/` are unpublished (specs are committed; `plans/` is gitignored). The rules are in
   `docs/development.md#writing-docs`. In short:
   - Every page is flat in `docs/`, listed once in the index under Getting started, Guides,
     Reference or Development.
@@ -102,6 +106,9 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   table), `db.py` (SQLite or SQLAlchemy), and `calc.py` (`calculate` with a restricted-namespace
   eval; `group_stats`). Everything works on VTK data and mutates it in place; use `shallow_clone`
   when the input must stay intact.
+- `topology/`: `graph.py` (the bipartite grid↔cell graph of any multiblock, plus `Rules` and `Seeds`),
+  `grow.py`, `parts.py`, `path.py` and `check.py`. Results are written back as arrays and `PART_*`/`LINK_*`/`CHECK_*`
+  tables, like `fields`.
 - `vtkhdf.py`: VTKHDF output built on VTK's own `vtkHDFWriter`.
   - The multiblock is converted to a `vtkPartitionedDataSetCollection` plus a `vtkDataAssembly`
     (`to_pdc`), because a multiblock loses its block names in VTKHDF.
@@ -114,8 +121,8 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   `launch.py` provides `view`, `render` and `setup`, and `locate.py` finds the ParaView executables
   and the repo's `paraview/` folder.
 - `glyphs.py`: mass ellipsoids and bush triads as real `vtkPolyData`.
-- `paraview/nastran_bdf_reader.py`: one plugin file containing the reader, two glyph filters and
-  three field filters.
+- `paraview/nastran_bdf_reader.py`: one plugin file containing the reader, two glyph filters,
+  three field filters and four topology filters (grow, parts, path, model check).
   - At import it bootstraps `sys.path` with `../src`, then `_vendor`, then
     `NASTRAN_PV_SITE_PACKAGES`, and imports nastran_pv lazily.
   - The reader caches the deck by the mtimes of the main file and every INCLUDE, and caches the
@@ -139,6 +146,9 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
     `NastranMassGlyphs`, `NastranMapTable`, etc.
   - `reader.TimestepValues` is a bare float when there is one step; use `nastran_views.timesteps`.
   - `ColorBy(rep, None)` fails in ParaView 6; use `nastran_views.solid`.
+  - A Python proxy's properties come from its class's own `__dict__` only; the topology filters'
+    shared properties are copied in by `_with_traversal`.
+  - Deleting a proxy that was the active source leaves no active source; `selected_ids` restores it.
 - Gallery scene export (`paraview/scene_export.py`) calls trame-vtk's serializers directly. ParaView 6
   mappers take a `vtkPartitionedDataSetCollection`, which trame-vtk 2.11 drops silently unless the
   `vtkMultiBlockDataSet` serializer is also registered for it (`_init_serializers` does this).

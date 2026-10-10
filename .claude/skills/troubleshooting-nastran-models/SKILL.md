@@ -27,6 +27,7 @@ grep -n "INCLUDE\|^SOL\|LOAD\s*=\|SPC\s*=" DECK         # is this the run deck, 
 | Masses view empty / no `Masses` block | No CONM1/CONM2/CMASS1/2 in the deck (e.g. all Linderholt models). CMASS3/4 have no location | Expected. The mass is in `ElementMass`. Use `stats --by PID --field ElementMass` |
 | Loads view empty or smaller than expected | Modal deck (no `LOAD`). GRAV and PLOAD* are not drawn. Big models draw at most 1,500 arrows | Use the static run deck. State the GRAV caveat. Check `ActiveLoadSets` |
 | `family`/`group` views blank; FAMILY stats all `-1` | No `$ ... family` comments (only ICEM/TACS decks such as uCRM-9 have them) | Use the `pid`/`mid` views |
+| Model "falls apart", unexpected free-free modes, meshes that look joined but aren't | Floating parts, coincident unmerged grids, RBE/spring legs to nowhere | `nastran-pv check DECK`; `convert --parts --rules "exclude=rigid"` shows what the RBEs join (docs/tools.md) |
 | Results view: no time steps; "no displacement/eigenvector output found" | OP2 without DISP/eigenvector output, or complex SOL 107–111 (skipped) | Ask for a real-valued run with `DISP=ALL` |
 | `.h5`: "not an MSC/NX Nastran HDF5 result file" | Not an MSC/NX result HDF5 | Use the `.op2` |
 | "nastran-pv could not import pyNastran" in ParaView | `paraview/_vendor` is missing or broken | Close ParaView, `python paraview/install_deps.py --pvpython "<pvpython>"` |

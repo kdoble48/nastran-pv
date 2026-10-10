@@ -6,9 +6,10 @@ reuses named pipeline objects ("NPV ..."), so running a view twice does not
 pile up duplicates. Available views::
 
     masses  bushes  loads  spc  rigid  family  group  pid  mid  thickness
-    elementtype  results
+    elementtype  results  parts  grow  path  check
 
-plus :func:`index_colors`, which turns whatever integer array the active
+``grow_from_selection`` and ``path_from_selection`` seed the grow and path
+views from the current selection. Plus :func:`index_colors`, which turns whatever integer array the active
 representation is coloured by into an indexed lookup table with names.
 
 From the ParaView Python shell::
@@ -248,6 +249,7 @@ def labels_for(model, array, values):
         "FamilyId": ("Shells", "FamilyNames"),
         "GroupId": ("Shells", "GroupNames"),
         "RigidType": ("Rigid", "RigidTypeNames"),
+        "ConnectorType": ("Connectors", "ConnectorTypeNames"),
     }
     if array in tables:
         names = model.field_strings(*tables[array])
@@ -287,9 +289,12 @@ def _gather(data, array, assoc):
     def visit(obj):
         if obj is None:
             return
-        if obj.IsA("vtkMultiBlockDataSet"):
-            for i in range(obj.GetNumberOfBlocks()):
-                visit(obj.GetBlock(i))
+        if obj.IsA("vtkCompositeDataSet"):
+            it = obj.NewIterator()
+            it.InitTraversal()
+            while not it.IsDoneWithTraversal():
+                visit(it.GetCurrentDataObject())
+                it.GoToNextItem()
             return
         attr = obj.GetCellData() if assoc == "CELLS" else obj.GetPointData()
         a = attr.GetArray(array)
@@ -508,11 +513,192 @@ def view_results(model, view):
     info_text(model, view, f"{label[0] if label else ''}\nDeformation x{warp.ScaleFactor:.3g}", "Upper Center")
 
 
+# ----------------------------------------------------------------- topology
+TOPOLOGY_BLOCKS = ("Shells", "Solids", "Lines", "Rigid", "Connectors", "BushLines", "Masses")
+
+
+def _topology_blocks(model, src, what):
+    blocks = [b for b in TOPOLOGY_BLOCKS if model.has(b)]
+    return _named(model, f"{what} blocks",
+                  lambda: pv.ExtractBlock(Input=src, Selectors=[f"/Root/{b}" for b in blocks]))
+
+
+def _at_least(model, src, array, lower, what):
+    t = _named(model, what, lambda: pv.Threshold(Input=_topology_blocks(model, src, what)))
+    t.Scalars = ["CELLS", array]
+    t.LowerThreshold = lower
+    t.UpperThreshold = 1e9
+    return t
+
+
+def _root_value(src, name, default=None):
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    a = servermanager.Fetch(src).GetFieldData().GetArray(name)
+    return vtk_to_numpy(a).tolist()[0] if a is not None else default
+
+
+GROUP_PROPS = {"shells": "TraverseShells", "solids": "TraverseSolids", "lines": "TraverseLines",
+               "rigid": "TraverseRigid", "bushes": "TraverseBushes", "connectors": "TraverseConnectors"}
+
+
+def _exclude(src, names):
+    """Uncheck card types and groups (``rigid``, ``RBE3``, ...) on a topology filter."""
+    for name in names:
+        if name.lower() in GROUP_PROPS:
+            setattr(src, GROUP_PROPS[name.lower()], 0)
+    cards = {n.upper() for n in names if n.lower() not in GROUP_PROPS}
+    if cards:
+        src.UpdatePipelineInformation()
+        src.CardTypes = [c for c in list(src.GetProperty("CardTypesInfo"))[0::2] if c not in cards]
+
+
+def view_parts(model, view, exclude=()):
+    p = _named(model, "parts", lambda: pv.NastranParts(Input=model.reader))
+    _exclude(p, exclude)
+    d = pv.Show(_topology_blocks(model, p, "parts"), view)
+    d.Representation = "Surface"
+    d.LineWidth = 2.5
+    values = sorted({int(v) for v in _gather(servermanager.Fetch(p), "PartId", "CELLS")})
+    colors = palette(len(values))
+    colors = [GHOST_RGB if v < 0 else colors[i] for i, v in enumerate(values)]
+    labels = ["excluded" if v < 0 else f"Part {v}" for v in values]
+    categorical(d, "PartId", values, labels, colors=colors, view=view)
+    n = sum(v >= 0 for v in values)
+    info_text(model, view, f"{n} part(s)\nUncheck card types on 'NPV parts'\nto split the model there")
+
+
+def view_grow(model, view, seeds=None, exclude=()):
+    g = _named(model, "grow", lambda: pv.NastranGrow(Input=model.reader))
+    if seeds:
+        g.SeedIDs = seeds
+    _exclude(g, exclude)
+    if not (g.SeedIDs or "").strip():
+        ghost_mesh(model, view, opacity=0.35)
+        info_text(model, view, "Select cells or grids, then click 'NPV Grow from Selection'\n"
+                               "(or type Seed IDs on 'NPV grow').")
+        return
+    ghost_mesh(model, view, opacity=0.15)
+    d = pv.Show(_at_least(model, g, "Hops", 0, "grow reached"), view)
+    d.Representation = "Surface"
+    d.LineWidth = 2.5
+    continuous(d, "CELLS", "Hops", preset="Turbo", view=view)
+    hops = _gather(servermanager.Fetch(g), "Hops", "CELLS")
+    top = int(hops.max()) if hops.size else -1
+    seeds = g.SeedIDs if len(g.SeedIDs) <= 40 else g.SeedIDs[:37] + "..."
+    info_text(model, view, f"Grow from {seeds}\nup to {top} element hops")
+
+
+def view_path(model, view):
+    p = _named(model, "path", lambda: pv.NastranPath(Input=model.reader))
+    if not (p.FromGrid and p.ToGrid):
+        ghost_mesh(model, view, opacity=0.35)
+        info_text(model, view, "Select two grids (Select Points On), then click 'NPV Path from Selection'.")
+        return
+    ghost_mesh(model, view, opacity=0.15)
+    d = pv.Show(_at_least(model, p, "OnPath", 1, "path cells"), view)
+    d.Representation = "Surface"
+    d.LineWidth = 4
+    solid(d, list(SET1[0]))
+    length = _root_value(p, "PathLength", -1)
+    info_text(model, view, f"Path grid {p.FromGrid} -> grid {p.ToGrid}: {length} element(s)" if length >= 0
+              else f"No path from grid {p.FromGrid} to grid {p.ToGrid} through the checked card types.")
+
+
+CHECKS = ("FreeEdges", "FreeFaces", "CoincidentGrids", "DuplicateElements", "DanglingConnectors", "FloatingParts")
+CHECK_RGB = {"FreeEdges": (1.0, 0.5, 0.0), "FreeFaces": (0.95, 0.75, 0.35), "CoincidentGrids": (0.89, 0.10, 0.11),
+             "DuplicateElements": (0.80, 0.0, 0.60), "DanglingConnectors": (0.45, 0.10, 0.75),
+             "FloatingParts": (0.22, 0.49, 0.72)}
+SURFACE_INFO_CHECKS = ("FreeFaces", "FloatingParts")  # often the whole model: drawn translucent
+LINE_CHECKS = ("FreeEdges", "CoincidentGrids", "DuplicateElements", "DanglingConnectors")
+
+
+def _check_layer(model, c, view, what, blocks, codes):
+    ex = _named(model, what, lambda: pv.ExtractBlock(Input=c, Selectors=[f"/Root/{b}" for b in blocks]))
+    d = pv.Show(ex, view)
+    # both layers share the "Check" lookup table, so there is one legend naming the checks found
+    lut = categorical(d, "Check", codes, [CHECKS[k] for k in codes],
+                      colors=[CHECK_RGB[CHECKS[k]] for k in codes], view=view)
+    pv.GetScalarBar(lut, view).ComponentTitle = ""  # "Check", not "Check Magnitude"
+    return d
+
+
+def view_check(model, view):
+    """Free faces and floating parts (often the whole model) translucent; free edges and the error
+    findings opaque on top. Colored by the ``Check`` array, one color per check."""
+    c = _named(model, "check", lambda: pv.NastranModelCheck(Input=model.reader))
+    ghost_mesh(model, view, opacity=0.2)
+    codes = sorted({int(v) for v in _gather(servermanager.Fetch(c), "Check", "CELLS")})
+    if codes:
+        di = _check_layer(model, c, view, "check surfaces", SURFACE_INFO_CHECKS, codes)
+        di.Opacity = 0.3
+        d = _check_layer(model, c, view, "check findings", LINE_CHECKS, codes)
+        d.LineWidth = 4
+        d.PointSize = 10
+        d.RenderPointsAsSpheres = 1
+    fd = servermanager.Fetch(c).GetFieldData()
+    names = fd.GetAbstractArray("CHECK_Name")
+    counts = fd.GetArray("CHECK_Count")
+    sev = fd.GetAbstractArray("CHECK_Severity")
+    lines = [f"{names.GetValue(i)}: {int(counts.GetValue(i))} ({sev.GetValue(i)})"
+             for i in range(names.GetNumberOfValues())] if names is not None else ["No checks run."]
+    info_text(model, view, "\n".join(lines))
+
+
+def _selection_kinds(sel):
+    srcs = list(sel.Input) if _xml_name(sel) == "AppendSelections" else [sel]
+    kinds = set()
+    for s in srcs:
+        for prop in ("FieldType", "ElementType"):
+            if s.GetProperty(prop) is not None:
+                value = str(s.GetPropertyValue(prop)).upper()
+                kinds.add("POINT" if "POINT" in value or value == "1" else "CELL")
+                break
+    return kinds
+
+
+def selected_ids():
+    """("EID", ids) for a cell selection, ("GRID", ids) for a point selection on the active source."""
+    src = pv.GetActiveSource()
+    sel = src.GetSelectionInput(src.Port) if src is not None else None
+    if sel is None:
+        raise RuntimeError("Select cells or grids in the view first (Select Cells On / Select Points On).")
+    ex = pv.ExtractSelection(Input=src, Selection=sel)
+    try:
+        data = servermanager.Fetch(ex)
+    finally:
+        pv.Delete(ex)
+        pv.SetActiveSource(src)  # the extract became active; give the user's source back
+    if "POINT" not in _selection_kinds(sel):
+        eids = sorted({int(v) for v in _gather(data, "EID", "CELLS")})
+        if eids:
+            return "EID", eids
+    return "GRID", sorted({int(v) for v in _gather(data, "NID", "POINTS")})
+
+
+def grow_from_selection():
+    kind, ids = selected_ids()
+    model = Model(find_reader())
+    g = _named(model, "grow", lambda: pv.NastranGrow(Input=model.reader))
+    g.SeedIDs = f"{kind} {' '.join(map(str, ids))}"
+    apply("grow", reader=model.reader, model=model, reset_camera=False)
+
+
+def path_from_selection():
+    kind, ids = selected_ids()
+    if kind != "GRID" or len(ids) != 2:
+        raise RuntimeError(f"Select exactly two grids with Select Points On (got {len(ids)} {kind} id(s)).")
+    model = Model(find_reader())
+    p = _named(model, "path", lambda: pv.NastranPath(Input=model.reader))
+    p.FromGrid, p.ToGrid = ids
+    apply("path", reader=model.reader, model=model, reset_camera=False)
+
+
 VIEWS = {
     "masses": view_masses, "bushes": view_bushes, "loads": view_loads, "spc": view_spc,
     "rigid": view_rigid, "family": view_family, "group": view_group, "pid": view_pid,
     "mid": view_mid, "elementtype": view_elementtype, "thickness": view_thickness,
-    "results": view_results,
+    "results": view_results, "parts": view_parts, "grow": view_grow, "path": view_path, "check": view_check,
 }
 
 
@@ -548,13 +734,17 @@ def set_camera(view, which):
     view.ResetCamera(False)
 
 
+ACTIONS = {"index_colors": index_colors, "grow_from_selection": grow_from_selection,
+           "path_from_selection": path_from_selection}
+
+
 def run_macro(name):
     """Entry point for the toolbar macros: report problems in Output Messages instead of raising."""
     from vtkmodules.vtkCommonCore import vtkOutputWindow
 
     try:
-        if name == "index_colors":
-            index_colors()
+        if name in ACTIONS:
+            ACTIONS[name]()
         else:
             apply(name)
     except Exception as exc:  # shown to the GUI user, not a traceback dump

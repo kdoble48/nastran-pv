@@ -13,12 +13,15 @@ blocks. A block is left out when the deck has nothing for it.
 | `Masses` | CONM2, CONM1, CMASS1/2 (one point at the CG) | `Mass MassScale Inertia InertiaEllipsoid EquivalentRadius Offset` |
 | `MassOffsets` | grid-to-CG lines for offset CONM2s | `EID` |
 | `Rigid` | RBE2/RBE3/RBAR/... spider legs | cell: `EID RigidType DOF` |
+| `Connectors` | MPC, CELAS1/2, CDAMP1/2, CGAP, CFAST (GA/GB form) legs | cell: `EID ConnectorType DOF PID` (MPC legs: `EID` = MPC set id); point: `NID` |
 | `Bushes` | CBUSH spring locations | `K Axis1-3 K1dir K2dir K3dir KTransTensor KRotTensor KTransLogTensor` |
-| `BushLines` | CBUSH GA–GB lines | `EID` |
+| `BushLines` | CBUSH GA–GB lines | cell: `EID PID`; point: `NID` |
 | `Constraints` | SPC/SPC1/SPCADD/GRID PS points per set | `SPCSet SPC_DOF DOFCode CD` |
 | `Loads/SID_n`, `Loads/LOAD_n` | FORCE/MOMENT(1,2) per set, LOAD combinations resolved | `Force Moment ForceMagnitude`; field `ResultantForce GravityAcceleration` |
 
 Root field data: `DeckPath SOL WTMASS ActiveLoadSets ActiveSPCSets StructuralMass ConcentratedMass ModelMass ModelCG Warnings`.
+The [model tools](tools.md) add `Hops`, `PartId` and `OnPath` (cell and point) and the `PART_*`,
+`LINK_*` and `PathLength` root arrays; `nastran-pv check` writes `CHECK_*`.
 With an OP2 file loaded, the mesh blocks also get `Displacement Rotation DisplacementMagnitude`
 and `VonMisesMax`, and the root gets `ResultLabel Frequency`.
 
@@ -54,5 +57,6 @@ The [field options](fields.md) add further arrays on top of these.
 
 ## Not visualized yet
 
-Pressure loads (PLOAD*), CELAS/CDAMP springs, scalar-point masses (CMASS3/4), and GRAV as nodal
-forces (GRAV is reported as field data only).
+Pressure loads (PLOAD*), scalar-point masses and springs (CMASS3/4, CELAS3/4), grounded springs,
+CFAST patch forms, CWELD (pyNastran 1.4 cannot read it), and GRAV as nodal forces (GRAV is
+reported as field data only).

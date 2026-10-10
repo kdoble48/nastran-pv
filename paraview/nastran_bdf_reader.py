@@ -47,7 +47,7 @@ _HELP = (
     "version as ParaView's Python that has pyNastran installed. Original error: {err}"
 )
 
-_FLAGS = ("shells", "lines", "solids", "masses", "rigid", "bushes", "constraints", "loads")
+_FLAGS = ("shells", "lines", "solids", "masses", "rigid", "connectors", "bushes", "constraints", "loads")
 
 
 def _message(text, error=False):
@@ -127,6 +127,11 @@ class NastranPVReader(VTKPythonAlgorithmBase):
     @smdomain.xml('<BooleanDomain name="bool"/>')
     def SetRigidElements(self, v):
         self._set_flag("rigid", v)
+
+    @smproperty.intvector(name="Connectors", default_values=1)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetConnectors(self, v):
+        self._set_flag("connectors", v)
 
     @smproperty.intvector(name="Bushes", default_values=1)
     @smdomain.xml('<BooleanDomain name="bool"/>')
@@ -546,6 +551,25 @@ class NastranPVMapTable(_FieldFilter):
         _message(f"nastran-pv: {os.path.basename(self._file)}: {report}")
 
 
+def _fill_table(table, rows):
+    """List of dicts -> vtkTable columns (strings stay strings)."""
+    import numpy as np
+    from vtkmodules.vtkCommonCore import vtkStringArray
+
+    from nastran_pv import vtkutil
+
+    for col in (rows[0] if rows else []):
+        values = [r.get(col) for r in rows]
+        if isinstance(values[0], str):
+            arr = vtkStringArray()
+            arr.SetName(col)
+            for v in values:
+                arr.InsertNextValue(v)
+            table.AddColumn(arr)
+        else:
+            table.AddColumn(vtkutil.to_vtk_array(col, np.asarray(values, dtype=float)))
+
+
 _GROUP_BY = ("PID", "MID", "FAMILY", "GROUP", "ELEMENTTYPE")
 
 
@@ -579,24 +603,329 @@ class NastranPVGroupStats(_FieldFilter):
         self._set("_field", v or "ElementMass")
 
     def _apply(self, mb, outInfo):
-        import numpy as np
-        from vtkmodules.vtkCommonCore import vtkStringArray
         from vtkmodules.vtkCommonDataModel import vtkTable
 
-        from nastran_pv import vtkutil
         from nastran_pv.fields.calc import group_stats
 
-        rows = group_stats(mb, _GROUP_BY[self._by], self._field)
-        table = vtkTable.GetData(outInfo, 1)
-        if not rows:
+        _fill_table(vtkTable.GetData(outInfo, 1), group_stats(mb, _GROUP_BY[self._by], self._field))
+
+
+# ---------------------------------------------------- topology filters
+_GROUP_PROPS = {"shells": "TraverseShells", "solids": "TraverseSolids", "lines": "TraverseLines",
+                "rigid": "TraverseRigid", "bushes": "TraverseBushes", "connectors": "TraverseConnectors"}
+_CHECKS = ("FreeEdges", "FreeFaces", "CoincidentGrids", "DuplicateElements", "DanglingConnectors", "FloatingParts")
+
+
+class _Traversal:
+    """Traversal properties shared by the topology filters. ParaView builds a proxy from a class's
+    own ``__dict__`` only, so :func:`_with_traversal` copies these setters into each filter class."""
+
+    @smproperty.dataarrayselection(name="CardTypes")
+    def GetCardTypes(self):
+        """Card types to traverse; unchecked types are neither reached nor crossed."""
+        return self._cards
+
+    @smproperty.intvector(name="TraverseShells", default_values=1)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetTraverseShells(self, v):
+        self._group("shells", v)
+
+    @smproperty.intvector(name="TraverseSolids", default_values=1)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetTraverseSolids(self, v):
+        self._group("solids", v)
+
+    @smproperty.intvector(name="TraverseLines", default_values=1)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetTraverseLines(self, v):
+        self._group("lines", v)
+
+    @smproperty.intvector(name="TraverseRigid", default_values=1)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetTraverseRigid(self, v):
+        self._group("rigid", v)
+
+    @smproperty.intvector(name="TraverseBushes", default_values=1)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetTraverseBushes(self, v):
+        self._group("bushes", v)
+
+    @smproperty.intvector(name="TraverseConnectors", default_values=1)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetTraverseConnectors(self, v):
+        self._group("connectors", v)
+
+    @smproperty.stringvector(name="ExcludePIDs", default_values="")
+    def SetExcludePIDs(self, v):
+        """PIDs to leave out, e.g. 7 8."""
+        self._set("_exclude_pids", v or "")
+
+    @smproperty.intvector(name="StayWithinSeedPIDs", default_values=0)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetStayWithinSeedPIDs(self, v):
+        self._set("_within", int(v))
+
+    @smproperty.intvector(name="LimitHops", default_values=0)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetLimitHops(self, v):
+        self._set("_limit", int(v))
+
+    @smproperty.intvector(name="MaxHops", default_values=10)
+    @smdomain.intrange(min=0, max=200)
+    def SetMaxHops(self, v):
+        self._set("_max_hops", int(v))
+
+
+def _with_traversal(cls):
+    for name, fn in _Traversal.__dict__.items():
+        if callable(fn) and any(k.startswith("_pvsm") for k in vars(fn)):
+            setattr(cls, name, fn)
+    return cls
+
+
+class _TopologyFilter(_FieldFilter):
+    """Multiblock in -> topology arrays out. The graph is cached per input data object, so moving
+    a slider or a checkbox only re-runs the traversal."""
+
+    LABEL = "topology"
+
+    def __init__(self, n_out=1):
+        from vtkmodules.vtkCommonCore import vtkDataArraySelection
+
+        _FieldFilter.__init__(self, n_out)
+        self._listing = False
+        self._cards = vtkDataArraySelection()
+        self._cards.AddObserver("ModifiedEvent", lambda *args: None if self._listing else self.Modified())
+        self._groups = {g: 1 for g in _GROUP_PROPS}
+        self._exclude_pids = ""
+        self._within = 0
+        self._limit = 0
+        self._max_hops = 10
+        self._graph = None
+        self._graph_key = None
+
+    def FillOutputPortInformation(self, port, info):
+        info.Set(vtkDataObject.DATA_TYPE_NAME(), "vtkMultiBlockDataSet" if port == 0 else "vtkTable")
+        return 1
+
+    def _group(self, key, v):
+        if self._groups[key] != int(v):
+            self._groups[key] = int(v)
+            self.Modified()
+
+    def _list_cards(self, data):
+        if data is None or not data.IsA("vtkMultiBlockDataSet"):
             return
-        for col in rows[0]:
-            values = [r.get(col) for r in rows]
-            if isinstance(values[0], str):
-                arr = vtkStringArray()
-                arr.SetName(col)
-                for v in values:
-                    arr.InsertNextValue(v)
-                table.AddColumn(arr)
-            else:
-                table.AddColumn(vtkutil.to_vtk_array(col, np.asarray(values, dtype=float)))
+        try:
+            from nastran_pv.topology import card_types
+        except ImportError:
+            return
+        self._listing = True
+        try:
+            for name in card_types(data):
+                if not self._cards.ArrayExists(name):
+                    self._cards.AddArray(name)
+        finally:
+            self._listing = False
+
+    def RequestInformation(self, request, inInfo, outInfo):
+        self._list_cards(inInfo[0].GetInformationObject(0).Get(vtkDataObject.DATA_OBJECT()))
+        return 1
+
+    def _rules(self):
+        from nastran_pv.topology import Rules
+
+        off = {self._cards.GetArrayName(i) for i in range(self._cards.GetNumberOfArrays())
+               if not self._cards.GetArraySetting(i)}
+        off |= {g for g, on in self._groups.items() if not on}
+        pids = frozenset(int(p) for p in self._exclude_pids.replace(",", " ").split())
+        return Rules(exclude=frozenset(off), exclude_pids=pids, within_pids=bool(self._within),
+                     max_hops=self._max_hops if self._limit else None)
+
+    def _report(self, warnings):
+        for w in warnings:
+            _message(f"nastran-pv {self.LABEL}: {w}")
+
+    def RequestData(self, request, inInfo, outInfo):
+        try:
+            from nastran_pv.fields import shallow_clone
+            from nastran_pv.topology import Graph
+        except ImportError as exc:
+            _message(_HELP.format(missing=getattr(exc, "name", "a dependency"), err=exc), error=True)
+            return 0
+        src = vtkMultiBlockDataSet.GetData(inInfo[0], 0)
+        self._list_cards(src)
+        mb = shallow_clone(src)
+        out = mb
+        try:
+            if self._graph_key != src.GetMTime():
+                self._graph, self._graph_key = Graph.from_multiblock(src), src.GetMTime()
+            out = self._run(mb, self._graph, outInfo) or mb
+        except Exception as exc:  # report, pass the data through unchanged
+            _message(f"nastran-pv {self.LABEL}: {exc}", error=True)
+        vtkMultiBlockDataSet.GetData(outInfo, 0).ShallowCopy(out)
+        return 1
+
+
+@smproxy.filter(name="NastranPVGrow", label="Nastran Grow")
+@smhint.xml('<ShowInMenu category="Nastran" />')
+@smproperty.input(name="Input", port_index=0)
+@smdomain.datatype(dataTypes=["vtkMultiBlockDataSet"], composite_data_supported=True)
+@_with_traversal
+class NastranPVGrow(_TopologyFilter):
+    """Element hops (``Hops``) from seed elements, grids or PIDs through the checked card types."""
+
+    LABEL = "Grow"
+
+    def __init__(self):
+        _TopologyFilter.__init__(self)
+        self._seeds = ""
+        self._extract = 0
+
+    @smproperty.stringvector(name="SeedIDs", default_values="")
+    def SetSeedIDs(self, v):
+        """e.g. EID 1001 1002; GRID 55; PID 7 (NPV Grow from Selection fills this in)."""
+        self._set("_seeds", v or "")
+
+    @smproperty.intvector(name="ExtractReached", default_values=0)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetExtractReached(self, v):
+        self._set("_extract", int(v))
+
+    def _run(self, mb, graph, outInfo):
+        from nastran_pv.topology import Seeds, grow
+
+        seeds = Seeds.parse(self._seeds)
+        if not seeds:
+            return None
+        res = grow(mb, seeds, self._rules(), extract=bool(self._extract), graph=graph)
+        self._report(res.warnings)
+        return res.extracted
+
+
+@smproxy.filter(name="NastranPVParts", label="Nastran Parts")
+@smhint.xml('<ShowInMenu category="Nastran" />')
+@smproperty.input(name="Input", port_index=0)
+@smdomain.datatype(dataTypes=["vtkMultiBlockDataSet"], composite_data_supported=True)
+@_with_traversal
+class NastranPVParts(_TopologyFilter):
+    """Connected parts (``PartId``) through the checked card types.
+
+    Output 1: one row per part; output 2: the unchecked elements that join two parts.
+    """
+
+    LABEL = "Parts"
+
+    def __init__(self):
+        _TopologyFilter.__init__(self, n_out=3)
+
+    def _run(self, mb, graph, outInfo):
+        from vtkmodules.vtkCommonDataModel import vtkTable
+
+        from nastran_pv.topology import parts
+
+        res = parts(mb, self._rules(), graph=graph)
+        _fill_table(vtkTable.GetData(outInfo, 1), res.summary)
+        _fill_table(vtkTable.GetData(outInfo, 2), res.links)
+        self._report(res.warnings)
+
+
+@smproxy.filter(name="NastranPVPath", label="Nastran Path")
+@smhint.xml('<ShowInMenu category="Nastran" />')
+@smproperty.input(name="Input", port_index=0)
+@smdomain.datatype(dataTypes=["vtkMultiBlockDataSet"], composite_data_supported=True)
+@_with_traversal
+class NastranPVPath(_TopologyFilter):
+    """Shortest element path (``OnPath``, ``PathLength``) between two grids."""
+
+    LABEL = "Path"
+
+    def __init__(self):
+        _TopologyFilter.__init__(self)
+        self._from = 0
+        self._to = 0
+
+    @smproperty.intvector(name="FromGrid", default_values=0)
+    def SetFromGrid(self, v):
+        self._set("_from", int(v))
+
+    @smproperty.intvector(name="ToGrid", default_values=0)
+    def SetToGrid(self, v):
+        self._set("_to", int(v))
+
+    def _run(self, mb, graph, outInfo):
+        from nastran_pv.topology import path
+
+        if not (self._from and self._to):
+            return None
+        self._report(path(mb, self._from, self._to, self._rules(), graph=graph).warnings)
+
+
+@smproxy.filter(name="NastranPVModelCheck", label="Nastran Model Check")
+@smhint.xml('<ShowInMenu category="Nastran" />')
+@smproperty.input(name="Input", port_index=0)
+@smdomain.datatype(dataTypes=["vtkMultiBlockDataSet"], composite_data_supported=True)
+@_with_traversal
+class NastranPVModelCheck(_TopologyFilter):
+    """Free edges/faces, coincident grids, duplicate elements, dangling connectors, floating parts.
+
+    Output 0: one block of findings per check; output 1: the summary table.
+    """
+
+    LABEL = "Model Check"
+
+    def __init__(self):
+        _TopologyFilter.__init__(self, n_out=2)
+        self._checks = {c: 1 for c in _CHECKS}
+        self._tol = 1e-6
+
+    def _check(self, name, v):
+        if self._checks[name] != int(v):
+            self._checks[name] = int(v)
+            self.Modified()
+
+    @smproperty.intvector(name="CheckFreeEdges", default_values=1)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetCheckFreeEdges(self, v):
+        self._check("FreeEdges", v)
+
+    @smproperty.intvector(name="CheckFreeFaces", default_values=1)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetCheckFreeFaces(self, v):
+        self._check("FreeFaces", v)
+
+    @smproperty.intvector(name="CheckCoincidentGrids", default_values=1)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetCheckCoincidentGrids(self, v):
+        self._check("CoincidentGrids", v)
+
+    @smproperty.intvector(name="CheckDuplicateElements", default_values=1)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetCheckDuplicateElements(self, v):
+        self._check("DuplicateElements", v)
+
+    @smproperty.intvector(name="CheckDanglingConnectors", default_values=1)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetCheckDanglingConnectors(self, v):
+        self._check("DanglingConnectors", v)
+
+    @smproperty.intvector(name="CheckFloatingParts", default_values=1)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetCheckFloatingParts(self, v):
+        self._check("FloatingParts", v)
+
+    @smproperty.doublevector(name="Tolerance", default_values=1e-6)
+    def SetTolerance(self, v):
+        """Coincident-grid distance as a fraction of the model diagonal."""
+        self._set("_tol", float(v))
+
+    def _run(self, mb, graph, outInfo):
+        from vtkmodules.vtkCommonDataModel import vtkTable
+
+        from nastran_pv.topology import check
+
+        res = check(mb, self._rules(), tol=self._tol, checks=[c for c, on in self._checks.items() if on],
+                    graph=graph)
+        _fill_table(vtkTable.GetData(outInfo, 1), res.summary)
+        self._report(res.warnings)
+        return res.findings

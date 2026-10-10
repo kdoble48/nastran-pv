@@ -46,3 +46,7 @@ docs/_build/
 docs/gallery/
 docs/_static/gallery/
 docs/_static/viewer.html
+
+# Local design workflow: implementation plans and the plan executor's workspace (specs in docs/design are committed)
+docs/design/plans/
+.superpowers/

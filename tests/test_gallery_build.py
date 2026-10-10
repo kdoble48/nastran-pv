@@ -99,3 +99,18 @@ def test_build_models_drops_missing_parts(tmp_path):
     models = bg.build_models(None, demo, None)
     assert [m["id"] for m in models] == ["demo"]
     assert "results" not in models[0]["views"] and models[0]["results"] is None
+
+
+def test_build_models_showcase_model_tools(tmp_path):
+    """uCRM-9 shows grow from the root rib and parts with RBEs unchecked; the demo shows its free edges."""
+    deck, demo = tmp_path / "ucrm.bdf", tmp_path / "demo.bdf"
+    deck.write_text("x")
+    demo.write_text("x")
+    ucrm, dem = bg.build_models(deck, demo, None)
+    assert "grow" in ucrm["views"] and "parts" in ucrm["views"] and "check" not in ucrm["views"]
+    assert ucrm["view_args"] == {"grow": {"seeds": "PID 238"}, "parts": {"exclude": ["rigid"]}}
+    assert ucrm["reproduce"]["grow"] == [
+        'nastran-pv convert ucrm.bdf --grow "PID 238" -o out/grow.vtm',
+        '# ParaView Python shell: nastran_views.apply("grow", seeds="PID 238")']
+    assert ucrm["reproduce"]["parts"][0] == 'nastran-pv convert ucrm.bdf --parts --rules "exclude=rigid" -o out/parts.vtm'
+    assert "check" in dem["views"] and "parts" not in dem["views"]

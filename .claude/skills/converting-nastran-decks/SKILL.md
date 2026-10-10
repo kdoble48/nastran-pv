@@ -37,6 +37,9 @@ deck parsing, which is much faster on large models.
 | One result step | `--results F --step N` |
 | Per-part mass breakdown | `--derive pidmass`, or `stats --by PID --field ElementMass` |
 | Mesh quality | `--derive quality` → `EdgeRatio ScaledJacobian Skew Warpage` |
+| Connected parts, and what joins them | `--parts --rules "exclude=rigid"` → `PartId`, `PART_*`, `LINK_*` (docs/tools.md) |
+| Everything connected to an element | `--grow "EID 1001" [--rules ...]` → `Hops` |
+| Model sanity (free edges, coincident grids, duplicates, dangling RBEs, floating parts) | `nastran-pv check DECK [--strict]` |
 | External data per element/property | `--map FILE KEY` (CSV/TSV/JSON/xlsx/SQLite/SQLAlchemy URL; KEY = EID PID MID NID FAMILY GROUP) |
 
 ## Reading the result
