@@ -217,6 +217,22 @@ def main():
             check(len(one["frames"]) == 1 and one["frames"][0]["frequency"] is None,
                   "single static step: one frame, frequency null")
             check(not os.path.exists(os.path.join(out, "gone-pid.json")), "missing deck skipped")
+            check(all("legends" in fr for fr in res["frames"]) and "--results modes.op2" in res["reproduce"][1],
+                  f"results frames carry their own legends; render line {res['reproduce'][1]!r}")
+
+        from paraview import servermanager as sm
+
+        # pipeline objects a view creates but does not show (e.g. the loads extract) must stay out of
+        # the scene: the export helpers must not give them a (visible) representation
+        xview = pv.CreateRenderView()
+        nv.apply("loads", reader=reader, view=xview)
+        unshown = pv.Sphere()
+        se.overlays(xview)
+        es.has_content(xview)
+        se.hide_overlays(xview)
+        check(sm.GetRepresentation(unshown, xview) is None, "export helpers create no representations")
+        pv.Delete(unshown)
+        pv.Delete(xview)
 
         reader.Bushes = 0
         check(es.export_view(reader, {"id": "nb", "title": "", "deck": DECK, "results": None,

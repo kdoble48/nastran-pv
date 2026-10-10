@@ -78,3 +78,19 @@ def test_scene_size_shown_in_kb_when_small():
     small = dict(_view(), scene_bytes=12_345)
     assert "Scene: 12 KB." in g.view_page(small)
     assert "Scene: 0.7 MB." in g.view_page(_view())
+
+
+def test_results_page_legend_and_summary_per_mode():
+    def leg(lo, hi):
+        return {"array": "DisplacementMagnitude", "kind": "continuous", "range": [lo, hi],
+                "stops": [[lo, 0, 0, 1], [hi, 1, 0, 0]]}
+    frames = [{"label": "m1", "frequency": 6.4, "scene": "demo-results-m1.vtksz", "png": "demo-results-m1.png",
+               "text": ["Deformation x9.15"], "legends": [leg(6.328, 6.351)]},
+              {"label": "m2", "frequency": 9.1, "scene": "demo-results-m2.vtksz", "png": "demo-results-m2.png",
+               "text": ["Deformation x2.11"], "legends": [leg(0.164, 3.0)]}]
+    page = g.view_page(_view("results", frames=frames))
+    tab1 = page[page.index("{tab-item} Mode 1"):page.index("{tab-item} Mode 2")]
+    tab2 = page[page.index("{tab-item} Mode 2"):]
+    assert "x9.15" in tab1 and ">6.328<" in tab1 and "demo-results-m1.png" in tab1
+    assert "x2.11" in tab2 and ">0.164<" in tab2 and "demo-results-m2.png" in tab2 and "x9.15" not in tab2
+    assert "{tab-item} Static" not in page

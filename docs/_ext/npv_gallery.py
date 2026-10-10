@@ -42,11 +42,14 @@ def legend_html(leg) -> str:
     return f'<div class="npv-legend">{title}{body}</div>'
 
 
-def _side(legends, text) -> str:
+def _side(legends, text, static_png=None, alt="") -> str:
     summary = "\n".join(t for t in text if t).strip()
     parts = "".join(legend_html(lg) for lg in legends)
     if summary:
         parts += f'<pre class="npv-summary">{html.escape(summary)}</pre>'
+    if static_png:
+        parts += (f'<details class="npv-static"><summary>Static image</summary>'
+                  f'<img src="../{ASSETS}/{static_png}" alt="{html.escape(alt)}"></details>')
     return f'```{{raw}} html\n<div class="npv-side">{parts}</div>\n```\n' if parts else ""
 
 
@@ -67,16 +70,20 @@ def _size(nbytes) -> str:
 def view_page(meta) -> str:
     title = meta["title"]
     hint = f'Drag to rotate, scroll to zoom, right-drag to pan. Scene: {_size(meta["scene_bytes"])}.'
+    alt = f'{title} view of the {meta["model_title"]}'
     if meta.get("frames"):
-        tabs = "".join(f'```{{tab-item}} {_mode_label(k, fr)}\n{_iframe(fr["scene"])}\n\n{hint}\n```\n'
+        # each mode has its own color range and summary: legend, text and image live in its tab
+        tabs = "".join(f'````{{tab-item}} {_mode_label(k, fr)}\n{_iframe(fr["scene"])}\n\n{hint}\n\n'
+                       f'{_side(fr.get("legends", []), fr.get("text", []), fr["png"], f"{alt}, mode {k}")}````\n'
                        for k, fr in enumerate(meta["frames"], start=1))
+        side = ""
     else:
-        tabs = f'```{{tab-item}} Interactive\n{_iframe(meta["scene"])}\n\n{hint}\n```\n'
-    tabs += (f'```{{tab-item}} Static\n![{title} view of the {meta["model_title"]}]'
-             f'(../{ASSETS}/{meta["png"]})\n```\n')
+        tabs = (f'````{{tab-item}} Interactive\n{_iframe(meta["scene"])}\n\n{hint}\n````\n'
+                f'````{{tab-item}} Static\n![{alt}](../{ASSETS}/{meta["png"]})\n````\n')
+        side = _side(meta["legends"], meta["text"])
     reproduce = "\n".join(meta["reproduce"])
     return (f'# {title}: {meta["model_title"]}\n\n{meta["caption"]}\n\n'
-            f'````{{tab-set}}\n{tabs}````\n\n{_side(meta["legends"], meta["text"])}\n'
+            f'`````{{tab-set}}\n{tabs}`````\n\n{side}\n'
             f'## Reproduce\n\n```bash\n{reproduce}\n```\n\n'
             f'In the ParaView GUI: open the deck with the nastran-pv reader and click **NPV {title}** '
             f'on the Macros toolbar.\n\n'

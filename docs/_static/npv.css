@@ -8,3 +8,5 @@
 .npv-cats { list-style: none; padding: 0; margin: 0; columns: 2; font-size: .9em; }
 .npv-swatch { display: inline-block; width: .9em; height: .9em; margin-right: .4em; border-radius: 2px; vertical-align: -1px; }
 .npv-summary { font-size: .85em; margin: 0; }
+.npv-static { margin-top: .5rem; font-size: .9em; }
+.npv-static img { max-width: 100%; margin-top: .5rem; }

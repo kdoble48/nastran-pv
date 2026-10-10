@@ -11,11 +11,13 @@ Views with nothing to show are skipped. Exit status 1 only when nothing was expo
 import json
 import math
 import os
+import shlex
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
+from paraview import servermanager as sm  # noqa: E402
 from paraview import simple as pv  # noqa: E402
 
 import nastran_views as nv  # noqa: E402
@@ -57,7 +59,7 @@ def has_content(view):
     Views that find nothing to draw show only a solid ghost mesh and an info text.
     """
     for src in pv.GetSources().values():
-        rep = pv.GetRepresentation(src, view)
+        rep = sm.GetRepresentation(src, view)  # lookup only: simple.GetRepresentation would Show()
         if rep is None or not rep.Visibility or src.GetXMLName() == "TextSource":
             continue
         arr = getattr(rep, "ColorArrayName", None)
@@ -91,17 +93,16 @@ def export_view(reader, model, view_name, out):
         pv.SaveScreenshot(os.path.join(out, f"{stem}.png"), view, ImageResolution=SIZE)
         se.write_vtksz(view, os.path.join(out, f"{stem}.vtksz"))
         if meta is None:
-            deck = os.path.basename(model["deck"])
-            cmd = f"nastran-pv view {deck} --view {view_name}"
-            if model.get("results"):
-                cmd += f" --results {os.path.basename(model['results'])}"
+            deck = shlex.quote(os.path.basename(model["deck"]))
+            res = f" --results {shlex.quote(os.path.basename(model['results']))}" if model.get("results") else ""
             meta = {
                 "model": model["id"], "model_title": model.get("title", model["id"]),
                 "view": view_name, "title": title, "caption": caption,
                 "png": f"{stem}.png", "thumb": f"{base}-thumb.png", "thumb_raw": f"{base}-thumb-raw.png",
                 "scene": f"{stem}.vtksz", "scene_bytes": os.path.getsize(os.path.join(out, f"{stem}.vtksz")),
                 "text": over["text"], "legends": over["legends"], "frames": frames,
-                "reproduce": [cmd, f"nastran-pv render {deck} --preset {view_name} --views showcase"],
+                "reproduce": [f"nastran-pv view {deck} --view {view_name}{res}",
+                              f"nastran-pv render {deck} --preset {view_name} --views showcase{res}"],
                 "credit": model.get("credit", ""),
             }
             se.hide_overlays(view)
@@ -111,7 +112,8 @@ def export_view(reader, model, view_name, out):
             freq = state.field("Frequency")
             frames.append({"label": label[0] if label else f"Step {k}",
                            "frequency": _finite(freq[0]) if freq is not None and freq.size else None,
-                           "scene": f"{stem}.vtksz", "png": f"{stem}.png", "text": over["text"]})
+                           "scene": f"{stem}.vtksz", "png": f"{stem}.png", "text": over["text"],
+                           "legends": over["legends"]})  # each step rescales its color range
         pv.Delete(view)
     return meta
 

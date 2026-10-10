@@ -17,6 +17,7 @@ _VENDOR = os.path.join(HERE, "_vendor")
 if os.path.isdir(_VENDOR) and _VENDOR not in sys.path:
     sys.path.append(_VENDOR)  # after ParaView's own site-packages, as the plugin does
 
+from paraview import servermanager as sm  # noqa: E402
 from paraview import simple as pv  # noqa: E402
 
 _READY = False
@@ -94,7 +95,7 @@ def overlays(view):
     """Visible text sources and the legends of shown scalar bars in ``view``."""
     text, legends = [], []
     for src in pv.GetSources().values():
-        rep = pv.GetRepresentation(src, view)
+        rep = sm.GetRepresentation(src, view)  # lookup only: simple.GetRepresentation would Show()
         if rep is None or not rep.Visibility:
             continue
         if src.GetXMLName() == "TextSource":
@@ -113,7 +114,7 @@ def hide_overlays(view):
     """Hide text, scalar bars and the axes triad (for thumbnails)."""
     view.OrientationAxesVisibility = 0
     for src in pv.GetSources().values():
-        rep = pv.GetRepresentation(src, view)
+        rep = sm.GetRepresentation(src, view)  # lookup only: simple.GetRepresentation would Show()
         if rep is None:
             continue
         if src.GetXMLName() == "TextSource":
