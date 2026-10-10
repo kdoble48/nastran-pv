@@ -115,6 +115,17 @@ def main():
         check("vtkPolyData" in classes and any(c.endswith("Actor") for c in classes),
               f"scene has actors and polydata: {sorted(classes)}")
         check(len(state["hashes"]) > 0, f"scene carries {len(state['hashes'])} data arrays")
+        # vtk.js has no indexed color transfer functions: categorical LUTs must ship as step nodes
+        stack, luts = [state["scene"]], []
+        while stack:
+            node = stack.pop()
+            stack.extend(node.get("dependencies", []))
+            if "indexedLookup" in node.get("properties", {}):
+                luts.append(node["properties"])
+        check(luts and not any(p["indexedLookup"] for p in luts)
+              and any([round(n[0]) for n in p["nodes"]] == [1, 2, 11, 12] and all(n[5] == 1.0 for n in p["nodes"])
+                      for p in luts),
+              f"categorical LUT exported as step nodes: {[(p['indexedLookup'], len(p['nodes'])) for p in luts]}")
         legends = se.overlays(sview)["legends"]
         check(any(lg["array"] == "PID" and lg["kind"] == "categorical" for lg in legends),
               f"PID legend captured: {[lg['array'] for lg in legends]}")
