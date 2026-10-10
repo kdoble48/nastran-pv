@@ -60,6 +60,6 @@ nastran-pv render run.dat --results run.op2 --step 3 --preset results
 ```
 
 The presets are the views from the toolbar macros: `masses`, `bushes`, `loads`, `spc`, `rigid`,
-`family`, `group`, `pid`, `mid`, `elementtype`, `thickness` and `results`.
+`family`, `group`, `pid`, `mid`, `elementtype`, `thickness`, `results`, `parts` and `check`.
 
 Cameras: `iso` (default), `top`, `front`, `side`, and `showcase` (Z up, three-quarter view from ahead; used by the web gallery).

@@ -39,6 +39,10 @@ VIEW_INFO = {
     "elementtype": ("Element type", "Mesh colored by element type."),
     "thickness": ("Thickness", "Shell thickness."),
     "results": ("Results", "Deformed shape colored by displacement magnitude, one scene per mode."),
+    "parts": ("Parts", "Connected parts in indexed colors, traversing every element, rigid element, bush and "
+                       "connector; one legend entry per part."),
+    "check": ("Model check", "Free edges and faces, coincident grids, duplicate elements, dangling connectors and "
+                             "floating parts, one color per check, with counts."),
 }
 
 

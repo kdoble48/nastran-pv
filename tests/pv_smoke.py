@@ -97,6 +97,28 @@ def topology_checks(pv, nv):
     check(True, "bad seed text reports and passes the data through")
     for src in (g, p, path, mc):
         pv.Delete(src)
+
+    view = pv.CreateRenderView()
+    pv.Show(topo, view)
+    pv.SetActiveView(view)
+    pv.SetActiveSource(topo)
+    pv.QuerySelect(QueryString="(EID == 11)", FieldType="CELL", InsideOut=False)
+    ids = nv.selected_ids()
+    check(ids == ("EID", [11]) and pv.GetActiveSource() is topo, f"cell selection -> EIDs: {ids}")
+    nv.grow_from_selection()
+    grow_src = pv.FindSource(nv._name(nv.Model(topo), "grow"))
+    check(grow_src is not None and grow_src.SeedIDs == "EID 11", "Grow from Selection writes Seed IDs")
+    pv.SetActiveSource(topo)
+    pv.QuerySelect(QueryString="(NID == 4) | (NID == 42)", FieldType="POINT", InsideOut=False)
+    ids = nv.selected_ids()
+    check(ids == ("GRID", [4, 42]), f"point selection -> grids: {ids}")
+    nv.path_from_selection()
+    path_src = pv.FindSource(nv._name(nv.Model(topo), "path"))
+    check((path_src.FromGrid, path_src.ToGrid) == (4, 42) and _root(path_src, "PathLength") == [9],
+          "Path from Selection: grids 4 -> 42, 9 elements")
+    for name in ("parts", "grow", "path", "check"):
+        nv.apply(name, reader=topo, view=view)
+    check(True, "topology views build on the topology deck")
     return topo
 
 

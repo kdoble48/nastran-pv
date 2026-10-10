@@ -43,6 +43,11 @@ summary. Running a view again reuses its pipeline objects, which are named `NPV 
 | NPV Family / Group / PID / MID / Element Type | Mesh with an indexed color per value, with names in the legend |
 | NPV Thickness | Shell thickness |
 | NPV Results | Deformed shape (Warp By Vector) colored by displacement, for the current time step |
+| NPV Parts | Connected parts in indexed colors; uncheck card types on *NPV parts* to split at connectors |
+| NPV Grow | Elements reached from the seeds, colored by element hops |
+| NPV Grow from Selection | Seeds *NPV grow* with the selected cells (EIDs) or grids, then shows NPV Grow |
+| NPV Path from Selection | Shortest element path between two selected grids |
+| NPV Model Check | Free edges and faces, coincident grids, duplicates, dangling connectors, floating parts |
 | NPV Index Colors | Turns the selected object's current integer coloring (PID, MID, FamilyId, …) into an indexed LUT with annotations |
 
 The same views can be called from the Python shell (`import nastran_views as nv; nv.apply("masses")`),
@@ -76,6 +81,8 @@ from `render_model.py`, and as `nastran-pv render` presets (see [CLI](cli.md#bat
 
 The field filters (*Nastran Derived Fields*, *Nastran Map Table*, *Nastran Group Stats*) are
 described in [Fields](fields.md#paraview-filters).
+The topology filters (*Nastran Grow*, *Nastran Parts*, *Nastran Path*, *Nastran Model Check*) are
+described in [Model tools](tools.md#paraview).
 
 ## Indexed colors
 

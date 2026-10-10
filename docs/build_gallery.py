@@ -30,7 +30,7 @@ RELEASE = "gallery-assets"
 SCENE_WARN_BYTES = 3_000_000
 MODEL_ORDER = ["ucrm9", "demo"]
 VIEW_ORDER = ["masses", "bushes", "loads", "spc", "rigid", "family", "group", "pid", "mid",
-              "elementtype", "thickness", "results"]
+              "elementtype", "thickness", "parts", "check", "results"]
 UCRM9_CREDIT = ("uCRM-9 wingbox, coarse mesh: Brooks, Kenway and Martins, *Benchmark Aerostructural Models "
                 "for the Study of Transonic Aircraft Wings*, AIAA Journal 56(7), 2018. Data: "
                 "[doi:10.17632/gpk4zn73xn.1](https://doi.org/10.17632/gpk4zn73xn.1), CC BY 4.0.")
@@ -43,8 +43,8 @@ def build_models(ucrm9, demo_bdf, demo_op2) -> list[dict]:
     if ucrm9:
         models.append({"id": "ucrm9", "title": "uCRM-9 wingbox", "deck": str(ucrm9), "results": None,
                        "views": ["masses", "loads", "spc", "rigid", "family", "group", "pid", "mid",
-                                 "elementtype", "thickness"], "credit": UCRM9_CREDIT})
-    views = ["bushes", "masses"] + (["results"] if demo_op2 else [])
+                                 "elementtype", "thickness", "parts", "check"], "credit": UCRM9_CREDIT})
+    views = ["bushes", "masses", "parts", "check"] + (["results"] if demo_op2 else [])
     models.append({"id": "demo", "title": "Demo: tray on four isolators", "deck": str(demo_bdf),
                    "results": str(demo_op2) if demo_op2 else None, "views": views, "credit": DEMO_CREDIT})
     return models
