@@ -21,6 +21,8 @@ you use.
 - [CLI](cli.md): `convert`, `stats`, `view`, `render` and `setup`, with examples.
 - [Fields](fields.md): add derived, table-mapped and computed fields, from the CLI or from the
   ParaView filters.
+- [Model tools](tools.md): connectivity traversal (grow), parts, shortest paths and model checks,
+  with per-card-type rules, from the CLI, Python and ParaView.
 - [Run store](store.md): keep runs in SQLite and compare fields across runs and meshes.
 
 ## Reference
@@ -49,6 +51,7 @@ install
 paraview
 cli
 fields
+tools
 store
 ```
 

@@ -16,7 +16,8 @@ Gotchas section before you touch the builders, VTKHDF or pvpython code.
 
 | Change | Files |
 |---|---|
-| New element/card in an existing block | `builders/<block>.py`. A new type code goes **only** in `categories.py` (`ELEMENT_TYPES`/`RIGID_TYPES` are global tables shared by every block's indexed LUT: append, never reorder). Solid cells need the winding check (`solids.FLIP`). |
+| New element/card in an existing block | `builders/<block>.py`. A new type code goes **only** in `categories.py` (`ELEMENT_TYPES`/`RIGID_TYPES`/`CONNECTOR_TYPES` are global tables shared by every block's indexed LUT: append, never reorder). Solid cells need the winding check (`solids.FLIP`). |
+| Topology (a new traversable block, rule or check) | A line/cell block with a `NID` point array joins the graph through `topology/graph.py` `GRAPH_BLOCKS` (group alias + type array + names table); checks live in `topology/check.py` `CHECKS`/`SEVERITY`/`FUNCS`; the plugin's `_TopologyFilter` and `_Traversal`; docs/tools.md. Test on `tests/data/topology.bdf` with hand-counted values. |
 | New block | `builders/<new>.py` (geometry via `vtkutil`/`common.CellTable`; return None when empty) → `assemble.Options` field + build call → `cli.BLOCK_FLAGS` (gives `--no-<block>`) → reader `_FLAGS` + `@smproperty.intvector` toggle in `paraview/nastran_bdf_reader.py`. Block names must be valid XML names. Then decide **for each** mesh-block list whether the block belongs in it (see below). |
 | New cell/point array | The builder. Use `vtkutil.add_array(..., skip_all_nan=True)`, because all-NaN arrays break the XML reader. If it is categorical, add legend names in `labels_for` (`nastran_views.py`). `index_colors` is generic. |
 | Derived field / `--map` key / `--calc` | `fields/derived.py`, `fields/tables.py` or `fields/calc.py`, plus the CLI options in `cli.py`. The matching ParaView filter lives in `nastran_bdf_reader.py`. |
