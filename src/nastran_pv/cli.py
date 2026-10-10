@@ -22,7 +22,7 @@ from pathlib import Path
 from .assemble import Options, block_names, build_multiblock, get_block
 from .vtkio import read_vtm, write_series, write_vtm
 
-BLOCK_FLAGS = ("shells", "lines", "solids", "masses", "rigid", "bushes", "constraints", "loads")
+BLOCK_FLAGS = ("shells", "lines", "solids", "masses", "rigid", "connectors", "bushes", "constraints", "loads")
 
 __all__ = ["main", "write_vtm", "write_series", "summarize"]
 

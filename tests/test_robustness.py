@@ -98,3 +98,30 @@ def test_theta_measured_from_g1_g2_on_skewed_quad(tmp_path, theta_mcid, expected
     deck = load_deck(write(tmp_path, "skew.bdf", text), echo=False)
     shells = get_block(build_multiblock(deck), "Shells")
     np.testing.assert_allclose(arr(shells, "MaterialAxis", "cell")[0], expected, atol=1e-12)
+
+
+CONNECTOR_EDGE_CASES = """\
+GRID,1,,0.,0.,0.
+GRID,2,,1.,0.,0.
+SPOINT,99
+CELAS2,1,100.,1,1
+CELAS2,2,100.,1,1,777,1
+CELAS3,3,5,99,98
+CFAST,4,6,PROP,1,1,,,
+,0.5,0.,0.
+PFAST,6,1.,,,1.,1.,1.
+CWELD,7,8,,ALIGN,1,2
+PWELD,8,1,1.
+CGAP,9,10,1,2,1.,0.,0.
+PGAP,10
+"""
+
+
+def test_connector_edge_cases_warn_and_skip(tmp_path):
+    deck = load_deck(write(tmp_path, "conn.bdf", CONNECTOR_EDGE_CASES), echo=False)
+    con = get_block(build_multiblock(deck), "Connectors")
+    assert arr(con, "EID", "cell").tolist() == [9]  # only the CGAP connects two known grids
+    text = "\n".join(deck.warnings)
+    assert "CFAST 4: patch form" in text
+    assert "CWELD: 1 card(s)" in text
+    assert "connectors: 1 leg(s) reference unknown grids" in text  # CELAS2 2 -> grid 777; CELAS3 is not drawn

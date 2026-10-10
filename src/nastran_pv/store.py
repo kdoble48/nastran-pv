@@ -117,9 +117,12 @@ class Store:
         cd = ds.GetCellData()
         pid, mid = get_array(cd, "PID"), get_array(cd, "MID")
         et, fam = get_array(cd, "ElementType"), get_array(cd, "FamilyId")
-        et_names = field_strings(ds, "ElementTypeNames") or field_strings(ds, "RigidTypeNames")
+        et_names = (field_strings(ds, "ElementTypeNames") or field_strings(ds, "RigidTypeNames")
+                    or field_strings(ds, "ConnectorTypeNames"))
         if et is None:
             et = get_array(cd, "RigidType")
+        if et is None:
+            et = get_array(cd, "ConnectorType")
         fam_names = field_strings(ds, "FamilyNames")
         rows = []
         for i, e in enumerate(eid):

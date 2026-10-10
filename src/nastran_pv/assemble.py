@@ -8,6 +8,7 @@ from vtkmodules.vtkCommonDataModel import vtkMultiBlockDataSet
 
 from . import vtkutil
 from .builders.bushes import build_bushes
+from .builders.connectors import build_connectors
 from .builders.constraints import build_constraints, nodal_spc_mask, spc_sets
 from .builders.lines import build_lines
 from .builders.loads import build_load_block, load_sets, nodal_load_arrays
@@ -30,6 +31,7 @@ class Options:
     solids: bool = True
     masses: bool = True
     rigid: bool = True
+    connectors: bool = True
     bushes: bool = True
     constraints: bool = True
     loads: bool = True
@@ -126,6 +128,8 @@ def build_multiblock(deck: Deck, opts: Options | None = None) -> vtkMultiBlockDa
         blocks.add("MassOffsets", mass_info[1])
     if opts.rigid:
         blocks.add("Rigid", build_rigid(deck))
+    if opts.connectors:
+        blocks.add("Connectors", build_connectors(deck))
     if opts.bushes:
         pts, lines = build_bushes(deck, opts.k_ref)
         blocks.add("Bushes", pts)

@@ -248,6 +248,7 @@ def labels_for(model, array, values):
         "FamilyId": ("Shells", "FamilyNames"),
         "GroupId": ("Shells", "GroupNames"),
         "RigidType": ("Rigid", "RigidTypeNames"),
+        "ConnectorType": ("Connectors", "ConnectorTypeNames"),
     }
     if array in tables:
         names = model.field_strings(*tables[array])

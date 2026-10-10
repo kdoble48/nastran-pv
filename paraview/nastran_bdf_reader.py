@@ -47,7 +47,7 @@ _HELP = (
     "version as ParaView's Python that has pyNastran installed. Original error: {err}"
 )
 
-_FLAGS = ("shells", "lines", "solids", "masses", "rigid", "bushes", "constraints", "loads")
+_FLAGS = ("shells", "lines", "solids", "masses", "rigid", "connectors", "bushes", "constraints", "loads")
 
 
 def _message(text, error=False):
@@ -127,6 +127,11 @@ class NastranPVReader(VTKPythonAlgorithmBase):
     @smdomain.xml('<BooleanDomain name="bool"/>')
     def SetRigidElements(self, v):
         self._set_flag("rigid", v)
+
+    @smproperty.intvector(name="Connectors", default_values=1)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetConnectors(self, v):
+        self._set_flag("connectors", v)
 
     @smproperty.intvector(name="Bushes", default_values=1)
     @smdomain.xml('<BooleanDomain name="bool"/>')

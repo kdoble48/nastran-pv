@@ -155,4 +155,6 @@ def build_bushes(deck: Deck, k_ref: float | None = None):
         lines = vtkutil.polydata(np.vstack([a, b]), verts=False,
                                  lines=np.column_stack([np.arange(k), np.arange(k) + k]))
         vtkutil.add_array(lines.GetCellData(), "EID", eid[has_gb])
+        vtkutil.add_array(lines.GetCellData(), "PID", pid[has_gb])
+        vtkutil.add_array(lines.GetPointData(), "NID", np.concatenate([ga[has_gb], gb[has_gb]]))
     return pts, lines
