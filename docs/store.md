@@ -10,8 +10,9 @@
 `add` takes the same [field options](fields.md#cli-options) as `convert`.
 
 `compare` aggregates a field per PID, MID, FAMILY, ETYPE, BLOCK or EID between two runs. That
-works across meshes too: the uCRM-9 coarse, medium and fine wings agree on mass per family to
-about 1e-5. `query` runs any SQL against the tables, and `open` shows a run in ParaView.
+works across meshes too: the uCRM-9 coarse and fine wings agree on total structural mass to about
+3e-5, and on the mass of each family to within about 1e-3 (the largest differences are in the
+wingtip ribs). `query` runs any SQL against the tables, and `open` shows a run in ParaView.
 
 ```bash
 nastran-pv store add coarse.bdf --db runs.sqlite --derive size --only ElementMass Area

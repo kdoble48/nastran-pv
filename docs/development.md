@@ -8,7 +8,10 @@ python -m pyflakes src paraview/*.py tests  # lint (skip paraview/_vendor)
 ```
 
 The architecture, the repository layout and the known VTK, ParaView and pyNastran quirks are
-described in [CLAUDE.md](https://github.com/kdoble48/nastran-pv/blob/main/CLAUDE.md).
+described in [CLAUDE.md](https://github.com/kdoble48/nastran-pv/blob/main/CLAUDE.md). Task
+workflows for Claude Code (converting, rendering, comparing runs, troubleshooting, extending, the
+gallery) are project skills in
+[`.claude/skills/`](https://github.com/kdoble48/nastran-pv/tree/main/.claude/skills).
 
 ## Writing docs
 
