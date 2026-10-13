@@ -68,7 +68,12 @@ says so in its overlay text, so read the PNG.
   `--dry-run` prints the generated script.
 - Custom pvpython scripts: `import nastran_views as nv; nv.apply("masses", reader=r, view=v)`. Read the
   pvpython quirks in CLAUDE.md first (proxy-label constructor names, `block_names`, `timesteps`,
-  `solid`).
+  `solid`, `nv.fetch`). The reader outputs the model tree, so use `nv.Model(reader)` (a gathered
+  multiblock) or `nv.fetch` + `nastran_pv.tree.as_multiblock` instead of a bare `Fetch`, and
+  `nv.selectors([...])` for `ExtractBlock`.
+- Hiding parts from a script: set the reader's `VisibleProperties`/`VisibleMaterials`/
+  `VisibleElementTypes`/`VisibleFamilies`/`VisibleGroups` lists or `ShowOnlyElements`/`HiddenElements`
+  (`nv.show_all(reader)` resets them); `docs/paraview.md#model-tree-and-visibility`.
 
 ## Report back with
 

@@ -1,7 +1,9 @@
 # Model blocks and arrays
 
-The reader output (and every `.vtm` the CLI writes) is a `vtkMultiBlockDataSet` with these named
-blocks. A block is left out when the deck has nothing for it.
+Every `.vtm` the CLI writes is a `vtkMultiBlockDataSet` with these named blocks. The ParaView reader
+outputs the same blocks under `Model/` in its [model tree](paraview.md#model-tree-and-visibility), cut
+into one piece per property, material, element type, family and group. A block is left out when the
+deck has nothing for it.
 
 ## Blocks
 

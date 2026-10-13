@@ -32,10 +32,11 @@ def check(cond, msg):
 
 def _by_eid(src, block, name):
     import nastran_views as nv
-    from paraview import servermanager
     from vtkmodules.util.numpy_support import vtk_to_numpy
 
-    data = servermanager.Fetch(src)
+    from nastran_pv.tree import as_multiblock
+
+    data = as_multiblock(nv.fetch(src))
     blk = data.GetBlock(nv.block_names(data).index(block))
     cd = blk.GetCellData()
     return dict(zip(vtk_to_numpy(cd.GetArray("EID")).tolist(), vtk_to_numpy(cd.GetArray(name)).tolist()))
@@ -132,6 +133,62 @@ def topology_checks(pv, nv):
     return topo
 
 
+def _cells(reader, block):
+    m = rm.Model(reader)
+    return m.block(block).GetNumberOfCells() if m.has(block) else 0
+
+
+def _select(pv, reader, query):
+    pv.SetActiveSource(reader)
+    pv.QuerySelect(QueryString=query, FieldType="CELL", InsideOut=False)
+
+
+def tree_checks(pv, nv, reader):
+    """Model tree output, Femap-style visibility checklists and the selection commands."""
+    data = nv.fetch(reader)
+    check(data.IsA("vtkPartitionedDataSetCollection"), "reader outputs the model tree")
+    asm = data.GetDataAssembly()
+    top = [asm.GetNodeName(n) for n in asm.GetChildNodes(asm.GetRootNode(), False)]
+    check(top == ["Model", "Properties", "Materials", "ElementTypes", "Families", "Groups"], f"tree branches {top}")
+    reader.UpdatePipelineInformation()
+    props = nv._listed(reader, "VisibleProperties")
+    check(props == ["PBUSH_51", "PSHELL_1", "PSHELL_2", "PSOLID_11", "PSOLID_12"], f"property checklist {props}")
+    reader.VisibleProperties = [p for p in props if p != "PSHELL_1"]
+    check(_cells(reader, "Shells") == 1, "unchecking PSHELL_1 hides its two shells")
+    reader.VisibleMaterials = [m for m in nv._listed(reader, "VisibleMaterials") if m != "MAT1_1"]
+    check(_cells(reader, "Shells") == 1 and _cells(reader, "Solids") == 1 and _cells(reader, "BushLines") == 2,
+          "material AND property: EID 2 and 13 remain; bushes have no material and stay")
+    nv.show_all(reader)
+    check(_cells(reader, "Shells") == 3 and _cells(reader, "Solids") == 3, "Show All checks everything again")
+    ex = pv.ExtractBlock(Input=reader, Selectors=["/Root/Materials/MAT1_1"])
+    ex.UpdatePipeline()
+    check(ex.GetDataInformation().GetNumberOfCells() == 4, "ExtractBlock //Materials/MAT1_1 -> 4 elements")
+    pv.Delete(ex)
+
+    view = pv.CreateRenderView()
+    pv.Show(reader, view)
+    pv.SetActiveView(view)
+    _select(pv, reader, "(EID == 1)")
+    nv.show_only_selected()
+    check(reader.ShowOnlyElements == "1" and _cells(reader, "Shells") == 1 and _cells(reader, "Solids") == 0
+          and _cells(reader, "Constraints") == 4, "NPV Show Only: EID 1 alone (SPCs stay)")
+    nv.show_all(reader)
+    _select(pv, reader, "(EID == 2)")
+    nv.hide_selected()
+    check(reader.HiddenElements == "2" and _cells(reader, "Shells") == 2, "NPV Hide: EID 2 hidden")
+    nv.show_all(reader)
+    _select(pv, reader, "(EID == 11)")
+    keep = nv.show_only_property()
+    check(keep == ["PSOLID_11"] and _cells(reader, "Shells") == 0 and _cells(reader, "Solids") == 2,
+          f"NPV Only Property -> {keep}")
+    nv.show_all(reader)
+    _select(pv, reader, "(EID == 13)")
+    keep = nv.show_only_material()
+    check(keep == ["MAT1_3"] and _cells(reader, "Solids") == 1, f"NPV Only Material -> {keep}")
+    nv.show_all(reader)
+    pv.Delete(view)
+
+
 def main():
     reader = rm.load_reader(DECK)
     model = rm.Model(reader)
@@ -143,6 +200,10 @@ def main():
     reader.Solids = 0
     check("Solids" not in rm.Model(reader).names, "Solids toggle removes the block")
     reader.Solids = 1
+    from paraview import simple as pv
+    import nastran_views as nv
+
+    tree_checks(pv, nv, reader)
 
     from op2_fixture import make_op2  # synthesized results, written with pyNastran
 
@@ -240,6 +301,8 @@ def main():
     stats.UpdatePipeline()
     table = servermanager.Fetch(stats, idx=1) if hasattr(servermanager, "Fetch") else None
     check(table is not None and table.GetNumberOfRows() == 4, "Nastran Group Stats table has one row per PID")
+    check(servermanager.Fetch(derived).IsA("vtkPartitionedDataSetCollection"),
+          "field filters keep the model tree")
     shells = nv.Model(reader).block("Shells")  # unchanged input
     check(shells.GetCellData().GetArray("Area") is None, "field filters leave the reader output untouched")
     # ParaView keeps the VTKHDF file handle open on Windows: ignore cleanup errors
@@ -249,7 +312,9 @@ def main():
             f.write("EID,MS\n1,0.5\n2,-0.2\n")
         mapped = pv.NastranMapTable(Input=reader, TableFileName=csv_path, Key="EID")
         mapped.UpdatePipeline()
-        out = servermanager.Fetch(mapped)
+        from nastran_pv.tree import as_multiblock
+
+        out = as_multiblock(nv.fetch(mapped))
         names = nv.block_names(out)
         sh = out.GetBlock(names.index("Shells"))
         check(sh.GetCellData().GetArray("MS") is not None, "Nastran Map Table adds the CSV column")
@@ -352,6 +417,10 @@ def main():
                                       "credit": ""}, "bushes", tempfile.gettempdir()) is None,
               "view with nothing to show is skipped")
         reader.Bushes = 1
+    twin = rm.load_reader(DECK)  # the same deck opened twice must not share NPV pipeline objects
+    check(nv._name(nv.Model(twin), "mesh") != nv._name(nv.Model(reader), "mesh"),
+          f"same deck twice: {nv._name(nv.Model(twin), 'mesh')!r}")
+    pv.Delete(twin)
     topology_checks(pv, nv)
     print("pv_smoke: all checks passed")
 

@@ -109,6 +109,12 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
 - `topology/`: `graph.py` (the bipartite grid↔cell graph of any multiblock, plus `Rules` and `Seeds`),
   `grow.py`, `parts.py`, `path.py` and `check.py`. Results are written back as arrays and `PART_*`/`LINK_*`/`CHECK_*`
   tables, like `fields`.
+- `tree.py`: the plugin's model tree. `build_tree` cuts the multiblock into pieces per
+  property/material/element type/family/group (AND `Visibility` from the reader's checklists and
+  EID lists) and `Tree.output` gives a `vtkPartitionedDataSetCollection` whose assembly has `Model/`
+  (today's blocks) plus `Properties/ Materials/ ElementTypes/ Families/ Groups/`. Time steps only
+  re-slice changed arrays. Plugin filters `gather` the tree into the plain multiblock, run the usual
+  code, and `scatter` new arrays back; the CLI, VTK files and the store never see the tree.
 - `vtkhdf.py`: VTKHDF output built on VTK's own `vtkHDFWriter`.
   - The multiblock is converted to a `vtkPartitionedDataSetCollection` plus a `vtkDataAssembly`
     (`to_pdc`), because a multiblock loses its block names in VTKHDF.
@@ -126,8 +132,11 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   - At import it bootstraps `sys.path` with `../src`, then `_vendor`, then
     `NASTRAN_PV_SITE_PACKAGES`, and imports nastran_pv lazily.
   - The reader caches the deck by the mtimes of the main file and every INCLUDE, and caches the
-    built multiblock by its options, so changing the time step only re-attaches results.
-- `paraview/nastran_views.py`: view functions (`apply(name)`), `index_colors`, and the macro entry
+    built multiblock by its options, so changing the time step only re-attaches results. The cut
+    model tree is cached by the visibility settings too; its checklists are filled in
+    `RequestInformation`, before the first Apply.
+- `paraview/nastran_views.py`: view functions (`apply(name)`), `index_colors`, the selection
+  commands (grow/path from selection, Femap-style show only/hide/show all), and the macro entry
   point `run_macro`. It creates named, reused pipeline objects (`NPV <what> [<reader>]`).
   `render_model.py` is a thin batch wrapper around it.
 
@@ -149,6 +158,12 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   - A Python proxy's properties come from its class's own `__dict__` only; the topology filters'
     shared properties are copied in by `_with_traversal`.
   - Deleting a proxy that was the active source leaves no active source; `selected_ids` restores it.
+  - `Fetch` of a `vtkPartitionedDataSetCollection` drops its data assembly (partitions, order and
+    field data survive); `nastran_views.fetch` copies it back from the data information.
+  - The reader outputs the model tree: select blocks with `nastran_views.selectors` (both
+    `/Root/Model/<b>` and `/Root/<b>`), and read data through `nastran_views.Model` (gathered).
+  - Opening the same deck twice gives two readers with one label; `_name` then adds the proxy id,
+    so they do not share `NPV ...` objects.
 - Gallery scene export (`paraview/scene_export.py`) calls trame-vtk's serializers directly. ParaView 6
   mappers take a `vtkPartitionedDataSetCollection`, which trame-vtk 2.11 drops silently unless the
   `vtkMultiBlockDataSet` serializer is also registered for it (`_init_serializers` does this).
