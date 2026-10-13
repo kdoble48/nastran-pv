@@ -686,10 +686,28 @@ def _selection_kinds(sel):
     return kinds
 
 
+def _selection_of(src):
+    try:
+        return src.GetSelectionInput(src.Port) if src is not None else None
+    except AttributeError:
+        return None
+
+
+def selected_source():
+    """The source holding the current selection: the active one, else any source with a selection.
+    Views show ``NPV ...`` extracts, so a selection made in the view usually sits on one of those
+    rather than on the reader the user clicked."""
+    active = pv.GetActiveSource()
+    if _selection_of(active) is not None:
+        return active
+    return next((s for s in pv.GetSources().values() if _selection_of(s) is not None), None)
+
+
 def _fetch_selection():
-    """(selected cells/points of the active source, the selection proxy)."""
-    src = pv.GetActiveSource()
-    sel = src.GetSelectionInput(src.Port) if src is not None else None
+    """(selected cells/points, the selection proxy) of :func:`selected_source`."""
+    active = pv.GetActiveSource()
+    src = selected_source()
+    sel = _selection_of(src)
     if sel is None:
         raise RuntimeError("Select cells or grids in the view first (Select Cells On / Select Points On).")
     ex = pv.ExtractSelection(Input=src, Selection=sel)
@@ -697,7 +715,7 @@ def _fetch_selection():
         data = servermanager.Fetch(ex)
     finally:
         pv.Delete(ex)
-        pv.SetActiveSource(src)  # the extract became active; give the user's source back
+        pv.SetActiveSource(active or src)  # the extract became active; give the user's source back
     return data, sel
 
 
@@ -771,8 +789,9 @@ def _listed(reader, prop):
 
 def _refresh(reader):
     """The reader output changed: drop the selection (it would point at other cells) and redraw."""
-    if pv.GetActiveSource() is not None:
-        pv.ClearSelection(pv.GetActiveSource())
+    held = selected_source()
+    if held is not None:
+        pv.ClearSelection(held)
     reader.UpdatePipeline()
     if pv.GetActiveView() is not None:
         pv.Render()

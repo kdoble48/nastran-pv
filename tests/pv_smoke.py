@@ -186,6 +186,15 @@ def tree_checks(pv, nv, reader):
     keep = nv.show_only_material()
     check(keep == ["MAT1_3"] and _cells(reader, "Solids") == 1, f"NPV Only Material -> {keep}")
     nv.show_all(reader)
+    # GUI flow: the view shows an NPV extract; the selection sits on it while the reader is active
+    nv.apply("family", reader=reader, view=view)
+    shells = pv.FindSource(nv._name(nv.Model(reader), "Shells"))
+    _select(pv, shells, "(EID == 3)")
+    pv.SetActiveSource(reader)
+    nv.hide_selected()
+    check(reader.HiddenElements == "3" and _cells(reader, "Shells") == 2 and nv.selected_source() is None,
+          "NPV Hide takes the selection from the view's extract, then clears it")
+    nv.show_all(reader)
     _select(pv, reader, "(EID == 1) | (EID == 201)")  # a shell and a CONM2 (EID on mass points)
     nv.show_only_selected()
     check(reader.ShowOnlyElements == "1 201" and _cells(reader, "Masses") == 1,
