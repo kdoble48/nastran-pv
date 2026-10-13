@@ -21,6 +21,39 @@ cards often live in the run deck. A bare geometry file still loads, but without 
 When ParaView asks which reader to use, pick *Nastran Bulk Data (nastran-pv)* and click *Set
 reader as default*. Its built-in "BDF Reader" reads geometry only.
 
+## Model tree and visibility
+
+The reader outputs a model tree, in the spirit of Femap's Model Info tree. Open it with
+*View > MultiBlock Inspector*:
+
+```
+Model/         Shells  Solids  Lines  Masses  Rigid  Connectors  Bushes  Constraints  Loads/LOAD_1001 …
+Properties/    PSHELL_101  PCOMP_7  PBUSH_3 …        (PID_<n> when the card is missing)
+Materials/     MAT1_1  MAT8_2 …                      (MID_<n> when the card is missing)
+ElementTypes/  CQUAD4  CTRIA3  CHEXA  RBE2  CBUSH …
+Families/  Groups/                                   (decks with ICEM/TACS family comments)
+```
+
+Each node can be shown or hidden and given its own color and opacity. A category node points at the
+same elements as the `Model` nodes, so ticking `Properties/PSHELL_101` shows the elements of that
+property. *Extract Block* takes the same paths, e.g. `/Root/Materials/MAT1_1`. In the
+MultiBlock Inspector a piece shows when *any* ticked node contains it.
+
+For Femap's AND visibility, use these lists in the reader's Properties panel:
+
+* **Visible Properties / Materials / Element Types / Families / Groups**: an element stays only if
+  every category it has is checked. An element without a category passes that test; for example,
+  CBUSH elements have no material, so the Materials list never hides them. Loads and SPCs are
+  switched by their block toggles only.
+* **Show Only Elements** and **Hidden Elements**: element ID lists such as `1001 1002 2000-2010`.
+  They apply to everything that has an `EID`: elements, rigid elements, connectors and masses.
+
+The selection macros below fill these in. The model totals (`ModelMass`, CG, material table) always
+describe the whole deck, whatever is hidden.
+
+On a large model the tree is capped at 1,000 pieces. Above that, Families, Groups, Element types and
+then Materials leave the tree, with a message in Output Messages; the checklists still work.
+
 ## One-click views (toolbar macros)
 
 ```bash
@@ -49,6 +82,11 @@ summary. Running a view again reuses its pipeline objects, which are named `NPV 
 | NPV Path from Selection | Shortest element path between two selected grids |
 | NPV Model Check | Free edges and faces, coincident grids, duplicates, dangling connectors, floating parts |
 | NPV Index Colors | Turns the selected object's current integer coloring (PID, MID, FamilyId, …) into an indexed LUT with annotations |
+| NPV Show Only | Shows only the selected elements (Select Cells On first); loads and SPCs stay |
+| NPV Hide | Adds the selected elements to the reader's *Hidden Elements* |
+| NPV Show All | Clears both element lists and checks every property, material, type, family and group |
+| NPV Only Property | Unchecks every property except those of the selected elements |
+| NPV Only Material | Unchecks every material except those of the selected elements |
 
 The same views can be called from the Python shell (`import nastran_views as nv; nv.apply("masses")`),
 from `render_model.py`, and as `nastran-pv render` presets (see [CLI](cli.md#batch-screenshots)).
@@ -91,7 +129,7 @@ Categorical arrays (`PID`, `MID`, `FamilyId`, `GroupId`, `ElementType`, `RigidTy
 *NPV Index Colors*, or import `paraview/nastran_pv_colors.json` under *Choose Preset > Import*.
 The preset has 256 distinct colors.
 
-**Why some arrays show "(partial)".** The reader output is a multiblock. An array that exists
+**Why some arrays show "(partial)".** The reader output is a collection of blocks. An array that exists
 on only some blocks (`PID` on the mesh but not on Rigid, for example) is marked *partial* by
 ParaView. This is expected. Use the views, or *Extract Block*, to color one block type at a time.
 The root-level summary values (`ModelMass`, `ActiveLoadSets`, …) are field data and always show

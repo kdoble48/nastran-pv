@@ -59,7 +59,7 @@ The docs describe behavior that lives in code. Update them in the same change wh
 |---|---|
 | CLI parsers in `cli.py` / `launch.py` | [cli.md](cli.md), [fields.md](fields.md), [store.md](store.md) |
 | `VIEW_NAMES`, `nastran_views.py`, `install_macros.py` | [paraview.md](paraview.md), [cli.md](cli.md#batch-screenshots) |
-| Plugin proxies in `nastran_bdf_reader.py` | [paraview.md](paraview.md), [fields.md](fields.md#paraview-filters) |
+| Plugin proxies in `nastran_bdf_reader.py`, `tree.py` | [paraview.md](paraview.md), [fields.md](fields.md#paraview-filters) |
 | Builders, `assemble.py`, `results*.py` | [model.md](model.md) |
 | `topology/`, the topology proxies, selection macros | [tools.md](tools.md), [model.md](model.md) |
 | `vtkio.py`, `vtkhdf.py`, `store.py` | [output-formats.md](output-formats.md), [store.md](store.md) |

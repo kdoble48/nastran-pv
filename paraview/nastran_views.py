@@ -9,7 +9,9 @@ pile up duplicates. Available views::
     elementtype  results  parts  grow  path  check
 
 ``grow_from_selection`` and ``path_from_selection`` seed the grow and path
-views from the current selection. Plus :func:`index_colors`, which turns whatever integer array the active
+views from the current selection. ``show_only_selected``, ``hide_selected``, ``show_all``,
+``show_only_property`` and ``show_only_material`` are Femap-style visibility commands: they set the
+reader's visibility checklists and element ID lists. Plus :func:`index_colors`, which turns whatever integer array the active
 representation is coloured by into an indexed lookup table with names.
 
 From the ParaView Python shell::
@@ -77,6 +79,21 @@ def find_reader(source=None):
     raise RuntimeError("No Nastran deck is open: File > Open a .bdf/.dat with 'Nastran Bulk Data (nastran-pv)'.")
 
 
+def fetch(src, port=0):
+    """``servermanager.Fetch`` that keeps the model tree: Fetch drops a partitioned collection's
+    data assembly, so it is copied back from the proxy's data information."""
+    from vtkmodules.vtkCommonDataModel import vtkDataAssembly
+
+    data = servermanager.Fetch(src, idx=port) if port else servermanager.Fetch(src)
+    if data is not None and data.IsA("vtkPartitionedDataSetCollection") and data.GetDataAssembly() is None:
+        asm = src.GetDataInformation(port).DataInformation.GetDataAssembly()
+        if asm is not None:
+            copy = vtkDataAssembly()
+            copy.DeepCopy(asm)
+            data.SetDataAssembly(copy)
+    return data
+
+
 def block_names(mb):
     """Child names of a multiblock (Fetch() prefixes them with "Block <n>_")."""
     from vtkmodules.vtkCommonDataModel import vtkMultiBlockDataSet
@@ -102,7 +119,9 @@ class Model:
             view = pv.GetActiveView()
             time = getattr(view, "ViewTime", 0.0) if view is not None else 0.0
         reader.UpdatePipeline(time)
-        self.data = servermanager.Fetch(reader)
+        from nastran_pv.tree import as_multiblock
+
+        self.data = as_multiblock(fetch(reader))  # the reader outputs the model tree
         self.names = block_names(self.data)
         b = reader.GetDataInformation().GetBounds()
         self.bounds = b
@@ -144,7 +163,11 @@ class Model:
 
 # ------------------------------------------------------------ named objects
 def _name(model, what):
-    label = next((k[0] for k, v in pv.GetSources().items() if v == model.reader), "deck")
+    sources = pv.GetSources()
+    label = next((k[0] for k, v in sources.items() if v == model.reader), "deck")
+    twins = [v for k, v in sources.items() if k[0] == label and _xml_name(v) == READER_XML]
+    if len(twins) > 1 and model.reader != min(twins, key=lambda v: int(v.GetGlobalIDAsString())):
+        label = f"{label} #{model.reader.GetGlobalIDAsString()}"  # same deck opened again
     return f"NPV {what} [{label}]"
 
 
@@ -158,12 +181,18 @@ def _named(model, what, factory):
     return src
 
 
+def selectors(blocks):
+    """ExtractBlock selectors for blocks of the reader's model tree (``/Root/Model/<b>``) or of a
+    filter's multiblock output (``/Root/<b>``)."""
+    return [f"/Root/{prefix}{b}" for b in blocks for prefix in ("Model/", "")]
+
+
 def _extract(model, *blocks, what=None):
     blocks = [b for b in blocks if model.has(b) or "/" in b]
     if not blocks:
         return None
     return _named(model, what or "+".join(blocks),
-                  lambda: pv.ExtractBlock(Input=model.reader, Selectors=[f"/Root/{b}" for b in blocks]))
+                  lambda: pv.ExtractBlock(Input=model.reader, Selectors=selectors(blocks)))
 
 
 def _reset_view(view):
@@ -520,7 +549,7 @@ TOPOLOGY_BLOCKS = ("Shells", "Solids", "Lines", "Rigid", "Connectors", "BushLine
 def _topology_blocks(model, src, what):
     blocks = [b for b in TOPOLOGY_BLOCKS if model.has(b)]
     return _named(model, f"{what} blocks",
-                  lambda: pv.ExtractBlock(Input=src, Selectors=[f"/Root/{b}" for b in blocks]))
+                  lambda: pv.ExtractBlock(Input=src, Selectors=selectors(blocks)))
 
 
 def _at_least(model, src, array, lower, what):
@@ -614,7 +643,7 @@ LINE_CHECKS = ("FreeEdges", "CoincidentGrids", "DuplicateElements", "DanglingCon
 
 
 def _check_layer(model, c, view, what, blocks, codes):
-    ex = _named(model, what, lambda: pv.ExtractBlock(Input=c, Selectors=[f"/Root/{b}" for b in blocks]))
+    ex = _named(model, what, lambda: pv.ExtractBlock(Input=c, Selectors=selectors(blocks)))
     d = pv.Show(ex, view)
     # both layers share the "Check" lookup table, so there is one legend naming the checks found
     lut = categorical(d, "Check", codes, [CHECKS[k] for k in codes],
@@ -657,8 +686,8 @@ def _selection_kinds(sel):
     return kinds
 
 
-def selected_ids():
-    """("EID", ids) for a cell selection, ("GRID", ids) for a point selection on the active source."""
+def _fetch_selection():
+    """(selected cells/points of the active source, the selection proxy)."""
     src = pv.GetActiveSource()
     sel = src.GetSelectionInput(src.Port) if src is not None else None
     if sel is None:
@@ -669,8 +698,37 @@ def selected_ids():
     finally:
         pv.Delete(ex)
         pv.SetActiveSource(src)  # the extract became active; give the user's source back
+    return data, sel
+
+
+def _vertex_eids(data):
+    """Point EIDs of selected vertex-only pieces: masses and bushes keep EID on their points."""
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    out = set()
+    it = data.NewIterator() if data is not None and data.IsA("vtkCompositeDataSet") else None
+    leaves = []
+    if it is None:
+        leaves = [data] if data is not None else []
+    else:
+        it.InitTraversal()
+        while not it.IsDoneWithTraversal():
+            leaves.append(it.GetCurrentDataObject())
+            it.GoToNextItem()
+    for ds in leaves:
+        eid = ds.GetPointData().GetArray("EID") if ds is not None else None
+        if eid is None or ds.GetCellData().GetArray("EID") is not None or not ds.GetNumberOfCells():
+            continue
+        if all(ds.GetCellType(c) == 1 for c in range(ds.GetNumberOfCells())):  # VTK_VERTEX
+            out.update(int(v) for v in vtk_to_numpy(eid))
+    return out
+
+
+def selected_ids():
+    """("EID", ids) for a cell selection, ("GRID", ids) for a point selection on the active source."""
+    data, sel = _fetch_selection()
     if "POINT" not in _selection_kinds(sel):
-        eids = sorted({int(v) for v in _gather(data, "EID", "CELLS")})
+        eids = sorted({int(v) for v in _gather(data, "EID", "CELLS")} | _vertex_eids(data))
         if eids:
             return "EID", eids
     return "GRID", sorted({int(v) for v in _gather(data, "NID", "POINTS")})
@@ -692,6 +750,87 @@ def path_from_selection():
     p = _named(model, "path", lambda: pv.NastranPath(Input=model.reader))
     p.FromGrid, p.ToGrid = ids
     apply("path", reader=model.reader, model=model, reset_camera=False)
+
+
+# ------------------------------------------------------ Femap-style visibility
+VISIBILITY_PROPS = ("VisibleProperties", "VisibleMaterials", "VisibleElementTypes", "VisibleFamilies",
+                    "VisibleGroups")
+
+
+def _selected_elements():
+    kind, ids = selected_ids()
+    if kind != "EID" or not ids:
+        raise RuntimeError("Select elements first (Select Cells On); a grid selection names no elements.")
+    return ids
+
+
+def _listed(reader, prop):
+    """Every entry of a reader checklist (checked or not)."""
+    return list(reader.GetProperty(prop + "Info"))[0::2]
+
+
+def _refresh(reader):
+    """The reader output changed: drop the selection (it would point at other cells) and redraw."""
+    if pv.GetActiveSource() is not None:
+        pv.ClearSelection(pv.GetActiveSource())
+    reader.UpdatePipeline()
+    if pv.GetActiveView() is not None:
+        pv.Render()
+
+
+def show_only_selected():
+    """Femap Show Only: the selected elements and nothing else (loads and SPCs stay)."""
+    from nastran_pv.tree import format_ids
+
+    ids = _selected_elements()
+    reader = find_reader()
+    reader.ShowOnlyElements = format_ids(ids)
+    reader.HiddenElements = ""
+    _refresh(reader)
+
+
+def hide_selected():
+    """Femap Hide: add the selected elements to the reader's Hidden Elements."""
+    from nastran_pv.tree import format_ids, parse_ids
+
+    ids = _selected_elements()
+    reader = find_reader()
+    reader.HiddenElements = format_ids(parse_ids(reader.HiddenElements) | set(ids))
+    _refresh(reader)
+
+
+def show_all(reader=None):
+    """Clear the element ID lists and check every property, material, type, family and group."""
+    reader = reader or find_reader()
+    reader.ShowOnlyElements = ""
+    reader.HiddenElements = ""
+    reader.UpdatePipelineInformation()
+    for prop in VISIBILITY_PROPS:
+        setattr(reader, prop, _listed(reader, prop))
+    _refresh(reader)
+
+
+def _show_only_category(array, prop, what):
+    data, _ = _fetch_selection()
+    ids = {int(v) for assoc in ("CELLS", "POINTS") for v in _gather(data, array, assoc) if v > 0}
+    if not ids:
+        raise RuntimeError(f"The selection carries no {array}: select elements that have a {what}.")
+    reader = find_reader()
+    reader.UpdatePipelineInformation()
+    keep = [n for n in _listed(reader, prop) if (m := re.search(r"_(\d+)$", n)) and int(m.group(1)) in ids]
+    setattr(reader, prop, keep)
+    _refresh(reader)
+    return keep
+
+
+def show_only_property():
+    """Femap Show Only Property: uncheck every property but those of the selected elements."""
+    return _show_only_category("PID", "VisibleProperties", "property")
+
+
+def show_only_material():
+    """Uncheck every material but those of the selected elements."""
+    return _show_only_category("MID", "VisibleMaterials", "material")
 
 
 VIEWS = {
@@ -735,7 +874,9 @@ def set_camera(view, which):
 
 
 ACTIONS = {"index_colors": index_colors, "grow_from_selection": grow_from_selection,
-           "path_from_selection": path_from_selection}
+           "path_from_selection": path_from_selection, "show_only_selected": show_only_selected,
+           "hide_selected": hide_selected, "show_all": show_all, "show_only_property": show_only_property,
+           "show_only_material": show_only_material}
 
 
 def run_macro(name):

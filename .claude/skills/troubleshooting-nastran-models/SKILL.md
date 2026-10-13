@@ -34,6 +34,8 @@ grep -n "INCLUDE\|^SOL\|LOAD\s*=\|SPC\s*=" DECK         # is this the run deck, 
 | "pvpython not found; put ParaView's bin folder on PATH or set NASTRAN_PV_PARAVIEW_BIN" | ParaView is not on PATH or in a standard folder | Set `NASTRAN_PV_PARAVIEW_BIN` to its `bin`, or pass `--pvpython` |
 | Opened with VisIt's NASTRAN or the built-in "BDF Reader": geometry only | Wrong reader picked | Choose *Nastran Bulk Data (nastran-pv)* → *Set reader as default* |
 | `ExtractBlock` selector matches nothing | VTKHDF root is `assembly`, and pvpython `Fetch` prefixes `Block <n>_` | Selectors `//Shells`; `nastran_views.block_names` |
+| Reader block missing in a script, `GetNumberOfBlocks` AttributeError | The reader outputs the model tree (a `vtkPartitionedDataSetCollection`), and `Fetch` drops its assembly | `nv.Model(reader)`, or `as_multiblock(nv.fetch(src))`; reader selectors are `/Root/Model/<block>` (`nv.selectors`) |
+| Elements missing in the GUI, but `convert` has them | The reader's visibility lists (Visible Properties/..., Show Only/Hidden Elements) hide them | *NPV Show All* or `nv.show_all(reader)` |
 | VTK XML read fails with a NaN range | An all-NaN array was written | In code: `add_array(..., skip_all_nan=True)` (`extending-nastran-pv`) |
 
 ## Not bugs (known gaps)

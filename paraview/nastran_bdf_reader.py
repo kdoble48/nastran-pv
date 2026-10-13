@@ -16,8 +16,8 @@ import os
 import sys
 
 from paraview.util.vtkAlgorithm import VTKPythonAlgorithmBase, smdomain, smhint, smproperty, smproxy
-from vtkmodules.vtkCommonCore import vtkOutputWindow
-from vtkmodules.vtkCommonDataModel import vtkDataObject, vtkMultiBlockDataSet
+from vtkmodules.vtkCommonCore import vtkDataArraySelection, vtkOutputWindow
+from vtkmodules.vtkCommonDataModel import vtkDataObject, vtkMultiBlockDataSet, vtkPartitionedDataSetCollection
 from vtkmodules.vtkCommonExecutionModel import vtkStreamingDemandDrivenPipeline
 
 EXTENSIONS = "bdf dat nas bulk blk"
@@ -48,6 +48,9 @@ _HELP = (
 )
 
 _FLAGS = ("shells", "lines", "solids", "masses", "rigid", "connectors", "bushes", "constraints", "loads")
+# model tree checklists (reader property -> nastran_pv.tree category)
+_VISIBILITY = {"VisibleProperties": "Properties", "VisibleMaterials": "Materials",
+               "VisibleElementTypes": "ElementTypes", "VisibleFamilies": "Families", "VisibleGroups": "Groups"}
 
 
 def _message(text, error=False):
@@ -63,7 +66,8 @@ def _message(text, error=False):
 )
 class NastranPVReader(VTKPythonAlgorithmBase):
     def __init__(self):
-        VTKPythonAlgorithmBase.__init__(self, nInputPorts=0, nOutputPorts=1, outputType="vtkMultiBlockDataSet")
+        VTKPythonAlgorithmBase.__init__(self, nInputPorts=0, nOutputPorts=1,
+                                        outputType="vtkPartitionedDataSetCollection")
         self._filename = None
         self._op2name = ""
         self._flags = {f: True for f in _FLAGS}
@@ -78,6 +82,19 @@ class NastranPVReader(VTKPythonAlgorithmBase):
         self._mb_key = None
         self._results = None
         self._results_key = None
+        self._show_only = ""
+        self._hidden = ""
+        self._listing = False  # filling the checklists must not re-execute the reader
+        self._lists = {}
+        for cat in _VISIBILITY.values():
+            sel = vtkDataArraySelection()
+            sel.AddObserver("ModifiedEvent", lambda *args: None if self._listing else self.Modified())
+            self._lists[cat] = sel
+        self._listed_key = None
+        self._reported_key = None
+        self._names = {}
+        self._tree = None
+        self._tree_key = None
 
     # ------------------------------------------------------------ properties
     @smproperty.stringvector(name="FileName")
@@ -161,6 +178,43 @@ class NastranPVReader(VTKPythonAlgorithmBase):
             self._k_ref = float(v)
             self.Modified()
 
+    # --------------------------------------------- model tree visibility
+    @smproperty.dataarrayselection(name="VisibleProperties")
+    def GetVisibleProperties(self):
+        """Femap-style visibility: an element shows only if its property, material, element type,
+        family and group are all checked."""
+        return self._lists["Properties"]
+
+    @smproperty.dataarrayselection(name="VisibleMaterials")
+    def GetVisibleMaterials(self):
+        return self._lists["Materials"]
+
+    @smproperty.dataarrayselection(name="VisibleElementTypes")
+    def GetVisibleElementTypes(self):
+        return self._lists["ElementTypes"]
+
+    @smproperty.dataarrayselection(name="VisibleFamilies")
+    def GetVisibleFamilies(self):
+        return self._lists["Families"]
+
+    @smproperty.dataarrayselection(name="VisibleGroups")
+    def GetVisibleGroups(self):
+        return self._lists["Groups"]
+
+    @smproperty.stringvector(name="ShowOnlyElements", default_values="")
+    def SetShowOnlyElements(self, v):
+        """Element IDs to show, e.g. 1001 1002 2000-2010; empty shows all (NPV Show Only fills it)."""
+        if (v or "") != self._show_only:
+            self._show_only = v or ""
+            self.Modified()
+
+    @smproperty.stringvector(name="HiddenElements", default_values="")
+    def SetHiddenElements(self, v):
+        """Element IDs to hide (NPV Hide adds the selected elements)."""
+        if (v or "") != self._hidden:
+            self._hidden = v or ""
+            self.Modified()
+
     @smproperty.doublevector(name="TimestepValues", information_only="1", si_class="vtkSITimeStepsProperty")
     def GetTimestepValues(self):
         res = self._get_results(quiet=True)
@@ -227,7 +281,53 @@ class NastranPVReader(VTKPythonAlgorithmBase):
                 info.Append(key_steps, t)
             info.Append(key_range, times[0])
             info.Append(key_range, times[-1])
+        if self._filename:
+            try:  # fill the visibility checklists before the first Apply
+                deck = self._get_deck()
+                self._list_categories(self._get_multiblock(deck)[0], deck)
+            except Exception:
+                pass  # RequestData reports it
         return 1
+
+    def _list_categories(self, mb, deck):
+        """Checklist entries for the current multiblock; settings of labels that stay are kept."""
+        if self._listed_key == self._mb_key:
+            return
+        from nastran_pv.tree import category_values, names_from_deck
+
+        self._names = names_from_deck(deck)
+        values = category_values(mb, self._names)
+        self._listing = True
+        try:
+            for cat, sel in self._lists.items():
+                keep = set(values[cat])
+                for name in [sel.GetArrayName(i) for i in range(sel.GetNumberOfArrays())]:
+                    if name not in keep:
+                        sel.RemoveArrayByName(name)
+                for name in values[cat]:
+                    if not sel.ArrayExists(name):
+                        sel.AddArray(name)
+        finally:
+            self._listing = False
+        self._listed_key = self._mb_key
+
+    def _visibility(self):
+        from nastran_pv.tree import Visibility, parse_ids
+
+        hidden = {}
+        for cat, sel in self._lists.items():
+            off = frozenset(sel.GetArrayName(i) for i in range(sel.GetNumberOfArrays()) if not sel.GetArraySetting(i))
+            if off:
+                hidden[cat] = off
+        ids = {}
+        for what, text in (("ShowOnlyElements", self._show_only), ("HiddenElements", self._hidden)):
+            try:
+                ids[what] = parse_ids(text)
+            except ValueError as exc:
+                _message(f"nastran-pv: {what}: {exc}; ignored", error=True)
+                ids[what] = set()
+        show = frozenset(ids["ShowOnlyElements"]) if ids["ShowOnlyElements"] else None
+        return Visibility(hidden, show, frozenset(ids["HiddenElements"]))
 
     def RequestData(self, request, inInfo, outInfo):
         if not self._filename:
@@ -238,8 +338,13 @@ class NastranPVReader(VTKPythonAlgorithmBase):
             _message(_HELP.format(missing=getattr(exc, "name", "a dependency"), err=exc), error=True)
             return 0
         try:
+            from nastran_pv.tree import build_tree
+
             deck = self._get_deck()
-            mb, rebuilt = self._get_multiblock(deck)
+            mb, _ = self._get_multiblock(deck)
+            rebuilt = self._reported_key != self._mb_key  # RequestInformation may have built it
+            self._reported_key = self._mb_key
+            self._list_categories(mb, deck)
             res = self._get_results()
             time_value = None
             if res is not None and res.steps:
@@ -252,6 +357,14 @@ class NastranPVReader(VTKPythonAlgorithmBase):
                 time_value = res.times[step]
                 if rebuilt:
                     deck.warnings += res.skipped
+            vis = self._visibility()
+            key = (self._mb_key, vis.key())
+            if key != self._tree_key:
+                self._tree = build_tree(mb, vis, self._names)
+                self._tree_key = key
+                for w in self._tree.warnings:
+                    _message(f"nastran-pv: {w}")
+            pdc = self._tree.output(mb)
         except Exception:
             import traceback
 
@@ -261,10 +374,10 @@ class NastranPVReader(VTKPythonAlgorithmBase):
             shown = "\n  ".join(deck.warnings[:25])
             more = f"\n  ... {len(deck.warnings) - 25} more" if len(deck.warnings) > 25 else ""
             _message(f"nastran-pv: {os.path.basename(self._filename)}: {len(deck.warnings)} message(s)\n  {shown}{more}")
-        output = vtkMultiBlockDataSet.GetData(outInfo, 0)
-        output.ShallowCopy(mb)
+        output = vtkPartitionedDataSetCollection.GetData(outInfo, 0)
+        output.ShallowCopy(pdc)
         if time_value is not None:
-            output.GetInformation().Set(vtkMultiBlockDataSet.DATA_TIME_STEP(), time_value)
+            output.GetInformation().Set(vtkDataObject.DATA_TIME_STEP(), time_value)
         return 1
 
 
@@ -306,10 +419,11 @@ class _GlyphFilter(VTKPythonAlgorithmBase):
 
         try:
             from nastran_pv.glyphs import model_diagonal
+            from nastran_pv.tree import as_multiblock
         except ImportError as exc:
             _message(_HELP.format(missing=getattr(exc, "name", "a dependency"), err=exc), error=True)
             return 0
-        data = vtkDataObject.GetData(inInfo[0], 0)
+        data = as_multiblock(vtkDataObject.GetData(inInfo[0], 0))
         block = _find_block(data, self.BLOCK, self.REQUIRED)
         out = vtkPolyData.GetData(outInfo, 0)
         if block is None or block.GetNumberOfPoints() == 0:
@@ -422,13 +536,36 @@ def _enum_xml(labels):
 
 
 class _FieldFilter(VTKPythonAlgorithmBase):
-    """Multiblock in -> shallow copy with extra arrays out."""
+    """Model in -> shallow copy with extra arrays out. A model tree (the reader's partitioned
+    collection) is gathered into the plain multiblock for the work and scattered back after it,
+    so the output keeps the tree; extra output ports are tables."""
 
     def __init__(self, n_out=1):
-        VTKPythonAlgorithmBase.__init__(self, nInputPorts=1, nOutputPorts=n_out, outputType="vtkMultiBlockDataSet")
+        VTKPythonAlgorithmBase.__init__(self, nInputPorts=1, nOutputPorts=n_out, outputType="vtkDataObject")
 
     def FillInputPortInformation(self, port, info):
-        info.Set(self.INPUT_REQUIRED_DATA_TYPE(), "vtkMultiBlockDataSet")
+        info.Set(self.INPUT_REQUIRED_DATA_TYPE(), "vtkDataObject")
+        return 1
+
+    def FillOutputPortInformation(self, port, info):
+        info.Set(vtkDataObject.DATA_TYPE_NAME(), "vtkDataObject" if port == 0 else "vtkTable")
+        return 1
+
+    def _keeps_tree(self):
+        """False for outputs with a structure of their own (findings, extracted cells): a multiblock."""
+        return True
+
+    def RequestDataObject(self, request, inInfo, outInfo):
+        from vtkmodules.vtkCommonDataModel import vtkTable
+
+        inp = vtkDataObject.GetData(inInfo[0], 0)
+        tree_out = inp is not None and inp.IsA("vtkPartitionedDataSetCollection") and self._keeps_tree()
+        for port in range(self.GetNumberOfOutputPorts()):
+            info = outInfo.GetInformationObject(port)
+            want = (vtkPartitionedDataSetCollection if tree_out else vtkMultiBlockDataSet) if port == 0 else vtkTable
+            out = info.Get(vtkDataObject.DATA_OBJECT())
+            if out is None or out.GetClassName() != want.__name__:
+                info.Set(vtkDataObject.DATA_OBJECT(), want())
         return 1
 
     def _set(self, attr, value):
@@ -436,25 +573,44 @@ class _FieldFilter(VTKPythonAlgorithmBase):
             setattr(self, attr, value)
             self.Modified()
 
+    @staticmethod
+    def _model(inInfo):
+        """(multiblock to work on, the tree input or None, gather layout)."""
+        from nastran_pv.fields import shallow_clone
+        from nastran_pv.tree import gather
+
+        src = vtkDataObject.GetData(inInfo[0], 0)
+        if src.IsA("vtkPartitionedDataSetCollection"):
+            mb, layout = gather(src)
+            return mb, src, layout
+        return shallow_clone(src), None, None
+
+    @staticmethod
+    def _emit(outInfo, mb, tree_in, layout):
+        from nastran_pv.tree import scatter
+
+        out = vtkDataObject.GetData(outInfo, 0)
+        out.ShallowCopy(scatter(tree_in, mb, layout) if out.IsA("vtkPartitionedDataSetCollection") else mb)
+
     def RequestData(self, request, inInfo, outInfo):
         try:
-            from nastran_pv.fields import shallow_clone
+            mb, tree_in, layout = self._model(inInfo)
         except ImportError as exc:
             _message(_HELP.format(missing=getattr(exc, "name", "a dependency"), err=exc), error=True)
             return 0
-        mb = shallow_clone(vtkMultiBlockDataSet.GetData(inInfo[0], 0))
         try:
             self._apply(mb, outInfo)
         except Exception as exc:  # report, pass the data through unchanged
             _message(f"nastran-pv {type(self).__name__}: {exc}", error=True)
-        vtkMultiBlockDataSet.GetData(outInfo, 0).ShallowCopy(mb)
+        self._emit(outInfo, mb, tree_in, layout)
         return 1
 
 
 @smproxy.filter(name="NastranPVDerivedFields", label="Nastran Derived Fields")
 @smhint.xml('<ShowInMenu category="Nastran" />')
 @smproperty.input(name="Input", port_index=0)
-@smdomain.datatype(dataTypes=["vtkMultiBlockDataSet"], composite_data_supported=True)
+@smdomain.datatype(dataTypes=["vtkMultiBlockDataSet", "vtkPartitionedDataSetCollection"],
+                  composite_data_supported=True)
 class NastranPVDerivedFields(_FieldFilter):
     """Material constants, mesh quality, size, distance from CG, mass per PID."""
 
@@ -504,7 +660,8 @@ _KEYS = ("EID", "PID", "MID", "NID", "FAMILY", "GROUP")
 @smproxy.filter(name="NastranPVMapTable", label="Nastran Map Table")
 @smhint.xml('<ShowInMenu category="Nastran" />')
 @smproperty.input(name="Input", port_index=0)
-@smdomain.datatype(dataTypes=["vtkMultiBlockDataSet"], composite_data_supported=True)
+@smdomain.datatype(dataTypes=["vtkMultiBlockDataSet", "vtkPartitionedDataSetCollection"],
+                  composite_data_supported=True)
 class NastranPVMapTable(_FieldFilter):
     """Columns of a CSV/JSON/Excel/SQLite table mapped onto the model by EID, PID, MID, NID, family or group."""
 
@@ -576,7 +733,8 @@ _GROUP_BY = ("PID", "MID", "FAMILY", "GROUP", "ELEMENTTYPE")
 @smproxy.filter(name="NastranPVGroupStats", label="Nastran Group Stats")
 @smhint.xml('<ShowInMenu category="Nastran" />')
 @smproperty.input(name="Input", port_index=0)
-@smdomain.datatype(dataTypes=["vtkMultiBlockDataSet"], composite_data_supported=True)
+@smdomain.datatype(dataTypes=["vtkMultiBlockDataSet", "vtkPartitionedDataSetCollection"],
+                  composite_data_supported=True)
 class NastranPVGroupStats(_FieldFilter):
     """Sum/mean/min/max of a cell field per PID, MID, family, group or element type.
 
@@ -588,10 +746,6 @@ class NastranPVGroupStats(_FieldFilter):
         _FieldFilter.__init__(self, n_out=2)
         self._by = 0
         self._field = "ElementMass"
-
-    def FillOutputPortInformation(self, port, info):
-        info.Set(vtkDataObject.DATA_TYPE_NAME(), "vtkMultiBlockDataSet" if port == 0 else "vtkTable")
-        return 1
 
     @smproperty.intvector(name="GroupBy", default_values=0)
     @smdomain.xml(_enum_xml(_GROUP_BY))
@@ -704,21 +858,19 @@ class _TopologyFilter(_FieldFilter):
         self._graph = None
         self._graph_key = None
 
-    def FillOutputPortInformation(self, port, info):
-        info.Set(vtkDataObject.DATA_TYPE_NAME(), "vtkMultiBlockDataSet" if port == 0 else "vtkTable")
-        return 1
-
     def _group(self, key, v):
         if self._groups[key] != int(v):
             self._groups[key] = int(v)
             self.Modified()
 
     def _list_cards(self, data):
-        if data is None or not data.IsA("vtkMultiBlockDataSet"):
-            return
         try:
             from nastran_pv.topology import card_types
+            from nastran_pv.tree import as_multiblock
         except ImportError:
+            return
+        data = as_multiblock(data) if data is not None else None
+        if data is None or not data.IsA("vtkMultiBlockDataSet"):
             return
         self._listing = True
         try:
@@ -748,29 +900,30 @@ class _TopologyFilter(_FieldFilter):
 
     def RequestData(self, request, inInfo, outInfo):
         try:
-            from nastran_pv.fields import shallow_clone
             from nastran_pv.topology import Graph
+
+            mb, tree_in, layout = self._model(inInfo)
         except ImportError as exc:
             _message(_HELP.format(missing=getattr(exc, "name", "a dependency"), err=exc), error=True)
             return 0
-        src = vtkMultiBlockDataSet.GetData(inInfo[0], 0)
-        self._list_cards(src)
-        mb = shallow_clone(src)
+        src = vtkDataObject.GetData(inInfo[0], 0)
+        self._list_cards(mb)
         out = mb
         try:
-            if self._graph_key != src.GetMTime():
-                self._graph, self._graph_key = Graph.from_multiblock(src), src.GetMTime()
+            if self._graph_key != src.GetMTime():  # a gathered tree comes out the same every time
+                self._graph, self._graph_key = Graph.from_multiblock(mb), src.GetMTime()
             out = self._run(mb, self._graph, outInfo) or mb
         except Exception as exc:  # report, pass the data through unchanged
             _message(f"nastran-pv {self.LABEL}: {exc}", error=True)
-        vtkMultiBlockDataSet.GetData(outInfo, 0).ShallowCopy(out)
+        self._emit(outInfo, out, tree_in, layout)
         return 1
 
 
 @smproxy.filter(name="NastranPVGrow", label="Nastran Grow")
 @smhint.xml('<ShowInMenu category="Nastran" />')
 @smproperty.input(name="Input", port_index=0)
-@smdomain.datatype(dataTypes=["vtkMultiBlockDataSet"], composite_data_supported=True)
+@smdomain.datatype(dataTypes=["vtkMultiBlockDataSet", "vtkPartitionedDataSetCollection"],
+                  composite_data_supported=True)
 @_with_traversal
 class NastranPVGrow(_TopologyFilter):
     """Element hops (``Hops``) from seed elements, grids or PIDs through the checked card types."""
@@ -792,6 +945,9 @@ class NastranPVGrow(_TopologyFilter):
     def SetExtractReached(self, v):
         self._set("_extract", int(v))
 
+    def _keeps_tree(self):
+        return not self._extract
+
     def _run(self, mb, graph, outInfo):
         from nastran_pv.topology import Seeds, grow
 
@@ -806,7 +962,8 @@ class NastranPVGrow(_TopologyFilter):
 @smproxy.filter(name="NastranPVParts", label="Nastran Parts")
 @smhint.xml('<ShowInMenu category="Nastran" />')
 @smproperty.input(name="Input", port_index=0)
-@smdomain.datatype(dataTypes=["vtkMultiBlockDataSet"], composite_data_supported=True)
+@smdomain.datatype(dataTypes=["vtkMultiBlockDataSet", "vtkPartitionedDataSetCollection"],
+                  composite_data_supported=True)
 @_with_traversal
 class NastranPVParts(_TopologyFilter):
     """Connected parts (``PartId``) through the checked card types.
@@ -833,7 +990,8 @@ class NastranPVParts(_TopologyFilter):
 @smproxy.filter(name="NastranPVPath", label="Nastran Path")
 @smhint.xml('<ShowInMenu category="Nastran" />')
 @smproperty.input(name="Input", port_index=0)
-@smdomain.datatype(dataTypes=["vtkMultiBlockDataSet"], composite_data_supported=True)
+@smdomain.datatype(dataTypes=["vtkMultiBlockDataSet", "vtkPartitionedDataSetCollection"],
+                  composite_data_supported=True)
 @_with_traversal
 class NastranPVPath(_TopologyFilter):
     """Shortest element path (``OnPath``, ``PathLength``) between two grids."""
@@ -864,7 +1022,8 @@ class NastranPVPath(_TopologyFilter):
 @smproxy.filter(name="NastranPVModelCheck", label="Nastran Model Check")
 @smhint.xml('<ShowInMenu category="Nastran" />')
 @smproperty.input(name="Input", port_index=0)
-@smdomain.datatype(dataTypes=["vtkMultiBlockDataSet"], composite_data_supported=True)
+@smdomain.datatype(dataTypes=["vtkMultiBlockDataSet", "vtkPartitionedDataSetCollection"],
+                  composite_data_supported=True)
 @_with_traversal
 class NastranPVModelCheck(_TopologyFilter):
     """Free edges/faces, coincident grids, duplicate elements, dangling connectors, floating parts.
@@ -878,6 +1037,9 @@ class NastranPVModelCheck(_TopologyFilter):
         _TopologyFilter.__init__(self, n_out=2)
         self._checks = {c: 1 for c in _CHECKS}
         self._tol = 1e-6
+
+    def _keeps_tree(self):
+        return False  # one block of findings per check
 
     def _check(self, name, v):
         if self._checks[name] != int(v):
