@@ -73,7 +73,7 @@ def parts(mb, rules: Rules | None = None, graph: Graph | None = None) -> PartsRe
     """Write ``PartId`` cell/point arrays and the ``PART_*``/``LINK_*`` root tables onto ``mb``."""
     rules = rules or Rules()
     graph = graph or Graph.from_multiblock(mb)
-    warnings = ["within_pids needs seeds; ignored for parts"] if rules.within_pids else []
+    warnings = [f"within={rules.within} needs seeds; ignored for parts"] if rules.within else []
     allowed = rules.allowed(graph)
     part_cell, part_grid, n = label_parts(graph, allowed)
     write_cells(mb, graph, "PartId", part_cell)

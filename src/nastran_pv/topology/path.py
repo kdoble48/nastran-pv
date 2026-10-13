@@ -26,8 +26,9 @@ def path(mb, grid_a: int, grid_b: int, rules: Rules | None = None, graph: Graph 
     if missing:
         raise ValueError(f"grid(s) {missing} are not used by any element")
     C = graph.n_cells
-    touching = np.unique(graph.incidence[:, ends].nonzero()[0])
-    allowed = rules.allowed(graph, {int(p) for p in graph.pid[touching] if p > 0})
+    touching = np.zeros(C, bool)
+    touching[np.unique(graph.incidence[:, ends].nonzero()[0])] = True
+    allowed = rules.allowed(graph, rules.seed_values(graph, touching))
     # like grow from grid_a: grid_b is in reach when its hop is <= max_hops (max_hops + 1 elements)
     limit = np.inf if rules.max_hops is None else 2 * rules.max_hops + 2
     dist, pred = csgraph.dijkstra(graph.adjacency(allowed), directed=False, indices=C + ends[0],

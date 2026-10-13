@@ -10,9 +10,10 @@ pile up duplicates. Available views::
 
 ``grow_from_selection`` and ``path_from_selection`` seed the grow and path
 views from the current selection. ``show_only_selected``, ``hide_selected``, ``show_all``,
-``show_only_property`` and ``show_only_material`` are Femap-style visibility commands: they set the
-reader's visibility checklists and element ID lists. Plus :func:`index_colors`, which turns whatever integer array the active
-representation is coloured by into an indexed lookup table with names.
+``show_only_property``, ``show_only_material``, ``show_only_reached`` and ``hide_reached`` are
+Femap-style visibility commands: they set the reader's visibility checklists and element ID lists.
+Plus :func:`index_colors`, which turns whatever integer array the active representation is
+coloured by into an indexed lookup table with names.
 
 From the ParaView Python shell::
 
@@ -842,6 +843,55 @@ def _show_only_category(array, prop, what):
     return keep
 
 
+def reached_eids(reader=None):
+    """EIDs of everything *NPV grow* reached (``Hops >= 0``): elements, masses and bushes.
+    MPC legs are left out: their EID is the MPC set id."""
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    from nastran_pv.fields.common import field_strings, iter_blocks
+    from nastran_pv.tree import as_multiblock
+
+    model = Model(reader or find_reader())
+    g = pv.FindSource(_name(model, "grow"))
+    if g is None or not (g.SeedIDs or "").strip():
+        raise RuntimeError("Nothing grown yet: select a grid or elements, then click 'NPV Grow from Selection'.")
+    out = set()
+    for path, ds in iter_blocks(as_multiblock(fetch(g))):
+        for attr in (ds.GetCellData(), ds.GetPointData()):
+            hops, eid = attr.GetArray("Hops"), attr.GetArray("EID")
+            if hops is None or eid is None:
+                continue
+            keep = vtk_to_numpy(hops) >= 0
+            if path == "Connectors" and attr is ds.GetCellData():
+                names = field_strings(ds, "ConnectorTypeNames")
+                codes = vtk_to_numpy(attr.GetArray("ConnectorType"))
+                keep &= np.array([names[c] != "MPC" if 0 <= c < len(names) else True for c in codes], bool)
+            out.update(int(e) for e in vtk_to_numpy(eid)[keep])
+            break  # cell EIDs when the block has them, else point EIDs (masses, bushes)
+    return model.reader, out
+
+
+def show_only_reached():
+    """Femap-style isolate: show only what NPV Grow reached (e.g. grown from a grid within a group)."""
+    from nastran_pv.tree import format_ids
+
+    reader, eids = reached_eids()
+    if not eids:
+        raise RuntimeError("NPV grow reached no elements.")
+    reader.ShowOnlyElements = format_ids(eids)
+    reader.HiddenElements = ""
+    _refresh(reader)
+
+
+def hide_reached():
+    """Add everything NPV Grow reached to the reader's Hidden Elements."""
+    from nastran_pv.tree import format_ids, parse_ids
+
+    reader, eids = reached_eids()
+    reader.HiddenElements = format_ids(parse_ids(reader.HiddenElements) | eids)
+    _refresh(reader)
+
+
 def show_only_property():
     """Femap Show Only Property: uncheck every property but those of the selected elements."""
     return _show_only_category("PID", "VisibleProperties", "property")
@@ -895,7 +945,8 @@ def set_camera(view, which):
 ACTIONS = {"index_colors": index_colors, "grow_from_selection": grow_from_selection,
            "path_from_selection": path_from_selection, "show_only_selected": show_only_selected,
            "hide_selected": hide_selected, "show_all": show_all, "show_only_property": show_only_property,
-           "show_only_material": show_only_material}
+           "show_only_material": show_only_material, "show_only_reached": show_only_reached,
+           "hide_reached": hide_reached}
 
 
 def run_macro(name):

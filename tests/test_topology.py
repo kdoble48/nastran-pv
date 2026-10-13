@@ -90,7 +90,7 @@ def test_rules_allowed(topo_mb):
     assert Rules.parse("include=shells").allowed(g).sum() == 8
     assert Rules.parse("exclude=RBE3").allowed(g).sum() == 16  # known card, absent from the model
     assert Rules.parse("exclude_pids=2,6").allowed(g).sum() == 11
-    assert Rules.parse("within_pids").allowed(g, seed_pids={1}).sum() == 2
+    assert Rules.parse("within_pids").allowed(g, seed_values={1}).sum() == 2
     with pytest.raises(ValueError, match="unknown card type"):
         Rules.parse("exclude=CFOO").allowed(g)
 
@@ -251,7 +251,7 @@ def test_parts_without_links_writes_vtkhdf(topo_mb, tmp_path):
 
 
 def test_parts_warn_on_within_pids(topo_mb):
-    assert parts(topo_mb, Rules(within_pids=True)).warnings == ["within_pids needs seeds; ignored for parts"]
+    assert parts(topo_mb, Rules(within_pids=True)).warnings == ["within=pid needs seeds; ignored for parts"]
 
 
 def test_path_through_every_connector_kind(topo_mb):
@@ -381,3 +381,68 @@ def test_findings_carry_their_check_code(topo_mb):
     for name in ("FreeEdges", "CoincidentGrids", "DuplicateElements", "DanglingConnectors"):
         blk = get_block(f, name)
         assert set(arr(blk, "Check", "cell").tolist()) == {CHECKS.index(name)}, name
+
+
+STRIP = """$ five quads in a row: families SKIN/A SKIN/A SKIN/B SPAR/C SPAR/C, PIDs 1 1 1 1 2, all MAT1 1
+""" + "".join(f"GRID,{i + 1},,{float(i)},0.,0.\nGRID,{i + 7},,{float(i)},1.,0.\n" for i in range(6)) + """\
+$       Shell element data for family    SKIN/A
+CQUAD4,1,1,1,2,8,7
+CQUAD4,2,1,2,3,9,8
+$       Shell element data for family    SKIN/B
+CQUAD4,3,1,3,4,10,9
+$       Shell element data for family    SPAR/C
+CQUAD4,4,1,4,5,11,10
+CQUAD4,5,2,5,6,12,11
+PSHELL,1,1,0.01
+PSHELL,2,1,0.02
+MAT1,1,7.0e10,,0.3,2700.
+"""
+
+
+@pytest.fixture(scope="module")
+def strip_mb(tmp_path_factory):
+    p = tmp_path_factory.mktemp("strip") / "strip.bdf"
+    p.write_text(STRIP)
+    return build_multiblock(load_deck(p, echo=False))
+
+
+def reached(mb, seeds, rules):
+    from nastran_pv.fields.common import shallow_clone
+
+    m = shallow_clone(mb)
+    grow(m, seeds, Rules.parse(rules))
+    shells = get_block(m, "Shells")
+    return sorted(int(e) for e, h in zip(arr(shells, "EID", "cell"), arr(shells, "Hops", "cell")) if h >= 0)
+
+
+@pytest.mark.parametrize("rules, eids", [
+    ("", [1, 2, 3, 4, 5]),
+    ("within=pid", [1, 2, 3, 4]),
+    ("within_pids", [1, 2, 3, 4]),
+    ("within=mid", [1, 2, 3, 4, 5]),
+    ("within=family", [1, 2]),
+    ("within=group", [1, 2, 3]),
+])
+def test_grow_within(strip_mb, rules, eids):
+    assert reached(strip_mb, "EID 1", rules) == eids
+
+
+def test_grow_within_from_boundary_grid(strip_mb):
+    # grid 3 sits between SKIN/A (EID 2) and SKIN/B (EID 3): both families are seeds
+    assert reached(strip_mb, "GRID 3", "within=family") == [1, 2, 3]
+
+
+def test_path_within_family(strip_mb):
+    from nastran_pv.fields.common import shallow_clone
+
+    assert path(shallow_clone(strip_mb), 1, 6, Rules.parse("within=group")).length == 5
+    # the end families are SKIN/A and SPAR/C: SKIN/B (EID 3) is not allowed, so there is no path
+    assert path(shallow_clone(strip_mb), 1, 6, Rules.parse("within=family")).length == -1
+
+
+def test_rules_within_parse():
+    assert Rules.parse("within_pids") == Rules.parse("within=pid") == Rules(within="pid")
+    assert Rules.parse("within=Property").within == "pid"
+    assert Rules.parse("within=material").within == "mid"
+    with pytest.raises(ValueError, match="expected"):
+        Rules.parse("within=foo")

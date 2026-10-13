@@ -767,6 +767,7 @@ class NastranPVGroupStats(_FieldFilter):
 # ---------------------------------------------------- topology filters
 _GROUP_PROPS = {"shells": "TraverseShells", "solids": "TraverseSolids", "lines": "TraverseLines",
                 "rigid": "TraverseRigid", "bushes": "TraverseBushes", "connectors": "TraverseConnectors"}
+_WITHIN = ("", "pid", "mid", "family", "group")  # StayWithin entries -> Rules.within
 _CHECKS = ("FreeEdges", "FreeFaces", "CoincidentGrids", "DuplicateElements", "DanglingConnectors", "FloatingParts")
 
 
@@ -814,9 +815,10 @@ class _Traversal:
         """PIDs to leave out, e.g. 7 8."""
         self._set("_exclude_pids", v or "")
 
-    @smproperty.intvector(name="StayWithinSeedPIDs", default_values=0)
-    @smdomain.xml('<BooleanDomain name="bool"/>')
-    def SetStayWithinSeedPIDs(self, v):
+    @smproperty.intvector(name="StayWithin", default_values=0)
+    @smdomain.xml(_enum_xml(("anything", "seed properties", "seed materials", "seed families", "seed groups")))
+    def SetStayWithin(self, v):
+        """Do not leave the seeds' property, material, family or group (grow and path)."""
         self._set("_within", int(v))
 
     @smproperty.intvector(name="LimitHops", default_values=0)
@@ -891,7 +893,7 @@ class _TopologyFilter(_FieldFilter):
                if not self._cards.GetArraySetting(i)}
         off |= {g for g, on in self._groups.items() if not on}
         pids = frozenset(int(p) for p in self._exclude_pids.replace(",", " ").split())
-        return Rules(exclude=frozenset(off), exclude_pids=pids, within_pids=bool(self._within),
+        return Rules(exclude=frozenset(off), exclude_pids=pids, within=_WITHIN[self._within],
                      max_hops=self._max_hops if self._limit else None)
 
     def _report(self, warnings):

@@ -19,7 +19,7 @@ Every tool takes the same rules. On the CLI they are one `--rules` string:
 | `exclude=NAME,...` | Card types or groups to leave out. An excluded element is never reached and never joins two grids. |
 | `include=NAME,...` | Only these card types or groups. Give `include` or `exclude`, not both. |
 | `exclude_pids=ID,...` | Leave out the elements with these PIDs. |
-| `within_pids` | Stay inside the seeds' PIDs (grow and path). |
+| `within=pid\|mid\|family\|group` | Grow and path never leave the seeds' property, material, family or group. A seed grid on a boundary seeds every one it touches. Elements without that key (rigid elements and connectors have no family or material) are not entered. `within_pids` is the old spelling of `within=pid`. |
 | `max_hops=N` | Stop N elements away from the seeds. |
 
 Names are card types (`RBE2`, `CQUAD4`, `CELAS2`, ...) or groups, and the two mix freely:
@@ -101,7 +101,7 @@ Check*. They share these properties, and with *Auto Apply* on they update as you
 | Card Types | A checklist of the card types in the model. Uncheck RBE2/RBE3 to stop at them. |
 | Traverse Shells … Traverse Connectors | Group switches; an element must pass both its group and its card type. |
 | Exclude PIDs | PIDs to leave out, e.g. `7 8`. |
-| Stay Within Seed PIDs | Grow and Path stay inside the seeds' PIDs. |
+| Stay Within | *seed properties / materials / families / groups*: Grow and Path never leave them (`within=`). |
 | Limit Hops, Max Hops | A slider from 0 to 200 element hops. |
 
 The graph is built once per model, so moving the slider or a checkbox only reruns the traversal.
@@ -119,6 +119,12 @@ The toolbar macros (see [ParaView](paraview.md#one-click-views-toolbar-macros)) 
 2. Click **NPV Grow from Selection**: the selected EIDs (or grids) become the seeds of *NPV grow*
    and the grow view colors the reached elements by hops.
 3. Select exactly two grids and click **NPV Path from Selection** for the path between them.
+
+To select everything connected to a point without crossing into another group (Femap's "select
+connected"), select a grid, click **NPV Grow from Selection**, and set *Stay Within* on *NPV grow*
+to *seed groups* (or families, properties, materials). Then **NPV Show Only Reached** isolates what
+was reached, through the reader's *Show Only Elements*, and **NPV Hide Reached** hides it. Masses
+and bushes on reached grids count as reached. **NPV Show All** brings everything back.
 
 **NPV Parts** and **NPV Model Check** show the parts and the findings without seeds.
 

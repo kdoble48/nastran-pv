@@ -29,7 +29,10 @@ GROUPS = ("shells", "solids", "lines", "rigid", "bushes", "connectors")
 MESH_GROUPS = ("shells", "solids", "lines")
 LINK_GROUPS = ("rigid", "bushes", "connectors")
 KNOWN_CARDS = set(ELEMENT_TYPES) | set(RIGID_TYPES) | set(CONNECTOR_TYPES) | {"CBUSH"}
-RULES_SYNTAX = "exclude=NAME,... (or include=NAME,...) exclude_pids=ID,... within_pids max_hops=N"
+RULES_SYNTAX = ("exclude=NAME,... (or include=NAME,...) exclude_pids=ID,... within=pid|mid|family|group "
+                "max_hops=N")
+WITHIN = ("pid", "mid", "family", "group")
+WITHIN_ALIASES = {"property": "pid", "material": "mid", "pids": "pid"}
 SEEDS_SYNTAX = "EID 1001 1002; GRID 55; PID 7"
 
 
@@ -57,6 +60,13 @@ class Graph:
     group: np.ndarray                # (C,) index into GROUPS
     card_names: list
     spans: dict                      # block path -> (first cell, end)
+    mid: np.ndarray = None           # (C,) MID, -1 where the block has none
+    family: np.ndarray = None        # (C,) FamilyId, -1 where none
+    group_id: np.ndarray = None      # (C,) GroupId (pre-processor group), -1 where none
+
+    def within_values(self, key: str) -> np.ndarray:
+        """The per-cell array a ``within=<key>`` rule compares (-1 or 0 = none)."""
+        return {"pid": self.pid, "mid": self.mid, "family": self.family, "group": self.group_id}[key]
 
     @property
     def n_cells(self) -> int:
@@ -70,6 +80,7 @@ class Graph:
     def from_multiblock(cls, mb) -> "Graph":
         rows, cols, nid_parts, xyz_parts = [], [], [], []
         eid, pid, card, group = [], [], [], []
+        extra = {"MID": [], "FamilyId": [], "GroupId": []}
         card_names: list[str] = []
         spans = {}
         start = 0
@@ -92,6 +103,9 @@ class Graph:
             eid.append(np.full(n, -1, np.int64) if e is None else np.asarray(e, dtype=np.int64))
             p = get_array(cd, "PID")
             pid.append(np.full(n, -1, np.int64) if p is None else np.asarray(p, dtype=np.int64))
+            for name, parts in extra.items():
+                a = get_array(cd, name)
+                parts.append(np.full(n, -1, np.int64) if a is None else np.asarray(a, dtype=np.int64))
             codes = get_array(cd, type_array) if type_array else None
             names = field_strings(ds, names_table) if names_table else []
             if codes is None or not names:
@@ -113,7 +127,7 @@ class Graph:
         inc.data[:] = 1
         return cls(nids, xyz, inc, np.concatenate(eid), np.concatenate(pid),
                    np.concatenate(card).astype(np.int64), np.concatenate(group).astype(np.int64),
-                   card_names, spans)
+                   card_names, spans, *(np.concatenate(v) for v in extra.values()))
 
     def grid_index(self, ids) -> np.ndarray:
         """Row of each grid id in :attr:`nids`, -1 where unknown."""
@@ -149,10 +163,18 @@ class Rules:
     include: frozenset = frozenset()
     exclude: frozenset = frozenset()
     exclude_pids: frozenset = frozenset()
-    within_pids: bool = False
+    within_pids: bool = False  # old spelling of within="pid"
     max_hops: int | None = None
+    within: str = ""  # "", or stay inside the seeds' pid / mid / family / group
 
     def __post_init__(self):
+        if self.within_pids:
+            object.__setattr__(self, "within", self.within or "pid")
+            object.__setattr__(self, "within_pids", False)
+        within = WITHIN_ALIASES.get(self.within.lower(), self.within.lower())
+        if within and within not in WITHIN:
+            raise ValueError(f"rules: within must be one of {', '.join(WITHIN)}")
+        object.__setattr__(self, "within", within)
         if self.include and self.exclude:
             raise ValueError("rules: give include= or exclude=, not both")
         if self.max_hops is not None and self.max_hops < 0:
@@ -171,7 +193,11 @@ class Rules:
                 elif key == "exclude_pids" and items:
                     kw[key] = frozenset(int(v) for v in items)
                 elif key == "within_pids" and not eq:
-                    kw[key] = True
+                    kw["within"] = "pid"
+                elif key == "within" and value:
+                    kw["within"] = WITHIN_ALIASES.get(value.lower(), value.lower())
+                    if kw["within"] not in WITHIN:
+                        raise ValueError
                 elif key == "max_hops":
                     kw[key] = int(value)
                 else:
@@ -180,8 +206,17 @@ class Rules:
                 raise ValueError(f"bad rule {token!r}; expected: {RULES_SYNTAX}") from None
         return cls(**kw)
 
-    def allowed(self, graph: Graph, seed_pids=None) -> np.ndarray:
-        """Cells the rules let a traversal enter (``seed_pids`` is used by ``within_pids``)."""
+    def seed_values(self, graph: Graph, cells: np.ndarray, extra=()) -> set | None:
+        """Values of the ``within`` key on the seed ``cells`` (a mask), plus ``extra`` (e.g. PID
+        seeds); None without a ``within`` rule."""
+        if not self.within:
+            return None
+        values = graph.within_values(self.within)[cells]
+        floor = 0 if self.within in ("family", "group") else 1  # FamilyId 0 is a family; PID 0 is none
+        return {int(v) for v in values if v >= floor} | {int(v) for v in extra}
+
+    def allowed(self, graph: Graph, seed_values=None) -> np.ndarray:
+        """Cells the rules let a traversal enter (``seed_values`` is used by ``within``)."""
         names = self.include or self.exclude
         unknown = sorted(n for n in names if n not in GROUPS and n not in KNOWN_CARDS and n not in graph.card_names)
         if unknown:
@@ -192,8 +227,8 @@ class Rules:
         ok = hit if self.include else ~hit
         if self.exclude_pids:
             ok &= ~np.isin(graph.pid, sorted(self.exclude_pids))
-        if self.within_pids and seed_pids is not None:
-            ok &= np.isin(graph.pid, sorted(seed_pids))
+        if self.within and seed_values is not None:
+            ok &= np.isin(graph.within_values(self.within), sorted(seed_values))
         return ok
 
 

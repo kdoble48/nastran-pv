@@ -195,6 +195,19 @@ def tree_checks(pv, nv, reader):
     check(reader.HiddenElements == "3" and _cells(reader, "Shells") == 2 and nv.selected_source() is None,
           "NPV Hide takes the selection from the view's extract, then clears it")
     nv.show_all(reader)
+    # grow from a grid without leaving the seed's family, then isolate what it reached
+    pv.SetActiveSource(reader)
+    nv.apply("grow", reader=reader, view=view, seeds="GRID 1")
+    grow_src = pv.FindSource(nv._name(nv.Model(reader), "grow"))
+    grow_src.StayWithin = "seed families"
+    _, eids = nv.reached_eids(reader)
+    check(eids == {1, 3, 201, 202, 503}, f"grow GRID 1 within its family -> {sorted(eids)}")
+    pv.SetActiveSource(reader)
+    nv.show_only_reached()
+    check(reader.ShowOnlyElements == "1 3 201-202 503" and _cells(reader, "Shells") == 2,
+          f"NPV Show Only Reached: {reader.ShowOnlyElements!r}")
+    nv.show_all(reader)
+    pv.Delete(grow_src)
     _select(pv, reader, "(EID == 1) | (EID == 201)")  # a shell and a CONM2 (EID on mass points)
     nv.show_only_selected()
     check(reader.ShowOnlyElements == "1 201" and _cells(reader, "Masses") == 1,

@@ -87,6 +87,7 @@ summary. Running a view again reuses its pipeline objects, which are named `NPV 
 | NPV Show All | Clears both element lists and checks every property, material, type, family and group |
 | NPV Only Property | Unchecks every property except those of the selected elements |
 | NPV Only Material | Unchecks every material except those of the selected elements |
+| NPV Show Only Reached / NPV Hide Reached | Shows only, or hides, what *NPV grow* reached; with *Stay Within* that is "everything connected to this point inside its group" ([Model tools](tools.md#paraview)) |
 
 The same views can be called from the Python shell (`import nastran_views as nv; nv.apply("masses")`),
 from `render_model.py`, and as `nastran-pv render` presets (see [CLI](cli.md#batch-screenshots)).

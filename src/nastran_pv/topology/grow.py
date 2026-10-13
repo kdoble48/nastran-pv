@@ -38,9 +38,8 @@ def seed_cells(graph: Graph, seeds: Seeds, rules: Rules, warnings: list):
     grid_hit = np.zeros(graph.n_cells, bool)
     if len(rows):
         grid_hit[np.unique(graph.incidence[:, rows].nonzero()[0])] = True
-    seed_pids = set(seeds.pids) | set(graph.pid[eid_hit].tolist())
-    seed_pids |= set(graph.pid[grid_hit & graph.group_mask(MESH_GROUPS)].tolist())
-    allowed = rules.allowed(graph, {p for p in seed_pids if p > 0})
+    seed_mask = eid_hit | pid_hit | (grid_hit & graph.group_mask(MESH_GROUPS))
+    allowed = rules.allowed(graph, rules.seed_values(graph, seed_mask, seeds.pids if rules.within == "pid" else ()))
     excluded = (eid_hit | pid_hit) & ~allowed
     if excluded.any():
         named = sorted({(graph.card_names[c], int(e)) for c, e in zip(graph.card[excluded], graph.eid[excluded])})
