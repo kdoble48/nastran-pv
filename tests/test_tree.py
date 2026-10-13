@@ -212,3 +212,57 @@ def test_parse_ids():
 def test_format_ids():
     assert tree.format_ids([5, 1, 2, 3, 8, 7]) == "1-3 5 7-8"
     assert tree.format_ids([]) == ""
+
+
+def test_removed_result_array_disappears(mb, names):
+    shells = get_block(mb, "Shells")
+    replace_array(shells.GetCellData(), "VonMisesMax", np.ones(shells.GetNumberOfCells()))
+    t = tree.build_tree(mb, names=names)  # cut while the step has stress
+    shells.GetCellData().RemoveArray("VonMisesMax")  # the next step has none
+    pdc = t.output(mb)
+    for i in node_sets(pdc)["Model/Shells"]:
+        assert pdc.GetPartition(i, 0).GetCellData().GetArray("VonMisesMax") is None
+
+
+def test_gather_from_category_extract(mb, names):
+    """A filter fed by ExtractBlock(//Properties/PSHELL_1) must still see a Shells block, once."""
+    from vtkmodules.vtkCommonDataModel import vtkDataAssembly, vtkPartitionedDataSetCollection
+
+    pdc = tree.build_tree(mb, names=names).output(mb)
+    keep = node_sets(pdc)["Properties/PSHELL_1"] + node_sets(pdc)["Materials/MAT1_1"]
+    sub = vtkPartitionedDataSetCollection()
+    asm = vtkDataAssembly()
+    asm.SetRootNodeName("Root")
+    for j, i in enumerate(sorted(set(keep))):
+        sub.SetPartition(j, 0, pdc.GetPartition(i, 0))
+        asm.AddDataSetIndex(asm.AddNode("Properties") if j == 0 else 1, j)
+    sub.SetDataAssembly(asm)
+    merged, layout = tree.gather(sub)
+    assert block_names(merged) == ["Shells", "Solids"]
+    assert sorted(arr(get_block(merged, "Shells"), "EID", "cell")) == [1, 3]
+    assert sorted(arr(get_block(merged, "Solids"), "EID", "cell")) == [11, 12]
+
+
+def test_gather_without_assembly(mb, names):
+    """pvpython's Fetch drops the assembly; the block paths on the pieces are enough."""
+    pdc = tree.build_tree(mb, names=names).output(mb)
+    pdc.SetDataAssembly(None)
+    merged, _ = tree.gather(pdc)
+    assert block_names(merged) == block_names(mb)
+
+
+def test_take_string_array(mb):
+    from vtkmodules.vtkCommonCore import vtkStringArray
+
+    shells = get_block(mb, "Shells")
+    s = vtkStringArray()
+    s.SetName("Tag")
+    for e in arr(shells, "EID", "cell"):
+        s.InsertNextValue(f"e{e}")
+    shells.GetCellData().AddArray(s)
+    pdc = tree.build_tree(mb, tree.Visibility(hidden_eids=frozenset({3}))).output(mb)
+    found = []
+    for i in node_sets(pdc)["Model/Shells"]:
+        tags = pdc.GetPartition(i, 0).GetCellData().GetAbstractArray("Tag")
+        found += [tags.GetValue(k) for k in range(tags.GetNumberOfValues())]
+    assert sorted(found) == ["e1", "e2"]

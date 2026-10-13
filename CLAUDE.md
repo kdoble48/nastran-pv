@@ -113,8 +113,10 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   property/material/element type/family/group (AND `Visibility` from the reader's checklists and
   EID lists) and `Tree.output` gives a `vtkPartitionedDataSetCollection` whose assembly has `Model/`
   (today's blocks) plus `Properties/ Materials/ ElementTypes/ Families/ Groups/`. Time steps only
-  re-slice changed arrays. Plugin filters `gather` the tree into the plain multiblock, run the usual
-  code, and `scatter` new arrays back; the CLI, VTK files and the store never see the tree.
+  re-slice changed (and drop removed) arrays. Plugin filters `gather` the tree into the plain
+  multiblock, run the usual code, and `scatter` new arrays back; the CLI, VTK files and the store
+  never see the tree. Every piece carries a `BlockPath` field string, so `gather` also works after a
+  `Fetch` (no assembly) or an `ExtractBlock` of category nodes.
 - `vtkhdf.py`: VTKHDF output built on VTK's own `vtkHDFWriter`.
   - The multiblock is converted to a `vtkPartitionedDataSetCollection` plus a `vtkDataAssembly`
     (`to_pdc`), because a multiblock loses its block names in VTKHDF.

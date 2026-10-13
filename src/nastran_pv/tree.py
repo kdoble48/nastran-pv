@@ -22,7 +22,6 @@ from dataclasses import dataclass, field
 
 import numpy as np
 from vtkmodules.util.numpy_support import numpy_to_vtk, vtk_to_numpy
-from vtkmodules.vtkCommonCore import vtkIdList
 from vtkmodules.vtkCommonDataModel import (
     vtkDataAssembly,
     vtkMultiBlockDataSet,
@@ -210,14 +209,14 @@ def _take(array, idx):
     if array.IsA("vtkDataArray"):
         values = vtk_to_numpy(array)[idx]
         out = numpy_to_vtk(np.ascontiguousarray(values), deep=True, array_type=array.GetDataType())
-    else:  # string arrays
-        ids = vtkIdList()
-        ids.SetNumberOfIds(len(idx))
-        for k, i in enumerate(idx):
-            ids.SetId(k, int(i))
+    else:  # string arrays (GetTuples into a fresh vtkStringArray crashes)
+        nc = array.GetNumberOfComponents()
         out = array.NewInstance()
-        out.SetNumberOfComponents(array.GetNumberOfComponents())
-        array.GetTuples(ids, out)
+        out.SetNumberOfComponents(nc)
+        out.SetNumberOfTuples(len(idx))
+        for k, i in enumerate(idx):
+            for c in range(nc):
+                out.SetValue(k * nc + c, array.GetValue(int(i) * nc + c))
     out.SetName(array.GetName())
     return out
 
@@ -247,13 +246,41 @@ def _pointers(ds) -> dict:
     return out
 
 
-def _changed(ds, before: dict) -> dict:
-    """{"cell"/"point": {names}} of arrays that are new or replaced since ``before`` (from _pointers)."""
-    out = {"cell": set(), "point": set()}
-    for key, p in _pointers(ds).items():
+def _changed(ds, before: dict) -> tuple[dict, dict]:
+    """Arrays new or replaced since ``before`` (from _pointers), and arrays removed since then,
+    each as ``{"cell"/"point": {names}}``."""
+    new, gone = {"cell": set(), "point": set()}, {"cell": set(), "point": set()}
+    now = _pointers(ds)
+    for key, p in now.items():
         if before.get(key) != p:
-            out[key[0]].add(key[1])
-    return out
+            new[key[0]].add(key[1])
+    for key in before.keys() - now.keys():
+        gone[key[0]].add(key[1])
+    return new, gone
+
+
+def _sync(src, piece, new, gone, cell_ids, point_ids):
+    """Bring ``piece`` up to date with ``src``: re-slice ``new`` arrays, drop ``gone`` ones."""
+    for assoc, s_attr, p_attr, idx in (("cell", src.GetCellData(), piece.GetCellData(), cell_ids),
+                                       ("point", src.GetPointData(), piece.GetPointData(), point_ids)):
+        for name in gone[assoc]:
+            p_attr.RemoveArray(name)
+        if new[assoc]:
+            _copy_arrays(s_attr, p_attr, idx, new[assoc])
+
+
+BLOCK_PATH = "BlockPath"  # field string on every piece: its Model/ block, e.g. Loads/LOAD_1001
+
+
+def _tag(ds, path):
+    fd = ds.GetFieldData()
+    fd.RemoveArray(BLOCK_PATH)
+    vtkutil.add_string_array(fd, BLOCK_PATH, [path])
+
+
+def _block_path(ds):
+    paths = field_strings(ds, BLOCK_PATH)
+    return paths[0] if paths else None
 
 
 def _shallow(ds):
@@ -293,11 +320,8 @@ class Tree:
             src = blocks.get(piece.path)
             if src is not None:
                 ds.GetFieldData().ShallowCopy(src.GetFieldData())
-                new = changed[piece.path]
-                if new["cell"]:
-                    _copy_arrays(src.GetCellData(), ds.GetCellData(), piece.cell_ids, new["cell"])
-                if new["point"]:
-                    _copy_arrays(src.GetPointData(), ds.GetPointData(), piece.point_ids, new["point"])
+                _sync(src, ds, *changed[piece.path], piece.cell_ids, piece.point_ids)
+            _tag(ds, piece.path)
             pdc.SetPartition(i, 0, ds)
             pdc.GetMetaData(i).Set(vtkPartitionedDataSetCollection.NAME(), piece.name)
         pdc.SetDataAssembly(self.assembly)
@@ -444,46 +468,82 @@ def _model_node(asm):
     return asm.GetRootNode()
 
 
-def gather(pdc) -> tuple[vtkMultiBlockDataSet, dict]:
-    """The ``Model`` branch of a tree collection as a plain multiblock (pieces appended per block),
-    plus the layout :func:`scatter` needs."""
+def _groups_by_assembly(pdc):
+    """{block path: [dataset indices]} from the assembly's ``Model`` branch (untagged pieces)."""
     asm = pdc.GetDataAssembly()
-    layout = {}
+    groups = {}
 
     def visit(node, prefix):
-        out = vtkMultiBlockDataSet()
         for child in asm.GetChildNodes(node, False):
-            name = asm.GetNodeName(child)
-            path = prefix + name
+            path = prefix + asm.GetNodeName(child)
             if asm.GetNumberOfChildren(child):
-                block = visit(child, path + "/")
-                if not block.GetNumberOfBlocks():
-                    continue
+                visit(child, path + "/")
             else:
-                idx = [i for i in asm.GetDataSetIndices(child, False) if pdc.GetPartition(i, 0) is not None]
-                if not idx:
-                    continue
-                pieces = [pdc.GetPartition(i, 0) for i in idx]
-                block = _append(pieces)
-                layout[path] = _Layout(
-                    idx,
-                    np.concatenate([[0], np.cumsum([p.GetNumberOfCells() for p in pieces])]),
-                    np.concatenate([[0], np.cumsum([p.GetNumberOfPoints() for p in pieces])]),
-                    _pointers(block),
-                )
-            j = out.GetNumberOfBlocks()
-            out.SetBlock(j, block)
-            out.GetMetaData(j).Set(vtkMultiBlockDataSet.NAME(), name)
-        return out
+                groups[path] = list(asm.GetDataSetIndices(child, False))
 
-    mb = visit(_model_node(asm), "") if asm is not None else vtkMultiBlockDataSet()
+    if asm is not None:
+        visit(_model_node(asm), "")
+    return groups
+
+
+def _groups(pdc):
+    """{block path: [dataset indices]} in block order. Pieces carry their block path, so this works
+    on a Fetch without the assembly and on an ExtractBlock of category nodes."""
+    groups = {}
+    for i in range(pdc.GetNumberOfPartitionedDataSets()):
+        p = pdc.GetPartition(i, 0)
+        if p is None:
+            continue
+        path = _block_path(p)
+        if path is None:
+            return _groups_by_assembly(pdc)
+        groups.setdefault(path, []).append(i)
+    return groups
+
+
+def gather(pdc) -> tuple[vtkMultiBlockDataSet, dict]:
+    """The model blocks of a tree collection as a plain multiblock (pieces appended per block),
+    plus the layout :func:`scatter` needs."""
+    mb = vtkMultiBlockDataSet()
+    parents = {"": mb}
+    layout = {}
+
+    def parent_of(path):
+        head, _, name = path.rpartition("/")
+        if head not in parents:
+            outer, head_name = parent_of(head)
+            parents[head] = vtkMultiBlockDataSet()
+            _add(outer, head_name, parents[head])
+        return parents[head], name
+
+    for path, idx in _groups(pdc).items():
+        idx = [i for i in idx if pdc.GetPartition(i, 0) is not None]
+        if not idx:
+            continue
+        pieces = [pdc.GetPartition(i, 0) for i in idx]
+        block = _append(pieces)
+        block.GetFieldData().RemoveArray(BLOCK_PATH)
+        layout[path] = _Layout(
+            idx,
+            np.concatenate([[0], np.cumsum([p.GetNumberOfCells() for p in pieces])]),
+            np.concatenate([[0], np.cumsum([p.GetNumberOfPoints() for p in pieces])]),
+            _pointers(block),
+        )
+        outer, name = parent_of(path)
+        _add(outer, name, block)
     mb.GetFieldData().ShallowCopy(pdc.GetFieldData())
     return mb, layout
 
 
+def _add(mb, name, block):
+    j = mb.GetNumberOfBlocks()
+    mb.SetBlock(j, block)
+    mb.GetMetaData(j).Set(vtkMultiBlockDataSet.NAME(), name)
+
+
 def scatter(pdc, mb, layout) -> vtkPartitionedDataSetCollection:
-    """A copy of ``pdc`` with the arrays a filter added to the gathered ``mb`` sliced back onto the
-    pieces, and ``mb``'s root field data. ``pdc`` itself is not modified."""
+    """A copy of ``pdc`` with the arrays a filter added to (or removed from) the gathered ``mb``
+    applied to the pieces, and ``mb``'s root field data. ``pdc`` itself is not modified."""
     out = vtkPartitionedDataSetCollection()
     out.SetNumberOfPartitionedDataSets(pdc.GetNumberOfPartitionedDataSets())
     for i in range(pdc.GetNumberOfPartitionedDataSets()):
@@ -498,21 +558,19 @@ def scatter(pdc, mb, layout) -> vtkPartitionedDataSetCollection:
         block = blocks.get(path)
         if block is None:
             continue
-        new = _changed(block, lay.pointers)
+        new, gone = _changed(block, lay.pointers)
         for k, i in enumerate(lay.indices):
-            piece = out.GetPartition(i, 0)
-            if new["cell"]:
-                _copy_arrays(block.GetCellData(), piece.GetCellData(),
-                             np.arange(lay.cells[k], lay.cells[k + 1]), new["cell"])
-            if new["point"]:
-                _copy_arrays(block.GetPointData(), piece.GetPointData(),
-                             np.arange(lay.points[k], lay.points[k + 1]), new["point"])
+            _sync(block, out.GetPartition(i, 0), new, gone, np.arange(lay.cells[k], lay.cells[k + 1]),
+                  np.arange(lay.points[k], lay.points[k + 1]))
     out.GetFieldData().ShallowCopy(mb.GetFieldData())
     return out
 
 
 def is_tree(data) -> bool:
-    return data is not None and data.IsA("vtkPartitionedDataSetCollection") and data.GetDataAssembly() is not None
+    if data is None or not data.IsA("vtkPartitionedDataSetCollection"):
+        return False
+    first = data.GetPartition(0, 0) if data.GetNumberOfPartitionedDataSets() else None
+    return data.GetDataAssembly() is not None or (first is not None and _block_path(first) is not None)
 
 
 def as_multiblock(data):

@@ -38,7 +38,8 @@ ParaView plugin both, without a C++ GUI plugin:
   └─ Groups/
   ```
   Category branches appear only when non-empty. Node names go through
-  `vtkDataAssembly.MakeValidNodeName`; collisions get a numeric suffix.
+  `vtkDataAssembly.MakeValidNodeName`; two labels that map to the same name share one node (and one
+  checklist entry).
 - **Items and categories.** An item is a cell, or a point for vertex-only blocks (`Masses`,
   `Bushes`). Categories come from arrays already on the blocks:
   | Category | Arrays |

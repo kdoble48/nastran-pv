@@ -165,8 +165,9 @@ class Model:
 def _name(model, what):
     sources = pv.GetSources()
     label = next((k[0] for k, v in sources.items() if v == model.reader), "deck")
-    if sum(k[0] == label and _xml_name(v) == READER_XML for k, v in sources.items()) > 1:
-        label = f"{label} #{model.reader.GetGlobalIDAsString()}"  # same deck opened twice
+    twins = [v for k, v in sources.items() if k[0] == label and _xml_name(v) == READER_XML]
+    if len(twins) > 1 and model.reader != min(twins, key=lambda v: int(v.GetGlobalIDAsString())):
+        label = f"{label} #{model.reader.GetGlobalIDAsString()}"  # same deck opened again
     return f"NPV {what} [{label}]"
 
 
@@ -700,11 +701,34 @@ def _fetch_selection():
     return data, sel
 
 
+def _vertex_eids(data):
+    """Point EIDs of selected vertex-only pieces: masses and bushes keep EID on their points."""
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    out = set()
+    it = data.NewIterator() if data is not None and data.IsA("vtkCompositeDataSet") else None
+    leaves = []
+    if it is None:
+        leaves = [data] if data is not None else []
+    else:
+        it.InitTraversal()
+        while not it.IsDoneWithTraversal():
+            leaves.append(it.GetCurrentDataObject())
+            it.GoToNextItem()
+    for ds in leaves:
+        eid = ds.GetPointData().GetArray("EID") if ds is not None else None
+        if eid is None or ds.GetCellData().GetArray("EID") is not None or not ds.GetNumberOfCells():
+            continue
+        if all(ds.GetCellType(c) == 1 for c in range(ds.GetNumberOfCells())):  # VTK_VERTEX
+            out.update(int(v) for v in vtk_to_numpy(eid))
+    return out
+
+
 def selected_ids():
     """("EID", ids) for a cell selection, ("GRID", ids) for a point selection on the active source."""
     data, sel = _fetch_selection()
     if "POINT" not in _selection_kinds(sel):
-        eids = sorted({int(v) for v in _gather(data, "EID", "CELLS")})
+        eids = sorted({int(v) for v in _gather(data, "EID", "CELLS")} | _vertex_eids(data))
         if eids:
             return "EID", eids
     return "GRID", sorted({int(v) for v in _gather(data, "NID", "POINTS")})

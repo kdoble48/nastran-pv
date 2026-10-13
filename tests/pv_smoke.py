@@ -186,6 +186,11 @@ def tree_checks(pv, nv, reader):
     keep = nv.show_only_material()
     check(keep == ["MAT1_3"] and _cells(reader, "Solids") == 1, f"NPV Only Material -> {keep}")
     nv.show_all(reader)
+    _select(pv, reader, "(EID == 1) | (EID == 201)")  # a shell and a CONM2 (EID on mass points)
+    nv.show_only_selected()
+    check(reader.ShowOnlyElements == "1 201" and _cells(reader, "Masses") == 1,
+          f"NPV Show Only keeps a selected mass: {reader.ShowOnlyElements!r}")
+    nv.show_all(reader)
     pv.Delete(view)
 
 
@@ -219,6 +224,15 @@ def main():
         shells = rm.Model(reader, steps[0]).block("Shells")
         check(shells.GetPointData().GetArray("Displacement") is not None, "Displacement attached")
         check(shells.GetCellData().GetArray("VonMisesMax") is not None, "VonMisesMax attached")
+        full_path = os.path.join(tmp, "full.op2")
+        make_op2().write_op2(full_path)  # static subcase 1 (with stress) + modes (without)
+        reader.OP2FileName = full_path
+        reader.UpdatePipelineInformation()
+        full = rm.timesteps(reader)
+        first = rm.Model(reader, full[0]).block("Shells").GetCellData().GetArray("VonMisesMax")
+        later = rm.Model(reader, full[-1]).block("Shells").GetCellData().GetArray("VonMisesMax")
+        check(len(full) > 1 and first is not None and later is None,
+              f"VonMisesMax at step 1 only, not carried to step {len(full)} by the tree")
         reader.OP2FileName = ""
 
         shots = rm.render(DECK, ["pid"], ["iso"], tmp, [400, 300])
@@ -418,8 +432,9 @@ def main():
               "view with nothing to show is skipped")
         reader.Bushes = 1
     twin = rm.load_reader(DECK)  # the same deck opened twice must not share NPV pipeline objects
-    check(nv._name(nv.Model(twin), "mesh") != nv._name(nv.Model(reader), "mesh"),
-          f"same deck twice: {nv._name(nv.Model(twin), 'mesh')!r}")
+    check(nv._name(nv.Model(twin), "mesh") != nv._name(nv.Model(reader), "mesh")
+          and nv._name(nv.Model(reader), "mesh").endswith("[tiny_run.bdf]"),
+          f"same deck twice: {nv._name(nv.Model(twin), 'mesh')!r}; the first keeps its names")
     pv.Delete(twin)
     topology_checks(pv, nv)
     print("pv_smoke: all checks passed")
