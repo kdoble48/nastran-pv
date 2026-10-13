@@ -1,7 +1,8 @@
 # ParaView
 
 The plugin adds a reader for Nastran decks, glyph and field filters under *Filters > Nastran*, and
-one-click views on the Macros toolbar.
+one-click views on the Macros toolbar. For step-by-step walkthroughs, see
+[ParaView tutorials](paraview-tutorials.md).
 
 ## Open a deck
 

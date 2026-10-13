@@ -58,7 +58,7 @@ The docs describe behavior that lives in code. Update them in the same change wh
 | Code | Doc |
 |---|---|
 | CLI parsers in `cli.py` / `launch.py` | [cli.md](cli.md), [fields.md](fields.md), [store.md](store.md) |
-| `VIEW_NAMES`, `nastran_views.py`, `install_macros.py` | [paraview.md](paraview.md), [cli.md](cli.md#batch-screenshots) |
+| `VIEW_NAMES`, `nastran_views.py`, `install_macros.py` | [paraview.md](paraview.md), [cli.md](cli.md#batch-screenshots), [paraview-tutorials.md](paraview-tutorials.md) (images: `pvpython docs/build_tutorial_images.py --ucrm9 <coarse run deck> --demo-op2 <demo.OP2>`) |
 | Plugin proxies in `nastran_bdf_reader.py`, `tree.py` | [paraview.md](paraview.md), [fields.md](fields.md#paraview-filters) |
 | Builders, `assemble.py`, `results*.py` | [model.md](model.md) |
 | `topology/`, the topology proxies, selection macros | [tools.md](tools.md), [model.md](model.md) |

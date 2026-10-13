@@ -200,6 +200,10 @@ def tree_checks(pv, nv, reader):
     nv.apply("grow", reader=reader, view=view, seeds="GRID 1")
     grow_src = pv.FindSource(nv._name(nv.Model(reader), "grow"))
     grow_src.StayWithin = "seed families"
+    reached_view = pv.FindSource(nv._name(nv.Model(reader), "grow reached"))
+    reached_view.UpdatePipeline()
+    check(reached_view.GetDataInformation().GetNumberOfCells() == 4,
+          "grow view draws the reached shells and masses (ExtractBlock uses the tree's assembly)")
     _, eids = nv.reached_eids(reader)
     check(eids == {1, 3, 201, 202, 503}, f"grow GRID 1 within its family -> {sorted(eids)}")
     pv.SetActiveSource(reader)

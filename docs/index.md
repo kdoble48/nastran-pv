@@ -18,6 +18,9 @@ you use.
 
 - [ParaView](paraview.md): load the plugin, open a deck, and use the one-click views, the glyph
   filters and indexed colors.
+- [ParaView tutorials](paraview-tutorials.md): step-by-step walkthroughs in the ParaView GUI, from
+  browsing the model tree and Femap-style hiding to masses, mode shapes, model checks and your own
+  tables.
 - [CLI](cli.md): `convert`, `stats`, `view`, `render` and `setup`, with examples.
 - [Fields](fields.md): add derived, table-mapped and computed fields, from the CLI or from the
   ParaView filters.
@@ -49,6 +52,7 @@ install
 :caption: Guides
 
 paraview
+paraview-tutorials
 cli
 fields
 tools

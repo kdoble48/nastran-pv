@@ -188,12 +188,22 @@ def selectors(blocks):
     return [f"/Root/{prefix}{b}" for b in blocks for prefix in ("Model/", "")]
 
 
+def extract_blocks(src, blocks):
+    """ExtractBlock of ``blocks`` from ``src``. The model tree is selected through its assembly and a
+    multiblock through its hierarchy; ExtractBlock picks that when it is created, from data the
+    input may not have produced yet, so it is set here from the updated input."""
+    src.UpdatePipeline()
+    info = src.GetDataInformation().DataInformation
+    assembly = "Assembly" if info.GetDataAssembly() is not None else "Hierarchy"
+    return pv.ExtractBlock(Input=src, Assembly=assembly, Selectors=selectors(blocks))
+
+
 def _extract(model, *blocks, what=None):
     blocks = [b for b in blocks if model.has(b) or "/" in b]
     if not blocks:
         return None
     return _named(model, what or "+".join(blocks),
-                  lambda: pv.ExtractBlock(Input=model.reader, Selectors=selectors(blocks)))
+                  lambda: extract_blocks(model.reader, blocks))
 
 
 def _reset_view(view):
@@ -550,7 +560,7 @@ TOPOLOGY_BLOCKS = ("Shells", "Solids", "Lines", "Rigid", "Connectors", "BushLine
 def _topology_blocks(model, src, what):
     blocks = [b for b in TOPOLOGY_BLOCKS if model.has(b)]
     return _named(model, f"{what} blocks",
-                  lambda: pv.ExtractBlock(Input=src, Selectors=selectors(blocks)))
+                  lambda: extract_blocks(src, blocks))
 
 
 def _at_least(model, src, array, lower, what):
@@ -644,7 +654,7 @@ LINE_CHECKS = ("FreeEdges", "CoincidentGrids", "DuplicateElements", "DanglingCon
 
 
 def _check_layer(model, c, view, what, blocks, codes):
-    ex = _named(model, what, lambda: pv.ExtractBlock(Input=c, Selectors=selectors(blocks)))
+    ex = _named(model, what, lambda: extract_blocks(c, blocks))
     d = pv.Show(ex, view)
     # both layers share the "Check" lookup table, so there is one legend naming the checks found
     lut = categorical(d, "Check", codes, [CHECKS[k] for k in codes],
