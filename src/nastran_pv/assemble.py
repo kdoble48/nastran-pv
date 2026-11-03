@@ -155,8 +155,8 @@ def build_multiblock(deck: Deck, opts: Options | None = None) -> vtkMultiBlockDa
     vtkutil.add_array(fd, "WTMASS", np.array([deck.wtmass]))
     vtkutil.add_array(fd, "ActiveSPCSets", np.array(active_spc or [-1]))
     vtkutil.add_array(fd, "ActiveLoadSets", np.array(active_loads or [-1]))
-    struct_parts = [element_mass(ug, name) for name, ug in mesh.items() if ug is not None]
-    struct_mass, _ = totals(struct_parts)
+    elem = [element_mass(ug, name) for name, ug in mesh.items() if ug is not None]
+    struct_parts = [(m, c) for m, c, _ in elem]
     conc_parts = []
     if mass_info[0] is not None:
         pts = mass_info[0]
@@ -164,10 +164,13 @@ def build_multiblock(deck: Deck, opts: Options | None = None) -> vtkMultiBlockDa
                            vtkutil.to_numpy(pts.GetPoints().GetData())))
     conc_mass, _ = totals(conc_parts)
     mass, cg = totals(struct_parts + conc_parts)
-    n_nan = sum(int(np.isnan(p[0]).sum()) for p in struct_parts)
+    n_nan = sum(int(np.isnan(s).sum()) for _, _, s in elem)
     if n_nan:
-        deck.warn(f"model mass excludes {n_nan} element(s) without thickness/area/density")
-    vtkutil.add_array(fd, "StructuralMass", np.array([struct_mass - nsm_info.total]))
+        nsm_kept = sum(float(np.nansum(m[np.isnan(s)])) for m, _, s in elem)
+        deck.warn(f"model mass excludes the structural mass of {n_nan} element(s) without "
+                  f"thickness/area/density" + (f" (their NSM, {nsm_kept:.6g}, is included)" if nsm_kept else ""), mass=True)
+    struct_mass = sum(float(np.nansum(s)) for _, _, s in elem)
+    vtkutil.add_array(fd, "StructuralMass", np.array([struct_mass]))
     nsm.add_root_arrays(fd, nsm_info)
     vtkutil.add_array(fd, "ConcentratedMass", np.array([conc_mass]))
     vtkutil.add_array(fd, "ModelMass", np.array([mass]))

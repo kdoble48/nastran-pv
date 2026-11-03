@@ -97,6 +97,10 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   mesh blocks. It adds root field data: masses from `massprops.py` (VTK cell sizes; never
   pyNastran's slow `mass_properties`) and a `MAT_*` material table from `materials.py`. Derived
   fields therefore need no deck.
+- `nsm.py`: property NSM plus the NSM/NSM1/NSML/NSML1/NSMADD set selected by `--nsm-set`/`NSM=` →
+  `NSMPerArea|NSMPerLength NSMMass NSMSource` and the `NSM_*` root tables. It runs in
+  `build_multiblock` before the masses; its warnings use `deck.warn(..., mass=True)`, which lists
+  them first.
 - `results.py` / `results_h5.py`: `Op2Results` and `H5Results` share an interface (`steps`,
   `times`, `skipped`, `step_data`, `attach`). The shared `attach_step` writes `Displacement` and
   `VonMisesMax`, rotating vectors from CD into basic when a deck is passed. `open_results`

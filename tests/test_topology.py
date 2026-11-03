@@ -383,7 +383,7 @@ def test_findings_carry_their_check_code(topo_mb):
         assert set(arr(blk, "Check", "cell").tolist()) == {CHECKS.index(name)}, name
 
 
-STRIP = """$ five quads in a row: families SKIN/A SKIN/A SKIN/B SPAR/C SPAR/C, PIDs 1 1 1 1 2, all MAT1 1
+STRIP = """$ five quads in a row: families SKIN/A SKIN/A SKIN/B SPAR/C SPAR/C, PIDs 1 1 1 1 2, MIDs 1 1 1 1 2
 """ + "".join(f"GRID,{i + 1},,{float(i)},0.,0.\nGRID,{i + 7},,{float(i)},1.,0.\n" for i in range(6)) + """\
 $       Shell element data for family    SKIN/A
 CQUAD4,1,1,1,2,8,7
@@ -394,8 +394,13 @@ $       Shell element data for family    SPAR/C
 CQUAD4,4,1,4,5,11,10
 CQUAD4,5,2,5,6,12,11
 PSHELL,1,1,0.01
-PSHELL,2,1,0.02
+$ a bar off the end (no family or group): CBAR 6 from grid 6 to grid 13
+GRID,13,,6.,0.,0.
+CBAR,6,3,6,13,0.,0.,1.
+PBAR,3,1,1.-4
+PSHELL,2,2,0.02
 MAT1,1,7.0e10,,0.3,2700.
+MAT1,2,7.0e10,,0.3,2800.
 """
 
 
@@ -419,7 +424,7 @@ def reached(mb, seeds, rules):
     ("", [1, 2, 3, 4, 5]),
     ("within=pid", [1, 2, 3, 4]),
     ("within_pids", [1, 2, 3, 4]),
-    ("within=mid", [1, 2, 3, 4, 5]),
+    ("within=mid", [1, 2, 3, 4]),
     ("within=family", [1, 2]),
     ("within=group", [1, 2, 3]),
 ])
@@ -430,6 +435,17 @@ def test_grow_within(strip_mb, rules, eids):
 def test_grow_within_from_boundary_grid(strip_mb):
     # grid 3 sits between SKIN/A (EID 2) and SKIN/B (EID 3): both families are seeds
     assert reached(strip_mb, "GRID 3", "within=family") == [1, 2, 3]
+
+
+@pytest.mark.parametrize("seeds", ["EID 6", "GRID 13"])
+def test_grow_within_family_from_a_bar_warns(strip_mb, seeds):
+    from nastran_pv.fields.common import shallow_clone
+
+    res = grow(shallow_clone(strip_mb), seeds, Rules.parse("within=family"))
+    assert res.cells == 0
+    assert any("seeds have no family (only shells" in w for w in res.warnings)
+    assert not any("seeds have no" in w for w in grow(shallow_clone(strip_mb), "EID 1",
+                                                       Rules.parse("within=family")).warnings)
 
 
 def test_path_within_family(strip_mb):

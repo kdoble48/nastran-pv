@@ -65,7 +65,7 @@ class Graph:
     group_id: np.ndarray = None      # (C,) GroupId (pre-processor group), -1 where none
 
     def within_values(self, key: str) -> np.ndarray:
-        """The per-cell array a ``within=<key>`` rule compares (-1 or 0 = none)."""
+        """The per-cell array a ``within=<key>`` rule compares (-1 = none; for pid and mid 0 too)."""
         return {"pid": self.pid, "mid": self.mid, "family": self.family, "group": self.group_id}[key]
 
     @property
@@ -214,6 +214,13 @@ class Rules:
         values = graph.within_values(self.within)[cells]
         floor = 0 if self.within in ("family", "group") else 1  # FamilyId 0 is a family; PID 0 is none
         return {int(v) for v in values if v >= floor} | {int(v) for v in extra}
+
+    def empty_within(self, seed_values) -> str | None:
+        """The warning for a ``within`` rule whose seeds have no value of that key (nothing allowed)."""
+        if not self.within or seed_values is None or seed_values:
+            return None
+        why = " (only shells carry families and groups)" if self.within in ("family", "group") else ""
+        return f"within={self.within}: the seeds have no {self.within}{why}; nothing can be reached"
 
     def allowed(self, graph: Graph, seed_values=None) -> np.ndarray:
         """Cells the rules let a traversal enter (``seed_values`` is used by ``within``)."""

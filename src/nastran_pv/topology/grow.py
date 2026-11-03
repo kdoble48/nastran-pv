@@ -39,7 +39,10 @@ def seed_cells(graph: Graph, seeds: Seeds, rules: Rules, warnings: list):
     if len(rows):
         grid_hit[np.unique(graph.incidence[:, rows].nonzero()[0])] = True
     seed_mask = eid_hit | pid_hit | (grid_hit & graph.group_mask(MESH_GROUPS))
-    allowed = rules.allowed(graph, rules.seed_values(graph, seed_mask, seeds.pids if rules.within == "pid" else ()))
+    values = rules.seed_values(graph, seed_mask, seeds.pids if rules.within == "pid" else ())
+    if (seed_mask.any() or len(rows)) and (msg := rules.empty_within(values)):
+        warnings.append(msg)
+    allowed = rules.allowed(graph, values)
     excluded = (eid_hit | pid_hit) & ~allowed
     if excluded.any():
         named = sorted({(graph.card_names[c], int(e)) for c, e in zip(graph.card[excluded], graph.eid[excluded])})

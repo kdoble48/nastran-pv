@@ -38,8 +38,10 @@ def cell_measure(ug, name: str) -> np.ndarray:
     return vtkutil.to_numpy(_sizes_and_centers(ug)[0].GetArray(name))
 
 
-def element_mass(ug, kind: str) -> tuple[np.ndarray, np.ndarray]:
-    """Per-cell (mass, centroid) for a Shells/Solids/Lines block; adds ``ElementMass``."""
+def element_mass(ug, kind: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Per-cell (mass, centroid, structural mass) for a Shells/Solids/Lines block; adds
+    ``ElementMass``. The structural mass is NaN without thickness/area/density; ``NSMMass`` still
+    counts there, so such an element's mass is its NSM (NaN when it has none)."""
     sizes, centers = _sizes_and_centers(ug)
     cd = ug.GetCellData()
     n = ug.GetNumberOfCells()
@@ -48,7 +50,7 @@ def element_mass(ug, kind: str) -> tuple[np.ndarray, np.ndarray]:
         measure = vtkutil.to_numpy(sizes.GetArray("Volume"))
     elif kind == "Shells":
         area = vtkutil.to_numpy(sizes.GetArray("Area"))
-        if cd.GetArray("MassPerArea") is not None:  # laminates
+        if cd.GetArray("MassPerArea") is not None:  # structural mass/area per property (PSHELL, laminates)
             rho = vtkutil.to_numpy(cd.GetArray("MassPerArea"))
             measure = area
         else:
@@ -57,11 +59,13 @@ def element_mass(ug, kind: str) -> tuple[np.ndarray, np.ndarray]:
         measure = vtkutil.to_numpy(sizes.GetArray("Length")) * _cell_values(cd, "Area", n)
     else:
         raise ValueError(kind)
-    mass = np.abs(measure) * rho
+    struct = np.abs(measure) * rho
+    mass = struct
     if cd.GetArray("NSMMass") is not None:
-        mass = mass + vtkutil.to_numpy(cd.GetArray("NSMMass"))
+        nsm = vtkutil.to_numpy(cd.GetArray("NSMMass"))
+        mass = np.where(np.isnan(struct) & (nsm != 0), nsm, struct + nsm)
     vtkutil.add_array(cd, "ElementMass", mass, skip_all_nan=True)
-    return mass, centers
+    return mass, centers, struct
 
 
 def _cell_values(cd, name: str, n: int) -> np.ndarray:

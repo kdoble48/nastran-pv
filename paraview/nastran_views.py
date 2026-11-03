@@ -545,8 +545,19 @@ def view_nsm(model, view, top=8):
     legends, the units differ), the rest ghosted, and the totals per source and NSM set."""
     blocks = [b for b in NSM_DENSITY if model.has(b) and model.array(b, "NSMMass", "cell") is not None]
     ghost_mesh(model, view)
+    active = model.field("ActiveNSMSet")
+    active = int(active[0]) if active is not None else -1
+    defined = model.field("DefinedNSMSets")
+    defined = ", ".join(str(int(v)) for v in defined) if defined is not None else ""
+    pick = "reader property NSMSet (-1 = Case Control, 0 = none)"
     if not blocks:
-        info_text(model, view, "No nonstructural mass (property NSM or NSM/NSML cards) in this deck.")
+        if active > 0:
+            text = f"NSM set {active} puts mass on no element (see Output Messages)."
+        elif defined:
+            text = f"NSM set(s) {defined} defined but none selected:\nset the {pick}."
+        else:
+            text = "No nonstructural mass (property NSM or NSM/NSML cards) in this deck."
+        info_text(model, view, text)
         return
     for b in blocks:
         d = pv.Show(_extract(model, b), view)
@@ -558,13 +569,12 @@ def view_nsm(model, view, top=8):
         return float(a[0]) if a is not None else 0.0
 
     nsm, model_mass = total("NonstructuralMass"), total("ModelMass")
-    active = model.field("ActiveNSMSet")
-    active = int(active[0]) if active is not None else -1
     text = f"Nonstructural mass: {nsm:.6g}"
     if model_mass > 0:
         text += f"  ({100.0 * nsm / model_mass:.3g}% of model mass {model_mass:.6g})"
     text += f"\n  property NSM fields: {total('PropertyNSMMass'):.6g}"
-    text += f"\n  bulk NSM set {active if active > 0 else '(none selected)'}: {total('BulkNSMMass'):.6g}"
+    unselected = f"(none selected; defined: {defined})" if defined else "(none)"
+    text += f"\n  bulk NSM set {active if active > 0 else unselected}: {total('BulkNSMMass'):.6g}"
     sids, masses = model.field("NSM_SET"), model.field("NSM_SetMass")
     if sids is not None and masses is not None:
         order = np.argsort(-masses)
@@ -573,7 +583,7 @@ def view_nsm(model, view, top=8):
         if len(order) > top:
             text += f"\n    ... {len(order) - top} more (NSM_SET / NSM_SetMass in the field data)"
     t = info_text(model, view, text + "\nMass units as in the deck (WTMASS not applied)"
-                                      "\nOther set: reader property NSMSet (-1 = Case Control, 0 = none)")
+                                      f"\nOther set: {pick}")
     pv.GetDisplayProperties(t, view).Justification = "Left"
 
 
@@ -748,14 +758,27 @@ def _selection_of(src):
         return None
 
 
+def _sources_with_selection():
+    return {key[0]: s for key, s in pv.GetSources().items() if _selection_of(s) is not None}
+
+
 def selected_source():
-    """The source holding the current selection: the active one, else any source with a selection.
-    Views show ``NPV ...`` extracts, so a selection made in the view usually sits on one of those
-    rather than on the reader the user clicked."""
+    """The source holding the current selection: the active one, else the only source with a
+    selection. Views show ``NPV ...`` extracts, so a selection made in the view usually sits on one
+    of those rather than on the reader the user clicked."""
     active = pv.GetActiveSource()
     if _selection_of(active) is not None:
         return active
-    return next((s for s in pv.GetSources().values() if _selection_of(s) is not None), None)
+    held = _sources_with_selection()
+    if len(held) > 1:
+        raise RuntimeError(f"Selections on several sources ({', '.join(sorted(held))}): click the one "
+                           "to use in the Pipeline Browser, or clear the others.")
+    return next(iter(held.values()), None)
+
+
+def selected_reader():
+    """The Nastran reader upstream of the selection (with two decks open, not always the active one)."""
+    return find_reader(selected_source())
 
 
 def _fetch_selection():
@@ -809,7 +832,7 @@ def selected_ids():
 
 def grow_from_selection():
     kind, ids = selected_ids()
-    model = Model(find_reader())
+    model = Model(selected_reader())
     g = _named(model, "grow", lambda: pv.NastranGrow(Input=model.reader))
     g.SeedIDs = f"{kind} {' '.join(map(str, ids))}"
     apply("grow", reader=model.reader, model=model, reset_camera=False)
@@ -819,7 +842,7 @@ def path_from_selection():
     kind, ids = selected_ids()
     if kind != "GRID" or len(ids) != 2:
         raise RuntimeError(f"Select exactly two grids with Select Points On (got {len(ids)} {kind} id(s)).")
-    model = Model(find_reader())
+    model = Model(selected_reader())
     p = _named(model, "path", lambda: pv.NastranPath(Input=model.reader))
     p.FromGrid, p.ToGrid = ids
     apply("path", reader=model.reader, model=model, reset_camera=False)
@@ -843,10 +866,10 @@ def _listed(reader, prop):
 
 
 def _refresh(reader):
-    """The reader output changed: drop the selection (it would point at other cells) and redraw."""
-    held = selected_source()
-    if held is not None:
-        pv.ClearSelection(held)
+    """The reader output changed: drop its selections (they would point at other cells) and redraw."""
+    for src in _sources_with_selection().values():
+        if find_reader(src) == reader:
+            pv.ClearSelection(src)
     reader.UpdatePipeline()
     if pv.GetActiveView() is not None:
         pv.Render()
@@ -857,7 +880,7 @@ def show_only_selected():
     from nastran_pv.tree import format_ids
 
     ids = _selected_elements()
-    reader = find_reader()
+    reader = selected_reader()
     reader.ShowOnlyElements = format_ids(ids)
     reader.HiddenElements = ""
     _refresh(reader)
@@ -868,7 +891,7 @@ def hide_selected():
     from nastran_pv.tree import format_ids, parse_ids
 
     ids = _selected_elements()
-    reader = find_reader()
+    reader = selected_reader()
     reader.HiddenElements = format_ids(parse_ids(reader.HiddenElements) | set(ids))
     _refresh(reader)
 
@@ -889,7 +912,7 @@ def _show_only_category(array, prop, what):
     ids = {int(v) for assoc in ("CELLS", "POINTS") for v in _gather(data, array, assoc) if v > 0}
     if not ids:
         raise RuntimeError(f"The selection carries no {array}: select elements that have a {what}.")
-    reader = find_reader()
+    reader = selected_reader()
     reader.UpdatePipelineInformation()
     keep = [n for n in _listed(reader, prop) if (m := re.search(r"_(\d+)$", n)) and int(m.group(1)) in ids]
     setattr(reader, prop, keep)

@@ -20,7 +20,7 @@ from paraview import simple as pv  # noqa: E402
 
 OUT = os.path.join(HERE, "images")
 SIZE = [1200, 700]
-# uCRM-9 coarse: an upper-skin grid near the root, used as the grow seed
+# uCRM-9 coarse: the group whose grid seeds the grow (see skin_grid)
 SKIN_GROUP = "WING_U_SKIN"
 
 
@@ -58,7 +58,7 @@ def save(view, name):
 
 
 def skin_grid(reader):
-    """A grid of the first upper-skin element (the grow seed)."""
+    """A grid of one upper-skin element (the grow seed); a fixed pick so the image is repeatable."""
     from vtkmodules.util.numpy_support import vtk_to_numpy
 
     model = nv.Model(reader)
@@ -134,7 +134,7 @@ def ucrm(deck):
     csv = os.path.join(tempfile.mkdtemp(), "margins.csv")
     with open(csv, "w") as f:
         f.write("PID,MS\n")
-        for k, p in enumerate(pids):  # example values: margins falling towards the root
+        for k, p in enumerate(pids):  # example values, scattered over the properties
             f.write(f"{p},{0.05 + 0.6 * ((k * 37) % len(pids)) / len(pids):.3f}\n")
     view = new_view()
     mapped = pv.NastranMapTable(Input=reader, TableFileName=csv, Key="PID")

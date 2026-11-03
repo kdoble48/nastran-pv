@@ -22,7 +22,8 @@ deck has nothing for it.
 | `Loads/SID_n`, `Loads/LOAD_n` | FORCE/MOMENT(1,2) per set, LOAD combinations resolved | `Force Moment ForceMagnitude`; field `ResultantForce GravityAcceleration` |
 
 Root field data: `DeckPath SOL WTMASS ActiveLoadSets ActiveSPCSets StructuralMass ConcentratedMass ModelMass ModelCG Warnings`,
-plus `ActiveNSMSet PropertyNSMMass BulkNSMMass NonstructuralMass` and, when there is NSM, the
+plus `ActiveNSMSet PropertyNSMMass BulkNSMMass NonstructuralMass`, `DefinedNSMSets` (the top-level
+bulk sets, when the deck has any) and, when there is NSM, the
 `NSM_SET NSM_SetType NSM_SetMass NSM_SetCount` (per NSM set) and `NSM_PID NSM_PIDMass` tables
 (see [Nonstructural mass](#nonstructural-mass)).
 The [model tools](tools.md) add `Hops`, `PartId` and `OnPath` (cell and point) and the `PART_*`,
@@ -50,7 +51,8 @@ The [field options](fields.md) add further arrays on top of these.
   - lines: length × area × density
 
   plus `NSMMass` on both (see below). `StructuralMass` excludes NSM, and `ModelMass` is structural
-  + nonstructural + concentrated. WTMASS is not applied. CONM2, CONM1 and CMASS1/2 count as
+  + nonstructural + concentrated. An element without thickness, area or density has no structural
+  mass, but its NSM still counts (the warning gives the amount). WTMASS is not applied. CONM2, CONM1 and CMASS1/2 count as
   concentrated masses.
 * **Material axis.** THETA is measured from the projected G1→G2 edge. MCID projects that coordinate
   system's x-axis onto the element plane.
@@ -66,8 +68,8 @@ The [field options](fields.md) add further arrays on top of these.
 
 Nonstructural mass (NSM) comes from two sources, summed per element:
 
-* **Property fields**: the NSM field of PSHELL, PCOMP/PCOMPG, PBAR/PBARL, PBEAM/PBEAML (stations
-  averaged), PROD, PTUBE and CONROD. It always applies.
+* **Property fields**: the NSM field of PSHELL, PCOMP/PCOMPG, PSHEAR, PBAR/PBARL, PBEAM/PBEAML,
+  PROD, PTUBE and the CONROD element card. It always applies.
 * **Bulk sets**: `NSM`, `NSM1`, `NSML` and `NSML1`, combined (and nested) by `NSMADD`. One set
   applies: `--nsm-set ID` (reader property *NSMSet*), else Case Control `NSM=`, else, in a
   bulk-only file, the only top-level set. A run deck without `NSM=` applies none, as Nastran does,
@@ -76,7 +78,8 @@ Nonstructural mass (NSM) comes from two sources, summed per element:
 `NSM`/`NSM1` values are per unit area or length. `NSML`/`NSML1` values are a total, spread over the
 elements in proportion to area or length (`NSML` per id, `NSML1` over its whole list). TYPE matches
 the property card exactly (`PSHELL` does not cover PCOMP), `ELEMENT` takes element ids, and `ALL`
-takes every element of that property type. A set reached twice through `NSMADD` counts once.
+takes every element of that property type. `TYPE=CONROD` takes CONROD element ids. A set reached
+twice through `NSMADD` counts once.
 
 | Array | Where | Meaning |
 |---|---|---|
@@ -84,11 +87,14 @@ takes every element of that property type. A set reached twice through `NSMADD` 
 | `NSMMass` | Shells, Lines | NSM of the element; included in `ElementMass` |
 | `NSMSource` | Shells, Lines | 0 none, 1 property, 2 bulk set, 3 both |
 | `PropertyNSMMass`, `BulkNSMMass`, `NonstructuralMass` | root | totals |
-| `NSM_SET NSM_SetType NSM_SetMass NSM_SetCount` | root | per leaf set of the active set: card types, mass, elements |
+| `DefinedNSMSets` | root | sets no NSMADD references (what `NSM=` or `--nsm-set` would name) |
+| `NSM_SET NSM_SetType NSM_SetMass NSM_SetCount` | root | per leaf set of the active set (written whenever a set is active): card types, mass, elements |
 | `NSM_PID NSM_PIDMass` | root | NSM per property |
 
-Cards of other types (PBEND, PCONEAX, PRAC2D, PBCOMP), ids that match no element and `NSML` sets
-that mix shells and lines are skipped with a warning. The `nsm` view shows all of this
+Cards of other types (PBEND, PCONEAX, PRAC2D, PBCOMP), ids that match no element, `ELEMENT` ids of
+elements that take no NSM (CVISC, CBEND, ...) and `NSML` sets that mix shells and lines are skipped
+with a warning. Warnings that change the mass are listed first, so the CLI's and the reader's
+shortened lists show them. The `nsm` view shows all of this
 ([toolbar macros](paraview.md#one-click-views-toolbar-macros)).
 
 ## Not visualized yet

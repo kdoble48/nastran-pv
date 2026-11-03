@@ -181,7 +181,8 @@ class NastranPVReader(VTKPythonAlgorithmBase):
 
     @smproperty.intvector(name="NSMSet", default_values=-1)
     def SetNSMSet(self, v):
-        """Bulk NSM set to apply: -1 = Case Control NSM=, 0 = none (property NSM always applies)."""
+        """Bulk NSM set to apply: -1 = automatic (Case Control NSM=, or the only set of a bulk-only
+        file), 0 = none (property NSM always applies)."""
         if int(v) != self._nsm_set:
             self._nsm_set = int(v)
             self.Modified()
@@ -254,7 +255,7 @@ class NastranPVReader(VTKPythonAlgorithmBase):
         key = (self._deck_key, tuple(sorted(self._flags.items())), self._k_ref, self._nodal, self._nsm_set,
                self._op2name)
         if key != self._mb_key:
-            deck.warnings = list(self._base_warnings)
+            deck.reset_warnings(self._base_warnings)
             opts = Options(k_ref=self._k_ref or None, nodal_arrays=self._nodal,
                            nsm_set=self._nsm_set if self._nsm_set >= 0 else None, **self._flags)
             self._mb = build_multiblock(deck, opts)

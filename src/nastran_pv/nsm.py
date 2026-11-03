@@ -1,11 +1,12 @@
 """Nonstructural mass: property NSM fields plus NSM/NSM1/NSML/NSML1 sets (via NSMADD).
 
-The property NSM (PSHELL, PCOMP, PBAR, PBEAM, PROD, ...) always applies. Bulk sets apply
+The property NSM (SHELL_PROPS, LINE_PROPS; CONROD's is on the element card) always applies. Bulk sets apply
 only when one is selected: ``--nsm-set``, else Case Control ``NSM=``, else (bulk-only
 decks) the single top-level set. NSM/NSM1 values are per unit area or length; NSML/NSML1
 values are a total spread over their elements in proportion to area or length (NSML per
-id, NSML1 over the whole id list). TYPE matches the property card exactly; ``ELEMENT``
-takes EIDs and ``ALL`` every element of that type.
+id, NSML1 over the whole id list). TYPE matches the property card exactly (``CONROD``
+takes CONROD EIDs); ``ELEMENT`` takes EIDs of elements whose property takes NSM, and ``ALL``
+every element of that type. Warnings are mass warnings (listed first in ``Deck.warnings``).
 
 Writes ``NSMPerArea`` (Shells) or ``NSMPerLength`` (Lines), ``NSMMass`` and
 ``NSMSource`` (0 none, 1 property, 2 bulk, 3 both) on the mesh blocks.
@@ -30,6 +31,7 @@ SOURCE_NAMES = ("none", "property", "bulk", "property + bulk")
 @dataclass
 class NSMResult:
     active: int | None = None  # selected bulk set (None = no bulk NSM)
+    defined: list[int] = field(default_factory=list)  # top-level bulk sets (in no NSMADD)
     property_mass: float = 0.0
     sets: dict[int, dict] = field(default_factory=dict)  # leaf sid -> {types, mass, count}
     pid_mass: dict[int, float] = field(default_factory=dict)
@@ -47,6 +49,12 @@ def defined_sets(model) -> set[int]:
     return set(model.nsms) | set(model.nsmadds)
 
 
+def top_level_sets(model) -> list[int]:
+    """Defined sets that no NSMADD references: the ones Case Control NSM= would name."""
+    referenced = {s for cards in model.nsmadds.values() for c in cards for s in c.sets}
+    return sorted(defined_sets(model) - referenced)
+
+
 def select_set(deck: Deck, override: int | None, case_ids: list[int]) -> int | None:
     """The bulk NSM set to apply, or None; warns about the choice when it is not obvious."""
     model = deck.model
@@ -56,23 +64,22 @@ def select_set(deck: Deck, override: int | None, case_ids: list[int]) -> int | N
     elif case_ids:
         sid = case_ids[0]
         if len(case_ids) > 1:
-            deck.warn(f"subcases select NSM sets {case_ids}; using {sid} (pick one with --nsm-set)")
+            deck.warn(f"subcases select NSM sets {case_ids}; using {sid} (pick one with --nsm-set)", mass=True)
     elif not sets:
         return None
     else:
-        referenced = {s for cards in model.nsmadds.values() for c in cards for s in c.sets}
-        top = sorted(sets - referenced)
+        top = top_level_sets(model)
         if has_executive_control(deck.path):
             deck.warn(f"NSM set(s) {top} not selected by Case Control NSM=; not applied "
-                      "(pick one with --nsm-set)")
+                      "(pick one with --nsm-set)", mass=True)
             return None
         if len(top) == 1:
-            deck.warn(f"no Case Control NSM=; applying the only NSM set {top[0]}")
+            deck.warn(f"no Case Control NSM=; applying the only NSM set {top[0]}", mass=True)
             return top[0]
-        deck.warn(f"NSM sets {top} defined but none selected; pick one with --nsm-set")
+        deck.warn(f"NSM sets {top} defined but none selected; pick one with --nsm-set", mass=True)
         return None
     if sid is not None and sid not in sets:
-        deck.warn(f"NSM set {sid} is not defined")
+        deck.warn(f"NSM set {sid} is not defined", mass=True)
         return None
     return sid
 
@@ -84,29 +91,32 @@ def resolve_sets(deck: Deck, sid: int) -> list[int]:
 
     def visit(s: int, path: tuple[int, ...]) -> None:
         if s in path:
-            deck.warn(f"NSMADD {path[-1]}: cycle through set {s}, ignored")
+            deck.warn(f"NSMADD {path[-1]}: cycle through set {s}, ignored", mass=True)
             return
         if s in model.nsms:
             if s in out:
-                deck.warn(f"NSM set {s} is reached twice through NSMADD; counted once")
+                deck.warn(f"NSM set {s} is reached twice through NSMADD; counted once", mass=True)
             else:
                 out.append(s)
         for card in model.nsmadds.get(s, []):
             for child in card.sets:
                 visit(int(child), path + (s,))
         if s not in model.nsms and s not in model.nsmadds:
-            deck.warn(f"NSMADD {path[-1] if path else s}: set {s} is not defined")
+            deck.warn(f"NSMADD {path[-1] if path else s}: set {s} is not defined", mass=True)
 
     visit(int(sid), ())
     return out
 
 
-def property_nsm(model, prop) -> float:
-    """Per-unit (area or length) NSM of a property card; 0 when it has none."""
+def property_nsm(prop, warn=None) -> float:
+    """Per-unit (area or length) NSM of a property card; 0 when it has none. When ``Nsm()``
+    fails (an un-cross-referenced material etc.) the raw NSM field is used, with a warning."""
     try:
         value = prop.Nsm() if hasattr(prop, "Nsm") else getattr(prop, "nsm", 0.0)
-    except Exception:  # un-cross-referenced material etc.
+    except Exception as exc:
         value = getattr(prop, "nsm", 0.0)
+        if warn is not None:
+            warn(f"{prop.type} {prop.pid}: NSM not computed ({exc}); using the NSM field")
     if value is None:
         return 0.0
     value = np.asarray(value, dtype=float)
@@ -125,6 +135,7 @@ class _Block:
         types = []
         prop_nsm = np.zeros(len(self.eid))
         cache: dict[int, tuple[str, float]] = {}
+        warn = lambda msg: deck.warn(msg, mass=True)  # noqa: E731
         for i, (eid, pid) in enumerate(zip(self.eid, self.pid)):
             elem = model.elements.get(int(eid))
             if elem is not None and elem.type == "CONROD":
@@ -133,43 +144,54 @@ class _Block:
                 continue
             if pid not in cache:
                 prop = model.properties.get(int(pid))
-                cache[pid] = (prop.type, property_nsm(model, prop)) if prop is not None else ("", 0.0)
+                cache[pid] = (prop.type, property_nsm(prop, warn)) if prop is not None else ("", 0.0)
             types.append(cache[pid][0])
             prop_nsm[i] = cache[pid][1]
+        undefined = sorted(int(p) for p, (t, _) in cache.items() if not t and p > 0)
+        if undefined:
+            warn(f"{name}: property id(s) {undefined[:5]} not defined; no property NSM there")
         self.ptype = np.asarray(types, dtype=object)
         self.prop = prop_nsm
         self.bulk = np.zeros(len(self.eid))
 
 
 def _targets(card, blocks: dict[str, _Block]):
-    """{block name: cell mask} for one NSM card, and the ids that matched nothing."""
+    """{block name: cell mask} for one NSM card, the ids that matched nothing, and the elements
+    ``ELEMENT`` named whose property takes no NSM (CVISC, CBEND, ...: ``"PVISC 7"``)."""
     ids = list(card.ids)
+    every = ids == ["ALL"]
+    wanted = None if every else np.asarray(ids, dtype=np.int64)
     t = card.nsm_type
     out = {}
     matched = set()
+    skipped = []
     for name, b in blocks.items():
         if t == "ELEMENT":
-            key = b.eid
+            ok = np.isin(b.ptype, SHELL_PROPS + LINE_PROPS)
+            bad = ~ok if every else ~ok & np.isin(b.eid, wanted)
+            skipped += [f"{p or 'no property'} {e}" for p, e in zip(b.ptype[bad], b.eid[bad])]
+            matched.update(int(e) for e in b.eid[bad])
+            key = np.where(ok, b.eid, -1)
         elif t == "CONROD":
             key = np.where(b.ptype == "CONROD", b.eid, -1)
         else:
             key = np.where(b.ptype == t, b.pid, -1)
-        if ids == ["ALL"]:
-            mask = key >= 0 if t != "ELEMENT" else np.ones(len(key), dtype=bool)
+        if every:
+            mask = key >= 0
         else:
-            mask = np.isin(key, np.asarray(ids, dtype=np.int64))
+            mask = np.isin(key, wanted)
             matched.update(int(k) for k in np.unique(key[mask]))
         if mask.any():
             out[name] = mask
-    missing = [] if ids == ["ALL"] else [i for i in ids if int(i) not in matched]
-    return out, missing
+    missing = [] if every else [i for i in ids if int(i) not in matched]
+    return out, missing, skipped
 
 
 def apply(deck: Deck, mesh: dict, override: int | None = None, case_ids: list[int] | None = None) -> NSMResult:
     """Write the NSM arrays on the Shells/Lines blocks of ``mesh``; return the totals."""
     model = deck.model
     blocks = {n: _Block(deck, n, mesh[n]) for n in DENSITY if mesh.get(n) is not None}
-    res = NSMResult(active=select_set(deck, override, case_ids or []))
+    res = NSMResult(active=select_set(deck, override, case_ids or []), defined=top_level_sets(model))
     if not blocks:
         return res
     unsupported: dict[str, int] = defaultdict(int)
@@ -184,20 +206,23 @@ def apply(deck: Deck, mesh: dict, override: int | None = None, case_ids: list[in
                 continue
             if card.type not in info["types"]:
                 info["types"].append(card.type)
-            targets, missing = _targets(card, blocks)
+            targets, missing, skipped = _targets(card, blocks)
             if missing:
-                deck.warn(f"{card.type} {sid} {t}: id(s) {missing[:5]} match no element")
+                deck.warn(f"{card.type} {sid} {t}: id(s) {missing[:5]} match no element", mass=True)
+            if skipped:
+                deck.warn(f"{card.type} {sid} {t}: {len(skipped)} element(s) take no NSM, skipped "
+                          f"(property, EID: {', '.join(skipped[:5])})", mass=True)
             if not targets:
                 continue
             value = float(card.value)
             if card.type in ("NSML", "NSML1"):
                 if len(targets) > 1:
-                    deck.warn(f"{card.type} {sid}: mixes shells and lines; skipped")
+                    deck.warn(f"{card.type} {sid}: mixes shells and lines; skipped", mass=True)
                     continue
                 (name, mask), = targets.items()
                 total = blocks[name].size[mask].sum()
                 if total <= 0:
-                    deck.warn(f"{card.type} {sid}: elements have zero area/length; skipped")
+                    deck.warn(f"{card.type} {sid}: elements have zero area/length; skipped", mass=True)
                     continue
                 value /= total
             for name, mask in targets.items():
@@ -208,7 +233,7 @@ def apply(deck: Deck, mesh: dict, override: int | None = None, case_ids: list[in
         info["count"] = int(sum(m.sum() for m in touched.values()))
         res.sets[sid] = info
     for t, n in unsupported.items():
-        deck.warn(f"{n} NSM card(s) of type {t} not supported")
+        deck.warn(f"{n} NSM card(s) of type {t} not supported", mass=True)
 
     if not any(b.prop.any() or b.bulk.any() for b in blocks.values()):
         return res
@@ -234,6 +259,8 @@ def add_root_arrays(fd, res: NSMResult) -> None:
     vtkutil.add_array(fd, "PropertyNSMMass", np.array([res.property_mass]))
     vtkutil.add_array(fd, "BulkNSMMass", np.array([res.bulk_mass]))
     vtkutil.add_array(fd, "NonstructuralMass", np.array([res.total]))
+    if res.defined:
+        vtkutil.add_array(fd, "DefinedNSMSets", np.array(res.defined, dtype=np.int64))
     if res.sets:
         sids = sorted(res.sets)
         vtkutil.add_array(fd, "NSM_SET", np.array(sids, dtype=np.int64))

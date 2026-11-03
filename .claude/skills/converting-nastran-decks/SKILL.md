@@ -50,7 +50,7 @@ deck parsing, which is much faster on large models.
   `BulkNSMMass` and the `NSM_SET`/`NSM_PID` tables (`docs/model.md#nonstructural-mass`). Units are the deck's own: say so, and infer them from MAT values
   (rho 2780 and E 7e10 mean SI).
 - **Warnings** print on stdout and are kept in `Warnings`. Read them. "solid property id(s) not
-  defined (open the run deck?)" and "model mass excludes N element(s)" mean the numbers are
+  defined (open the run deck?)" and "model mass excludes the structural mass of N element(s)" mean the numbers are
   incomplete (`troubleshooting-nastran-models`). "reordered N solid element(s)" is info only.
 - **Half models:** uCRM-9 is semi-span (Y ≥ 0). Say that the mass and CG are for one side.
 - **Loads:** `ActiveLoadSets` comes from case control. GRAV is reported as field data and is not
