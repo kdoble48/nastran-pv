@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from . import vtkutil
+from .categories import ELEMENT_TYPES
 from .deck import Deck, has_executive_control
 from .massprops import cell_measure
 
@@ -123,6 +124,25 @@ def property_nsm(prop, warn=None) -> float:
     return float(value.mean()) if value.size else 0.0  # PBEAM: per-station list
 
 
+class _Rows:
+    """Block rows by an integer key, for many keys at once: O(k log n), not one scan per card."""
+
+    def __init__(self, keys: np.ndarray):
+        self.order = np.argsort(keys, kind="stable")
+        self.keys = keys[self.order]
+
+    def find(self, wanted: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """(rows whose key is in ``wanted``, a per-``wanted`` found mask)."""
+        lo = np.searchsorted(self.keys, wanted, "left")
+        hi = np.searchsorted(self.keys, wanted, "right")
+        counts = hi - lo
+        if not counts.size or counts.max() <= 1:  # unique keys (EIDs): at most one row each
+            return self.order[lo[counts > 0]], counts > 0
+        total = int(counts.sum())
+        starts = np.repeat(lo - np.cumsum(counts) + counts, counts)
+        return self.order[starts + np.arange(total)], counts > 0
+
+
 class _Block:
     def __init__(self, deck: Deck, name: str, ug):
         model = deck.model
@@ -132,58 +152,81 @@ class _Block:
         self.eid = vtkutil.to_numpy(cd.GetArray("EID")).astype(np.int64)
         self.pid = vtkutil.to_numpy(cd.GetArray("PID")).astype(np.int64)
         self.size = np.abs(cell_measure(ug, "Area" if name == "Shells" else "Length"))
-        types = []
-        prop_nsm = np.zeros(len(self.eid))
-        cache: dict[int, tuple[str, float]] = {}
         warn = lambda msg: deck.warn(msg, mass=True)  # noqa: E731
-        for i, (eid, pid) in enumerate(zip(self.eid, self.pid)):
-            elem = model.elements.get(int(eid))
-            if elem is not None and elem.type == "CONROD":
-                types.append("CONROD")
-                prop_nsm[i] = float(elem.nsm or 0.0)
-                continue
-            if pid not in cache:
-                prop = model.properties.get(int(pid))
-                cache[pid] = (prop.type, property_nsm(prop, warn)) if prop is not None else ("", 0.0)
-            types.append(cache[pid][0])
-            prop_nsm[i] = cache[pid][1]
-        undefined = sorted(int(p) for p, (t, _) in cache.items() if not t and p > 0)
-        if undefined:
-            warn(f"{name}: property id(s) {undefined[:5]} not defined; no property NSM there")
-        self.ptype = np.asarray(types, dtype=object)
-        self.prop = prop_nsm
+        # property type and NSM once per PID, then broadcast (CONROD carries both on the element)
+        upid, inv = np.unique(self.pid, return_inverse=True)
+        ptypes, values = [], []
+        for pid in upid:
+            prop = model.properties.get(int(pid))
+            ptypes.append(prop.type if prop is not None else "")
+            values.append(property_nsm(prop, warn) if prop is not None else 0.0)
+        undefined = [int(pid) for pid, t in zip(upid, ptypes) if not t and pid > 0]
+        self.ptype = np.asarray(ptypes, dtype=object)[inv]
+        self.prop = np.asarray(values, dtype=float)[inv]
+        for i in np.flatnonzero(_conrods(cd, len(self.eid))):
+            elem = model.elements.get(int(self.eid[i]))
+            self.ptype[i] = "CONROD"
+            self.prop[i] = float(getattr(elem, "nsm", 0.0) or 0.0)
+        if undefined:  # a CONROD's PID 0 is never a property
+            warn(f"{name}: property id(s) {sorted(undefined)[:5]} not defined; no property NSM there")
+        names = sorted(set(self.ptype))
+        self.type_code = np.searchsorted(names, self.ptype.astype(str)) if len(names) else np.zeros(0, int)
+        self.type_names = names
+        self.takes_nsm = np.isin(self.ptype.astype(str), SHELL_PROPS + LINE_PROPS)
+        self.by_eid = _Rows(self.eid)
+        self.by_type_pid = _Rows(self.type_code.astype(np.int64) << 32 | (self.pid & 0xFFFFFFFF))
         self.bulk = np.zeros(len(self.eid))
+
+    def code(self, ptype: str) -> int:
+        """Type code of a property card name in this block, -1 when no cell has it."""
+        return self.type_names.index(ptype) if ptype in self.type_names else -1
+
+
+def _conrods(cd, n: int) -> np.ndarray:
+    """Cells that are CONRODs (from the global ElementType codes)."""
+    arr = cd.GetArray("ElementType")
+    if arr is None or "CONROD" not in ELEMENT_TYPES:
+        return np.zeros(n, dtype=bool)
+    return vtkutil.to_numpy(arr) == ELEMENT_TYPES.index("CONROD")
 
 
 def _targets(card, blocks: dict[str, _Block]):
-    """{block name: cell mask} for one NSM card, the ids that matched nothing, and the elements
+    """{block name: cell rows} for one NSM card, the ids that matched nothing, and the elements
     ``ELEMENT`` named whose property takes no NSM (CVISC, CBEND, ...: ``"PVISC 7"``)."""
     ids = list(card.ids)
     every = ids == ["ALL"]
-    wanted = None if every else np.asarray(ids, dtype=np.int64)
+    wanted = None if every else np.unique(np.asarray(ids, dtype=np.int64))
     t = card.nsm_type
     out = {}
-    matched = set()
+    found = None if every else np.zeros(len(wanted), dtype=bool)
     skipped = []
     for name, b in blocks.items():
-        if t == "ELEMENT":
-            ok = np.isin(b.ptype, SHELL_PROPS + LINE_PROPS)
-            bad = ~ok if every else ~ok & np.isin(b.eid, wanted)
-            skipped += [f"{p or 'no property'} {e}" for p, e in zip(b.ptype[bad], b.eid[bad])]
-            matched.update(int(e) for e in b.eid[bad])
-            key = np.where(ok, b.eid, -1)
-        elif t == "CONROD":
-            key = np.where(b.ptype == "CONROD", b.eid, -1)
+        if t in ("ELEMENT", "CONROD"):
+            if every:
+                rows = np.arange(len(b.eid))
+            else:
+                rows, hit = b.by_eid.find(wanted)
+            ok = b.takes_nsm[rows] if t == "ELEMENT" else b.ptype[rows] == "CONROD"
+            if t == "ELEMENT":  # named but without NSM: reported, not "missing"
+                bad = rows[~ok]
+                skipped += [f"{p or 'no property'} {e}" for p, e in zip(b.ptype[bad], b.eid[bad])]
+                if not every:
+                    found |= hit
+            elif not every:
+                found[np.isin(wanted, b.eid[rows[ok]])] = True
+            rows = rows[ok]
         else:
-            key = np.where(b.ptype == t, b.pid, -1)
-        if every:
-            mask = key >= 0
-        else:
-            mask = np.isin(key, wanted)
-            matched.update(int(k) for k in np.unique(key[mask]))
-        if mask.any():
-            out[name] = mask
-    missing = [] if every else [i for i in ids if int(i) not in matched]
+            code = b.code(t)
+            if code < 0:
+                continue
+            if every:
+                rows = np.flatnonzero(b.type_code == code)
+            else:
+                rows, hit = b.by_type_pid.find(np.int64(code) << 32 | (wanted & 0xFFFFFFFF))
+                found |= hit
+        if rows.size:
+            out[name] = np.sort(rows)
+    missing = [] if every else [int(i) for i in wanted[~found]]
     return out, missing, skipped
 
 
@@ -198,7 +241,7 @@ def apply(deck: Deck, mesh: dict, override: int | None = None, case_ids: list[in
     leaves = resolve_sets(deck, res.active) if res.active is not None else []
     for sid in leaves:
         info = {"types": [], "mass": 0.0, "count": 0}
-        touched = {n: np.zeros(len(b.eid), dtype=bool) for n, b in blocks.items()}
+        touched = {n: [] for n in blocks}
         for card in model.nsms[sid]:
             t = card.nsm_type
             if t != "ELEMENT" and t not in SHELL_PROPS + LINE_PROPS:
@@ -219,18 +262,18 @@ def apply(deck: Deck, mesh: dict, override: int | None = None, case_ids: list[in
                 if len(targets) > 1:
                     deck.warn(f"{card.type} {sid}: mixes shells and lines; skipped", mass=True)
                     continue
-                (name, mask), = targets.items()
-                total = blocks[name].size[mask].sum()
+                (name, rows), = targets.items()
+                total = blocks[name].size[rows].sum()
                 if total <= 0:
                     deck.warn(f"{card.type} {sid}: elements have zero area/length; skipped", mass=True)
                     continue
                 value /= total
-            for name, mask in targets.items():
+            for name, rows in targets.items():
                 b = blocks[name]
-                b.bulk[mask] += value
-                info["mass"] += float((value * b.size[mask]).sum())
-                touched[name] |= mask
-        info["count"] = int(sum(m.sum() for m in touched.values()))
+                b.bulk[rows] += value  # rows are unique within one card
+                info["mass"] += float((value * b.size[rows]).sum())
+                touched[name].append(rows)
+        info["count"] = sum(len(np.unique(np.concatenate(r))) for r in touched.values() if r)
         res.sets[sid] = info
     for t, n in unsupported.items():
         deck.warn(f"{n} NSM card(s) of type {t} not supported", mass=True)
@@ -247,8 +290,11 @@ def apply(deck: Deck, mesh: dict, override: int | None = None, case_ids: list[in
         vtkutil.add_array(cd, "NSMMass", mass)
         vtkutil.add_array(cd, "NSMSource", source)
         res.property_mass += float((b.prop * b.size).sum())
-        for pid in np.unique(b.pid[mass != 0]):
-            pid_mass[int(pid)] += float(mass[b.pid == pid].sum())
+        upid, inv = np.unique(b.pid, return_inverse=True)
+        per_pid = np.bincount(inv, weights=mass, minlength=len(upid))
+        has_nsm = np.bincount(inv, weights=mass != 0, minlength=len(upid)) > 0
+        for pid, m in zip(upid[has_nsm], per_pid[has_nsm]):
+            pid_mass[int(pid)] += float(m)
     res.pid_mass = dict(sorted(pid_mass.items()))
     return res
 
