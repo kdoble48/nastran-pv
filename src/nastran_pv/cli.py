@@ -103,12 +103,14 @@ def apply_field_options(mb, args) -> list[str]:
 
 
 def add_model_arguments(p, results=True):
+    from .launch import nsm_set_id
+
     p.add_argument("input", help="run deck (.bdf/.dat with INCLUDEs), bulk-data file, or a .vtm written by nastran-pv")
     if results:
         p.add_argument("--results", "--op2", dest="results", help="OP2 or MSC/NX HDF5 (.h5) results to attach")
         p.add_argument("--step", type=int, default=0, help="result step (mode/subcase index) to attach")
     p.add_argument("--k-ref", type=float, default=None, help="bush stiffness reference for log scaling")
-    p.add_argument("--nsm-set", type=int, default=None, metavar="ID",
+    p.add_argument("--nsm-set", type=nsm_set_id, default=None, metavar="ID",
                    help="bulk NSM set to apply (default: Case Control NSM=; 0 = none)")
     p.add_argument("--no-nodal-arrays", action="store_true", help="no SPC_DOF / F_<sid> point arrays on the mesh")
     for flag in BLOCK_FLAGS:

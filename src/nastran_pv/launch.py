@@ -9,6 +9,16 @@ from pathlib import Path
 
 from .locate import find_executable, paraview_scripts_dir
 
+
+def nsm_set_id(text: str) -> int:
+    """argparse type for ``--nsm-set``: a set id, or 0 for none."""
+    import argparse
+
+    value = int(text)
+    if value < 0:
+        raise argparse.ArgumentTypeError("give a set id, or 0 for none (leave it out for Case Control NSM=)")
+    return value
+
 VIEW_NAMES = ("masses", "bushes", "loads", "spc", "rigid", "family", "group", "pid", "mid",
               "elementtype", "thickness", "nsm", "results", "parts", "check", "none")
 
@@ -96,7 +106,7 @@ def add_parsers(sub) -> None:
     v.add_argument("deck")
     v.add_argument("--view", default="pid", choices=VIEW_NAMES)
     v.add_argument("--results", "--op2", dest="results", help="OP2 or MSC HDF5 (.h5) results file")
-    v.add_argument("--nsm-set", type=int, default=None, metavar="ID", help="bulk NSM set (0 = none)")
+    v.add_argument("--nsm-set", type=nsm_set_id, default=None, metavar="ID", help="bulk NSM set (0 = none)")
     v.add_argument("--paraview", help="path to the paraview executable")
     v.add_argument("--dry-run", action="store_true", help="print the command and script instead of launching")
     v.set_defaults(func=cmd_view)
@@ -110,7 +120,7 @@ def add_parsers(sub) -> None:
     r.add_argument("--size", nargs=2, type=int, default=[1600, 1000])
     r.add_argument("--results", "--op2", dest="results")
     r.add_argument("--step", type=int, default=0)
-    r.add_argument("--nsm-set", type=int, default=None, metavar="ID", help="bulk NSM set (0 = none)")
+    r.add_argument("--nsm-set", type=nsm_set_id, default=None, metavar="ID", help="bulk NSM set (0 = none)")
     r.add_argument("--pvpython", help="path to pvpython")
     r.add_argument("--dry-run", action="store_true")
     r.set_defaults(func=cmd_render)

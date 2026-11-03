@@ -180,6 +180,7 @@ class NastranPVReader(VTKPythonAlgorithmBase):
             self.Modified()
 
     @smproperty.intvector(name="NSMSet", default_values=-1)
+    @smdomain.intrange(min=-1)
     def SetNSMSet(self, v):
         """Bulk NSM set to apply: -1 = automatic (Case Control NSM=, or the only set of a bulk-only
         file), 0 = none (property NSM always applies)."""
@@ -831,6 +832,13 @@ class _Traversal:
     def SetStayWithin(self, v):
         """Do not leave the seeds' property, material, family or group (grow and path)."""
         self._set("_within", int(v))
+
+    @smproperty.intvector(name="StayWithinSeedPIDs", default_values=0, panel_visibility="never")
+    def SetStayWithinSeedPIDs(self, v):
+        """Old spelling of StayWithin = seed properties, kept for saved states and scripts. Only 1
+        acts, so a newer state's default 0 does not undo its StayWithin."""
+        if int(v):
+            self._set("_within", _WITHIN.index("pid"))
 
     @smproperty.intvector(name="LimitHops", default_values=0)
     @smdomain.xml('<BooleanDomain name="bool"/>')

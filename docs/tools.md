@@ -101,7 +101,7 @@ Check*. They share these properties, and with *Auto Apply* on they update as you
 | Card Types | A checklist of the card types in the model. Uncheck RBE2/RBE3 to stop at them. |
 | Traverse Shells … Traverse Connectors | Group switches; an element must pass both its group and its card type. |
 | Exclude PIDs | PIDs to leave out, e.g. `7 8`. |
-| Stay Within | *seed properties / materials / families / groups*: Grow and Path never leave them (`within=`). |
+| Stay Within | *seed properties / materials / families / groups*: Grow and Path never leave them (`within=`). States and scripts that set the old `StayWithinSeedPIDs = 1` still get *seed properties*. |
 | Limit Hops, Max Hops | A slider from 0 to 200 element hops. |
 
 The graph is built once per model, so moving the slider or a checkbox only reruns the traversal.

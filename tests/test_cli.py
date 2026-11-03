@@ -124,6 +124,12 @@ def test_stats_by_part(capsys):
     assert capsys.readouterr().out.split()[0] == "PartId"
 
 
+def test_negative_nsm_set_exits(tmp_path, capsys):
+    with pytest.raises(SystemExit):
+        main(["convert", TOPO, "--nsm-set", "-1", "-o", str(tmp_path / "x.vtm")])
+    assert "0 for none" in capsys.readouterr().err
+
+
 def test_bad_rules_exit(tmp_path):
     with pytest.raises(SystemExit, match="max_hops"):
         main(["convert", TOPO, "--parts", "--rules", "max_hops=x", "-o", str(tmp_path / "x.vtm")])

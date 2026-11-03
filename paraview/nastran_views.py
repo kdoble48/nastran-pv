@@ -965,6 +965,8 @@ def hide_reached():
     from nastran_pv.tree import format_ids, parse_ids
 
     reader, eids = reached_eids()
+    if not eids:
+        raise RuntimeError("NPV grow reached no elements.")
     reader.HiddenElements = format_ids(parse_ids(reader.HiddenElements) | eids)
     _refresh(reader)
 
@@ -1035,8 +1037,12 @@ def run_macro(name):
             ACTIONS[name]()
         else:
             apply(name)
-    except Exception as exc:  # shown to the GUI user, not a traceback dump
+    except (RuntimeError, ValueError) as exc:  # what the user should do next, not a traceback dump
         vtkOutputWindow.GetInstance().DisplayErrorText(f"nastran-pv: {exc}\n")
+    except Exception:  # a bug: the traceback is what a report needs
+        import traceback
+
+        vtkOutputWindow.GetInstance().DisplayErrorText(f"nastran-pv: {name} failed:\n{traceback.format_exc()}")
 
 
 def write_color_preset(path, n=256, name="nastran-pv categorical"):

@@ -206,6 +206,17 @@ def tree_checks(pv, nv, reader):
           "grow view draws the reached shells and masses (ExtractBlock uses the tree's assembly)")
     _, eids = nv.reached_eids(reader)
     check(eids == {1, 3, 201, 202, 503}, f"grow GRID 1 within its family -> {sorted(eids)}")
+    grow_src.StayWithin = "anything"
+    _, everything = nv.reached_eids(reader)
+    grow_src.StayWithin = "seed properties"
+    _, by_pid = nv.reached_eids(reader)
+    grow_src.StayWithin = "anything"
+    grow_src.StayWithinSeedPIDs = 1  # the property's name before StayWithin (saved states, scripts)
+    _, legacy = nv.reached_eids(reader)
+    check(legacy == by_pid != everything, f"StayWithinSeedPIDs = 1 is StayWithin = seed properties: "
+                                          f"{sorted(legacy)} vs {sorted(by_pid)}")
+    grow_src.StayWithinSeedPIDs = 0
+    grow_src.StayWithin = "seed families"
     pv.SetActiveSource(reader)
     nv.show_only_reached()
     check(reader.ShowOnlyElements == "1 3 201-202 503" and _cells(reader, "Shells") == 2,
