@@ -37,6 +37,8 @@ grep -n "INCLUDE\|^SOL\|LOAD\s*=\|SPC\s*=" DECK         # is this the run deck, 
 | Reader block missing in a script, `GetNumberOfBlocks` AttributeError | The reader outputs the model tree (a `vtkPartitionedDataSetCollection`), and `Fetch` drops its assembly | `nv.Model(reader)`, or `as_multiblock(nv.fetch(src))`; reader selectors are `/Root/Model/<block>` (`nv.selectors`) |
 | Elements missing in the GUI, but `convert` has them | The reader's visibility lists (Visible Properties/..., Show Only/Hidden Elements) hide them | *NPV Show All* or `nv.show_all(reader)` |
 | Mass lower than Nastran's; "NSM set(s) [...] not selected by Case Control NSM="; "NSM sets [...] defined but none selected" | Bulk NSM/NSML sets apply only when one is selected (Nastran does the same for `NSM=`) | `--nsm-set ID` (reader *NSMSet*); check `ActiveNSMSet`, `BulkNSMMass`; the `nsm` view |
+| Beams view empty, or a beam missing from it; "beam section of PID n not drawn: ..."; "CBAR n: no orientation vector" / "numeric OFFT" | The PID has no usable section (user-defined PBARL group, impossible dimensions, PBAR without area) or the frame failed. CROD/CTUBE/CONROD are never swept | Read the warning; `nastran-pv sections DECK` lists what was computed (docs/beam-sections.md) |
+| A CHAN/L/T section looks shifted off its grids | Expected: the beam line passes through the shear center (MSC/NX convention), not the web or a corner | The orange line is the neutral axis; see the figure in docs/beam-sections.md |
 | VTK XML read fails with a NaN range | An all-NaN array was written | In code: `add_array(..., skip_all_nan=True)` (`extending-nastran-pv`) |
 
 ## Not bugs (known gaps)

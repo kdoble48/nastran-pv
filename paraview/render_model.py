@@ -1,7 +1,7 @@
 """Batch screenshots of a Nastran deck through the nastran-pv reader plugin.
 
     pvpython paraview/render_model.py DECK [--op2 F.op2] [--step N]
-        [--preset masses bushes loads spc rigid family group pid mid thickness elementtype results]
+        [--preset masses bushes beams loads spc rigid family group pid mid thickness elementtype results]
         [--views iso top front side showcase] [--out shots/] [--size 1600 1000]
 
 The presets are the views in ``nastran_views.py`` (also available as GUI

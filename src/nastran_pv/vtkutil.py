@@ -56,6 +56,15 @@ def add_string_array(field_data, name: str, values: Iterable[str]) -> None:
     field_data.AddArray(arr)
 
 
+def match_ids(sorted_ids: np.ndarray, query: np.ndarray) -> np.ndarray:
+    """Index of each ``query`` id in ``sorted_ids`` or -1."""
+    sorted_ids, query = np.asarray(sorted_ids), np.asarray(query)
+    if sorted_ids.size == 0:
+        return np.full(len(query), -1, dtype=np.int64)
+    i = np.minimum(np.searchsorted(sorted_ids, query), len(sorted_ids) - 1)
+    return np.where(sorted_ids[i] == query, i, -1)
+
+
 def make_points(xyz: np.ndarray) -> vtkPoints:
     pts = vtkPoints()
     pts.SetDataTypeToDouble()
@@ -115,6 +124,7 @@ __all__ = [
     "add_string_array",
     "make_cell_array",
     "make_points",
+    "match_ids",
     "polydata",
     "set_field_strings",
     "to_numpy",

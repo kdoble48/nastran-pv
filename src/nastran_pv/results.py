@@ -24,6 +24,7 @@ import numpy as np
 
 from . import vtkutil
 from .assemble import MESH_BLOCKS, block_names, get_block
+from .sections import sweep
 
 
 @dataclass
@@ -168,7 +169,7 @@ def attach_step(results, mb, step_index: int, deck=None) -> None:
         nid_arr = block.GetPointData().GetArray("NID")
         if nid_arr is None:
             continue
-        idx = _match(nids, vtkutil.to_numpy(nid_arr))
+        idx = vtkutil.match_ids(nids, vtkutil.to_numpy(nid_arr))
         vals = np.zeros((len(idx), 6))
         ok = idx >= 0
         vals[ok] = data[idx[ok], :6]
@@ -179,9 +180,12 @@ def attach_step(results, mb, step_index: int, deck=None) -> None:
         eid_arr = block.GetCellData().GetArray("EID")
         block.GetCellData().RemoveArray("VonMisesMax")
         if name in MESH_BLOCKS and len(vm_eids) and eid_arr is not None:
-            j = _match(vm_eids, vtkutil.to_numpy(eid_arr))
+            j = vtkutil.match_ids(vm_eids, vtkutil.to_numpy(eid_arr))
             cell_vm = np.where(j >= 0, vm[np.maximum(j, 0)], np.nan)
             vtkutil.add_array(block.GetCellData(), "VonMisesMax", cell_vm, skip_all_nan=True)
+
+    if "BeamSections" in names and "Lines" in names:
+        sweep.attach_displacement(get_block(mb, "BeamSections"), get_block(mb, "Lines"))
 
     fd = mb.GetFieldData()
     for arr_name in ("ResultLabel", "Frequency", "ResultStep"):
@@ -239,14 +243,6 @@ def to_basic(deck, nids: np.ndarray, data: np.ndarray) -> np.ndarray:
                 data[r, :3] = data[r, :3] @ R
                 data[r, 3:6] = data[r, 3:6] @ R
     return data
-
-
-def _match(sorted_ids: np.ndarray, query: np.ndarray) -> np.ndarray:
-    """Index of each ``query`` id in ``sorted_ids`` or -1."""
-    if sorted_ids.size == 0:
-        return np.full(len(query), -1, dtype=np.int64)
-    i = np.minimum(np.searchsorted(sorted_ids, query), len(sorted_ids) - 1)
-    return np.where(sorted_ids[i] == query, i, -1)
 
 
 def attach_op2(mb, deck, op2_path, step_index: int = 0):

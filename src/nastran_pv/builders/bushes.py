@@ -24,12 +24,7 @@ import numpy as np
 
 from .. import vtkutil
 from ..deck import Deck
-from .common import unit
-
-
-def _perpendicular(x: np.ndarray) -> np.ndarray:
-    trial = np.eye(3)[np.argmin(np.abs(x))]
-    return trial - trial.dot(x) * x
+from .common import element_axes, orientation_vector, perpendicular, unit
 
 
 def _grid(deck: Deck, nid):
@@ -51,21 +46,15 @@ def bush_frame(deck: Deck, elem) -> np.ndarray:
         deck.warn(f"CBUSH {elem.eid}: coincident/grounded without CID; using basic axes")
         return np.eye(3)
     x = unit(gb - ga)
-    if elem.g0 is not None:
-        v = deck.xyz[deck.index([elem.g0])[0]] - ga
-    elif elem.x is not None and any(c is not None for c in elem.x):
-        v = np.array([c or 0.0 for c in elem.x], dtype=float)
-        gidx = deck.index([elem.Ga()])[0]
-        v = deck.vector_to_basic(int(deck.cd[gidx]), v, ga)
-    else:
+    v = orientation_vector(deck, elem, ga)
+    if v is None:
         deck.warn(f"CBUSH {elem.eid}: no orientation vector; y-axis chosen arbitrarily")
-        v = _perpendicular(x)
-    z = np.cross(x, v)
-    if np.linalg.norm(z) < 1e-12:
+        v = perpendicular(x)
+    R = element_axes(x, v)
+    if R is None:
         deck.warn(f"CBUSH {elem.eid}: orientation vector parallel to GA-GB; y-axis chosen arbitrarily")
-        z = np.cross(x, _perpendicular(x))
-    z = unit(z)
-    return np.array([x, np.cross(z, x), z])
+        R = element_axes(x, perpendicular(x))
+    return R
 
 
 def bush_location(deck: Deck, elem) -> np.ndarray:

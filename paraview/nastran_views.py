@@ -5,7 +5,7 @@ upstream of it), hides what else is shown in the active view, and builds or
 reuses named pipeline objects ("NPV ..."), so running a view twice does not
 pile up duplicates. Available views::
 
-    masses  bushes  loads  spc  rigid  family  group  pid  mid  thickness
+    masses  bushes  beams  loads  spc  rigid  family  group  pid  mid  thickness
     nsm  elementtype  results  parts  grow  path  check
 
 ``grow_from_selection`` and ``path_from_selection`` seed the grow and path
@@ -303,6 +303,10 @@ def labels_for(model, array, values):
         return [{0: "none", 1: "property", 2: "bulk", 3: "property + bulk"}.get(v, str(v)) for v in values]
     if array == "Axis":
         return [{0: "ellipsoid", 1: "K1", 2: "K2", 3: "K3"}.get(v, str(v)) for v in values]
+    if array == "BeamPart":
+        from nastran_pv.categories import BEAM_PARTS
+
+        return [BEAM_PARTS[v] if 0 <= v < len(BEAM_PARTS) else str(v) for v in values]
     prefix = {"PID": "PID", "MID": "MID", "DOFCode": "DOF", "SPCSet": "SPC set", "CID": "CID", "CD": "CD"}
     return [f"{prefix[array]} {v}" if array in prefix else str(v) for v in values]
 
@@ -418,6 +422,47 @@ def view_bushes(model, view, size=0.04, ellipsoids=False):
     info_text(model, view, f"{n} CBUSH: arrows along element axes K1/K2/K3\n"
                            f"length ~ log10(1 + K/K_ref), K_ref = {kref[0]:.4g}"
                            "\nColour by Log10Stiffness to compare values")
+
+
+BEAM_PART_RGB = {1: (0.05, 0.05, 0.05), 2: (0.95, 0.55, 0.05), 3: (0.85, 0.12, 0.12),
+                 4: (0.15, 0.65, 0.2), 5: (0.15, 0.3, 0.9)}
+
+
+def view_beams(model, view, triads=None, max_triads=500, scale=0.0):
+    """CBAR/CBEAM sections coloured by PID, with the shear-center (black) and neutral (orange) axes;
+    triads when there are at most ``max_triads`` beams. Undeformed, like the ghost mesh, unless
+    ``scale`` (the filter's DeformationScale) is given."""
+    ghost_mesh(model, view)
+    axis2 = model.array("Lines", "Axis2", "cell")
+    pids = model.field("SECTION_PID")
+    n = int(np.isfinite(axis2[:, 0]).sum()) if axis2 is not None else 0
+    if not n or pids is None:
+        info_text(model, view, "No CBAR/CBEAM with a section (PBARL, PBEAML, PBAR, PBEAM) in this deck.")
+        return
+    sections = _named(model, "beam sections", lambda: pv.NastranBeamSections(Input=model.reader))
+    sections.ShowSections, sections.ShowAxes, sections.ShowTriads = 1, 0, 0
+    sections.DeformationScale = scale
+    d = pv.Show(sections, view)
+    values = sorted({int(p) for p in pids})
+    categorical(d, "PID", values, labels_for(model, "PID", values), view=view)
+    triads = n <= max_triads if triads is None else triads
+    axes = _named(model, "beam axes", lambda: pv.NastranBeamSections(Input=model.reader))
+    axes.ShowSections, axes.ShowAxes, axes.ShowTriads = 0, 1, int(triads)
+    axes.DeformationScale = scale
+    ad = pv.Show(axes, view)
+    parts = [1, 2] + ([3, 4, 5] if triads else [])
+    categorical(ad, "BeamPart", parts, labels_for(model, "BeamPart", parts),
+                [BEAM_PART_RGB[p] for p in parts], view=view)
+    ad.LineWidth = 2.0
+    ad.SetScalarBarVisibility(view, False)
+    equivalent = model.field("SECTION_Equivalent")
+    eq = int(np.sum(equivalent > 0)) if equivalent is not None else 0
+    lines = [f"{n} CBAR/CBEAM, {len(values)} section PID(s)"
+             + (f"; {eq} PBAR/PBEAM station(s) drawn as equivalent rectangles" if eq else ""),
+             "black: shear-center axis (beam line)   orange: neutral axis"]
+    if scale:
+        lines.append(f"Deformation x{scale:.3g}")
+    info_text(model, view, "\n".join(lines))
 
 
 def view_loads(model, view):
@@ -982,7 +1027,7 @@ def show_only_material():
 
 
 VIEWS = {
-    "masses": view_masses, "bushes": view_bushes, "loads": view_loads, "spc": view_spc,
+    "masses": view_masses, "bushes": view_bushes, "beams": view_beams, "loads": view_loads, "spc": view_spc,
     "rigid": view_rigid, "family": view_family, "group": view_group, "pid": view_pid,
     "mid": view_mid, "elementtype": view_elementtype, "thickness": view_thickness, "nsm": view_nsm,
     "results": view_results, "parts": view_parts, "grow": view_grow, "path": view_path, "check": view_check,

@@ -50,7 +50,7 @@ def unit_arrow(resolution: int = 12):
     return _template(a)  # along +x, from 0 to 1
 
 
-def _instance(templates, mats, origins):
+def instance(templates, mats, origins):
     """Place one template per (3x3 matrix, origin): p' = origin + M p."""
     pts, polys, nrm = templates
     n, m = len(mats), len(pts)
@@ -161,7 +161,7 @@ def mass_glyphs(masses: vtkPolyData, diag: float, mode: str = "auto", relative: 
     has = vtkutil.to_numpy(has).astype(bool) if has is not None else None
     mats, used, text, glyph_r = mass_glyph_matrices(tensors, radius, mass, has, diag, mode, relative, law, minimum)
     tmpl = unit_sphere(resolution)
-    xyz, conn, ntri, normals = _instance(tmpl, mats, centres)
+    xyz, conn, ntri, normals = instance(tmpl, mats, centres)
     out = _polydata(xyz, conn, ntri, n, normals)
     per = len(tmpl[0])
     _repeat_point_arrays(masses, out, per, ("Mass", "EID", "NID", "MassScale", "EquivalentRadius", "HasInertia"))
@@ -172,7 +172,7 @@ def mass_glyphs(masses: vtkPolyData, diag: float, mode: str = "auto", relative: 
 
 
 # --------------------------------------------------------------------- bushes
-def _frame_from_x(x: np.ndarray) -> np.ndarray:
+def frame_from_x(x: np.ndarray) -> np.ndarray:
     """3x3 matrix with columns (x, y, z) where x is the given unit vector."""
     trial = np.eye(3)[np.argmin(np.abs(x))]
     y = trial - trial.dot(x) * x
@@ -207,7 +207,7 @@ def bush_glyphs(bushes: vtkPolyData, diag: float, size: float = 0.04, triad: boo
             d = vtkutil.to_numpy(pd.GetArray(f"K{i + 1}dir"))
             mag = np.linalg.norm(d, axis=1)
             for b in np.nonzero(mag > 0)[0]:
-                frame = _frame_from_x(d[b] / mag[b])
+                frame = frame_from_x(d[b] / mag[b])
                 # scale x by the arrow length, y/z by a constant width
                 mats.append(frame @ np.diag([length * mag[b], length, length]))
                 origins.append(loc[b])
@@ -215,7 +215,7 @@ def bush_glyphs(bushes: vtkPolyData, diag: float, size: float = 0.04, triad: boo
                 stiff.append(K[b, i])
                 eids.append(eid[b])
         if mats:
-            xyz, conn, ntri, normals = _instance(arrow, np.array(mats), np.array(origins))
+            xyz, conn, ntri, normals = instance(arrow, np.array(mats), np.array(origins))
             pieces.append((xyz, conn, ntri, normals, len(mats)))
     ell_count = 0
     if ellipsoid:
@@ -225,7 +225,7 @@ def bush_glyphs(bushes: vtkPolyData, diag: float, size: float = 0.04, triad: boo
         w, v = np.linalg.eigh(tensors)
         w = np.clip(w, 0.05, None) * 0.5 * length
         mats_e = np.einsum("nij,nj,nkj->nik", v, w, v)
-        xyz, conn, ntri, normals = _instance(sphere, mats_e, loc)
+        xyz, conn, ntri, normals = instance(sphere, mats_e, loc)
         pieces.append((xyz, conn, ntri, normals, n))
         ell_count = n
         axis_id += [0] * n

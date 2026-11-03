@@ -72,6 +72,7 @@ summary. Running a view again reuses its pipeline objects, which are named `NPV 
 |---|---|
 | NPV Masses | Mass ellipsoids from mass and inertia, colored by mass; grid→CG offsets; model CG marker; total mass |
 | NPV Bushes | CBUSH stiffness triads (K1/K2/K3 arrows, length ~ log stiffness) and GA–GB lines |
+| NPV Beams | CBAR/CBEAM cross sections swept along the beams, colored by PID, with the shear-center axis (black), neutral axis (orange) and, up to 500 beams, x/y/z triads; undeformed like the ghost mesh (`nv.apply("beams", scale=10)` or the filter's *DeformationScale* deforms it; [Beam sections](beam-sections.md)) |
 | NPV Loads | Force arrows for the active LOAD set, scaled by magnitude (at most 1,500 arrows, every Nth loaded grid, on large models); resultant force |
 | NPV SPC | Constrained grids colored by DOF code |
 | NPV Rigid | RBE2/RBE3/... spider legs by type |
@@ -97,7 +98,7 @@ from `render_model.py`, and as `nastran-pv render` presets (see [CLI](cli.md#bat
 
 ## Glyph filters
 
-*Filters > Nastran* adds two filters you can apply to the reader by hand:
+*Filters > Nastran* adds three filters you can apply to the reader by hand:
 
 * **Nastran Mass Glyphs** builds one ellipsoid per concentrated mass. Its sizing controls:
   - *SizeMode*:
@@ -120,6 +121,12 @@ from `render_model.py`, and as `nastran-pv render` presets (see [CLI](cli.md#bat
 * **Nastran Bush Glyphs** builds arrows along each CBUSH's element axes, with lengths
   proportional to `log10(1+Kᵢ/K_ref)`, and optional log-stiffness ellipsoids. Cell arrays
   `Axis`, `Stiffness`, `Log10Stiffness` and `EID` are available for coloring.
+* **Nastran Beam Sections** sweeps each CBAR/CBEAM's cross section along it (see
+  [Beam sections](beam-sections.md)). *ShowSections*, *ShowAxes* (shear-center and neutral axes) and
+  *ShowTriads* (x/y/z arrows, *TriadSize* × model diagonal) pick the parts; the `BeamPart` cell array
+  tells them apart. *DeformationScale* (0 = undeformed) moves the sections rigidly with the end
+  grids' displacement and rotation at the current time step. The output follows the reader's
+  visibility checklists and hidden elements.
 
 The field filters (*Nastran Derived Fields*, *Nastran Map Table*, *Nastran Group Stats*) are
 described in [Fields](fields.md#paraview-filters).

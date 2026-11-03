@@ -25,6 +25,9 @@ def test_demo_deck_contents(tmp_path):
     assert m.sol == 103 and 1 in m.methods
     assert m.params["POST"].values == [-1]
     assert sorted(m.nsms) == [11, 12] and m.nsmadds[10][0].sets == [11, 12]
+    bars = [e for e in m.elements.values() if e.type == "CBAR"]
+    assert len(bars) == 2 * 12 + 2 * 8  # two stringers along x, two rails along y
+    assert sorted({m.properties[b.pid].Type for b in bars}) == ["CHAN", "I"]
     cid10 = m.coords[10]
     np.testing.assert_allclose(cid10.i, [np.cos(np.radians(30)), np.sin(np.radians(30)), 0], atol=1e-9)
 

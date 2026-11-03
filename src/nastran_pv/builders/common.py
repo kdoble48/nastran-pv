@@ -1,6 +1,7 @@
 """Shared helpers for the element-mesh builders."""
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -112,3 +113,38 @@ def compact_mesh(deck: Deck, table: CellTable):
 def unit(v: np.ndarray) -> np.ndarray:
     n = np.linalg.norm(v, axis=-1, keepdims=True)
     return np.divide(v, n, out=np.zeros_like(v), where=n > 0)
+
+
+def perpendicular(x: np.ndarray) -> np.ndarray:
+    trial = np.eye(3)[np.argmin(np.abs(x))]
+    return trial - trial.dot(x) * x
+
+
+def orientation_vector(deck: Deck, elem, ga_xyz: np.ndarray, basic: bool = False) -> np.ndarray | None:
+    """The v-vector of a CBUSH/CBAR/CBEAM in basic: GA->G0, or X in the displacement system of GA
+    (``basic=True``: X is already basic, OFFT 'B..'). None when neither is given."""
+    if elem.g0 is not None:
+        return deck.xyz[deck.index([elem.g0])[0]] - ga_xyz
+    if elem.x is not None and any(c is not None for c in elem.x):
+        v = np.array([c or 0.0 for c in elem.x], dtype=float)
+        if basic:
+            return v
+        return deck.vector_to_basic(int(deck.cd[deck.index([elem.Ga()])[0]]), v, ga_xyz)
+    return None
+
+
+def _cross(a, b) -> tuple[float, float, float]:
+    return a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]
+
+
+def element_axes(x: np.ndarray, v: np.ndarray) -> np.ndarray | None:
+    """Rows (x, y, z): x (unit) along the element, v in the x-y plane, z = x × v. None if v ∥ x.
+
+    Plain-float arithmetic: called once per beam, where numpy's per-call overhead dominates."""
+    x, v = [float(c) for c in x], [float(c) for c in v]
+    z = _cross(x, v)
+    nz, nv = math.sqrt(sum(c * c for c in z)), math.sqrt(sum(c * c for c in v))
+    if nz < 1e-12 * max(nv, 1e-300):
+        return None
+    z = [c / nz for c in z]
+    return np.array([x, _cross(z, x), z])

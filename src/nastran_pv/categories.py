@@ -14,6 +14,8 @@ ELEMENT_TYPES = [
 RIGID_TYPES = ["RBE2", "RBE3", "RBAR", "RBAR1", "RROD", "RBE1", "RTRPLT", "RTRPLT1", "RSPLINE", "RSSCON"]
 CONNECTOR_TYPES = ["MPC", "CELAS1", "CELAS2", "CDAMP1", "CDAMP2", "CGAP", "CFAST"]
 BUSH_AXES = ["ellipsoid", "K1", "K2", "K3"]  # Axis cell array of the bush glyphs
+# BeamPart cell array of the swept beam sections (nastran_pv.sections.sweep)
+BEAM_PARTS = ["section", "shear-center axis", "neutral axis", "x axis", "y axis", "z axis"]
 
 
 def code_of(table: list[str], name: str) -> int:

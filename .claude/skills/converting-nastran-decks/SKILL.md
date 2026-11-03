@@ -40,6 +40,7 @@ deck parsing, which is much faster on large models.
 | Connected parts, and what joins them | `--parts --rules "exclude=rigid"` → `PartId`, `PART_*`, `LINK_*` (docs/tools.md) |
 | Everything connected to an element | `--grow "EID 1001" [--rules ...]` → `Hops` |
 | Model sanity (free edges, coincident grids, duplicates, dangling RBEs, floating parts) | `nastran-pv check DECK [--strict]` |
+| Beam section properties per PID (A, I1, I2, J, shear center vs card), swept CBAR/CBEAM sections | `nastran-pv sections DECK [--csv F]`; `convert DECK --beam-sections` (docs/beam-sections.md) |
 | External data per element/property | `--map FILE KEY` (CSV/TSV/JSON/xlsx/SQLite/SQLAlchemy URL; KEY = EID PID MID NID FAMILY GROUP) |
 
 ## Reading the result

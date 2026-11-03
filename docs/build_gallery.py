@@ -29,7 +29,7 @@ ZIP = ROOT / "build" / "gallery-assets.zip"
 RELEASE = "gallery-assets"
 SCENE_WARN_BYTES = 3_000_000
 MODEL_ORDER = ["ucrm9", "demo"]
-VIEW_ORDER = ["masses", "bushes", "loads", "spc", "rigid", "family", "group", "pid", "mid",
+VIEW_ORDER = ["masses", "bushes", "beams", "loads", "spc", "rigid", "family", "group", "pid", "mid",
               "elementtype", "thickness", "nsm", "grow", "parts", "check", "results"]
 UCRM9_CREDIT = ("uCRM-9 wingbox, coarse mesh: Brooks, Kenway and Martins, *Benchmark Aerostructural Models "
                 "for the Study of Transonic Aircraft Wings*, AIAA Journal 56(7), 2018. Data: "
@@ -65,7 +65,7 @@ def build_models(ucrm9, demo_bdf, demo_op2) -> list[dict]:
                                  "elementtype", "thickness", "grow", "parts"], "credit": UCRM9_CREDIT,
                        "view_args": view_args,
                        "reproduce": model_tools_reproduce(Path(ucrm9).name, view_args)})
-    views = ["bushes", "masses", "nsm", "check"] + (["results"] if demo_op2 else [])
+    views = ["bushes", "beams", "masses", "nsm", "check"] + (["results"] if demo_op2 else [])
     models.append({"id": "demo", "title": "Demo: tray on four isolators", "deck": str(demo_bdf),
                    "results": str(demo_op2) if demo_op2 else None, "views": views, "credit": DEMO_CREDIT})
     return models

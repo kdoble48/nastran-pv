@@ -143,6 +143,58 @@ def _select(pv, reader, query):
     pv.QuerySelect(QueryString=query, FieldType="CELL", InsideOut=False)
 
 
+def beam_checks(pv, nv, view, tmp):
+    """Nastran Beam Sections filter on tests/data/beams.bdf: sweep, tree visibility, deformation, view."""
+    from paraview import servermanager
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    from op2_fixture import make_op2
+
+    beams = rm.load_reader(os.path.join(HERE, "data", "beams.bdf"))
+    bs = pv.NastranBeamSections(Input=beams)
+    bs.UpdatePipeline()
+    # 392 = 6 BARs x 8 + taper 12 + PBAR/PBEAM 16 + CHAN 28 + TUBE 288 (see test_beam_sections.SWEPT_CELLS)
+    check(bs.GetDataInformation().GetNumberOfCells() == 392, "Nastran Beam Sections: 392 swept cells")
+    beams.HiddenElements = "1"  # a BAR: 4 walls + 2 x 2 cap triangles
+    bs.UpdatePipeline()
+    check(bs.GetDataInformation().GetNumberOfCells() == 384, "hidden EID 1 drops its 8 section cells")
+    nv.show_all(beams)
+    bs.ShowSections, bs.ShowAxes, bs.ShowTriads = 0, 1, 1
+    bs.UpdatePipeline()
+    parts = vtk_to_numpy(servermanager.Fetch(bs).GetCellData().GetArray("BeamPart"))
+    check(set(parts.tolist()) == {1, 2, 3, 4, 5}, f"axes and triads: BeamPart {sorted(set(parts.tolist()))}")
+    op2_path = os.path.join(tmp, "beams.op2")
+    make_op2().write_op2(op2_path)  # T3 = 0.1 * NID for grids 1-7
+    beams.OP2FileName = op2_path
+    beams.UpdatePipelineInformation()
+    bs.ShowSections, bs.ShowAxes, bs.ShowTriads = 1, 0, 0
+    bs.DeformationScale = 10.0
+    bs.UpdatePipeline(rm.timesteps(beams)[0])
+    out = servermanager.Fetch(bs)
+    ga = vtk_to_numpy(out.GetPointData().GetArray("GA"))
+    t = vtk_to_numpy(out.GetPointData().GetArray("StationT"))
+    z = vtk_to_numpy(out.GetPoints().GetData())[:, 2]
+    u = vtk_to_numpy(out.GetPointData().GetArray("Displacement"))[:, 2]
+    on1 = ga == 1  # EID 1: z in [-1, 1] undeformed, lifted by 10 x (0.1 + 0.1 t)
+    check(np.allclose(u[on1], 0.1 + 0.1 * t[on1], atol=1e-6)
+          and np.isclose(z[on1 & (t == 1)].max(), 1 + 10 * 0.2, atol=1e-5),
+          "deformation scale moves the sections with the end grids")
+    demo = rm.load_reader(os.path.join(HERE, "..", "docs", "models", "demo.bdf"))
+    ds = pv.NastranBeamSections(Input=demo)  # Shells come before Lines: the filter must not take them
+    ds.UpdatePipeline()
+    check(ds.GetDataInformation().GetNumberOfCells() > 0, "beam sections on the demo (shells + bars)")
+    pv.Delete(ds)
+    pv.Delete(demo)
+    pv.SetActiveSource(beams)
+    model = nv.apply("beams", reader=beams, view=view)
+    text = pv.FindSource(nv._name(model, "info")).Text
+    check("12 CBAR/CBEAM, 6 section PID(s)" in text and "4 PBAR/PBEAM station(s)" in text
+          and "Deformation" not in text, f"beams view text: {text!r}")
+    nv.apply("beams", reader=beams, view=view, scale=5.0)
+    check(pv.FindSource(nv._name(model, "beam sections")).DeformationScale == 5.0, "beams view scale=")
+    beams.OP2FileName = ""
+
+
 def tree_checks(pv, nv, reader):
     """Model tree output, Femap-style visibility checklists and the selection commands."""
     data = nv.fetch(reader)
@@ -288,6 +340,9 @@ def main():
     for name in nv.VIEWS:
         nv.apply(name, reader=reader, view=view)
     check(True, f"all views build: {', '.join(nv.VIEWS)}")
+    with tempfile.TemporaryDirectory() as tmp:
+        beam_checks(pv, nv, view, tmp)
+    pv.SetActiveSource(reader)
     nsm_reader = rm.load_reader(os.path.join(HERE, "data", "nsm.bdf"))
     nmodel = nv.apply("nsm", reader=nsm_reader, view=view)
     ntext = pv.FindSource(nv._name(nmodel, "info")).Text

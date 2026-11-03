@@ -29,6 +29,8 @@ VIEW_INFO = {
                          "model CG marker."),
     "bushes": ("Bushes", "CBUSH stiffness triads: K1/K2/K3 arrows along the element axes, length ~ log "
                          "stiffness, with GA–GB lines."),
+    "beams": ("Beams", "CBAR/CBEAM cross sections swept along the beams (PBARL/PBEAML shapes, PBAR/PBEAM "
+                       "equivalent rectangles), colored by PID, with the shear-center and neutral axes."),
     "loads": ("Loads", "Force arrows for the active LOAD set, scaled by magnitude; resultant force."),
     "spc": ("SPC", "Constrained grids colored by DOF code."),
     "rigid": ("Rigid", "RBE2/RBE3 spider legs by type."),
