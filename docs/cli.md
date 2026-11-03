@@ -31,6 +31,24 @@ nastran-pv convert run.bdf --no-loads --k-ref 1e5 -o out/model.vtm
 `view` and `render` take it too. An output ending in `.vtkhdf`, or
 `--format vtkhdf`, writes VTKHDF instead (see [Output formats](output-formats.md)).
 
+### Progress
+
+Every command that reads a deck reports its progress on stderr. That covers each file as it opens
+(INCLUDEs too), a live card count while pyNastran parses, then cross-referencing, each block and
+the write. Each stage that takes half a second or more leaves one timed line:
+
+```text
+[   0.0s] reading run_uCRM-9_static_cruise_fine.bdf
+[   0.5s] read 6 file(s), 251,989 cards: 0.5s
+[   2.1s] parsed 251,989 cards: 1.7s
+[   3.9s] writing vtm: 0.5s
+```
+
+On a terminal, the current stage is rewritten in place. When stderr is redirected, counters print
+every 5 s instead. Stdout (the block summary and the tables) is unchanged. `-q`/`--quiet` turns
+the progress off, and `-v`/`--verbose` also echoes pyNastran's warnings as they come. In
+ParaView, the same stages and card counts drive the reader's progress bar.
+
 ## Beam sections
 
 ```bash

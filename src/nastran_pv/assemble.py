@@ -20,6 +20,7 @@ from .deck import Deck
 from .families import element_families
 from . import nsm
 from .massprops import element_mass, totals
+from .progress import NULL, Progress
 from .materials import COLUMNS, material_table
 from .sections import beams, sweep
 
@@ -97,70 +98,88 @@ def get_block(mb: vtkMultiBlockDataSet, name: str):
     return None
 
 
-def build_multiblock(deck: Deck, opts: Options | None = None) -> vtkMultiBlockDataSet:
+def _add_nodal_arrays(deck, mesh, opts, spc, active_spc, lsets, active_loads) -> None:
+    """SPC_DOF and F_<sid>/M_<sid> point arrays on each mesh block."""
+    nodal = {}
+    if spc:
+        nodal["SPC_DOF"] = nodal_spc_mask(deck, spc, active_spc)
+    chosen = [s for s in active_loads if s in lsets]
+    chosen += [s for s in sorted(lsets) if s not in chosen]
+    for sid in chosen[: opts.max_nodal_load_sets]:
+        if not (lsets[sid].force or lsets[sid].moment):
+            continue
+        F, M = nodal_load_arrays(deck, lsets[sid])
+        nodal[f"F_{sid}"] = F
+        if np.any(M):
+            nodal[f"M_{sid}"] = M
+    for ug in mesh.values():
+        if ug is None:
+            continue
+        nid = vtkutil.to_numpy(ug.GetPointData().GetArray("NID"))
+        gidx = deck.index(nid)
+        for name, values in nodal.items():
+            vtkutil.add_array(ug.GetPointData(), name, values[gidx])
+
+
+def build_multiblock(deck: Deck, opts: Options | None = None, progress: Progress = NULL) -> vtkMultiBlockDataSet:
     opts = opts or Options()
     model = deck.model
     blocks = _Blocks()
+    step = progress.stage
 
     mesh = {}
     if opts.shells:
-        mesh["Shells"] = build_shells(deck, element_families(model.elements))
+        with step("Shells"):
+            mesh["Shells"] = build_shells(deck, element_families(model.elements))
     if opts.lines:
-        mesh["Lines"] = build_lines(deck)
+        with step("Lines"):
+            mesh["Lines"] = build_lines(deck)
     if opts.solids:
-        mesh["Solids"] = build_solids(deck)
+        with step("Solids"):
+            mesh["Solids"] = build_solids(deck)
 
-    spc = spc_sets(deck) if (opts.constraints or opts.nodal_arrays) else {}
+    with step("SPC and load sets"):
+        spc = spc_sets(deck) if (opts.constraints or opts.nodal_arrays) else {}
+        lsets = load_sets(deck) if (opts.loads or opts.nodal_arrays) else {}
     active_spc = case_control_ids(model, "SPC")
-    lsets = load_sets(deck) if (opts.loads or opts.nodal_arrays) else {}
     active_loads = case_control_ids(model, "LOAD")
 
     if opts.nodal_arrays:
-        nodal = {}
-        if spc:
-            nodal["SPC_DOF"] = nodal_spc_mask(deck, spc, active_spc)
-        chosen = [s for s in active_loads if s in lsets]
-        chosen += [s for s in sorted(lsets) if s not in chosen]
-        for sid in chosen[: opts.max_nodal_load_sets]:
-            if not (lsets[sid].force or lsets[sid].moment):
-                continue
-            F, M = nodal_load_arrays(deck, lsets[sid])
-            nodal[f"F_{sid}"] = F
-            if np.any(M):
-                nodal[f"M_{sid}"] = M
-        for ug in mesh.values():
-            if ug is None:
-                continue
-            nid = vtkutil.to_numpy(ug.GetPointData().GetArray("NID"))
-            gidx = deck.index(nid)
-            for name, values in nodal.items():
-                vtkutil.add_array(ug.GetPointData(), name, values[gidx])
+        with step("nodal SPC/load arrays"):
+            _add_nodal_arrays(deck, mesh, opts, spc, active_spc, lsets, active_loads)
 
-    nsm_info = nsm.apply(deck, mesh, opts.nsm_set, case_control_ids(model, "NSM"))
+    with step("nonstructural mass"):
+        nsm_info = nsm.apply(deck, mesh, opts.nsm_set, case_control_ids(model, "NSM"))
 
     for name in MESH_BLOCKS:
         blocks.add(name, mesh.get(name))
 
     mass_info = (None, None)
     if opts.masses:
-        mass_info = build_masses(deck)
+        with step("Masses"):
+            mass_info = build_masses(deck)
         blocks.add("Masses", mass_info[0])
         blocks.add("MassOffsets", mass_info[1])
     if opts.rigid:
-        blocks.add("Rigid", build_rigid(deck))
+        with step("Rigid"):
+            blocks.add("Rigid", build_rigid(deck))
     if opts.connectors:
-        blocks.add("Connectors", build_connectors(deck))
+        with step("Connectors"):
+            blocks.add("Connectors", build_connectors(deck))
     if opts.bushes:
-        pts, lines = build_bushes(deck, opts.k_ref)
+        with step("Bushes"):
+            pts, lines = build_bushes(deck, opts.k_ref)
         blocks.add("Bushes", pts)
         blocks.add("BushLines", lines)
     if opts.constraints and spc:
-        blocks.add("Constraints", build_constraints(deck, spc))
+        with step("Constraints"):
+            blocks.add("Constraints", build_constraints(deck, spc))
     if opts.loads and lsets:
         loads = _Blocks()
-        for sid in sorted(lsets):
-            ls = lsets[sid]
-            loads.add(f"{'LOAD' if ls.combined else 'SID'}_{sid}", build_load_block(deck, ls))
+        with step("Loads"):
+            for sid in sorted(lsets):
+                ls = lsets[sid]
+                loads.add(f"{'LOAD' if ls.combined else 'SID'}_{sid}", build_load_block(deck, ls))
         if loads.mb.GetNumberOfBlocks():
             blocks.add("Loads", loads.mb)
 
@@ -171,7 +190,8 @@ def build_multiblock(deck: Deck, opts: Options | None = None) -> vtkMultiBlockDa
     vtkutil.add_array(fd, "WTMASS", np.array([deck.wtmass]))
     vtkutil.add_array(fd, "ActiveSPCSets", np.array(active_spc or [-1]))
     vtkutil.add_array(fd, "ActiveLoadSets", np.array(active_loads or [-1]))
-    elem = [element_mass(ug, name) for name, ug in mesh.items() if ug is not None]
+    with step("element masses"):
+        elem = [element_mass(ug, name) for name, ug in mesh.items() if ug is not None]
     struct_parts = [(m, c) for m, c, _ in elem]
     conc_parts = []
     if mass_info[0] is not None:
@@ -199,9 +219,10 @@ def build_multiblock(deck: Deck, opts: Options | None = None) -> vtkMultiBlockDa
         vtkutil.add_string_array(fd, "MAT_Type", mats["Type"])
     lines = mesh.get("Lines")
     if lines is not None:
-        pids = vtkutil.to_numpy(lines.GetCellData().GetArray("PID"))[sweep.has_frame(lines)]
-        beams.write_section_tables(mb, *beams.section_rows(deck, pids))
-        if opts.beam_sections:
-            add_beam_sections(mb)
+        with step("beam sections"):
+            pids = vtkutil.to_numpy(lines.GetCellData().GetArray("PID"))[sweep.has_frame(lines)]
+            beams.write_section_tables(mb, *beams.section_rows(deck, pids))
+            if opts.beam_sections:
+                add_beam_sections(mb)
     vtkutil.add_string_array(fd, "Warnings", deck.warnings)
     return mb

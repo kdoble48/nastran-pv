@@ -96,7 +96,7 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   `common.CellTable` → `compact_mesh`. `categories.py` holds the *global* ElementType and RigidType
   code tables; codes must be consistent across blocks for indexed LUTs.
 - `assemble.py`: runs the builders according to `Options` and copies nodal SPC/load arrays onto the
-  mesh blocks. It adds root field data: masses from `massprops.py` (VTK cell sizes; never
+  mesh blocks. It adds root field data: masses from `massprops.py` (numpy volumes for linear solids, VTK cell sizes otherwise; never
   pyNastran's slow `mass_properties`) and a `MAT_*` material table from `materials.py`. Derived
   fields therefore need no deck.
 - `nsm.py`: property NSM plus the NSM/NSM1/NSML/NSML1/NSMADD set selected by `--nsm-set`/`NSM=` →
@@ -141,6 +141,10 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
 - `cli.py`: the `convert`, `stats`, `check`, `sections` and `store` commands, with shared field options.
   `launch.py` provides `view`, `render` and `setup`, and `locate.py` finds the ParaView executables
   and the repo's `paraview/` folder.
+- `progress.py`: stderr stages and throttled counters (`Progress`, silent `NULL`). `load_deck` hooks
+  pyNastran's include opener and the model's `add_card` only for the read and removes the hooks
+  afterward. The CLI's `-q` disables it; the reader passes a callback that drives ParaView's
+  progress bar.
 - `glyphs.py`: mass ellipsoids and bush triads as real `vtkPolyData`.
 - `paraview/nastran_bdf_reader.py`: one plugin file containing the reader, three glyph filters
   (masses, bushes, beam sections), three field filters and four topology filters (grow, parts,

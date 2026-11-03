@@ -48,8 +48,10 @@ The [field options](fields.md) add further arrays on top of these.
 * **Bushes.** Element axes follow the CBUSH rules: CID, or GA→GB plus the X/G0 orientation vector.
   `K{i}dir` is axis *i* scaled by `log10(1+Kᵢ/K_ref)`, normalized to [0, 1], so three arrow glyphs
   compare stiffnesses across decades. `K_ref` defaults to the softest translational stiffness.
-* **Mass.** Element masses come from VTK cell sizes:
-  - solids: volume × density
+* **Mass.** Element masses come from cell sizes:
+  - solids: volume × density. Linear tets, hexes, wedges and pyramids are computed in numpy (each
+    face fanned to its centroid, which is exact for a trilinear hex, warped faces included); other
+    solids use VTK's cell size filter
   - shells: area × structural mass per area (`MassPerArea`: all plies, with `LAM=SYM` expanded)
   - lines: length × area × density
 

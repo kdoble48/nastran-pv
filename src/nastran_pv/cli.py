@@ -24,6 +24,7 @@ import time
 from pathlib import Path
 
 from .assemble import Options, add_beam_sections, block_names, build_multiblock, get_block
+from .progress import Progress
 from .vtkio import read_vtm, write_series, write_vtm
 
 BLOCK_FLAGS = ("shells", "lines", "solids", "masses", "rigid", "connectors", "bushes", "constraints", "loads")
@@ -43,30 +44,42 @@ def summarize(mb) -> list[str]:
     return lines
 
 
+def progress_for(args) -> Progress:
+    """The command's stderr progress reporter (silent with -q), shared by its stages."""
+    if getattr(args, "_progress", None) is None:
+        args._progress = Progress(enabled=not getattr(args, "quiet", False))
+    return args._progress
+
+
 def load_model(args, verbose=False):
     """Deck or .vtm -> (multiblock, deck or None, results or None)."""
     from .deck import load_deck
 
+    progress = progress_for(args)
     src = Path(args.input)
     if src.suffix.lower() == ".vtm":
         if getattr(args, "results", None):
             raise SystemExit("--results needs a deck input (a .vtm has no deck to rotate CD systems)")
-        mb = read_vtm(src)
+        with progress.stage(f"reading {src.name}"):
+            mb = read_vtm(src)
         if getattr(args, "beam_sections", False):
             add_beam_sections(mb)
+        progress.done()
         return mb, None, None
-    deck = load_deck(src, echo=verbose)
+    deck = load_deck(src, echo=verbose, progress=progress)
     opts = Options(k_ref=getattr(args, "k_ref", None), nodal_arrays=not getattr(args, "no_nodal_arrays", False),
                    nsm_set=getattr(args, "nsm_set", None), beam_sections=getattr(args, "beam_sections", False))
     for flag in BLOCK_FLAGS:
         if getattr(args, f"no_{flag}", False):
             setattr(opts, flag, False)
-    mb = build_multiblock(deck, opts)
+    mb = build_multiblock(deck, opts, progress=progress)
     results = None
     if getattr(args, "results", None):
         from .results import attach_op2
 
-        results = attach_op2(mb, deck, args.results, args.step)
+        with progress.stage(f"results {Path(args.results).name}"):
+            results = attach_op2(mb, deck, args.results, args.step)
+    progress.done()
     return mb, deck, results
 
 
@@ -129,7 +142,12 @@ def add_model_arguments(p, results=True):
     p.add_argument("--parts", action="store_true", help="PartId per cell and grid, PART_*/LINK_* tables (see --rules)")
     p.add_argument("--grow", metavar="SEEDS", help='Hops from seeds, e.g. "EID 1001; GRID 55; PID 7" (see --rules)')
     p.add_argument("--rules", metavar="TEXT", help='traversal rules, e.g. "exclude=rigid,CBUSH max_hops=5"')
+    add_common_arguments(p)
+
+
+def add_common_arguments(p):
     p.add_argument("-v", "--verbose", action="store_true", help="echo pyNastran warnings")
+    p.add_argument("-q", "--quiet", action="store_true", help="no progress lines on stderr")
 
 
 def _fmt(v):
@@ -180,8 +198,12 @@ def cmd_convert(args) -> int:
     t0 = time.perf_counter()
     mb, deck, results = load_model(args, args.verbose)
     t1 = time.perf_counter()
-    notes = apply_field_options(mb, args)
-    path = write_output(mb, args, deck, results)
+    progress = progress_for(args)
+    with progress.stage("fields"):
+        notes = apply_field_options(mb, args)
+    with progress.stage(f"writing {output_format(args)}"):
+        path = write_output(mb, args, deck, results)
+    progress.done()
     t2 = time.perf_counter()
     print(f"{Path(args.input).name}: load+build {t1 - t0:.1f}s, fields+write {t2 - t1:.1f}s -> {path}")
     if results is not None:
@@ -338,7 +360,7 @@ def main(argv=None) -> int:
                                                              "DuplicateElements DanglingConnectors FloatingParts")
     k.add_argument("-o", "--output", help="write the findings as a .vtm")
     k.add_argument("--strict", action="store_true", help="exit 1 when an error-severity check finds anything")
-    k.add_argument("-v", "--verbose", action="store_true", help="echo pyNastran warnings")
+    add_common_arguments(k)
     k.set_defaults(func=cmd_check)
 
     b = sub.add_parser("sections", help="CBAR/CBEAM section properties per PID station (computed vs card)")
@@ -346,7 +368,7 @@ def main(argv=None) -> int:
     b.add_argument("--pid", type=int, nargs="+", help="only these PIDs")
     b.add_argument("--limit", type=int, default=None)
     b.add_argument("--csv", help="also write the table to CSV")
-    b.add_argument("-v", "--verbose", action="store_true", help="echo pyNastran warnings")
+    add_common_arguments(b)
     b.set_defaults(func=cmd_sections)
 
     st = sub.add_parser("store", help="model/results store (SQLite + saved .vtm per run)")
