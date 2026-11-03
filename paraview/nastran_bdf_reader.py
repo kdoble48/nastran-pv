@@ -72,6 +72,7 @@ class NastranPVReader(VTKPythonAlgorithmBase):
         self._op2name = ""
         self._flags = {f: True for f in _FLAGS}
         self._k_ref = 0.0
+        self._nsm_set = -1
         self._nodal = True
         self._deck = None
         self._deck_path = None
@@ -178,6 +179,13 @@ class NastranPVReader(VTKPythonAlgorithmBase):
             self._k_ref = float(v)
             self.Modified()
 
+    @smproperty.intvector(name="NSMSet", default_values=-1)
+    def SetNSMSet(self, v):
+        """Bulk NSM set to apply: -1 = Case Control NSM=, 0 = none (property NSM always applies)."""
+        if int(v) != self._nsm_set:
+            self._nsm_set = int(v)
+            self.Modified()
+
     # --------------------------------------------- model tree visibility
     @smproperty.dataarrayselection(name="VisibleProperties")
     def GetVisibleProperties(self):
@@ -243,10 +251,12 @@ class NastranPVReader(VTKPythonAlgorithmBase):
         """Built multiblock, cached per deck/options so time steps only re-attach results."""
         from nastran_pv.assemble import Options, build_multiblock
 
-        key = (self._deck_key, tuple(sorted(self._flags.items())), self._k_ref, self._nodal, self._op2name)
+        key = (self._deck_key, tuple(sorted(self._flags.items())), self._k_ref, self._nodal, self._nsm_set,
+               self._op2name)
         if key != self._mb_key:
             deck.warnings = list(self._base_warnings)
-            opts = Options(k_ref=self._k_ref or None, nodal_arrays=self._nodal, **self._flags)
+            opts = Options(k_ref=self._k_ref or None, nodal_arrays=self._nodal,
+                           nsm_set=self._nsm_set if self._nsm_set >= 0 else None, **self._flags)
             self._mb = build_multiblock(deck, opts)
             self._mb_key = key
             return self._mb, True

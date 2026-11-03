@@ -6,7 +6,7 @@ reuses named pipeline objects ("NPV ..."), so running a view twice does not
 pile up duplicates. Available views::
 
     masses  bushes  loads  spc  rigid  family  group  pid  mid  thickness
-    elementtype  results  parts  grow  path  check
+    nsm  elementtype  results  parts  grow  path  check
 
 ``grow_from_selection`` and ``path_from_selection`` seed the grow and path
 views from the current selection. ``show_only_selected``, ``hide_selected``, ``show_all``,
@@ -43,7 +43,7 @@ def ensure_plugin():
         pv.LoadPlugin(os.path.join(HERE, "nastran_bdf_reader.py"))
 
 
-def load_reader(deck, op2=None):
+def load_reader(deck, op2=None, nsm_set=None):
     ensure_plugin()
     # paraview.simple names the constructor after the reader label
     reader = pv.NastranBulkDatanastranpv(FileName=deck)
@@ -53,6 +53,8 @@ def load_reader(deck, op2=None):
         pass
     if op2:
         reader.OP2FileName = op2
+    if nsm_set is not None:
+        reader.NSMSet = int(nsm_set)
     reader.UpdatePipelineInformation()
     return reader
 
@@ -297,6 +299,8 @@ def labels_for(model, array, values):
     if array == "ElementType":
         names = next((model.field_strings(b, "ElementTypeNames") for b in MESH if model.has(b)), [])
         return [names[v] if 0 <= v < len(names) else str(v) for v in values]
+    if array == "NSMSource":
+        return [{0: "none", 1: "property", 2: "bulk", 3: "property + bulk"}.get(v, str(v)) for v in values]
     if array == "Axis":
         return [{0: "ellipsoid", 1: "K1", 2: "K2", 3: "K3"}.get(v, str(v)) for v in values]
     prefix = {"PID": "PID", "MID": "MID", "DOFCode": "DOF", "SPCSet": "SPC set", "CID": "CID", "CD": "CD"}
@@ -531,6 +535,46 @@ def view_thickness(model, view):
         return view_pid(model, view)
     d = pv.Show(_extract(model, "Shells"), view)
     continuous(d, "CELLS", "Thickness", view=view)
+
+
+NSM_DENSITY = {"Shells": "NSMPerArea", "Lines": "NSMPerLength"}
+
+
+def view_nsm(model, view, top=8):
+    """Nonstructural mass: shells coloured by NSM per area and lines by NSM per length (separate
+    legends, the units differ), the rest ghosted, and the totals per source and NSM set."""
+    blocks = [b for b in NSM_DENSITY if model.has(b) and model.array(b, "NSMMass", "cell") is not None]
+    ghost_mesh(model, view)
+    if not blocks:
+        info_text(model, view, "No nonstructural mass (property NSM or NSM/NSML cards) in this deck.")
+        return
+    for b in blocks:
+        d = pv.Show(_extract(model, b), view)
+        continuous(d, "CELLS", NSM_DENSITY[b], preset="Inferno (matplotlib)", view=view)
+        if b == "Lines":
+            d.LineWidth = 4.0
+    def total(name):
+        a = model.field(name)
+        return float(a[0]) if a is not None else 0.0
+
+    nsm, model_mass = total("NonstructuralMass"), total("ModelMass")
+    active = model.field("ActiveNSMSet")
+    active = int(active[0]) if active is not None else -1
+    text = f"Nonstructural mass: {nsm:.6g}"
+    if model_mass > 0:
+        text += f"  ({100.0 * nsm / model_mass:.3g}% of model mass {model_mass:.6g})"
+    text += f"\n  property NSM fields: {total('PropertyNSMMass'):.6g}"
+    text += f"\n  bulk NSM set {active if active > 0 else '(none selected)'}: {total('BulkNSMMass'):.6g}"
+    sids, masses = model.field("NSM_SET"), model.field("NSM_SetMass")
+    if sids is not None and masses is not None:
+        order = np.argsort(-masses)
+        for i in order[:top]:
+            text += f"\n    set {int(sids[i])}: {masses[i]:.6g}"
+        if len(order) > top:
+            text += f"\n    ... {len(order) - top} more (NSM_SET / NSM_SetMass in the field data)"
+    t = info_text(model, view, text + "\nMass units as in the deck (WTMASS not applied)"
+                                      "\nOther set: reader property NSMSet (-1 = Case Control, 0 = none)")
+    pv.GetDisplayProperties(t, view).Justification = "Left"
 
 
 def view_results(model, view):
@@ -915,7 +959,7 @@ def show_only_material():
 VIEWS = {
     "masses": view_masses, "bushes": view_bushes, "loads": view_loads, "spc": view_spc,
     "rigid": view_rigid, "family": view_family, "group": view_group, "pid": view_pid,
-    "mid": view_mid, "elementtype": view_elementtype, "thickness": view_thickness,
+    "mid": view_mid, "elementtype": view_elementtype, "thickness": view_thickness, "nsm": view_nsm,
     "results": view_results, "parts": view_parts, "grow": view_grow, "path": view_path, "check": view_check,
 }
 

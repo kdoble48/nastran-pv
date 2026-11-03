@@ -1,6 +1,6 @@
 ---
 name: rendering-nastran-views
-description: Use when the user wants screenshots or PNGs of a Nastran model (masses, loads, bushes, SPCs, rigid elements, PID/MID/family colors, thickness, deformed results), wants a deck opened in the ParaView GUI with a view applied, or when running pvpython scripts in nastran_pv.
+description: Use when the user wants screenshots or PNGs of a Nastran model (masses, loads, bushes, SPCs, rigid elements, PID/MID/family colors, thickness, nonstructural mass, deformed results), wants a deck opened in the ParaView GUI with a view applied, or when running pvpython scripts in nastran_pv.
 ---
 
 # Rendering nastran-pv views
@@ -56,7 +56,7 @@ file, not full fuel.
 
 ## Presets
 
-`masses bushes loads spc rigid family group pid mid elementtype thickness results parts check`
+`masses bushes loads spc rigid family group pid mid elementtype thickness nsm results parts check`
 (`grow` and `path` are GUI views seeded by the selection macros). `family` and `group`
 need ICEM/TACS family comments (uCRM-9 has them; Linderholt does not). `results` needs
 `--results run.op2|run.h5` and optionally `--step N`. `bushes` needs CBUSH cards. An empty view

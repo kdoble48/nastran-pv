@@ -107,7 +107,7 @@ Femap's "select connected" from a point, without crossing into the next group:
 
 2. To read the numbers, split the view (the split button at the top right of the render view),
    choose *SpreadSheet View*, show the reader, and set *Attribute* to `Field Data`.
-   `StructuralMass`, `ConcentratedMass`, `ModelMass` and `ModelCG` are in the first row.
+   `StructuralMass`, `NonstructuralMass`, `ConcentratedMass`, `ModelMass` and `ModelCG` are in the first row.
 3. To size the spheres, select *NPV mass glyphs* and change *RelativeSize* or *RadiusLaw*
    ([Glyph filters](paraview.md#glyph-filters)).
 4. **NPV Loads** draws the case control's `LOAD` set as arrows, with its resultant in the overlay.

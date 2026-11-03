@@ -277,6 +277,15 @@ def main():
     for name in nv.VIEWS:
         nv.apply(name, reader=reader, view=view)
     check(True, f"all views build: {', '.join(nv.VIEWS)}")
+    nsm_reader = rm.load_reader(os.path.join(HERE, "data", "nsm.bdf"))
+    nmodel = nv.apply("nsm", reader=nsm_reader, view=view)
+    ntext = pv.FindSource(nv._name(nmodel, "info")).Text
+    check("Nonstructural mass: 13.25" in ntext and "set 40: 8.6" in ntext, f"nsm view totals: {ntext!r}")
+    nsm_reader.NSMSet = 0
+    bulk = rm.Model(nsm_reader).field("BulkNSMMass")
+    check(bulk is not None and float(bulk[0]) == 0.0, f"NSMSet 0 drops the bulk NSM ({bulk})")
+    pv.Delete(nsm_reader)
+    pv.SetActiveSource(reader)
     nloads = rm.Model(reader).block("Loads")
     npts = max(nloads.GetBlock(i).GetNumberOfPoints() for i in range(nloads.GetNumberOfBlocks()))
     check(npts > 1, f"tiny deck load set has {npts} points")

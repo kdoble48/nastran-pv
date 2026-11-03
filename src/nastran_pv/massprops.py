@@ -4,8 +4,10 @@ pyNastran's ``mass_properties`` loops over elements in Python (~40 s for a
 200k-hex model), so masses are computed here from VTK cell sizes instead:
 
 * solids: volume x density
-* shells: area x mass-per-area (all plies, NSM), else area x thickness x density
-* lines:  length x cross-section area x density (NSM ignored)
+* shells: area x structural mass-per-area (all plies), else area x thickness x density
+* lines:  length x cross-section area x density
+
+plus ``NSMMass`` (property and bulk nonstructural mass, see ``nsm.py``) when present.
 
 Input-unit mass is reported (WTMASS is not applied).
 """
@@ -31,6 +33,11 @@ def _sizes_and_centers(ug):
     return out, centers
 
 
+def cell_measure(ug, name: str) -> np.ndarray:
+    """Signed cell ``Area``/``Length``/``Volume`` from vtkCellSizeFilter."""
+    return vtkutil.to_numpy(_sizes_and_centers(ug)[0].GetArray(name))
+
+
 def element_mass(ug, kind: str) -> tuple[np.ndarray, np.ndarray]:
     """Per-cell (mass, centroid) for a Shells/Solids/Lines block; adds ``ElementMass``."""
     sizes, centers = _sizes_and_centers(ug)
@@ -41,16 +48,18 @@ def element_mass(ug, kind: str) -> tuple[np.ndarray, np.ndarray]:
         measure = vtkutil.to_numpy(sizes.GetArray("Volume"))
     elif kind == "Shells":
         area = vtkutil.to_numpy(sizes.GetArray("Area"))
-        if cd.GetArray("MassPerArea") is not None:  # laminates, NSM
-            mass = np.abs(area) * vtkutil.to_numpy(cd.GetArray("MassPerArea"))
-            vtkutil.add_array(cd, "ElementMass", mass, skip_all_nan=True)
-            return mass, centers
-        measure = area * _cell_values(cd, "Thickness", n)
+        if cd.GetArray("MassPerArea") is not None:  # laminates
+            rho = vtkutil.to_numpy(cd.GetArray("MassPerArea"))
+            measure = area
+        else:
+            measure = area * _cell_values(cd, "Thickness", n)
     elif kind == "Lines":
         measure = vtkutil.to_numpy(sizes.GetArray("Length")) * _cell_values(cd, "Area", n)
     else:
         raise ValueError(kind)
     mass = np.abs(measure) * rho
+    if cd.GetArray("NSMMass") is not None:
+        mass = mass + vtkutil.to_numpy(cd.GetArray("NSMMass"))
     vtkutil.add_array(cd, "ElementMass", mass, skip_all_nan=True)
     return mass, centers
 

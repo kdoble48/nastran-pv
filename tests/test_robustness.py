@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from nastran_pv.assemble import build_multiblock, get_block
+from nastran_pv.assemble import Options, build_multiblock, get_block
 from nastran_pv.deck import load_deck
 from nastran_pv.results import Op2Results, _element_ids, to_basic
 from conftest import arr, row_of
@@ -46,6 +46,8 @@ def test_laminate_cmass_conrod_spoint(tmp_path):
     assert np.isclose(arr(shells, "Thickness", "cell")[0], 1.5)  # SYM stack: 2 x (0.5 + 0.25)
     # mass/area = 2*(0.5*2 + 0.25*8) + NSM 0.1 = 6.1 on a unit square
     assert np.isclose(arr(shells, "ElementMass", "cell")[0], 6.1)
+    assert np.isclose(arr(shells, "MassPerArea", "cell")[0], 6.0)  # structural only
+    assert np.isclose(arr(shells, "NSMMass", "cell")[0], 0.1)
     lines = get_block(mb, "Lines")
     assert np.isclose(arr(lines, "ElementMass", "cell")[0], 0.5 * 1.0 * 2.0)  # A * L * rho
     masses = get_block(mb, "Masses")
@@ -125,3 +127,28 @@ def test_connector_edge_cases_warn_and_skip(tmp_path):
     assert "CFAST 4: patch form" in text
     assert "CWELD: 1 card(s)" in text
     assert "connectors: 1 leg(s) reference unknown grids" in text  # CELAS2 2 -> grid 777; CELAS3 is not drawn
+
+
+NSM_EDGE_CASES = BULK + """\
+NSMADD,100,10,20
+NSMADD,20,30,10
+NSMADD,30,20
+NSM,10,PCOMP,5,0.2
+NSM,10,PCOMP,77,1.0
+NSM,10,PBEND,1,1.0
+NSML1,10,ELEMENT,1.0,1,30
+"""
+
+
+def test_nsm_edge_cases_warn_and_skip(tmp_path):
+    deck = load_deck(write(tmp_path, "nsm.bdf", NSM_EDGE_CASES), echo=False)
+    mb = build_multiblock(deck, Options(nsm_set=100))
+    text = "\n".join(deck.warnings)
+    assert "cycle through set 20" in text
+    assert "NSM set 10 is reached twice" in text
+    assert "id(s) [77] match no element" in text
+    assert "1 NSM card(s) of type PBEND not supported" in text
+    assert "NSML1 10: mixes shells and lines; skipped" in text
+    shells = get_block(mb, "Shells")
+    assert np.isclose(arr(shells, "NSMPerArea", "cell")[0], 0.1 + 0.2)  # PCOMP NSM field + set 10 once
+    assert np.isclose(arr(shells, "ElementMass", "cell")[0], 6.3)

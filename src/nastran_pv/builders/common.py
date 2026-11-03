@@ -35,12 +35,14 @@ def property_info(model, pid: int) -> tuple[int, float]:
 
 
 def shell_mass_per_area(model, pid: int) -> float:
-    """Mass per unit area of a shell property (all plies, NSM included); nan if unknown."""
+    """Structural mass per unit area of a shell property (all plies, no NSM); nan if unknown."""
     prop = model.properties.get(pid)
     if prop is None:
         return np.nan
     try:
-        return float(prop.MassPerArea())
+        if hasattr(prop, "MassPerArea_structure"):
+            return float(prop.MassPerArea_structure())
+        return float(prop.MassPerArea()) - float(getattr(prop, "nsm", 0.0) or 0.0)
     except Exception:  # missing/un-cross-referenced material
         return np.nan
 

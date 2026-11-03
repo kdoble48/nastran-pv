@@ -52,7 +52,8 @@ def load_model(args, verbose=False):
             raise SystemExit("--results needs a deck input (a .vtm has no deck to rotate CD systems)")
         return read_vtm(src), None, None
     deck = load_deck(src, echo=verbose)
-    opts = Options(k_ref=getattr(args, "k_ref", None), nodal_arrays=not getattr(args, "no_nodal_arrays", False))
+    opts = Options(k_ref=getattr(args, "k_ref", None), nodal_arrays=not getattr(args, "no_nodal_arrays", False),
+                   nsm_set=getattr(args, "nsm_set", None))
     for flag in BLOCK_FLAGS:
         if getattr(args, f"no_{flag}", False):
             setattr(opts, flag, False)
@@ -107,6 +108,8 @@ def add_model_arguments(p, results=True):
         p.add_argument("--results", "--op2", dest="results", help="OP2 or MSC/NX HDF5 (.h5) results to attach")
         p.add_argument("--step", type=int, default=0, help="result step (mode/subcase index) to attach")
     p.add_argument("--k-ref", type=float, default=None, help="bush stiffness reference for log scaling")
+    p.add_argument("--nsm-set", type=int, default=None, metavar="ID",
+                   help="bulk NSM set to apply (default: Case Control NSM=; 0 = none)")
     p.add_argument("--no-nodal-arrays", action="store_true", help="no SPC_DOF / F_<sid> point arrays on the mesh")
     for flag in BLOCK_FLAGS:
         p.add_argument(f"--no-{flag}", action="store_true", help=f"skip the {flag} block")

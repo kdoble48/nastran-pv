@@ -18,6 +18,7 @@ from .builders.shells import build_shells
 from .builders.solids import build_solids
 from .deck import Deck
 from .families import element_families
+from . import nsm
 from .massprops import element_mass, totals
 from .materials import COLUMNS, material_table
 
@@ -38,6 +39,7 @@ class Options:
     k_ref: float | None = None  # bush stiffness reference for log scaling (None = softest)
     nodal_arrays: bool = True  # SPC_DOF / F_<sid> / M_<sid> point arrays on the mesh blocks
     max_nodal_load_sets: int = 8
+    nsm_set: int | None = None  # bulk NSM set (None = Case Control NSM=, 0 = none)
 
 
 def case_control_ids(model, key: str) -> list[int]:
@@ -118,6 +120,8 @@ def build_multiblock(deck: Deck, opts: Options | None = None) -> vtkMultiBlockDa
             for name, values in nodal.items():
                 vtkutil.add_array(ug.GetPointData(), name, values[gidx])
 
+    nsm_info = nsm.apply(deck, mesh, opts.nsm_set, case_control_ids(model, "NSM"))
+
     for name in MESH_BLOCKS:
         blocks.add(name, mesh.get(name))
 
@@ -163,7 +167,8 @@ def build_multiblock(deck: Deck, opts: Options | None = None) -> vtkMultiBlockDa
     n_nan = sum(int(np.isnan(p[0]).sum()) for p in struct_parts)
     if n_nan:
         deck.warn(f"model mass excludes {n_nan} element(s) without thickness/area/density")
-    vtkutil.add_array(fd, "StructuralMass", np.array([struct_mass]))
+    vtkutil.add_array(fd, "StructuralMass", np.array([struct_mass - nsm_info.total]))
+    nsm.add_root_arrays(fd, nsm_info)
     vtkutil.add_array(fd, "ConcentratedMass", np.array([conc_mass]))
     vtkutil.add_array(fd, "ModelMass", np.array([mass]))
     vtkutil.add_array(fd, "ModelCG", cg[None, :], skip_all_nan=True)
