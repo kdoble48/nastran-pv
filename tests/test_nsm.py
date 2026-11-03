@@ -235,3 +235,25 @@ def test_nsm_only_model_mass_without_materials(tmp_path):
     assert f("StructuralMass") == 0.0
     assert f("NonstructuralMass") == pytest.approx(13.25)
     assert f("ModelMass") == pytest.approx(13.25)
+
+
+def test_duplicate_and_missing_ids_count_once(tmp_path):
+    # set 100's leaf 10 gets a card naming EID 1 twice plus an unknown 999: EID 1 gets +0.7 once
+    # (1.5 + 0.7 = 2.2 per area), and 999 is reported once
+    deck, mb = without_density(tmp_path, "NSM     10      PSHELL  1       1.0\n",
+                               "NSM     10      PSHELL  1       1.0\nNSM1    10      ELEMENT 0.7     1       1       999\n")
+    assert by_eid(get_block(mb, "Shells"), "NSMPerArea")[1] == pytest.approx(2.2)
+    assert arr(mb, "BulkNSMMass", "field")[0] == pytest.approx(11.2 + 0.7)
+    assert [w for w in deck.warnings if "match no element" in w] == ["NSM1 10 ELEMENT: id(s) [999] match no element"]
+
+
+def test_row_lookup_with_repeated_keys():
+    from nastran_pv.nsm import _Rows
+
+    rows = _Rows(np.array([7, 5, 7, 9, 5, 7]))
+    found_rows, hit = rows.find(np.array([5, 6, 7]))  # 6 absent: 0 rows; 5 twice, 7 three times
+    assert sorted(found_rows) == [0, 1, 2, 4, 5]
+    assert hit.tolist() == [True, False, True]
+    found_rows, hit = rows.find(np.array([4, 7]))  # counts 0 and 3: total != one per key
+    assert sorted(found_rows) == [0, 2, 5] and hit.tolist() == [False, True]
+

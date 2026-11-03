@@ -46,10 +46,6 @@ def _centers(ug) -> np.ndarray:
     return vtkutil.to_numpy(c.GetOutput().GetPoints().GetData()).reshape(-1, 3)
 
 
-def _sizes_and_centers(ug):
-    return _sizes(ug), _centers(ug)
-
-
 def _tet_sum(a, b, c) -> np.ndarray:
     """6 x signed volume of the tets (origin, a, b, c), row-wise."""
     return np.einsum("ij,ij->i", a, np.cross(b, c))
@@ -96,7 +92,7 @@ def solid_volumes(ug) -> np.ndarray | None:
 
 def cell_measure(ug, name: str) -> np.ndarray:
     """Signed cell ``Area``/``Length``/``Volume`` from vtkCellSizeFilter."""
-    return vtkutil.to_numpy(_sizes_and_centers(ug)[0].GetArray(name))
+    return vtkutil.to_numpy(_sizes(ug).GetArray(name))
 
 
 def element_mass(ug, kind: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
