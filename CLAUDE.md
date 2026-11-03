@@ -15,6 +15,8 @@ python paraview/install_macros.py [--remove]            # NPV toolbar macros in 
 PYTHONPATH=src python -m nastran_pv setup [--dry-run]   # runs both of the above
 python -m pyflakes src paraview/*.py tests              # lint (don't lint paraview/_vendor)
 PYTHONPATH=src python -m nastran_pv convert <deck> --results <op2|h5> --all-steps -o out/x.vtkhdf
+PYTHONPATH=src python -m nastran_pv sections <deck>                                # CBAR/CBEAM section table
+PYTHONPATH=src python docs/build_section_figure.py      # docs/images/beam-section-shapes.svg
 python docs/build_gallery.py --ucrm9 <coarse run deck> --mystran tools/mystran-19.0.0-windows-x86_64.exe [--upload]   # gallery assets (slow: background)
 .venv/Scripts/python -m sphinx -W -b html docs docs/_build/html   # docs site (pip install -r docs/requirements.txt into .venv)
 ```
@@ -113,6 +115,13 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
 - `topology/`: `graph.py` (the bipartite grid↔cell graph of any multiblock, plus `Rules` and `Seeds`),
   `grow.py`, `parts.py`, `path.py` and `check.py`. Results are written back as arrays and `PART_*`/`LINK_*`/`CHECK_*`
   tables, like `fields`.
+- `sections/`: CBAR/CBEAM cross sections. `shapes.py` (the 22 PBARL/PBEAML outlines, element y up /
+  z right), `props.py` (exact polygon properties; Q4 warping FE for J, shear center, Cw; cached per
+  shape and dims), `beams.py` (the only deck-aware part: frames from v/G0 + OFFT + WA/WB, written by
+  `builders/lines.py` as `Axis1-3 OffsetA OffsetB`; property stations; `SECTION_/SECRING_/SECPT_`
+  root tables) and `sweep.py` (lofts sections from `Lines` + the tables, no deck; rigid-section
+  displacement). Sections sit with their shear center on the beam line (MSC/NX). `BeamSections`
+  (opt-in) is in none of the mesh-block lists.
 - `tree.py`: the plugin's model tree. `build_tree` cuts the multiblock into pieces per
   property/material/element type/family/group (AND `Visibility` from the reader's checklists and
   EID lists) and `Tree.output` gives a `vtkPartitionedDataSetCollection` whose assembly has `Model/`
@@ -129,12 +138,13 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
     step are stored once, with all their step offsets set to 0.
 - `store.py`: SQLite in long format (`runs`, `elements`, `nodes`, `element_values`,
   `node_values`), plus `<db>_vtm/run_<id>.vtm`.
-- `cli.py`: the `convert`, `stats` and `store` commands, with shared field options.
+- `cli.py`: the `convert`, `stats`, `check`, `sections` and `store` commands, with shared field options.
   `launch.py` provides `view`, `render` and `setup`, and `locate.py` finds the ParaView executables
   and the repo's `paraview/` folder.
 - `glyphs.py`: mass ellipsoids and bush triads as real `vtkPolyData`.
-- `paraview/nastran_bdf_reader.py`: one plugin file containing the reader, two glyph filters,
-  three field filters and four topology filters (grow, parts, path, model check).
+- `paraview/nastran_bdf_reader.py`: one plugin file containing the reader, three glyph filters
+  (masses, bushes, beam sections), three field filters and four topology filters (grow, parts,
+  path, model check).
   - At import it bootstraps `sys.path` with `../src`, then `_vendor`, then
     `NASTRAN_PV_SITE_PACKAGES`, and imports nastran_pv lazily.
   - The reader caches the deck by the mtimes of the main file and every INCLUDE, and caches the

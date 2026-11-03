@@ -395,21 +395,29 @@ class NastranPVReader(VTKPythonAlgorithmBase):
 
 # ---------------------------------------------------------------- filters
 def _find_block(data, name, required_array):
-    """Block ``name`` anywhere in a multiblock, or ``data`` itself if it already is that block."""
+    """Block ``name`` anywhere in a multiblock, or ``data`` itself if it already is that block
+    (a dataset with ``required_array``; other blocks of a multiblock never stand in for it)."""
     if data is None:
         return None
     if data.IsA("vtkMultiBlockDataSet"):
-        for i in range(data.GetNumberOfBlocks()):
-            meta = data.GetMetaData(i) if data.HasMetaData(i) else None
-            child = data.GetBlock(i)
-            if meta is not None and meta.Get(vtkMultiBlockDataSet.NAME()) == name and child is not None:
-                return child
-            found = _find_block(child, name, required_array)
-            if found is not None:
-                return found
-        return None
+        return _named_block(data, name)
     if data.GetPointData().GetArray(required_array) is not None:
         return data
+    return None
+
+
+def _named_block(mb, name):
+    for i in range(mb.GetNumberOfBlocks()):
+        meta = mb.GetMetaData(i) if mb.HasMetaData(i) else None
+        child = mb.GetBlock(i)
+        if child is None:
+            continue
+        if meta is not None and meta.Get(vtkMultiBlockDataSet.NAME()) == name:
+            return child
+        if child.IsA("vtkMultiBlockDataSet"):
+            found = _named_block(child, name)
+            if found is not None:
+                return found
     return None
 
 
@@ -440,7 +448,7 @@ class _GlyphFilter(VTKPythonAlgorithmBase):
         out = vtkPolyData.GetData(outInfo, 0)
         if block is None or block.GetNumberOfPoints() == 0:
             return 1
-        out.ShallowCopy(self._glyphs(block, model_diagonal(data)))
+        out.ShallowCopy(self._glyphs(block, model_diagonal(data), data))
         return 1
 
 
@@ -492,7 +500,7 @@ class NastranPVMassGlyphs(_GlyphFilter):
     def SetResolution(self, v):
         self._set("_resolution", int(v))
 
-    def _glyphs(self, block, diag):
+    def _glyphs(self, block, diag, model):
         from nastran_pv.glyphs import MASS_SIZE_MODES, RADIUS_LAWS, mass_glyphs
 
         return mass_glyphs(block, diag, MASS_SIZE_MODES[self._mode], self._relative, self._resolution,
@@ -535,10 +543,66 @@ class NastranPVBushGlyphs(_GlyphFilter):
     def SetResolution(self, v):
         self._set("_resolution", int(v))
 
-    def _glyphs(self, block, diag):
+    def _glyphs(self, block, diag, model):
         from nastran_pv.glyphs import bush_glyphs
 
         return bush_glyphs(block, diag, self._size, bool(self._triad), bool(self._ellipsoids), self._resolution)
+
+
+@smproxy.filter(name="NastranPVBeamSections", label="Nastran Beam Sections")
+@smhint.xml('<ShowInMenu category="Nastran" />')
+@smproperty.input(name="Input", port_index=0)
+@smdomain.datatype(dataTypes=["vtkDataObject"], composite_data_supported=True)
+class NastranPVBeamSections(_GlyphFilter):
+    """CBAR/CBEAM cross sections swept along the beams (PBARL/PBEAML shapes, PBAR/PBEAM equivalent
+    rectangles), with the shear-center and neutral axes and element triads. A deformation scale
+    moves the sections rigidly with the end grids' displacements and rotations."""
+
+    BLOCK, REQUIRED = "Lines", "NID"
+
+    def __init__(self):
+        _GlyphFilter.__init__(self)
+        self._sections = 1
+        self._axes = 0
+        self._triads = 0
+        self._triad_size = 0.03
+        self._scale = 0.0
+
+    @smproperty.intvector(name="ShowSections", default_values=1)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetShowSections(self, v):
+        self._set("_sections", int(v))
+
+    @smproperty.intvector(name="ShowAxes", default_values=0)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetShowAxes(self, v):
+        """Shear-center axis (the offset beam line) and neutral axis (centroids) as lines."""
+        self._set("_axes", int(v))
+
+    @smproperty.intvector(name="ShowTriads", default_values=0)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetShowTriads(self, v):
+        """Element x/y/z arrows at mid-length."""
+        self._set("_triads", int(v))
+
+    @smproperty.doublevector(name="TriadSize", default_values=0.03)
+    @smdomain.doublerange(min=0.001, max=0.3)
+    def SetTriadSize(self, v):
+        """Arrow length as a fraction of the model diagonal."""
+        self._set("_triad_size", float(v))
+
+    @smproperty.doublevector(name="DeformationScale", default_values=0.0)
+    def SetDeformationScale(self, v):
+        """0 = undeformed; otherwise points move by scale x the rigid-section displacement."""
+        self._set("_scale", float(v))
+
+    def _glyphs(self, block, diag, model):
+        from nastran_pv.sections.sweep import attach_displacement, section_tables, sweep
+
+        out = sweep(block, section_tables(model, block), surfaces=bool(self._sections), axes=bool(self._axes),
+                    triads=bool(self._triads), triad_length=self._triad_size * diag)
+        attach_displacement(out, block, self._scale)
+        return out
 
 
 # ------------------------------------------------------- field filters

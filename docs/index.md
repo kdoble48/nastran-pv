@@ -34,6 +34,8 @@ you use.
   material axes and results are computed.
 - [Output formats](output-formats.md): `.vtm`, `.pvd` series and temporal VTKHDF, with file sizes
   and how to select blocks.
+- [Beam sections](beam-sections.md): CBAR/CBEAM cross sections swept in 3D, element frames and
+  offsets, section properties (J, shear center) and the section table.
 
 ## Development
 
@@ -72,6 +74,7 @@ gallery/index
 
 model
 output-formats
+beam-sections
 ```
 
 ```{toctree}

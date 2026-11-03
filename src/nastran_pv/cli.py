@@ -3,6 +3,7 @@
     nastran-pv convert DECK|VTM -o out.vtm [field options]   write a VTK multiblock
     nastran-pv stats DECK|VTM --by PID --field ElementMass   group statistics table
     nastran-pv check DECK|VTM [--strict] [-o findings.vtm]   model checks
+    nastran-pv sections DECK|VTM [--csv FILE]                CBAR/CBEAM section properties per PID
     nastran-pv store add|list|fields|query|compare|open ...  model/results store (SQLite)
     nastran-pv view DECK --view masses                       open the ParaView GUI on a deck
     nastran-pv render DECK --preset ...                      batch screenshots (pvpython)
@@ -22,7 +23,7 @@ import sys
 import time
 from pathlib import Path
 
-from .assemble import Options, block_names, build_multiblock, get_block
+from .assemble import Options, add_beam_sections, block_names, build_multiblock, get_block
 from .vtkio import read_vtm, write_series, write_vtm
 
 BLOCK_FLAGS = ("shells", "lines", "solids", "masses", "rigid", "connectors", "bushes", "constraints", "loads")
@@ -50,10 +51,13 @@ def load_model(args, verbose=False):
     if src.suffix.lower() == ".vtm":
         if getattr(args, "results", None):
             raise SystemExit("--results needs a deck input (a .vtm has no deck to rotate CD systems)")
-        return read_vtm(src), None, None
+        mb = read_vtm(src)
+        if getattr(args, "beam_sections", False):
+            add_beam_sections(mb)
+        return mb, None, None
     deck = load_deck(src, echo=verbose)
     opts = Options(k_ref=getattr(args, "k_ref", None), nodal_arrays=not getattr(args, "no_nodal_arrays", False),
-                   nsm_set=getattr(args, "nsm_set", None))
+                   nsm_set=getattr(args, "nsm_set", None), beam_sections=getattr(args, "beam_sections", False))
     for flag in BLOCK_FLAGS:
         if getattr(args, f"no_{flag}", False):
             setattr(opts, flag, False)
@@ -115,6 +119,8 @@ def add_model_arguments(p, results=True):
     p.add_argument("--no-nodal-arrays", action="store_true", help="no SPC_DOF / F_<sid> point arrays on the mesh")
     for flag in BLOCK_FLAGS:
         p.add_argument(f"--no-{flag}", action="store_true", help=f"skip the {flag} block")
+    p.add_argument("--beam-sections", action="store_true",
+                   help="add the BeamSections block: CBAR/CBEAM cross sections swept in 3D")
     p.add_argument("--derive", nargs="*", metavar="GROUP", help="derived fields: material quality size cg pidmass")
     p.add_argument("--map", nargs="+", action="append", metavar="ARG",
                    help="map a table: SOURCE KEY [SHEET|SQL]; repeatable")
@@ -223,6 +229,37 @@ def cmd_check(args) -> int:
     return 0
 
 
+SECTION_COLUMNS = ("PID", "Station", "Property", "Shape", "A", "I1", "I2", "I12", "J", "Cw",
+                   "CentroidY", "CentroidZ", "RefA", "RefI1", "RefI2", "RefJ", "MaxRelDiff")
+
+
+def cmd_sections(args) -> int:
+    from .fields.tables import write_csv
+    from .sections.beams import MISMATCH
+    from .topology.common import read_table
+
+    mb, deck, _ = load_model(args, args.verbose)
+    rows = read_table(mb, "SECTION_")
+    if args.pid:
+        rows = [r for r in rows if int(r["PID"]) in args.pid]
+    rows = [{c: r.get(c) for c in SECTION_COLUMNS} for r in rows]
+    for r in rows:
+        r["PID"] = int(r["PID"])
+        diff = r["MaxRelDiff"]
+        r["Check"] = "MISMATCH" if diff is not None and diff == diff and diff > MISMATCH else ""
+    _print_rows(rows, args.limit)
+    if args.csv:
+        print(f"wrote {write_csv(rows, args.csv)}")
+    if deck is not None:
+        for w in deck.warnings:  # missing sections, and CBAR/CBEAM frames with a fallback
+            if w.startswith(("beam section", "CBAR ", "CBEAM ")):
+                print(f"  {w}")
+    flagged = sum(r["Check"] == "MISMATCH" for r in rows)
+    if flagged:
+        print(f"{flagged} station(s) differ from the reference by more than {MISMATCH:.0%}")
+    return 0
+
+
 def cmd_store(args) -> int:
     from .store import Store
 
@@ -303,6 +340,14 @@ def main(argv=None) -> int:
     k.add_argument("--strict", action="store_true", help="exit 1 when an error-severity check finds anything")
     k.add_argument("-v", "--verbose", action="store_true", help="echo pyNastran warnings")
     k.set_defaults(func=cmd_check)
+
+    b = sub.add_parser("sections", help="CBAR/CBEAM section properties per PID station (computed vs card)")
+    b.add_argument("input", help="run deck, bulk-data file, or a .vtm written by nastran-pv")
+    b.add_argument("--pid", type=int, nargs="+", help="only these PIDs")
+    b.add_argument("--limit", type=int, default=None)
+    b.add_argument("--csv", help="also write the table to CSV")
+    b.add_argument("-v", "--verbose", action="store_true", help="echo pyNastran warnings")
+    b.set_defaults(func=cmd_sections)
 
     st = sub.add_parser("store", help="model/results store (SQLite + saved .vtm per run)")
     ssub = st.add_subparsers(dest="store_cmd", required=True)

@@ -152,3 +152,42 @@ def test_nsm_edge_cases_warn_and_skip(tmp_path):
     shells = get_block(mb, "Shells")
     assert np.isclose(arr(shells, "NSMPerArea", "cell")[0], 0.1 + 0.2)  # PCOMP NSM field + set 10 once
     assert np.isclose(arr(shells, "ElementMass", "cell")[0], 6.3)
+
+
+BAD_BEAMS = """\
+GRID,1,,0.,0.,0.
+GRID,2,,1.,0.,0.
+GRID,3,,1.,0.,0.
+GRID,4,,2.,0.,0.
+MAT1,1,1.e7,,0.3,2.
+PBARL,1,1,,BAR
+,0.1,0.2
+PBARL,2,1,,BOX
+,0.1,0.2,0.1,0.01
+PBARL,3,1,MYGROUP,BAR
+,0.1,0.2
+PBAR,4,1,0.
+CBAR,1,1,1,2,1.,0.,0.
+CBAR,2,1,2,3,0.,1.,0.
+CBAR,3,1,1,2,0.,1.,0.,1
+CBAR,4,2,1,2,0.,1.,0.
+CBAR,5,3,1,2,0.,1.,0.
+CBAR,6,4,1,2,0.,1.,0.
+CBAR,7,99,3,4,0.,1.,0.
+"""
+
+
+def test_bad_beams_warn_and_skip(tmp_path):
+    """v parallel to the axis, coincident ends, numeric OFFT, bad dimensions, user group, A = 0, no PID."""
+    deck = load_deck(write(tmp_path, "beams.bdf", BAD_BEAMS), echo=False)
+    mb = build_multiblock(deck, Options(beam_sections=True))
+    text = "\n".join(deck.warnings)
+    assert "CBAR 1: orientation vector parallel to GA-GB" in text
+    assert "CBAR 2: no beam frame (coincident GA/GB)" in text
+    assert "CBAR 3: numeric OFFT 1 not supported" in text
+    assert "PID 2 not drawn: BOX dimensions [0.1, 0.2, 0.1, 0.01]: walls meet or overlap" in text
+    assert "PID 3 not drawn: PBARL 3: user-defined group 'MYGROUP'" in text
+    assert "PID 4 not drawn: PBAR 4: no positive area" in text
+    assert "PID 99 not drawn: PID 99 not defined" in text
+    swept = get_block(mb, "BeamSections")
+    assert set(arr(swept, "EID", "cell")) == {1, 3}  # PID 1 with a frame (EID 1 with an arbitrary y)

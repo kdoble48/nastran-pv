@@ -15,7 +15,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 PREFIX = "NPV "
 MACROS = {
-    "Masses": "masses", "Bushes": "bushes", "Loads": "loads", "SPC": "spc", "Rigid": "rigid",
+    "Masses": "masses", "Bushes": "bushes", "Beams": "beams", "Loads": "loads", "SPC": "spc", "Rigid": "rigid",
     "Family": "family", "Group": "group", "PID": "pid", "MID": "mid", "Element Type": "elementtype",
     "Thickness": "thickness", "NSM": "nsm", "Results": "results", "Index Colors": "index_colors",
     "Parts": "parts", "Grow": "grow", "Grow from Selection": "grow_from_selection",

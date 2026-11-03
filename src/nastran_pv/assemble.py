@@ -21,6 +21,7 @@ from .families import element_families
 from . import nsm
 from .massprops import element_mass, totals
 from .materials import COLUMNS, material_table
+from .sections import beams, sweep
 
 MESH_BLOCKS = ("Shells", "Lines", "Solids")
 
@@ -40,6 +41,7 @@ class Options:
     nodal_arrays: bool = True  # SPC_DOF / F_<sid> / M_<sid> point arrays on the mesh blocks
     max_nodal_load_sets: int = 8
     nsm_set: int | None = None  # bulk NSM set (None = Case Control NSM=, 0 = none)
+    beam_sections: bool = False  # swept CBAR/CBEAM sections as the BeamSections block
 
 
 def case_control_ids(model, key: str) -> list[int]:
@@ -58,16 +60,30 @@ def case_control_ids(model, key: str) -> list[int]:
     return sorted(set(out))
 
 
+def add_block(mb: vtkMultiBlockDataSet, name: str, block) -> None:
+    """Append a named block (None is skipped)."""
+    if block is None:
+        return
+    i = mb.GetNumberOfBlocks()
+    mb.SetBlock(i, block)
+    mb.GetMetaData(i).Set(vtkMultiBlockDataSet.NAME(), name)
+
+
+def add_beam_sections(mb: vtkMultiBlockDataSet) -> None:
+    """Append ``BeamSections`` swept from ``Lines`` and the ``SECTION_*`` tables (deck or .vtm)."""
+    lines = get_block(mb, "Lines")
+    if lines is None or get_block(mb, "BeamSections") is not None:
+        return
+    swept = sweep.sweep(lines, sweep.section_tables(mb, lines))
+    add_block(mb, "BeamSections", swept if swept.GetNumberOfCells() else None)
+
+
 class _Blocks:
     def __init__(self):
         self.mb = vtkMultiBlockDataSet()
 
     def add(self, name: str, block) -> None:
-        if block is None:
-            return
-        i = self.mb.GetNumberOfBlocks()
-        self.mb.SetBlock(i, block)
-        self.mb.GetMetaData(i).Set(vtkMultiBlockDataSet.NAME(), name)
+        add_block(self.mb, name, block)
 
 
 def block_names(mb: vtkMultiBlockDataSet) -> list[str]:
@@ -181,5 +197,11 @@ def build_multiblock(deck: Deck, opts: Options | None = None) -> vtkMultiBlockDa
         for col in COLUMNS:
             vtkutil.add_array(fd, f"MAT_{col}", np.nan_to_num(mats[col], nan=-1.0))  # -1 = unknown
         vtkutil.add_string_array(fd, "MAT_Type", mats["Type"])
+    lines = mesh.get("Lines")
+    if lines is not None:
+        pids = vtkutil.to_numpy(lines.GetCellData().GetArray("PID"))[sweep.has_frame(lines)]
+        beams.write_section_tables(mb, *beams.section_rows(deck, pids))
+        if opts.beam_sections:
+            add_beam_sections(mb)
     vtkutil.add_string_array(fd, "Warnings", deck.warnings)
     return mb

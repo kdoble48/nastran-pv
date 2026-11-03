@@ -6,6 +6,7 @@ nastran-pv render DECK --preset masses loads --views iso top        # batch scre
 nastran-pv convert DECK|VTM -o out.vtm [field options] [--results F [--all-steps]]
 nastran-pv stats  DECK|VTM --by PID|MID|FAMILY|GROUP|ELEMENTTYPE --field ElementMass [--csv t.csv]
 nastran-pv check  DECK|VTM [--strict] [--rules TEXT] [-o findings.vtm]
+nastran-pv sections DECK|VTM [--pid ID ...] [--csv t.csv]          # CBAR/CBEAM section table
 nastran-pv store  add|list|fields|query|compare|open --db runs.sqlite ...
 nastran-pv setup  [--pvpython PATH] [--no-macros] [--dry-run]
 ```
@@ -29,6 +30,21 @@ nastran-pv convert run.bdf --no-loads --k-ref 1e5 -o out/model.vtm
 (default: Case Control `NSM=`; `0` = none; see [Nonstructural mass](model.md#nonstructural-mass));
 `view` and `render` take it too. An output ending in `.vtkhdf`, or
 `--format vtkhdf`, writes VTKHDF instead (see [Output formats](output-formats.md)).
+
+## Beam sections
+
+```bash
+nastran-pv convert frame.bdf --beam-sections -o out/frame.vtm      # adds the BeamSections block
+nastran-pv convert out/frame.vtm --beam-sections -o out/swept.vtm  # sweep a file written without it
+nastran-pv sections frame.bdf --pid 12 14 --csv out/sections.csv   # section table per PID station
+```
+
+`--beam-sections` (also on `stats` and `store add`) adds the swept CBAR/CBEAM sections. `sections`
+prints A, I1, I2, I12, J, Cw, the neutral-axis offset and the card (or pyNastran) reference values
+per PID and station, and flags differences above 2% as MISMATCH. It takes a deck or a `.vtm`. The
+section tables themselves are part of every conversion of a deck with CBAR/CBEAM, so a `.vtm`
+written without `--beam-sections` can still be swept or tabled later. See
+[Beam sections](beam-sections.md).
 
 ## Statistics
 
@@ -61,7 +77,7 @@ nastran-pv render run.dat --results run.op2 --step 3 --preset results
 # same as: pvpython paraview/render_model.py run_deck.bdf --preset ...
 ```
 
-The presets are the views from the toolbar macros: `masses`, `bushes`, `loads`, `spc`, `rigid`,
+The presets are the views from the toolbar macros: `masses`, `bushes`, `beams`, `loads`, `spc`, `rigid`,
 `family`, `group`, `pid`, `mid`, `elementtype`, `thickness`, `nsm`, `results`, `parts` and `check`.
 
 Cameras: `iso` (default), `top`, `front`, `side`, and `showcase` (Z up, three-quarter view from ahead; used by the web gallery).

@@ -1,0 +1,82 @@
+$ Beam-section test deck (bulk only). Expected values in tests/test_beam_sections.py are by hand.
+$ All beams run along +x, 10 long. CORD2R 5: x = basic y, z = basic z (CD of grids 3, 4, 6, 7).
+$ EID  1 PBARL BAR 2(z) x 3(y), X=(0,1,0) basic      -> y=(0,1,0)   z=(0,0,1)
+$ EID  2 same, X=(1,0,1) in CD 5 (OFFT GGG)           -> v=(0,1,1)  y=(0,.71,.71) z=(0,-.71,.71)
+$ EID  3 same X but OFFT BGG (X basic)                -> v=(1,0,1)  y=(0,0,1)  z=(0,-1,0)
+$ EID  4 G0 = grid 5 (0,30,10)                        -> v=(0,0,10) y=(0,0,1)  z=(0,-1,0)
+$ EID  5 WA=WB=(0,0,1) (OFFT GGG, CD 0)               -> beam line at z = 1
+$ EID  6 OFFT GOO, WA=WB=(0,.5,0) in the element frame -> y=(0,0,1): line at z = 0.5
+$ EID  7 CBEAM PBEAML BAR taper: z width 2, 3, 4 at x/L 0, .5, 1 (height 1)
+$ EID  8 PBAR A=6 I1=4.5 I2=2 -> equivalent rectangle 2(z) x 3(y)
+$ EID  9 PBEAM same, N1A=N1B=0.5 -> rectangle centred at y = 0.5
+$ EID 10 PBARL CHAN, EID 11 PBARL TUBE, EID 12 CROD (no section), EID 13 PBARL BOX too thick (warned)
+$NODES
+GRID           1              0.      0.      0.
+GRID           2             10.      0.      0.
+GRID           3              0.     10.      0.       5                
+GRID           4             10.     10.      0.       5                
+GRID           5              0.     30.     10.
+GRID           6              0.     20.      0.       5                
+GRID           7             10.     20.      0.       5                
+GRID           8              0.     30.      0.
+GRID           9             10.     30.      0.
+GRID          10              0.     40.      0.
+GRID          11             10.     40.      0.
+GRID          12              0.     50.      0.
+GRID          13             10.     50.      0.
+GRID          14              0.     60.      0.
+GRID          15             10.     60.      0.
+GRID          16              0.     70.      0.
+GRID          17             10.     70.      0.
+GRID          18              0.     80.      0.
+GRID          19             10.     80.      0.
+GRID          20              0.     90.      0.
+GRID          21             10.     90.      0.
+GRID          22              0.    100.      0.
+GRID          23             10.    100.      0.
+GRID          24              0.    110.      0.
+GRID          25             10.    110.      0.
+GRID          26              0.    120.      0.
+GRID          27             10.    120.      0.
+$ELEMENTS
+CBAR           1       1       1       2      0.      1.      0.
+CBAR           2       1       3       4      1.      0.      1.
+CBAR           3       1       6       7      1.      0.      1.     BGG
+CBAR           4       1       8       9       5
+CBAR           5       1      10      11      0.      1.      0.
+                                              1.                      1.
+CBAR           6       1      12      13      0.      0.      1.     GOO
+                                      .5                      .5
+CBEAM          7       2      14      15      0.      1.      0.
+CBAR           8       3      16      17      0.      1.      0.
+CBEAM          9       4      18      19      0.      1.      0.
+CBAR          10       5      20      21      0.      1.      0.
+CBAR          11       6      22      23      0.      1.      0.
+CROD          12       7      24      25
+CBAR          13       8      26      27      0.      1.      0.
+$PROPERTIES
+PBARL          1       1             BAR
+              2.      3.      0.
+PBEAML         2       1             BAR
+              2.      1.      0.     YES      .5      3.      1.      0.
+             YES      1.      4.      1.      0.
+PBAR           3       1      6.     4.5      2.      1.
+PBEAM          4       1      6.     4.5      2.              1.
++
+             YES      1.      6.     4.5      2.              1.
+              0.      0.
++
+                                              .5
+PBARL          5       1            CHAN
+              4.     10.      .5      .6      0.
+PBARL          6       1            TUBE
+              1.      .5      0.
+PROD           7       1      1.
+PBARL          8       1             BOX
+              2.      2.     1.5      .5      0.
+$MATERIALS
+MAT1           1  70000.              .3   2.7-9
+$COORDS
+CORD2R         5              0.      0.      0.      0.      0.      1.
+              0.      1.      0.
+ENDDATA

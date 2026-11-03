@@ -9,8 +9,11 @@ are soft laterally and stiffer vertically in basic axes; the fourth is turned 30
 its own CID 10 and is 10x stiffer along its local x. Nonstructural mass (Case Control NSM = 10):
 2 kg/m^2 of paint on the PSHELL, plus NSMADD 10 = a 20 kg/m^2 harness strip along the front row
 (NSM1 11) and a 2 kg cable bundle spread over the back row (NSML1 12). MYSTRAN applies the PSHELL
-NSM but not the NSM1/NSML1 sets, so the solved modes leave those out. ``write_bush_check`` writes a
-one-bush deck used to verify that the solver honors the CBUSH CID.
+NSM but not the NSM1/NSML1 sets, so the solved modes leave those out. Underneath, two PBARL I
+stringers run along x (rows y = -100 and +100) and two PBARL CHAN rails along the short edges with
+their flanges facing inward; all are CBARs on the plate grids, offset below the plate by WA/WB, with
+the orientation vector up (element y = basic z). ``write_bush_check`` writes a one-bush deck used to
+verify that the solver honors the CBUSH CID.
 """
 from __future__ import annotations
 
@@ -29,6 +32,9 @@ K_ROTATED = [100.0, 10.0, 50.0, 1.0e5, 1.0e5, 1.0e5]
 BOX_MASS, BOX_DIMS = 0.02, (200.0, 150.0, 80.0)             # t, mm
 BUSH_CHECK = {"k": (1000.0, 100.0, 10.0), "mass": 0.01, "angle_deg": 30.0}
 PAINT_NSM, HARNESS_NSM, BUNDLE_MASS = 2.0e-9, 2.0e-8, 0.002  # t/mm^2, t/mm^2, t
+STRINGER = [30.0, 20.0, 20.0, 1.5, 2.0, 2.0]   # PBARL I: depth, flange widths, web, flange thicknesses
+RAIL = [15.0, 25.0, 1.5, 1.5]                  # PBARL CHAN: width, depth, web, flange
+STRINGER_ROWS = (2, 6)
 
 
 def _case_control(title, extra=()):
@@ -88,8 +94,27 @@ def write_demo(path=HERE / "demo.bdf") -> Path:
         rotated = n == 2
         model.add_cbush(2001 + n, 12 if rotated else 11, [ground, top], None, None, cid=10 if rotated else 0)
     model.add_spc1(1, "123456", [1001, 1002, 1003, 1004])
+    _add_stiffeners(model, gid)
     model.write_bdf(str(path), enddata=True)
     return path
+
+
+def _add_stiffeners(model, gid):
+    """CBARs under the plate: I stringers along x, CHAN rails along y (flanges inward)."""
+    model.add_pbarl(21, 1, "I", STRINGER)
+    model.add_pbarl(22, 1, "CHAN", RAIL)
+    up = [0.0, 0.0, 1.0]  # element y = basic z, so the sections' depth is vertical
+    eid = 3001
+    for j in STRINGER_ROWS:  # I: shear center at mid-depth
+        w = [0.0, 0.0, -(T / 2 + STRINGER[0] / 2)]
+        for i in range(NX):
+            model.add_cbar(eid, 21, [gid(i, j), gid(i + 1, j)], up, None, wa=w, wb=w)
+            eid += 1
+    w = [0.0, 0.0, -(T / 2 + RAIL[1] / 2)]  # CHAN: the line is its shear center, behind the web
+    for j in range(NY):  # left rail runs +y, right rail -y: element z (the flanges) points inward
+        model.add_cbar(eid, 22, [gid(0, j), gid(0, j + 1)], up, None, wa=w, wb=w)
+        model.add_cbar(eid + 1, 22, [gid(NX, j + 1), gid(NX, j)], up, None, wa=w, wb=w)
+        eid += 2
 
 
 def write_bush_check(path) -> Path:

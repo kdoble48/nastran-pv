@@ -22,6 +22,7 @@ Gotchas section before you touch the builders, VTKHDF or pvpython code.
 | New cell/point array | The builder. Use `vtkutil.add_array(..., skip_all_nan=True)`, because all-NaN arrays break the XML reader. If it is categorical, add legend names in `labels_for` (`nastran_views.py`). `index_colors` is generic. |
 | Derived field / `--map` key / `--calc` | `fields/derived.py`, `fields/tables.py` or `fields/calc.py`, plus the CLI options in `cli.py`. The matching ParaView filter lives in `nastran_bdf_reader.py`. |
 | New view / toolbar macro | `nastran_views.VIEWS` (and its module docstring) + `launch.VIEW_NAMES` + `install_macros.MACROS` + `export_site.VIEW_INFO` + `docs/build_gallery.py` `VIEW_ORDER`, plus the preset list in `docs/cli.md` and the macro table in `docs/paraview.md`. A gallery scene appears only if a model in `build_gallery.build_models` lists the view **and** its deck has the cards (uCRM-9, or the demo from `docs/models/make_demo.py`). Then regenerate: `regenerating-nastran-gallery`. |
+| Beam section shape or property card | `sections/shapes.py` (`SHAPES`: rings, symmetry, dimension rule) and `sections/beams.py` `property_stations`; add the shape to `CANONICAL` in `tests/test_sections.py` and rerun `docs/build_section_figure.py` |
 | Results | `results.py` **and** `results_h5.py` (they share an interface). `attach_step` writes the arrays. |
 | Output format | `vtkio.py` / `vtkhdf.py` / `store.py`. Every array must exist at every step (`_fill_missing`). |
 
@@ -30,7 +31,8 @@ SPC/load arrays), `fields/common.MESH` (derived fields, `--map`, `--calc`), `vtk
 `nastran_views.MESH` (ghost mesh, ElementType legend), and `results.attach_step`
 (`MESH_BLOCKS + ("Masses", "Rigid", "Constraints")` get `Displacement`). Structural elements with
 mass belong in all of them. Connectors (springs, rigid elements) usually belong in none except
-`attach_step`.
+`attach_step`. Display geometry derived from a mesh block (`BeamSections`) belongs in none of them;
+`attach_step` gives it its own displacement (`sections.sweep.attach_displacement`).
 
 Then update the doc that the sync table in `docs/development.md#keeping-docs-in-sync` maps to
 (`model.md` for blocks and arrays, including its "Not visualized yet" list; `paraview.md` for

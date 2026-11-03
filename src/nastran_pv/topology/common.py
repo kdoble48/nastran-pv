@@ -67,7 +67,24 @@ def write_table(obj, prefix, rows) -> None:
         if isinstance(values[0], str):
             vtkutil.add_string_array(fd, prefix + col, values)
         else:
-            vtkutil.add_array(fd, prefix + col, np.asarray(values))
+            vtkutil.add_array(fd, prefix + col, np.asarray(values), skip_all_nan=True)
+
+
+def read_table(obj, prefix) -> list[dict]:
+    """The rows :func:`write_table` wrote (columns in field order; missing all-NaN columns stay missing)."""
+    fd = obj.GetFieldData()
+    cols = {}
+    for i in range(fd.GetNumberOfArrays()):
+        name = fd.GetArrayName(i)
+        if not name or not name.startswith(prefix):
+            continue
+        a = fd.GetAbstractArray(i)
+        if a.IsA("vtkStringArray"):
+            cols[name[len(prefix):]] = [a.GetValue(k) for k in range(a.GetNumberOfValues())]
+        else:
+            cols[name[len(prefix):]] = vtkutil.to_numpy(a).tolist()
+    n = min((len(v) for v in cols.values()), default=0)
+    return [{c: v[k] for c, v in cols.items()} for k in range(n)]
 
 
 def _extract(ds, local_ids):

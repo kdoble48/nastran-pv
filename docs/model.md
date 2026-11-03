@@ -11,7 +11,7 @@ deck has nothing for it.
 |---|---|---|
 | `Shells` | CTRIA3/6, CTRIAR, CQUAD4/8, CQUADR, CSHEAR | cell: `EID PID MID ElementType Thickness Density MassPerArea ElementMass FamilyId GroupId Normal ElementXAxis MaterialAxis`, with NSM also `NSMPerArea NSMMass NSMSource`; point: `NID SPC_DOF F_<sid> M_<sid>` |
 | `Solids` | CHEXA/CPENTA/CTETRA/CPYRAM, linear and quadratic | cell: `EID PID MID ElementType Density ElementMass`; point: as for shells |
-| `Lines` | CBAR, CBEAM, CROD, CONROD, CTUBE, ... | cell: `EID PID MID ElementType Density Area ElementMass`, with NSM also `NSMPerLength NSMMass NSMSource` |
+| `Lines` | CBAR, CBEAM, CROD, CONROD, CTUBE, ... | cell: `EID PID MID ElementType Density Area ElementMass Axis1-3 OffsetA OffsetB` (frame and offsets of CBAR/CBEAM, NaN for the others), with NSM also `NSMPerLength NSMMass NSMSource` |
 | `Masses` | CONM2, CONM1, CMASS1/2 (one point at the CG) | `Mass MassScale Inertia InertiaEllipsoid EquivalentRadius Offset` |
 | `MassOffsets` | grid-to-CG lines for offset CONM2s | `EID` |
 | `Rigid` | RBE2/RBE3/RBAR/... spider legs | cell: `EID RigidType DOF` |
@@ -20,16 +20,19 @@ deck has nothing for it.
 | `BushLines` | CBUSH GA–GB lines | cell: `EID PID`; point: `NID` |
 | `Constraints` | SPC/SPC1/SPCADD/GRID PS points per set | `SPCSet SPC_DOF DOFCode CD` |
 | `Loads/SID_n`, `Loads/LOAD_n` | FORCE/MOMENT(1,2) per set, LOAD combinations resolved | `Force Moment ForceMagnitude`; field `ResultantForce GravityAcceleration` |
+| `BeamSections` | CBAR/CBEAM cross sections swept in 3D (only with `--beam-sections`) | cell: `EID PID MID ElementType BeamPart Face`; point: `GA GB StationT`, with results `Displacement DisplacementMagnitude` |
 
 Root field data: `DeckPath SOL WTMASS ActiveLoadSets ActiveSPCSets StructuralMass ConcentratedMass ModelMass ModelCG Warnings`,
 plus `ActiveNSMSet PropertyNSMMass BulkNSMMass NonstructuralMass`, `DefinedNSMSets` (the top-level
 bulk sets, when the deck has any) and, when there is NSM, the
 `NSM_SET NSM_SetType NSM_SetMass NSM_SetCount` (per NSM set) and `NSM_PID NSM_PIDMass` tables
-(see [Nonstructural mass](#nonstructural-mass)).
+(see [Nonstructural mass](#nonstructural-mass)). Decks with CBAR/CBEAM also get the
+`SECTION_*`, `SECRING_*` and `SECPT_*` section tables (see [Beam sections](beam-sections.md)).
 The [model tools](tools.md) add `Hops`, `PartId` and `OnPath` (cell and point) and the `PART_*`,
 `LINK_*` and `PathLength` root arrays; `nastran-pv check` writes `CHECK_*`.
 With an OP2 file loaded, the mesh blocks also get `Displacement Rotation DisplacementMagnitude`
-and `VonMisesMax`, and the root gets `ResultLabel Frequency`.
+and `VonMisesMax`, `BeamSections` gets the rigid-section `Displacement` of its points, and the root
+gets `ResultLabel Frequency`.
 
 The [field options](fields.md) add further arrays on top of these.
 
