@@ -1,7 +1,8 @@
 # ParaView
 
 The plugin adds a reader for Nastran decks, glyph and field filters under *Filters > Nastran*, and
-one-click views on the Macros toolbar.
+one-click views on the Macros toolbar. For step-by-step walkthroughs, see
+[ParaView tutorials](paraview-tutorials.md).
 
 ## Open a deck
 
@@ -11,7 +12,8 @@ one-click views on the Macros toolbar.
    ParaView also offers its VisIt NASTRAN reader for some extensions.
 3. In the Properties panel, switch blocks on or off and optionally set *OP2 File Name*, which
    takes an `.op2` or MSC/NX `.h5` file. Each result step (subcase, load step or mode) becomes a
-   time step.
+   time step. *NSMSet* picks the bulk nonstructural mass set
+   ([Nonstructural mass](model.md#nonstructural-mass)).
 
 `nastran-pv view DECK --view masses` does all of this in one command.
 
@@ -75,6 +77,7 @@ summary. Running a view again reuses its pipeline objects, which are named `NPV 
 | NPV Rigid | RBE2/RBE3/... spider legs by type |
 | NPV Family / Group / PID / MID / Element Type | Mesh with an indexed color per value, with names in the legend |
 | NPV Thickness | Shell thickness |
+| NPV NSM | Nonstructural mass: shells by NSM per area, lines by NSM per length (two legends); totals by source and per NSM set, or the defined sets when none is selected. The reader's *NSMSet* picks the bulk set (-1 = Case Control `NSM=`, or the only set of a bulk-only file; 0 = none; see [Nonstructural mass](model.md#nonstructural-mass)) |
 | NPV Results | Deformed shape (Warp By Vector) colored by displacement, for the current time step |
 | NPV Parts | Connected parts in indexed colors; uncheck card types on *NPV parts* to split at connectors |
 | NPV Grow | Elements reached from the seeds, colored by element hops |
@@ -87,6 +90,7 @@ summary. Running a view again reuses its pipeline objects, which are named `NPV 
 | NPV Show All | Clears both element lists and checks every property, material, type, family and group |
 | NPV Only Property | Unchecks every property except those of the selected elements |
 | NPV Only Material | Unchecks every material except those of the selected elements |
+| NPV Show Only Reached / NPV Hide Reached | Shows only, or hides, what *NPV grow* reached; with *Stay Within* that is "everything connected to this point inside its group" ([Model tools](tools.md#paraview)) |
 
 The same views can be called from the Python shell (`import nastran_views as nv; nv.apply("masses")`),
 from `render_model.py`, and as `nastran-pv render` presets (see [CLI](cli.md#batch-screenshots)).

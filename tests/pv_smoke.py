@@ -186,6 +186,43 @@ def tree_checks(pv, nv, reader):
     keep = nv.show_only_material()
     check(keep == ["MAT1_3"] and _cells(reader, "Solids") == 1, f"NPV Only Material -> {keep}")
     nv.show_all(reader)
+    # GUI flow: the view shows an NPV extract; the selection sits on it while the reader is active
+    nv.apply("family", reader=reader, view=view)
+    shells = pv.FindSource(nv._name(nv.Model(reader), "Shells"))
+    _select(pv, shells, "(EID == 3)")
+    pv.SetActiveSource(reader)
+    nv.hide_selected()
+    check(reader.HiddenElements == "3" and _cells(reader, "Shells") == 2 and nv.selected_source() is None,
+          "NPV Hide takes the selection from the view's extract, then clears it")
+    nv.show_all(reader)
+    # grow from a grid without leaving the seed's family, then isolate what it reached
+    pv.SetActiveSource(reader)
+    nv.apply("grow", reader=reader, view=view, seeds="GRID 1")
+    grow_src = pv.FindSource(nv._name(nv.Model(reader), "grow"))
+    grow_src.StayWithin = "seed families"
+    reached_view = pv.FindSource(nv._name(nv.Model(reader), "grow reached"))
+    reached_view.UpdatePipeline()
+    check(reached_view.GetDataInformation().GetNumberOfCells() == 4,
+          "grow view draws the reached shells and masses (ExtractBlock uses the tree's assembly)")
+    _, eids = nv.reached_eids(reader)
+    check(eids == {1, 3, 201, 202, 503}, f"grow GRID 1 within its family -> {sorted(eids)}")
+    grow_src.StayWithin = "anything"
+    _, everything = nv.reached_eids(reader)
+    grow_src.StayWithin = "seed properties"
+    _, by_pid = nv.reached_eids(reader)
+    grow_src.StayWithin = "anything"
+    grow_src.StayWithinSeedPIDs = 1  # the property's name before StayWithin (saved states, scripts)
+    _, legacy = nv.reached_eids(reader)
+    check(legacy == by_pid != everything, f"StayWithinSeedPIDs = 1 is StayWithin = seed properties: "
+                                          f"{sorted(legacy)} vs {sorted(by_pid)}")
+    grow_src.StayWithinSeedPIDs = 0
+    grow_src.StayWithin = "seed families"
+    pv.SetActiveSource(reader)
+    nv.show_only_reached()
+    check(reader.ShowOnlyElements == "1 3 201-202 503" and _cells(reader, "Shells") == 2,
+          f"NPV Show Only Reached: {reader.ShowOnlyElements!r}")
+    nv.show_all(reader)
+    pv.Delete(grow_src)
     _select(pv, reader, "(EID == 1) | (EID == 201)")  # a shell and a CONM2 (EID on mass points)
     nv.show_only_selected()
     check(reader.ShowOnlyElements == "1 201" and _cells(reader, "Masses") == 1,
@@ -251,6 +288,15 @@ def main():
     for name in nv.VIEWS:
         nv.apply(name, reader=reader, view=view)
     check(True, f"all views build: {', '.join(nv.VIEWS)}")
+    nsm_reader = rm.load_reader(os.path.join(HERE, "data", "nsm.bdf"))
+    nmodel = nv.apply("nsm", reader=nsm_reader, view=view)
+    ntext = pv.FindSource(nv._name(nmodel, "info")).Text
+    check("Nonstructural mass: 13.25" in ntext and "set 40: 8.6" in ntext, f"nsm view totals: {ntext!r}")
+    nsm_reader.NSMSet = 0
+    bulk = rm.Model(nsm_reader).field("BulkNSMMass")
+    check(bulk is not None and float(bulk[0]) == 0.0, f"NSMSet 0 drops the bulk NSM ({bulk})")
+    pv.Delete(nsm_reader)
+    pv.SetActiveSource(reader)
     nloads = rm.Model(reader).block("Loads")
     npts = max(nloads.GetBlock(i).GetNumberOfPoints() for i in range(nloads.GetNumberOfBlocks()))
     check(npts > 1, f"tiny deck load set has {npts} points")

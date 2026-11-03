@@ -32,6 +32,7 @@ class Deck:
     xyz: np.ndarray  # (n, 3) basic coordinates, aligned with ``nids``
     cd: np.ndarray  # (n,) displacement coordinate system id per node
     warnings: list[str] = field(default_factory=list)
+    _n_mass: int = field(default=0, repr=False)  # leading mass warnings (see warn)
 
     # ------------------------------------------------------------------ nodes
     def lookup(self, node_ids) -> np.ndarray:
@@ -106,8 +107,19 @@ class Deck:
         p = self.model.params.get("WTMASS")
         return float(p.values[0]) if p is not None else 1.0
 
-    def warn(self, msg: str) -> None:
-        self.warnings.append(msg)
+    def warn(self, msg: str, mass: bool = False) -> None:
+        """Record a warning. ``mass`` ones (they change the model mass) go before the others, in
+        order, so the CLI and the reader still show them when they cut the list short."""
+        if mass:
+            self.warnings.insert(self._n_mass, msg)
+            self._n_mass += 1
+        else:
+            self.warnings.append(msg)
+
+    def reset_warnings(self, base) -> None:
+        """Back to ``base`` (the load warnings) before building the model again."""
+        self.warnings = list(base)
+        self._n_mass = 0
 
 
 def scan_sections(path: Path) -> tuple[bool, bool]:

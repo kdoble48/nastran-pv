@@ -38,6 +38,8 @@ VIEW_INFO = {
     "mid": ("MID", "Mesh colored by material ID."),
     "elementtype": ("Element type", "Mesh colored by element type."),
     "thickness": ("Thickness", "Shell thickness."),
+    "nsm": ("NSM", "Nonstructural mass: shells by NSM per area, lines by NSM per length; totals per source "
+                   "and NSM set."),
     "results": ("Results", "Deformed shape colored by displacement magnitude, one scene per mode."),
     "parts": ("Parts", "Connected parts with the rigid elements unchecked: the RBE2/RBE3 spiders turn gray as the "
                        "links the rules cut, and the part summary shows what they carry."),

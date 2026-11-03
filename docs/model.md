@@ -9,9 +9,9 @@ deck has nothing for it.
 
 | Block | Data | Main arrays |
 |---|---|---|
-| `Shells` | CTRIA3/6, CTRIAR, CQUAD4/8, CQUADR, CSHEAR | cell: `EID PID MID ElementType Thickness Density MassPerArea ElementMass FamilyId GroupId Normal ElementXAxis MaterialAxis`; point: `NID SPC_DOF F_<sid> M_<sid>` |
+| `Shells` | CTRIA3/6, CTRIAR, CQUAD4/8, CQUADR, CSHEAR | cell: `EID PID MID ElementType Thickness Density MassPerArea ElementMass FamilyId GroupId Normal ElementXAxis MaterialAxis`, with NSM also `NSMPerArea NSMMass NSMSource`; point: `NID SPC_DOF F_<sid> M_<sid>` |
 | `Solids` | CHEXA/CPENTA/CTETRA/CPYRAM, linear and quadratic | cell: `EID PID MID ElementType Density ElementMass`; point: as for shells |
-| `Lines` | CBAR, CBEAM, CROD, CONROD, CTUBE, ... | cell: `EID PID MID ElementType Density Area ElementMass` |
+| `Lines` | CBAR, CBEAM, CROD, CONROD, CTUBE, ... | cell: `EID PID MID ElementType Density Area ElementMass`, with NSM also `NSMPerLength NSMMass NSMSource` |
 | `Masses` | CONM2, CONM1, CMASS1/2 (one point at the CG) | `Mass MassScale Inertia InertiaEllipsoid EquivalentRadius Offset` |
 | `MassOffsets` | grid-to-CG lines for offset CONM2s | `EID` |
 | `Rigid` | RBE2/RBE3/RBAR/... spider legs | cell: `EID RigidType DOF` |
@@ -21,7 +21,11 @@ deck has nothing for it.
 | `Constraints` | SPC/SPC1/SPCADD/GRID PS points per set | `SPCSet SPC_DOF DOFCode CD` |
 | `Loads/SID_n`, `Loads/LOAD_n` | FORCE/MOMENT(1,2) per set, LOAD combinations resolved | `Force Moment ForceMagnitude`; field `ResultantForce GravityAcceleration` |
 
-Root field data: `DeckPath SOL WTMASS ActiveLoadSets ActiveSPCSets StructuralMass ConcentratedMass ModelMass ModelCG Warnings`.
+Root field data: `DeckPath SOL WTMASS ActiveLoadSets ActiveSPCSets StructuralMass ConcentratedMass ModelMass ModelCG Warnings`,
+plus `ActiveNSMSet PropertyNSMMass BulkNSMMass NonstructuralMass`, `DefinedNSMSets` (the top-level
+bulk sets, when the deck has any) and, when there is NSM, the
+`NSM_SET NSM_SetType NSM_SetMass NSM_SetCount` (per NSM set) and `NSM_PID NSM_PIDMass` tables
+(see [Nonstructural mass](#nonstructural-mass)).
 The [model tools](tools.md) add `Hops`, `PartId` and `OnPath` (cell and point) and the `PART_*`,
 `LINK_*` and `PathLength` root arrays; `nastran-pv check` writes `CHECK_*`.
 With an OP2 file loaded, the mesh blocks also get `Displacement Rotation DisplacementMagnitude`
@@ -43,10 +47,13 @@ The [field options](fields.md) add further arrays on top of these.
   compare stiffnesses across decades. `K_ref` defaults to the softest translational stiffness.
 * **Mass.** Element masses come from VTK cell sizes:
   - solids: volume × density
-  - shells: area × mass per area (all plies with `LAM=SYM` expanded, plus NSM)
+  - shells: area × structural mass per area (`MassPerArea`: all plies, with `LAM=SYM` expanded)
   - lines: length × area × density
 
-  WTMASS is not applied. CONM2, CONM1 and CMASS1/2 count as concentrated masses.
+  plus `NSMMass` on both (see below). `StructuralMass` excludes NSM, and `ModelMass` is structural
+  + nonstructural + concentrated. An element without thickness, area or density has no structural
+  mass, but its NSM still counts (the warning gives the amount). WTMASS is not applied. CONM2, CONM1 and CMASS1/2 count as
+  concentrated masses.
 * **Material axis.** THETA is measured from the projected G1→G2 edge. MCID projects that coordinate
   system's x-axis onto the element plane.
 * **Results.** OP2 and HDF5 displacements and eigenvectors are rotated from each grid's CD system
@@ -56,6 +63,39 @@ The [field options](fields.md) add further arrays on top of these.
   `X1 Y1 XY1`/`X2 Y2 XY2` on both fibres, and solids use `X Y Z TXY TYZ TZX`, taking the maximum
   over corner and centre points. It is tested against files written in that layout; please report
   any real files it misreads.
+
+## Nonstructural mass
+
+Nonstructural mass (NSM) comes from two sources, summed per element:
+
+* **Property fields**: the NSM field of PSHELL, PCOMP/PCOMPG, PSHEAR, PBAR/PBARL, PBEAM/PBEAML,
+  PROD, PTUBE and the CONROD element card. It always applies.
+* **Bulk sets**: `NSM`, `NSM1`, `NSML` and `NSML1`, combined (and nested) by `NSMADD`. One set
+  applies: `--nsm-set ID` (reader property *NSMSet*), else Case Control `NSM=`, else, in a
+  bulk-only file, the only top-level set. A run deck without `NSM=` applies none, as Nastran does,
+  with a warning; `--nsm-set 0` turns the bulk sets off.
+
+`NSM`/`NSM1` values are per unit area or length. `NSML`/`NSML1` values are a total, spread over the
+elements in proportion to area or length (`NSML` per id, `NSML1` over its whole list). TYPE matches
+the property card exactly (`PSHELL` does not cover PCOMP), `ELEMENT` takes element ids, and `ALL`
+takes every element of that property type. `TYPE=CONROD` takes CONROD element ids. A set reached
+twice through `NSMADD` counts once.
+
+| Array | Where | Meaning |
+|---|---|---|
+| `NSMPerArea` / `NSMPerLength` | Shells / Lines | NSM per unit area or length, property + bulk |
+| `NSMMass` | Shells, Lines | NSM of the element; included in `ElementMass` |
+| `NSMSource` | Shells, Lines | 0 none, 1 property, 2 bulk set, 3 both |
+| `PropertyNSMMass`, `BulkNSMMass`, `NonstructuralMass` | root | totals |
+| `DefinedNSMSets` | root | sets no NSMADD references (what `NSM=` or `--nsm-set` would name) |
+| `NSM_SET NSM_SetType NSM_SetMass NSM_SetCount` | root | per leaf set of the active set (written whenever a set is active): card types, mass, elements |
+| `NSM_PID NSM_PIDMass` | root | NSM per property |
+
+Cards of other types (PBEND, PCONEAX, PRAC2D, PBCOMP), ids that match no element, `ELEMENT` ids of
+elements that take no NSM (CVISC, CBEND, ...) and `NSML` sets that mix shells and lines are skipped
+with a warning. Warnings that change the mass are listed first, so the CLI's and the reader's
+shortened lists show them. The `nsm` view shows all of this
+([toolbar macros](paraview.md#one-click-views-toolbar-macros)).
 
 ## Not visualized yet
 

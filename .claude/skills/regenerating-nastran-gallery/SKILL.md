@@ -1,6 +1,6 @@
 ---
 name: regenerating-nastran-gallery
-description: Use when a nastran_pv view, export_site.py, scene_export.py or the demo deck changes and the web gallery is stale, when building or previewing the Sphinx docs site, or when sphinx -W fails on a docs change.
+description: Use when a nastran_pv view, export_site.py, scene_export.py or the demo deck changes and the web gallery or the tutorial screenshots are stale, when building or previewing the Sphinx docs site, or when sphinx -W fails on a docs change.
 ---
 
 # Regenerating the gallery and docs site
@@ -29,6 +29,19 @@ python docs/build_gallery.py \
 - `--upload` replaces a public release asset. It is outward-facing, so confirm with the user first.
 - Check a few thumbnails with the Read tool before reporting success. The script validates scenes,
   but colors and camera framing need eyes.
+
+## Tutorial screenshots
+
+`docs/paraview-tutorials.md` uses committed PNGs in `docs/images/` (not the release asset). When a
+view, a macro or the reader's tree changes, regenerate them (about a minute) and look at each one:
+
+```bash
+pvpython docs/build_tutorial_images.py \
+    --ucrm9 gpk4zn73xn-1/uCRM9/uCRM9/Mesh/Coarse/FEM/run_uCRM-9_static_cruise_coarse.bdf \
+    --demo-op2 docs/models/demo.OP2          # the MYSTRAN OP2 written by build_gallery.py
+```
+
+Camera properties read before the first render are stale, so the script frames from data bounds.
 
 ## Docs site
 

@@ -6,13 +6,14 @@ reuses named pipeline objects ("NPV ..."), so running a view twice does not
 pile up duplicates. Available views::
 
     masses  bushes  loads  spc  rigid  family  group  pid  mid  thickness
-    elementtype  results  parts  grow  path  check
+    nsm  elementtype  results  parts  grow  path  check
 
 ``grow_from_selection`` and ``path_from_selection`` seed the grow and path
 views from the current selection. ``show_only_selected``, ``hide_selected``, ``show_all``,
-``show_only_property`` and ``show_only_material`` are Femap-style visibility commands: they set the
-reader's visibility checklists and element ID lists. Plus :func:`index_colors`, which turns whatever integer array the active
-representation is coloured by into an indexed lookup table with names.
+``show_only_property``, ``show_only_material``, ``show_only_reached`` and ``hide_reached`` are
+Femap-style visibility commands: they set the reader's visibility checklists and element ID lists.
+Plus :func:`index_colors`, which turns whatever integer array the active representation is
+coloured by into an indexed lookup table with names.
 
 From the ParaView Python shell::
 
@@ -42,7 +43,7 @@ def ensure_plugin():
         pv.LoadPlugin(os.path.join(HERE, "nastran_bdf_reader.py"))
 
 
-def load_reader(deck, op2=None):
+def load_reader(deck, op2=None, nsm_set=None):
     ensure_plugin()
     # paraview.simple names the constructor after the reader label
     reader = pv.NastranBulkDatanastranpv(FileName=deck)
@@ -52,6 +53,8 @@ def load_reader(deck, op2=None):
         pass
     if op2:
         reader.OP2FileName = op2
+    if nsm_set is not None:
+        reader.NSMSet = int(nsm_set)
     reader.UpdatePipelineInformation()
     return reader
 
@@ -187,12 +190,22 @@ def selectors(blocks):
     return [f"/Root/{prefix}{b}" for b in blocks for prefix in ("Model/", "")]
 
 
+def extract_blocks(src, blocks):
+    """ExtractBlock of ``blocks`` from ``src``. The model tree is selected through its assembly and a
+    multiblock through its hierarchy; ExtractBlock picks that when it is created, from data the
+    input may not have produced yet, so it is set here from the updated input."""
+    src.UpdatePipeline()
+    info = src.GetDataInformation().DataInformation
+    assembly = "Assembly" if info.GetDataAssembly() is not None else "Hierarchy"
+    return pv.ExtractBlock(Input=src, Assembly=assembly, Selectors=selectors(blocks))
+
+
 def _extract(model, *blocks, what=None):
     blocks = [b for b in blocks if model.has(b) or "/" in b]
     if not blocks:
         return None
     return _named(model, what or "+".join(blocks),
-                  lambda: pv.ExtractBlock(Input=model.reader, Selectors=selectors(blocks)))
+                  lambda: extract_blocks(model.reader, blocks))
 
 
 def _reset_view(view):
@@ -286,6 +299,8 @@ def labels_for(model, array, values):
     if array == "ElementType":
         names = next((model.field_strings(b, "ElementTypeNames") for b in MESH if model.has(b)), [])
         return [names[v] if 0 <= v < len(names) else str(v) for v in values]
+    if array == "NSMSource":
+        return [{0: "none", 1: "property", 2: "bulk", 3: "property + bulk"}.get(v, str(v)) for v in values]
     if array == "Axis":
         return [{0: "ellipsoid", 1: "K1", 2: "K2", 3: "K3"}.get(v, str(v)) for v in values]
     prefix = {"PID": "PID", "MID": "MID", "DOFCode": "DOF", "SPCSet": "SPC set", "CID": "CID", "CD": "CD"}
@@ -522,6 +537,56 @@ def view_thickness(model, view):
     continuous(d, "CELLS", "Thickness", view=view)
 
 
+NSM_DENSITY = {"Shells": "NSMPerArea", "Lines": "NSMPerLength"}
+
+
+def view_nsm(model, view, top=8):
+    """Nonstructural mass: shells coloured by NSM per area and lines by NSM per length (separate
+    legends, the units differ), the rest ghosted, and the totals per source and NSM set."""
+    blocks = [b for b in NSM_DENSITY if model.has(b) and model.array(b, "NSMMass", "cell") is not None]
+    ghost_mesh(model, view)
+    active = model.field("ActiveNSMSet")
+    active = int(active[0]) if active is not None else -1
+    defined = model.field("DefinedNSMSets")
+    defined = ", ".join(str(int(v)) for v in defined) if defined is not None else ""
+    pick = "reader property NSMSet (-1 = Case Control, 0 = none)"
+    if not blocks:
+        if active > 0:
+            text = f"NSM set {active} puts mass on no element (see Output Messages)."
+        elif defined:
+            text = f"NSM set(s) {defined} defined but none selected:\nset the {pick}."
+        else:
+            text = "No nonstructural mass (property NSM or NSM/NSML cards) in this deck."
+        info_text(model, view, text)
+        return
+    for b in blocks:
+        d = pv.Show(_extract(model, b), view)
+        continuous(d, "CELLS", NSM_DENSITY[b], preset="Inferno (matplotlib)", view=view)
+        if b == "Lines":
+            d.LineWidth = 4.0
+    def total(name):
+        a = model.field(name)
+        return float(a[0]) if a is not None else 0.0
+
+    nsm, model_mass = total("NonstructuralMass"), total("ModelMass")
+    text = f"Nonstructural mass: {nsm:.6g}"
+    if model_mass > 0:
+        text += f"  ({100.0 * nsm / model_mass:.3g}% of model mass {model_mass:.6g})"
+    text += f"\n  property NSM fields: {total('PropertyNSMMass'):.6g}"
+    unselected = f"(none selected; defined: {defined})" if defined else "(none)"
+    text += f"\n  bulk NSM set {active if active > 0 else unselected}: {total('BulkNSMMass'):.6g}"
+    sids, masses = model.field("NSM_SET"), model.field("NSM_SetMass")
+    if sids is not None and masses is not None:
+        order = np.argsort(-masses)
+        for i in order[:top]:
+            text += f"\n    set {int(sids[i])}: {masses[i]:.6g}"
+        if len(order) > top:
+            text += f"\n    ... {len(order) - top} more (NSM_SET / NSM_SetMass in the field data)"
+    t = info_text(model, view, text + "\nMass units as in the deck (WTMASS not applied)"
+                                      f"\nOther set: {pick}")
+    pv.GetDisplayProperties(t, view).Justification = "Left"
+
+
 def view_results(model, view):
     mesh = _extract(model, *[b for b in MESH if model.has(b)], what="mesh")
     dmax = max((float(a.max()) for b in MESH
@@ -549,7 +614,7 @@ TOPOLOGY_BLOCKS = ("Shells", "Solids", "Lines", "Rigid", "Connectors", "BushLine
 def _topology_blocks(model, src, what):
     blocks = [b for b in TOPOLOGY_BLOCKS if model.has(b)]
     return _named(model, f"{what} blocks",
-                  lambda: pv.ExtractBlock(Input=src, Selectors=selectors(blocks)))
+                  lambda: extract_blocks(src, blocks))
 
 
 def _at_least(model, src, array, lower, what):
@@ -643,7 +708,7 @@ LINE_CHECKS = ("FreeEdges", "CoincidentGrids", "DuplicateElements", "DanglingCon
 
 
 def _check_layer(model, c, view, what, blocks, codes):
-    ex = _named(model, what, lambda: pv.ExtractBlock(Input=c, Selectors=selectors(blocks)))
+    ex = _named(model, what, lambda: extract_blocks(c, blocks))
     d = pv.Show(ex, view)
     # both layers share the "Check" lookup table, so there is one legend naming the checks found
     lut = categorical(d, "Check", codes, [CHECKS[k] for k in codes],
@@ -686,10 +751,41 @@ def _selection_kinds(sel):
     return kinds
 
 
+def _selection_of(src):
+    try:
+        return src.GetSelectionInput(src.Port) if src is not None else None
+    except AttributeError:
+        return None
+
+
+def _sources_with_selection():
+    return {key[0]: s for key, s in pv.GetSources().items() if _selection_of(s) is not None}
+
+
+def selected_source():
+    """The source holding the current selection: the active one, else the only source with a
+    selection. Views show ``NPV ...`` extracts, so a selection made in the view usually sits on one
+    of those rather than on the reader the user clicked."""
+    active = pv.GetActiveSource()
+    if _selection_of(active) is not None:
+        return active
+    held = _sources_with_selection()
+    if len(held) > 1:
+        raise RuntimeError(f"Selections on several sources ({', '.join(sorted(held))}): click the one "
+                           "to use in the Pipeline Browser, or clear the others.")
+    return next(iter(held.values()), None)
+
+
+def selected_reader():
+    """The Nastran reader upstream of the selection (with two decks open, not always the active one)."""
+    return find_reader(selected_source())
+
+
 def _fetch_selection():
-    """(selected cells/points of the active source, the selection proxy)."""
-    src = pv.GetActiveSource()
-    sel = src.GetSelectionInput(src.Port) if src is not None else None
+    """(selected cells/points, the selection proxy) of :func:`selected_source`."""
+    active = pv.GetActiveSource()
+    src = selected_source()
+    sel = _selection_of(src)
     if sel is None:
         raise RuntimeError("Select cells or grids in the view first (Select Cells On / Select Points On).")
     ex = pv.ExtractSelection(Input=src, Selection=sel)
@@ -697,7 +793,7 @@ def _fetch_selection():
         data = servermanager.Fetch(ex)
     finally:
         pv.Delete(ex)
-        pv.SetActiveSource(src)  # the extract became active; give the user's source back
+        pv.SetActiveSource(active or src)  # the extract became active; give the user's source back
     return data, sel
 
 
@@ -736,7 +832,7 @@ def selected_ids():
 
 def grow_from_selection():
     kind, ids = selected_ids()
-    model = Model(find_reader())
+    model = Model(selected_reader())
     g = _named(model, "grow", lambda: pv.NastranGrow(Input=model.reader))
     g.SeedIDs = f"{kind} {' '.join(map(str, ids))}"
     apply("grow", reader=model.reader, model=model, reset_camera=False)
@@ -746,7 +842,7 @@ def path_from_selection():
     kind, ids = selected_ids()
     if kind != "GRID" or len(ids) != 2:
         raise RuntimeError(f"Select exactly two grids with Select Points On (got {len(ids)} {kind} id(s)).")
-    model = Model(find_reader())
+    model = Model(selected_reader())
     p = _named(model, "path", lambda: pv.NastranPath(Input=model.reader))
     p.FromGrid, p.ToGrid = ids
     apply("path", reader=model.reader, model=model, reset_camera=False)
@@ -770,9 +866,10 @@ def _listed(reader, prop):
 
 
 def _refresh(reader):
-    """The reader output changed: drop the selection (it would point at other cells) and redraw."""
-    if pv.GetActiveSource() is not None:
-        pv.ClearSelection(pv.GetActiveSource())
+    """The reader output changed: drop its selections (they would point at other cells) and redraw."""
+    for src in _sources_with_selection().values():
+        if find_reader(src) == reader:
+            pv.ClearSelection(src)
     reader.UpdatePipeline()
     if pv.GetActiveView() is not None:
         pv.Render()
@@ -783,7 +880,7 @@ def show_only_selected():
     from nastran_pv.tree import format_ids
 
     ids = _selected_elements()
-    reader = find_reader()
+    reader = selected_reader()
     reader.ShowOnlyElements = format_ids(ids)
     reader.HiddenElements = ""
     _refresh(reader)
@@ -794,7 +891,7 @@ def hide_selected():
     from nastran_pv.tree import format_ids, parse_ids
 
     ids = _selected_elements()
-    reader = find_reader()
+    reader = selected_reader()
     reader.HiddenElements = format_ids(parse_ids(reader.HiddenElements) | set(ids))
     _refresh(reader)
 
@@ -815,12 +912,63 @@ def _show_only_category(array, prop, what):
     ids = {int(v) for assoc in ("CELLS", "POINTS") for v in _gather(data, array, assoc) if v > 0}
     if not ids:
         raise RuntimeError(f"The selection carries no {array}: select elements that have a {what}.")
-    reader = find_reader()
+    reader = selected_reader()
     reader.UpdatePipelineInformation()
     keep = [n for n in _listed(reader, prop) if (m := re.search(r"_(\d+)$", n)) and int(m.group(1)) in ids]
     setattr(reader, prop, keep)
     _refresh(reader)
     return keep
+
+
+def reached_eids(reader=None):
+    """EIDs of everything *NPV grow* reached (``Hops >= 0``): elements, masses and bushes.
+    MPC legs are left out: their EID is the MPC set id."""
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    from nastran_pv.fields.common import field_strings, iter_blocks
+    from nastran_pv.tree import as_multiblock
+
+    model = Model(reader or find_reader())
+    g = pv.FindSource(_name(model, "grow"))
+    if g is None or not (g.SeedIDs or "").strip():
+        raise RuntimeError("Nothing grown yet: select a grid or elements, then click 'NPV Grow from Selection'.")
+    out = set()
+    for path, ds in iter_blocks(as_multiblock(fetch(g))):
+        for attr in (ds.GetCellData(), ds.GetPointData()):
+            hops, eid = attr.GetArray("Hops"), attr.GetArray("EID")
+            if hops is None or eid is None:
+                continue
+            keep = vtk_to_numpy(hops) >= 0
+            if path == "Connectors" and attr is ds.GetCellData():
+                names = field_strings(ds, "ConnectorTypeNames")
+                codes = vtk_to_numpy(attr.GetArray("ConnectorType"))
+                keep &= np.array([names[c] != "MPC" if 0 <= c < len(names) else True for c in codes], bool)
+            out.update(int(e) for e in vtk_to_numpy(eid)[keep])
+            break  # cell EIDs when the block has them, else point EIDs (masses, bushes)
+    return model.reader, out
+
+
+def show_only_reached():
+    """Femap-style isolate: show only what NPV Grow reached (e.g. grown from a grid within a group)."""
+    from nastran_pv.tree import format_ids
+
+    reader, eids = reached_eids()
+    if not eids:
+        raise RuntimeError("NPV grow reached no elements.")
+    reader.ShowOnlyElements = format_ids(eids)
+    reader.HiddenElements = ""
+    _refresh(reader)
+
+
+def hide_reached():
+    """Add everything NPV Grow reached to the reader's Hidden Elements."""
+    from nastran_pv.tree import format_ids, parse_ids
+
+    reader, eids = reached_eids()
+    if not eids:
+        raise RuntimeError("NPV grow reached no elements.")
+    reader.HiddenElements = format_ids(parse_ids(reader.HiddenElements) | eids)
+    _refresh(reader)
 
 
 def show_only_property():
@@ -836,7 +984,7 @@ def show_only_material():
 VIEWS = {
     "masses": view_masses, "bushes": view_bushes, "loads": view_loads, "spc": view_spc,
     "rigid": view_rigid, "family": view_family, "group": view_group, "pid": view_pid,
-    "mid": view_mid, "elementtype": view_elementtype, "thickness": view_thickness,
+    "mid": view_mid, "elementtype": view_elementtype, "thickness": view_thickness, "nsm": view_nsm,
     "results": view_results, "parts": view_parts, "grow": view_grow, "path": view_path, "check": view_check,
 }
 
@@ -876,7 +1024,8 @@ def set_camera(view, which):
 ACTIONS = {"index_colors": index_colors, "grow_from_selection": grow_from_selection,
            "path_from_selection": path_from_selection, "show_only_selected": show_only_selected,
            "hide_selected": hide_selected, "show_all": show_all, "show_only_property": show_only_property,
-           "show_only_material": show_only_material}
+           "show_only_material": show_only_material, "show_only_reached": show_only_reached,
+           "hide_reached": hide_reached}
 
 
 def run_macro(name):
@@ -888,8 +1037,12 @@ def run_macro(name):
             ACTIONS[name]()
         else:
             apply(name)
-    except Exception as exc:  # shown to the GUI user, not a traceback dump
+    except (RuntimeError, ValueError) as exc:  # what the user should do next, not a traceback dump
         vtkOutputWindow.GetInstance().DisplayErrorText(f"nastran-pv: {exc}\n")
+    except Exception:  # a bug: the traceback is what a report needs
+        import traceback
+
+        vtkOutputWindow.GetInstance().DisplayErrorText(f"nastran-pv: {name} failed:\n{traceback.format_exc()}")
 
 
 def write_color_preset(path, n=256, name="nastran-pv categorical"):

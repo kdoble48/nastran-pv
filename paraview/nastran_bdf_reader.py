@@ -72,6 +72,7 @@ class NastranPVReader(VTKPythonAlgorithmBase):
         self._op2name = ""
         self._flags = {f: True for f in _FLAGS}
         self._k_ref = 0.0
+        self._nsm_set = -1
         self._nodal = True
         self._deck = None
         self._deck_path = None
@@ -178,6 +179,15 @@ class NastranPVReader(VTKPythonAlgorithmBase):
             self._k_ref = float(v)
             self.Modified()
 
+    @smproperty.intvector(name="NSMSet", default_values=-1)
+    @smdomain.intrange(min=-1)
+    def SetNSMSet(self, v):
+        """Bulk NSM set to apply: -1 = automatic (Case Control NSM=, or the only set of a bulk-only
+        file), 0 = none (property NSM always applies)."""
+        if int(v) != self._nsm_set:
+            self._nsm_set = int(v)
+            self.Modified()
+
     # --------------------------------------------- model tree visibility
     @smproperty.dataarrayselection(name="VisibleProperties")
     def GetVisibleProperties(self):
@@ -243,10 +253,12 @@ class NastranPVReader(VTKPythonAlgorithmBase):
         """Built multiblock, cached per deck/options so time steps only re-attach results."""
         from nastran_pv.assemble import Options, build_multiblock
 
-        key = (self._deck_key, tuple(sorted(self._flags.items())), self._k_ref, self._nodal, self._op2name)
+        key = (self._deck_key, tuple(sorted(self._flags.items())), self._k_ref, self._nodal, self._nsm_set,
+               self._op2name)
         if key != self._mb_key:
-            deck.warnings = list(self._base_warnings)
-            opts = Options(k_ref=self._k_ref or None, nodal_arrays=self._nodal, **self._flags)
+            deck.reset_warnings(self._base_warnings)
+            opts = Options(k_ref=self._k_ref or None, nodal_arrays=self._nodal,
+                           nsm_set=self._nsm_set if self._nsm_set >= 0 else None, **self._flags)
             self._mb = build_multiblock(deck, opts)
             self._mb_key = key
             return self._mb, True
@@ -767,6 +779,7 @@ class NastranPVGroupStats(_FieldFilter):
 # ---------------------------------------------------- topology filters
 _GROUP_PROPS = {"shells": "TraverseShells", "solids": "TraverseSolids", "lines": "TraverseLines",
                 "rigid": "TraverseRigid", "bushes": "TraverseBushes", "connectors": "TraverseConnectors"}
+_WITHIN = ("", "pid", "mid", "family", "group")  # StayWithin entries -> Rules.within
 _CHECKS = ("FreeEdges", "FreeFaces", "CoincidentGrids", "DuplicateElements", "DanglingConnectors", "FloatingParts")
 
 
@@ -814,10 +827,18 @@ class _Traversal:
         """PIDs to leave out, e.g. 7 8."""
         self._set("_exclude_pids", v or "")
 
-    @smproperty.intvector(name="StayWithinSeedPIDs", default_values=0)
-    @smdomain.xml('<BooleanDomain name="bool"/>')
-    def SetStayWithinSeedPIDs(self, v):
+    @smproperty.intvector(name="StayWithin", default_values=0)
+    @smdomain.xml(_enum_xml(("anything", "seed properties", "seed materials", "seed families", "seed groups")))
+    def SetStayWithin(self, v):
+        """Do not leave the seeds' property, material, family or group (grow and path)."""
         self._set("_within", int(v))
+
+    @smproperty.intvector(name="StayWithinSeedPIDs", default_values=0, panel_visibility="never")
+    def SetStayWithinSeedPIDs(self, v):
+        """Old spelling of StayWithin = seed properties, kept for saved states and scripts. Only 1
+        acts, so a newer state's default 0 does not undo its StayWithin."""
+        if int(v):
+            self._set("_within", _WITHIN.index("pid"))
 
     @smproperty.intvector(name="LimitHops", default_values=0)
     @smdomain.xml('<BooleanDomain name="bool"/>')
@@ -891,7 +912,7 @@ class _TopologyFilter(_FieldFilter):
                if not self._cards.GetArraySetting(i)}
         off |= {g for g, on in self._groups.items() if not on}
         pids = frozenset(int(p) for p in self._exclude_pids.replace(",", " ").split())
-        return Rules(exclude=frozenset(off), exclude_pids=pids, within_pids=bool(self._within),
+        return Rules(exclude=frozenset(off), exclude_pids=pids, within=_WITHIN[self._within],
                      max_hops=self._max_hops if self._limit else None)
 
     def _report(self, warnings):

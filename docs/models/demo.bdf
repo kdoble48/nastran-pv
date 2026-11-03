@@ -8,6 +8,7 @@ SOL 103
 CEND
 $CASE CONTROL DECK
 ECHO = NONE
+NSM = 10
 TITLE = nastran-pv demo: tray on four isolators
 SUBCASE 1
     DISPLACEMENT = ALL
@@ -239,8 +240,14 @@ CBUSH       2001      11    1001       1                               0
 CBUSH       2002      11    1002      13                               0
 CBUSH       2003      12    1003     117                              10
 CBUSH       2004      11    1004     105                               0
+$NSM
+NSMADD        10      11      12
+NSM1          11 ELEMENT    2.-8       1       2       3       4       5
+               6       7       8       9      10      11      12
+NSML1         12 ELEMENT    .002      85      86      87      88      89
+              90      91      92      93      94      95      96
 $PROPERTIES
-PSHELL         1       1      6.       1
+PSHELL         1       1      6.       1                            2.-9
 PBUSH         11       K     10.     10.     50. 100000. 100000. 100000.
 PBUSH         12       K    100.     10.     50. 100000. 100000. 100000.
 $MATERIALS

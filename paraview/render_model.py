@@ -22,9 +22,9 @@ PRESETS = tuple(nv.VIEWS)
 CAMERAS = ("iso", "top", "front", "side", "showcase")
 
 
-def render(deck, presets, cameras, out, size, op2=None, step=0):
+def render(deck, presets, cameras, out, size, op2=None, step=0, nsm_set=None):
     os.makedirs(out, exist_ok=True)
-    reader = load_reader(deck, op2)
+    reader = load_reader(deck, op2, nsm_set)
     times = timesteps(reader) if op2 else []
     t = times[min(step, len(times) - 1)] if times else 0.0
     model = Model(reader, t)
@@ -54,12 +54,14 @@ def main(argv=None):
     ap.add_argument("deck")
     ap.add_argument("--op2")
     ap.add_argument("--step", type=int, default=0)
+    ap.add_argument("--nsm-set", type=int, default=None, help="bulk NSM set (0 = none)")
     ap.add_argument("--preset", nargs="+", default=["family", "masses", "loads", "spc"], choices=PRESETS)
     ap.add_argument("--views", nargs="+", default=["iso"], choices=CAMERAS)
     ap.add_argument("--out", default="shots")
     ap.add_argument("--size", nargs=2, type=int, default=[1600, 1000])
     args = ap.parse_args(argv)
-    for p in render(os.path.abspath(args.deck), args.preset, args.views, args.out, args.size, args.op2, args.step):
+    for p in render(os.path.abspath(args.deck), args.preset, args.views, args.out, args.size, args.op2, args.step,
+                    args.nsm_set):
         print(p)
     return 0
 

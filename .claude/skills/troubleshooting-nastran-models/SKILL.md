@@ -22,7 +22,7 @@ grep -n "INCLUDE\|^SOL\|LOAD\s*=\|SPC\s*=" DECK         # is this the run deck, 
 
 | Symptom / message | Cause | Fix |
 |---|---|---|
-| `MID` = -1, no `Density`/`ElementMass`; "solid property id(s) not defined (open the run deck?)"; "model mass excludes N element(s)"; stats `KeyError: no mesh block has both 'PID' and 'ElementMass'` | A geometry include was opened. PSHELL/PSOLID/MAT cards live in the run deck | Open the run deck (the `.dat`/`run_*.bdf` with `INCLUDE`s), with the include beside it |
+| `MID` = -1, no `Density`/`ElementMass`; "solid property id(s) not defined (open the run deck?)"; "model mass excludes the structural mass of N element(s)"; stats `KeyError: no mesh block has both 'PID' and 'ElementMass'` | A geometry include was opened. PSHELL/PSOLID/MAT cards live in the run deck | Open the run deck (the `.dat`/`run_*.bdf` with `INCLUDE`s), with the include beside it |
 | `PID`, `ElementMass`, … shown as "(partial)" in ParaView | The array exists on some blocks only (not on Rigid/Masses). Root field data is always partial | Expected. Use the NPV views or Extract Block |
 | Masses view empty / no `Masses` block | No CONM1/CONM2/CMASS1/2 in the deck (e.g. all Linderholt models). CMASS3/4 have no location | Expected. The mass is in `ElementMass`. Use `stats --by PID --field ElementMass` |
 | Loads view empty or smaller than expected | Modal deck (no `LOAD`). GRAV and PLOAD* are not drawn. Big models draw at most 1,500 arrows | Use the static run deck. State the GRAV caveat. Check `ActiveLoadSets` |
@@ -36,6 +36,7 @@ grep -n "INCLUDE\|^SOL\|LOAD\s*=\|SPC\s*=" DECK         # is this the run deck, 
 | `ExtractBlock` selector matches nothing | VTKHDF root is `assembly`, and pvpython `Fetch` prefixes `Block <n>_` | Selectors `//Shells`; `nastran_views.block_names` |
 | Reader block missing in a script, `GetNumberOfBlocks` AttributeError | The reader outputs the model tree (a `vtkPartitionedDataSetCollection`), and `Fetch` drops its assembly | `nv.Model(reader)`, or `as_multiblock(nv.fetch(src))`; reader selectors are `/Root/Model/<block>` (`nv.selectors`) |
 | Elements missing in the GUI, but `convert` has them | The reader's visibility lists (Visible Properties/..., Show Only/Hidden Elements) hide them | *NPV Show All* or `nv.show_all(reader)` |
+| Mass lower than Nastran's; "NSM set(s) [...] not selected by Case Control NSM="; "NSM sets [...] defined but none selected" | Bulk NSM/NSML sets apply only when one is selected (Nastran does the same for `NSM=`) | `--nsm-set ID` (reader *NSMSet*); check `ActiveNSMSet`, `BulkNSMMass`; the `nsm` view |
 | VTK XML read fails with a NaN range | An all-NaN array was written | In code: `add_array(..., skip_all_nan=True)` (`extending-nastran-pv`) |
 
 ## Not bugs (known gaps)

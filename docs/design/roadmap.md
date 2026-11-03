@@ -59,6 +59,11 @@ dampers, gaps, welds and fasteners. Designed in `2026-10-09-model-tools.md`.
 
 Exit criteria: the exit criteria in that spec.
 
+### 0.3.x: Nonstructural mass
+
+Property NSM fields and the NSM/NSM1/NSML/NSML1/NSMADD sets as arrays, totals and an `nsm`
+view. Designed in `2026-11-02-nsm-layer.md`.
+
 ### 0.4: Results architecture and static results
 
 Scope:

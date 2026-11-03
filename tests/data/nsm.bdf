@@ -1,0 +1,62 @@
+$ Nonstructural mass: property NSM fields plus NSM/NSM1/NSML/NSML1 combined by
+$ nested NSMADD sets (tests/test_nsm.py). Values hand-computed below.
+$
+$ Shells, unit squares in z=0 at x = 0..1, 1..2, 2..3, 3..4:
+$   CQUAD4 1, 2 -> PSHELL 1 (t=0.1, MAT1 rho=10, NSM field 0.5)
+$   CQUAD4 3    -> PCOMP 3 (one ply t=0.2, rho=10, NSM field 0.25)
+$   CQUAD4 4    -> PSHELL 2 (t=0.1, rho=10, no NSM)
+$ Lines along y=-1: CBAR 11 length 1 (x 0..1), CBAR 12 length 3 (x 1..4), PBAR 5
+$   (A=0.01, rho=10, NSM field 0.2)
+$
+$ Case Control NSM = 100; NSMADD 100 = 10 + 20; NSMADD 20 = 30 + 40.
+$   set 10: NSM    PSHELL 1 value 1.0     -> EIDs 1, 2 get +1.0 per area
+$   set 30: NSM1   ELEMENT 3 THRU 4 0.3   -> EIDs 3, 4 get +0.3 per area
+$   set 40: NSML1  PBAR ALL total 8.0     -> by length: EID 11 2.0, EID 12 6.0 (per length 2.0)
+$   set 40: NSML   ELEMENT 4 total 0.6    -> EID 4 +0.6 per area (area 1)
+$   set 99 (not selected): NSM PSHELL 2 5.0
+$ Per element (NSMPerArea / NSMPerLength, NSMMass):
+$   EID 1, 2: 0.5 + 1.0 = 1.5          mass 1.5 each   (structural 0.1*10 = 1.0)
+$   EID 3:    0.25 + 0.3 = 0.55        mass 0.55       (structural 0.2*10 = 2.0)
+$   EID 4:    0.3 + 0.6 = 0.9          mass 0.9        (structural 1.0)
+$   EID 11:   0.2 + 2.0 = 2.2 /length  mass 2.2        (structural 0.01*10*1 = 0.1)
+$   EID 12:   0.2 + 2.0 = 2.2 /length  mass 6.6        (structural 0.3)
+$ Property NSM = 0.5*2 + 0.25 + 0.2*4 = 2.05; bulk = 2.0 + 0.3*2 + 8.0 + 0.6 = 11.2
+$ Nonstructural = 13.25; structural = 1+1+2+1+0.1+0.3 = 5.4; model = 18.65
+SOL 101
+CEND
+NSM = 100
+SUBCASE 1
+BEGIN BULK
+GRID    1               0.      0.      0.
+GRID    2               1.      0.      0.
+GRID    3               2.      0.      0.
+GRID    4               3.      0.      0.
+GRID    5               4.      0.      0.
+GRID    6               0.      1.      0.
+GRID    7               1.      1.      0.
+GRID    8               2.      1.      0.
+GRID    9               3.      1.      0.
+GRID    10              4.      1.      0.
+GRID    11              0.      -1.     0.
+GRID    12              1.      -1.     0.
+GRID    13              4.      -1.     0.
+CQUAD4  1       1       1       2       7       6
+CQUAD4  2       1       2       3       8       7
+CQUAD4  3       3       3       4       9       8
+CQUAD4  4       2       4       5       10      9
+CBAR    11      5       11      12      0.      0.      1.
+CBAR    12      5       12      13      0.      0.      1.
+PSHELL  1       1       0.1     1                               0.5
+PSHELL  2       1       0.1     1
+PCOMP   3               0.25
+        1       0.2     0.
+PBAR    5       1       0.01                            0.2
+MAT1    1       7.+10           0.3     10.
+NSMADD  100     10      20
+NSMADD  20      30      40
+NSM     10      PSHELL  1       1.0
+NSM1    30      ELEMENT 0.3     3       THRU    4
+NSML1   40      PBAR    8.0     ALL
+NSML    40      ELEMENT 4       0.6
+NSM     99      PSHELL  2       5.0
+ENDDATA
