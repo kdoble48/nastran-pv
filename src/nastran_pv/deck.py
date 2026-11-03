@@ -9,13 +9,17 @@ show it.
 from __future__ import annotations
 
 import sys
+import time
 import warnings
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 from cpylog import SimpleLogger
 from pyNastran.bdf.bdf import BDF
+
+from .progress import NULL, Progress
 
 RECTANGULAR = {"CORD1R", "CORD2R"}
 CYLINDRICAL = {"CORD1C", "CORD2C"}
@@ -152,12 +156,76 @@ def _read(model: BDF, path: Path, punch: bool | None, encoding: str) -> None:
                    encoding=encoding)
 
 
-def load_deck(path, punch: bool | None = None, encoding: str = "latin-1", echo: bool = True) -> Deck:
+@contextmanager
+def _read_progress(model: BDF, progress: Progress):
+    """Report INCLUDEs as they open and cards as they parse, around one ``read_bdf``.
+
+    pyNastran gives no callback, so this wraps ``BDFInputPy._open_file`` (class level, restored
+    on exit) and the model's own ``_parse_cards_list``/``add_card``, which its card loop looks
+    up on the instance. Every hook only counts and then calls the original; if pyNastran
+    renames one, that report is skipped and the read is unchanged.
+    """
+    if not progress.enabled and progress.callback is None:
+        yield
+        return
+    state = {"files": 0, "cards": 0, "total": None, "t": time.perf_counter()}
+    restore = []
+    try:
+        from pyNastran.bdf.bdf_interface.pybdf import BDFInputPy
+
+        orig_open = BDFInputPy.__dict__["_open_file"]
+
+        def _open_file(self, bdf_filename, *args, **kwargs):
+            state["files"] += 1
+            name = Path(bdf_filename).name if isinstance(bdf_filename, (str, Path)) else "<stream>"
+            progress.count("reading file", state["files"], detail=name)
+            return orig_open(self, bdf_filename, *args, **kwargs)
+
+        BDFInputPy._open_file = _open_file
+        restore.append(lambda: setattr(BDFInputPy, "_open_file", orig_open))
+    except (ImportError, KeyError):
+        pass
+
+    def counted(fn):
+        def add(*args, **kwargs):
+            state["cards"] += 1
+            progress.count("parsing cards", state["cards"], state["total"])
+            return fn(*args, **kwargs)
+        return add
+
+    parse_list = getattr(model, "_parse_cards_list", None)
+    if parse_list is not None:
+        def _parse_cards_list(cards_list, *args, **kwargs):
+            state["total"] = len(cards_list)
+            took = time.perf_counter() - state["t"]
+            progress.timed(f"read {state['files']} file(s), {len(cards_list):,} cards: {took:.1f}s", took)
+            state["t"] = time.perf_counter()
+            for attr in ("add_card", "add_card_lax"):
+                if hasattr(model, attr):
+                    setattr(model, attr, counted(getattr(model, attr)))
+            return parse_list(cards_list, *args, **kwargs)
+
+        model._parse_cards_list = _parse_cards_list
+    try:
+        yield
+    finally:
+        for undo in restore:
+            undo()
+        for attr in ("_parse_cards_list", "add_card", "add_card_lax"):
+            model.__dict__.pop(attr, None)  # back to the class methods (and picklable)
+    if state["total"] is not None:
+        took = time.perf_counter() - state["t"]
+        progress.timed(f"parsed {state['cards']:,} cards: {took:.1f}s", took)
+
+
+def load_deck(path, punch: bool | None = None, encoding: str = "latin-1", echo: bool = True,
+              progress: Progress = NULL) -> Deck:
     """Read a run deck (with INCLUDEs) or a bare bulk-data file.
 
     ``punch=None`` auto-detects a bulk-only file. ``latin-1`` decoding accepts
     any byte in comments. pyNastran warnings are collected into
-    ``Deck.warnings`` (and printed to stderr when ``echo``).
+    ``Deck.warnings`` (and printed to stderr when ``echo``). ``progress`` reports the files,
+    the card count and each later stage (see :mod:`nastran_pv.progress`).
     """
     path = Path(path).resolve()
     messages: list[str] = []
@@ -169,7 +237,9 @@ def load_deck(path, punch: bool | None = None, encoding: str = "latin-1", echo: 
         if len(text) > MAX_MESSAGE:  # pyNastran may list every element id
             text = text[:MAX_MESSAGE] + f" ... [{len(text) - MAX_MESSAGE} more characters]"
         messages.append(text)
-        if echo:
+        if echo and progress.enabled:
+            progress.note(text)
+        elif echo:
             print(text, file=sys.stderr)
 
     log = SimpleLogger(level="warning", log_func=log_func)
@@ -179,14 +249,24 @@ def load_deck(path, punch: bool | None = None, encoding: str = "latin-1", echo: 
     model.disable_cards(["CWELD"])
     with warnings.catch_warnings(record=True) as caught:  # pyNastran 1.5 also uses warnings.warn
         warnings.simplefilter("always")
-        _read(model, path, punch, encoding)
-        try:
-            model.safe_cross_reference()
-        except Exception as exc:  # keep going with whatever got cross-referenced
-            messages.append(f"ERROR: cross-referencing failed: {exc}")
+        progress.note(f"reading {path.name}")
+        with _read_progress(model, progress):
+            _read(model, path, punch, encoding)
+        with progress.stage("cross-referencing"):
+            try:
+                model.safe_cross_reference()
+            except Exception as exc:  # keep going with whatever got cross-referenced
+                messages.append(f"ERROR: cross-referencing failed: {exc}")
     for w in caught:
         log_func("WARNING", None, None, str(w.message))
 
+    with progress.stage(f"grid coordinates ({len(model.nodes):,} grids)"):
+        nids, xyz, cd = _grid_arrays(model)
+    return Deck(path=path, model=model, nids=nids, xyz=xyz, cd=cd, warnings=messages)
+
+
+def _grid_arrays(model: BDF):
+    """(sorted nids, basic xyz, cd) of the model's GRIDs, SPOINT/EPOINT dropped."""
     if model.nodes:
         nid_cp_cd, xyz, *_ = model.get_xyz_in_coord_array(cid=0, fdtype="float64", idtype="int64")
         order = np.argsort(nid_cp_cd[:, 0], kind="stable")
@@ -200,8 +280,7 @@ def load_deck(path, punch: bool | None = None, encoding: str = "latin-1", echo: 
         nids = np.zeros(0, dtype=np.int64)
         cd = np.zeros(0, dtype=np.int64)
         xyz = np.zeros((0, 3))
-
-    return Deck(path=path, model=model, nids=nids, xyz=xyz, cd=cd, warnings=messages)
+    return nids, xyz, cd
 
 
 def source_files(deck: Deck) -> list[str]:

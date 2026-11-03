@@ -50,6 +50,9 @@ deck parsing, which is much faster on large models.
   `NSM=` or `--nsm-set`) is in `ElementMass` and split out as `NSMMass`, `PropertyNSMMass`,
   `BulkNSMMass` and the `NSM_SET`/`NSM_PID` tables (`docs/model.md#nonstructural-mass`). Units are the deck's own: say so, and infer them from MAT values
   (rho 2780 and E 7e10 mean SI).
+- **Progress** goes to stderr (files, a card count, timed stages); `-q` silences it. A big deck
+  is not hung while the card count is still rising. Run it in the background and read stdout for
+  the summary.
 - **Warnings** print on stdout and are kept in `Warnings`. Read them. "solid property id(s) not
   defined (open the run deck?)" and "model mass excludes the structural mass of N element(s)" mean the numbers are
   incomplete (`troubleshooting-nastran-models`). "reordered N solid element(s)" is info only.

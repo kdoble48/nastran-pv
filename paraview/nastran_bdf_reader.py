@@ -251,13 +251,27 @@ class NastranPVReader(VTKPythonAlgorithmBase):
     def _files_key(files):
         return tuple((p, os.path.getmtime(p)) for p in files if os.path.exists(p))
 
+    def _progress(self, lo, hi):
+        """Progress whose stages and card counts drive ParaView's progress bar (lo..hi)."""
+        from nastran_pv.progress import Progress
+
+        state = {"frac": lo}
+
+        def report(text, frac):
+            if frac is not None:
+                state["frac"] = lo + (hi - lo) * frac
+            self.SetProgressText(text)
+            self.UpdateProgress(state["frac"])
+
+        return Progress(enabled=False, callback=report)
+
     def _get_deck(self):
         """Parsed deck, re-read when the main file or any INCLUDE changed."""
         from nastran_pv.deck import load_deck, source_files
 
         path = os.path.abspath(self._filename)
         if self._deck is None or self._deck_path != path or self._files_key(self._deck_files) != self._deck_key:
-            self._deck = load_deck(self._filename, echo=False)
+            self._deck = load_deck(self._filename, echo=False, progress=self._progress(0.0, 0.7))
             self._deck_path = path
             self._deck_files = source_files(self._deck)
             self._deck_key = self._files_key(self._deck_files)
@@ -275,7 +289,7 @@ class NastranPVReader(VTKPythonAlgorithmBase):
             deck.reset_warnings(self._base_warnings)
             opts = Options(k_ref=self._k_ref or None, nodal_arrays=self._nodal,
                            nsm_set=self._nsm_set if self._nsm_set >= 0 else None, **self._flags)
-            self._mb = build_multiblock(deck, opts)
+            self._mb = build_multiblock(deck, opts, progress=self._progress(0.7, 1.0))
             self._mb_key = key
             return self._mb, True
         return self._mb, False
