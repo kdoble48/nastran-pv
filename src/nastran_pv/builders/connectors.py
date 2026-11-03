@@ -67,7 +67,7 @@ def build_connectors(deck: Deck):
         add(legs, eid, elem.type, dof, pid)
     n_weld = model.card_count.get("CWELD", 0)
     if n_weld:
-        deck.warn(f"CWELD: {n_weld} card(s) not read by pyNastran 1.4, so not drawn or traversed")
+        deck.warn(f"CWELD: {n_weld} card(s) not read, so not drawn or traversed")
 
     if not pairs:
         return None

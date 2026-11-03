@@ -103,5 +103,5 @@ shortened lists show them. The `nsm` view shows all of this
 ## Not visualized yet
 
 Pressure loads (PLOAD*), scalar-point masses and springs (CMASS3/4, CELAS3/4), grounded springs,
-CFAST patch forms, CWELD (pyNastran 1.4 cannot read it), and GRAV as nodal forces (GRAV is
+CFAST patch forms, CWELD (not read), and GRAV as nodal forces (GRAV is
 reported as field data only).

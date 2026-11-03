@@ -44,6 +44,16 @@ def add_array(field_data, name: str, values: np.ndarray, skip_all_nan: bool = Fa
     field_data.AddArray(to_vtk_array(name, values))
 
 
+def cell_types(ug):
+    """The cell-type array of an unstructured grid. VTK 9.6 deprecated GetCellTypesArray()
+    in favour of an argument-less GetCellTypes(), which older VTK does not have."""
+    from vtkmodules.vtkCommonCore import vtkVersion
+
+    if (vtkVersion.GetVTKMajorVersion(), vtkVersion.GetVTKMinorVersion()) >= (9, 6):
+        return ug.GetCellTypes()
+    return ug.GetCellTypesArray()
+
+
 def add_string_array(field_data, name: str, values: Iterable[str]) -> None:
     """Named vtkStringArray; empty lists are skipped (VTKHDF cannot read empty string arrays)."""
     values = list(values)

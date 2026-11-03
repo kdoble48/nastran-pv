@@ -8,11 +8,38 @@ nastran-pv setup                 # ParaView-side dependencies + toolbar macros (
 Optional extras: `h5` (MSC/NX HDF5 results), `tables` (Excel tables for `--map`), `sql`
 (non-SQLite databases for `--map`), `all`, and `test`.
 
+## pyNastran and Python versions
+
+pyNastran 1.4.1, the last release, needs numpy < 2, so it installs only up to Python 3.12. On
+Python 3.13 and 3.14, install pyNastran's `main` branch first. nastran-pv works with both and
+`pip install -e .` keeps a pyNastran that is already installed:
+
+```bash
+pip install "pyNastran @ git+https://github.com/SteveDoyle2/pyNastran.git@main"
+pip install -e ".[vtk]"
+```
+
+Python 3.14 has only VTK 9.6+ wheels. nastran-pv handles both VTK generations. The wedge
+winding changed in VTK 9.7, and the solid builder follows the VTK it runs under. That means a
+`.vtm` written with VTK 9.7 shows inverted wedges in a ParaView built on VTK 9.5 (ParaView 6.0),
+and the reverse. Convert with the same VTK generation you view with, or open the deck itself in
+ParaView.
+
 ## ParaView-side dependencies
 
 `setup` runs two scripts, which can also be run on their own:
-- `paraview/install_deps.py` installs pyNastran, scipy and their dependencies, as wheels matching
-  ParaView's own Python, into `paraview/_vendor`. The plugin finds them there automatically.
+- `paraview/install_deps.py` fills `paraview/_vendor`, where the plugin finds them automatically:
+  - pyNastran from its GitHub `main` branch. It is pure Python, so the wheel built by any Python
+    works.
+  - cpylog, docopt-ng, colorama and scipy, as wheels matching ParaView's own Python.
+
+  It asks `pvpython` what it can already import. A pyNastran that ParaView already imports (from
+  `PYTHONPATH`, `NASTRAN_PV_SITE_PACKAGES` or its own site-packages), or a `main` build already in
+  `_vendor`, is not overwritten, and only the missing dependencies are added. Flags:
+  `--upgrade-pynastran` re-fetches `main`, `--pynastran SPEC` vendors another requirement (for
+  example `pyNastran==1.4.1` or a local checkout), `--upgrade` reinstalls the binary wheels, and
+  `--dry-run` prints the pip commands. Close the ParaView GUI first, because it locks the vendored
+  files.
 - `paraview/install_macros.py` adds the toolbar macros (see [ParaView](paraview.md#one-click-views-toolbar-macros)).
 
 ## Environment variables

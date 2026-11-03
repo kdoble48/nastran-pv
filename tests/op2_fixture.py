@@ -20,7 +20,7 @@ def make_op2() -> OP2:
     eig[1, :, 1] = NIDS
     op2.eigenvectors[2] = RealEigenvectorArray.add_modal_case(
         "BOUGV1", ng, eig, 2, [1, 2], [100.0, 400.0], [1.59, 3.18])
-    element_node = np.array([[2, 0], [2, 0], [1, 0], [1, 0]])
+    element_node = np.array([[2, 0], [2, 0], [1, 0], [1, 0]], dtype=np.int32)  # int32 as read from an OP2
     fiber = np.array([-0.01, 0.01, -0.005, 0.005])
     stress = np.zeros((1, 4, 8), dtype="float32")
     stress[0, :, 7] = [5.0, 7.0, 3.0, 2.0]

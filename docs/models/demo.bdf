@@ -1,8 +1,6 @@
 $pyNastran: version=msc
 $pyNastran: punch=False
 $pyNastran: encoding=utf-8
-$pyNastran: nnodes=121
-$pyNastran: nelements=140
 $EXECUTIVE CONTROL DECK
 SOL 103
 CEND
