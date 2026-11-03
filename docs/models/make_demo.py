@@ -6,8 +6,11 @@
 Units: mm, t (tonne), s, N. The tray is an aluminum plate, 600 x 400 x 6 mm, 12 x 8 CQUAD4, 50 mm
 above four grounded grids, carrying a 20 kg box (CONM2, CG 40 mm above the plate). Three isolators
 are soft laterally and stiffer vertically in basic axes; the fourth is turned 30 deg about Z through
-its own CID 10 and is 10x stiffer along its local x. ``write_bush_check`` writes a one-bush deck
-used to verify that the solver honors the CBUSH CID.
+its own CID 10 and is 10x stiffer along its local x. Nonstructural mass (Case Control NSM = 10):
+2 kg/m^2 of paint on the PSHELL, plus NSMADD 10 = a 20 kg/m^2 harness strip along the front row
+(NSM1 11) and a 2 kg cable bundle spread over the back row (NSML1 12). MYSTRAN applies the PSHELL
+NSM but not the NSM1/NSML1 sets, so the solved modes leave those out. ``write_bush_check`` writes a
+one-bush deck used to verify that the solver honors the CBUSH CID.
 """
 from __future__ import annotations
 
@@ -25,10 +28,11 @@ K_MOUNT = [10.0, 10.0, 50.0, 1.0e5, 1.0e5, 1.0e5]          # N/mm, N*mm/rad
 K_ROTATED = [100.0, 10.0, 50.0, 1.0e5, 1.0e5, 1.0e5]
 BOX_MASS, BOX_DIMS = 0.02, (200.0, 150.0, 80.0)             # t, mm
 BUSH_CHECK = {"k": (1000.0, 100.0, 10.0), "mass": 0.01, "angle_deg": 30.0}
+PAINT_NSM, HARNESS_NSM, BUNDLE_MASS = 2.0e-9, 2.0e-8, 0.002  # t/mm^2, t/mm^2, t
 
 
-def _case_control(title):
-    return CaseControlDeck([f"TITLE = {title}", "ECHO = NONE", "SUBCASE 1", "  METHOD = 1",
+def _case_control(title, extra=()):
+    return CaseControlDeck([f"TITLE = {title}", "ECHO = NONE", *extra, "SUBCASE 1", "  METHOD = 1",
                             "  SPC = 1", "  DISP = ALL", "BEGIN BULK"])
 
 
@@ -41,11 +45,11 @@ def _box_inertia(m, a, b, c):
     return [m * (b * b + c * c) / 12, 0.0, m * (a * a + c * c) / 12, 0.0, 0.0, m * (a * a + b * b) / 12]
 
 
-def _new(title, givens=False):
+def _new(title, givens=False, case_extra=()):
     model = BDF(debug=None)
     model.sol = 103
     model.executive_control_lines = ["SOL 103", "CEND"]
-    model.case_control_deck = _case_control(title)
+    model.case_control_deck = _case_control(title, case_extra)
     model.add_param("POST", [-1])
     if givens:  # MYSTRAN's Lanczos (ARPACK) cannot solve very small problems
         model.add_eigr(1, method="MGIV", nd=6)
@@ -56,9 +60,9 @@ def _new(title, givens=False):
 
 def write_demo(path=HERE / "demo.bdf") -> Path:
     path = Path(path)
-    model = _new("nastran-pv demo: tray on four isolators")
+    model = _new("nastran-pv demo: tray on four isolators", case_extra=["NSM = 10"])
     model.add_mat1(1, 70000.0, None, 0.33, rho=2.7e-9)
-    model.add_pshell(1, mid1=1, t=T, mid2=1)
+    model.add_pshell(1, mid1=1, t=T, mid2=1, nsm=PAINT_NSM)
     gid = lambda i, j: 1 + i + j * (NX + 1)  # noqa: E731
     for j in range(NY + 1):
         for i in range(NX + 1):
@@ -68,6 +72,9 @@ def write_demo(path=HERE / "demo.bdf") -> Path:
         for i in range(NX):
             model.add_cquad4(eid, 1, [gid(i, j), gid(i + 1, j), gid(i + 1, j + 1), gid(i, j + 1)])
             eid += 1
+    model.add_nsmadd(10, [11, 12])
+    model.add_nsm1(11, "ELEMENT", HARNESS_NSM, list(range(1, NX + 1)))  # front row
+    model.add_nsml1(12, "ELEMENT", BUNDLE_MASS, list(range(NX * (NY - 1) + 1, NX * NY + 1)))  # back row
     center = gid(NX // 2, NY // 2)
     model.add_conm2(5001, center, BOX_MASS, X=[0.0, 0.0, 40.0], I=_box_inertia(BOX_MASS, *BOX_DIMS))
     _rotated_cid(model, 10, 30.0)

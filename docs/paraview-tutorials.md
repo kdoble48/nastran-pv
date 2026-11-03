@@ -124,7 +124,7 @@ Femap's "select connected" from a point, without crossing into the next group:
 3. Step through the modes with the *VCR* toolbar (or the time field next to it). To change the
    amplification, select *NPV warp* and change *Scale Factor*.
 
-![Mode 2 of the demo tray at 9.1 Hz](images/paraview-tutorials-results.png)
+![Mode 2 of the demo tray at 9.0 Hz](images/paraview-tutorials-results.png)
 
 `Displacement` (points) and, when the results have stress, `VonMisesMax` (cells) are on the mesh
 blocks for coloring by hand.

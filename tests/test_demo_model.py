@@ -24,6 +24,7 @@ def test_demo_deck_contents(tmp_path):
     assert sum(1 for e in m.elements.values() if e.type == "CQUAD4") == 12 * 8
     assert m.sol == 103 and 1 in m.methods
     assert m.params["POST"].values == [-1]
+    assert sorted(m.nsms) == [11, 12] and m.nsmadds[10][0].sets == [11, 12]
     cid10 = m.coords[10]
     np.testing.assert_allclose(cid10.i, [np.cos(np.radians(30)), np.sin(np.radians(30)), 0], atol=1e-9)
 
