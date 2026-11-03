@@ -231,7 +231,45 @@ def read_vtkhdf(path, time: float | None = None):
         r.Update()
     else:
         r.UpdateTimeStep(float(time))
-    return r.GetOutputDataObject(0)
+    out = r.GetOutputDataObject(0)
+    if isinstance(out, vtkPartitionedDataSetCollection):
+        _restore_field_data(out, path, time)
+    return out
+
+
+def _restore_field_data(pdc, path, time: float | None) -> None:
+    """VTK 9.7's vtkHDFReader returns no field data for the partitions of a collection
+    (its field-data selection stays empty; a series gets one array). Add the missing arrays
+    from the file."""
+    from . import vtkutil
+
+    with h5py.File(path, "r") as h5:
+        groups = {int(g.attrs["Index"]): g for g in h5["VTKHDF"].values()
+                  if isinstance(g, h5py.Group) and "Index" in g.attrs and "FieldData" in g}
+        for idx, g in groups.items():
+            if idx >= pdc.GetNumberOfPartitionedDataSets() or pdc.GetNumberOfPartitions(idx) == 0:
+                continue
+            ds = pdc.GetPartition(idx, 0)
+            if ds is None:
+                continue
+            step = 0
+            steps = g.get("Steps")
+            if steps is not None and time is not None and "Values" in steps:
+                step = int(np.argmin(np.abs(steps["Values"][()] - float(time))))
+            fd = ds.GetFieldData()
+            for name, dset in g["FieldData"].items():
+                if fd.HasArray(name):
+                    continue
+                data = dset[()]
+                if steps is not None and "FieldDataOffsets" in steps and name in steps["FieldDataOffsets"]:
+                    off = int(steps["FieldDataOffsets"][name][step])
+                    ntup = int(np.asarray(steps["FieldDataSizes"][name][step]).reshape(-1)[-1])
+                    data = data[off:off + ntup]
+                if data.dtype.kind in "OSU":
+                    vtkutil.add_string_array(fd, name, [v.decode() if isinstance(v, bytes) else str(v)
+                                                        for v in np.asarray(data).reshape(-1)])
+                else:
+                    vtkutil.add_array(fd, name, data)
 
 
 def time_values(path) -> list[float]:

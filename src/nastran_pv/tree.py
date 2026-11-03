@@ -175,7 +175,7 @@ def _xyz(ds):
 def _subset_ug(ug, cells):
     sizes, conn = _take_cells(ug.GetCells(), cells)
     used, local = np.unique(conn, return_inverse=True)
-    types = vtk_to_numpy(ug.GetCellTypesArray())[cells]
+    types = vtk_to_numpy(vtkutil.cell_types(ug))[cells]
     return vtkutil.unstructured_grid(_xyz(ug)[used], types, sizes, local.reshape(-1)), used
 
 

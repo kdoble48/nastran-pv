@@ -4,11 +4,14 @@ Nastran does not prescribe the winding of the first face of a solid, while
 VTK does, so each cell is checked (signed-volume style test on its corners)
 and its node order flipped where needed. VTK expects the base-face normal
 (right-hand rule) to point *towards* the opposite face for hexahedra,
-tetrahedra and pyramids, and *away* from it for wedges.
+tetrahedra and pyramids. Wedges changed in VTK 9.7: before it their base normal
+points *away* from the opposite face, from 9.7 on *towards* it like the others.
+The VTK that runs the build decides (pip-vtk and ParaView may differ).
 """
 from __future__ import annotations
 
 import numpy as np
+from vtkmodules.vtkCommonCore import vtkVersion
 from vtkmodules.vtkCommonDataModel import (
     VTK_HEXAHEDRON,
     VTK_PYRAMID,
@@ -36,6 +39,9 @@ SOLIDS = {
     "CPYRAM": (5, VTK_PYRAMID, 13, VTK_QUADRATIC_PYRAMID, list(range(13))),
 }
 
+# VTK < 9.7 wants the wedge base normal away from the top face (vtkWedge face 0 = 0-1-2)
+WEDGE_BASE_AWAY = (vtkVersion.GetVTKMajorVersion(), vtkVersion.GetVTKMinorVersion()) < (9, 7)
+
 # Node-order flips (applied in VTK ordering) that reverse a cell's orientation.
 FLIP = {
     VTK_HEXAHEDRON: [0, 3, 2, 1, 4, 7, 6, 5],
@@ -53,8 +59,8 @@ def orientation(ncorner: int, p: np.ndarray) -> np.ndarray:
     """Orientation measure s per cell from (n, ncorner, 3) corners.
 
     s = (base normal, right-hand rule) . (opposite face/apex - base). VTK wants
-    s > 0 for hex/tet/pyramid and s < 0 for wedges; returns True where the cell
-    must be flipped.
+    s > 0 for hex/tet/pyramid, and for wedges s < 0 before VTK 9.7 and s > 0
+    from 9.7 (``WEDGE_BASE_AWAY``); returns True where the cell must be flipped.
     """
     if ncorner == 8:
         n = np.cross(p[:, 2] - p[:, 0], p[:, 3] - p[:, 1])
@@ -63,7 +69,8 @@ def orientation(ncorner: int, p: np.ndarray) -> np.ndarray:
     if ncorner == 6:
         n = np.cross(p[:, 1] - p[:, 0], p[:, 2] - p[:, 0])
         d = p[:, 3:6].mean(axis=1) - p[:, 0:3].mean(axis=1)
-        return np.sum(n * d, axis=1) > 0
+        s = np.sum(n * d, axis=1)
+        return s > 0 if WEDGE_BASE_AWAY else s < 0
     if ncorner == 4:
         n = np.cross(p[:, 1] - p[:, 0], p[:, 2] - p[:, 0])
         return np.sum(n * (p[:, 3] - p[:, 0]), axis=1) < 0

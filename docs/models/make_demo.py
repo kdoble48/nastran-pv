@@ -51,6 +51,15 @@ def _box_inertia(m, a, b, c):
     return [m * (b * b + c * c) / 12, 0.0, m * (a * a + c * c) / 12, 0.0, 0.0, m * (a * a + b * b) / 12]
 
 
+def _write(model, path) -> None:
+    """write_bdf without the count headers (pyNastran 1.4 writes nnodes/nelements, 1.5 does not),
+    so the committed deck does not depend on the pyNastran version."""
+    model.write_bdf(str(path), enddata=True)
+    lines = Path(path).read_text(encoding="latin-1").splitlines(keepends=True)
+    drop = ("$pyNastran: nnodes=", "$pyNastran: nelements=")
+    Path(path).write_text("".join(ln for ln in lines if not ln.startswith(drop)), encoding="latin-1", newline="")
+
+
 def _new(title, givens=False, case_extra=()):
     model = BDF(debug=None)
     model.sol = 103
@@ -95,7 +104,7 @@ def write_demo(path=HERE / "demo.bdf") -> Path:
         model.add_cbush(2001 + n, 12 if rotated else 11, [ground, top], None, None, cid=10 if rotated else 0)
     model.add_spc1(1, "123456", [1001, 1002, 1003, 1004])
     _add_stiffeners(model, gid)
-    model.write_bdf(str(path), enddata=True)
+    _write(model, path)
     return path
 
 
@@ -129,7 +138,7 @@ def write_bush_check(path) -> Path:
     model.add_cbush(1, 1, [1, 2], None, None, cid=10)
     model.add_conm2(2, 2, c["mass"], I=[1.0, 0.0, 1.0, 0.0, 0.0, 1.0])
     model.add_spc1(1, "123456", [1])
-    model.write_bdf(str(path), enddata=True)
+    _write(model, path)
     return path
 
 

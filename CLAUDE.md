@@ -159,8 +159,11 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
 ## Gotchas
 
 - VTK solid winding: the base-face normal must point toward the opposite face for hex, tet and
-  pyramid cells, and away from it for wedges. `solids.FLIP` holds the reorder permutations,
+  pyramid cells. For wedges it points away from it before VTK 9.7 and toward it from 9.7 on
+  (`solids.WEDGE_BASE_AWAY`, decided at runtime). `solids.FLIP` holds the reorder permutations,
   including the quadratic ones.
+- VTK 9.7's `vtkHDFReader` drops partition field data. `read_vtkhdf` refills it with h5py
+  (`_restore_field_data`).
 - Arrays that are entirely NaN break VTK's XML reader (a NaN `L2_NORM_RANGE`). Use
   `vtkutil.add_array(..., skip_all_nan=True)` or `fields.common.replace_array`.
 - Nested block names must be valid XML names (`LOAD_1001`), or `ExtractBlock` selectors such as
@@ -206,3 +209,10 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   patch scripts to the scratchpad with the Write tool instead.
 - ParaView ships numpy and h5py but not scipy; pyNastran needs scipy. `install_deps.py` pins scipy
   to a version ABI-compatible with ParaView's numpy.
+- pyNastran 1.4.1 and main (1.5 dev) are both supported, and main is required on Python 3.13+.
+  `install_deps.py` vendors main and never overwrites a pyNastran that ParaView already imports.
+  Main differs from 1.4.1:
+  - It breaks INCLUDEs in StringIO decks, so bulk-only decks are read by path with `punch=None`.
+  - `CBUSH.Ga()` fails after a partial xref, so use `elem.nodes`.
+  - It aborts the read on CWELD ALIGN, so CWELD is disabled.
+  - It reports some problems through `warnings.warn`, which `load_deck` captures.

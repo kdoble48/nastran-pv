@@ -23,8 +23,22 @@ from vtkmodules.vtkCommonExecutionModel import vtkStreamingDemandDrivenPipeline
 EXTENSIONS = "bdf dat nas bulk blk"
 
 
-def _bootstrap():
+def _plugin_dir():
+    """This file's folder. A plugin loaded from a string (``load_plugin_from_string``) has no
+    real ``__file__``; fall back to NASTRAN_PV_PARAVIEW_DIR, then the PV_PLUGIN_PATH entries."""
     here = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else None
+    if here and os.path.isfile(os.path.join(here, "nastran_bdf_reader.py")):
+        return here
+    cands = [os.environ.get("NASTRAN_PV_PARAVIEW_DIR", "")]
+    cands += os.environ.get("PV_PLUGIN_PATH", "").split(os.pathsep)
+    for cand in cands:
+        if cand and os.path.isfile(os.path.join(cand, "nastran_bdf_reader.py")):
+            return os.path.abspath(cand)
+    return None
+
+
+def _bootstrap():
+    here = _plugin_dir()
     front, back = [], []
     if here:
         front.append(os.path.join(os.path.dirname(here), "src"))
@@ -41,8 +55,10 @@ def _bootstrap():
 _bootstrap()
 
 _HELP = (
-    "nastran-pv could not import {missing}. Install pyNastran for ParaView's Python with\n"
+    "nastran-pv could not import {missing}. Install pyNastran and its dependencies (cpylog,\n"
+    "docopt-ng, colorama, scipy) for ParaView's Python with\n"
     "  python paraview/install_deps.py --pvpython <path to pvpython>\n"
+    "(it keeps a pyNastran that ParaView can already import and adds only what is missing),\n"
     "or point NASTRAN_PV_SITE_PACKAGES at a site-packages folder of a CPython with the same\n"
     "version as ParaView's Python that has pyNastran installed. Original error: {err}"
 )

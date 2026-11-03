@@ -35,13 +35,24 @@ def _grid(deck: Deck, nid):
     return deck.xyz[i] if i >= 0 else None
 
 
+def grid_a(elem) -> int:
+    """GA id. ``elem.nodes`` holds the raw ids in every pyNastran version; ``Ga()`` fails in
+    1.5 when a partial cross-reference left a missing grid as an int in ``nodes_ref``."""
+    return int(elem.nodes[0])
+
+
+def grid_b(elem) -> int:
+    """GB id, 0 when blank (grounded)."""
+    return int(elem.nodes[1] or 0)
+
+
 def bush_frame(deck: Deck, elem) -> np.ndarray:
     """3x3, rows = element axes in basic."""
-    ga = deck.xyz[deck.index([elem.Ga()])[0]]
+    ga = deck.xyz[deck.index([grid_a(elem)])[0]]
     cid = elem.Cid()
     if cid is not None and cid >= 0:
         return deck.basis(cid, ga)
-    gb = _grid(deck, elem.Gb())
+    gb = _grid(deck, grid_b(elem))
     if gb is None or np.linalg.norm(gb - ga) < 1e-12:
         deck.warn(f"CBUSH {elem.eid}: coincident/grounded without CID; using basic axes")
         return np.eye(3)
@@ -58,12 +69,12 @@ def bush_frame(deck: Deck, elem) -> np.ndarray:
 
 
 def bush_location(deck: Deck, elem) -> np.ndarray:
-    ga = deck.xyz[deck.index([elem.Ga()])[0]]
+    ga = deck.xyz[deck.index([grid_a(elem)])[0]]
     ocid = elem.ocid if elem.ocid is not None else -1
     if ocid >= 0:
         si = np.array([c or 0.0 for c in elem.si], dtype=float)
         return ga + deck.vector_to_basic(ocid, si, ga)
-    gb = _grid(deck, elem.Gb())
+    gb = _grid(deck, grid_b(elem))
     if gb is None:
         return ga
     s = 0.5 if elem.s is None else float(elem.s)
@@ -92,8 +103,7 @@ def build_bushes(deck: Deck, k_ref: float | None = None):
         except (KeyError, ValueError) as exc:
             deck.warn(f"CBUSH {eid}: skipped ({exc})")
             continue
-        gb = elem.Gb()
-        rows.append((eid, elem.Pid(), elem.Ga(), gb or 0, loc, R, pbush_k(model, elem.Pid())))
+        rows.append((eid, elem.Pid(), grid_a(elem), grid_b(elem), loc, R, pbush_k(model, elem.Pid())))
     if not rows:
         return None, None
 

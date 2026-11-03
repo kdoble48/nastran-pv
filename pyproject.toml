@@ -9,8 +9,11 @@ description = "Visualize Nastran decks and results in ParaView: properties, mass
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
+# pyNastran: 1.4.1 (PyPI) on Python <= 3.12; Python 3.13+ needs main (1.5 dev), which pip
+# then leaves alone: pip install "pyNastran @ git+https://github.com/SteveDoyle2/pyNastran.git@main"
 dependencies = [
-    "pyNastran>=1.4,<1.5",
+    "pyNastran>=1.4",
+    "cpylog>=1.4",
     "numpy",
 ]
 

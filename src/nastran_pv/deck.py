@@ -8,9 +8,8 @@ show it.
 """
 from __future__ import annotations
 
-import io
-import os
 import sys
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -143,20 +142,14 @@ def has_executive_control(path: Path) -> bool:
 
 def _read(model: BDF, path: Path, punch: bool | None, encoding: str) -> None:
     has_cend, has_bulk = scan_sections(path)
-    if punch is not None or has_cend or not has_bulk:
-        model.read_bdf(str(path), xref=False, punch=(not has_cend) if punch is None else punch,
-                       encoding=encoding)
+    if punch is None and has_bulk and not has_cend:
+        # "BEGIN BULK" without executive/case control: only pyNastran's own guess
+        # (punch=None) reads it in every version. A StringIO with a CEND prepended
+        # breaks INCLUDEs in pyNastran 1.5 (pybdf.py: no loaded file for the stream).
+        model.read_bdf(str(path), xref=False, punch=None, encoding=encoding)
         return
-    # "BEGIN BULK" without executive/case control: pyNastran accepts neither
-    # punch=True nor False, so prepend a CEND. INCLUDEs in a stream resolve
-    # against the working directory, hence the temporary chdir.
-    text = path.read_text(encoding=encoding, errors="replace")
-    cwd = os.getcwd()
-    try:
-        os.chdir(path.parent)
-        model.read_bdf(io.StringIO("CEND\n" + text), xref=False, punch=False, encoding=encoding)
-    finally:
-        os.chdir(cwd)
+    model.read_bdf(str(path), xref=False, punch=(not has_cend) if punch is None else punch,
+                   encoding=encoding)
 
 
 def load_deck(path, punch: bool | None = None, encoding: str = "latin-1", echo: bool = True) -> Deck:
@@ -170,6 +163,8 @@ def load_deck(path, punch: bool | None = None, encoding: str = "latin-1", echo: 
     messages: list[str] = []
 
     def log_func(typ, filename, lineno, msg):
+        if "skipping directly to bulk data" in msg:  # pyNastran 1.4 on a bulk-only file: expected
+            return
         text = f"{typ}: {msg}"
         if len(text) > MAX_MESSAGE:  # pyNastran may list every element id
             text = text[:MAX_MESSAGE] + f" ... [{len(text) - MAX_MESSAGE} more characters]"
@@ -179,11 +174,18 @@ def load_deck(path, punch: bool | None = None, encoding: str = "latin-1", echo: 
 
     log = SimpleLogger(level="warning", log_func=log_func)
     model = BDF(debug=None, log=log)
-    _read(model, path, punch, encoding)
-    try:
-        model.safe_cross_reference()
-    except Exception as exc:  # keep going with whatever got cross-referenced
-        messages.append(f"ERROR: cross-referencing failed: {exc}")
+    # pyNastran 1.4 skips CWELD; 1.5 parses it but aborts the whole read on the ALIGN and
+    # GRIDID forms. nastran-pv does not draw welds, so keep them out (they are still counted).
+    model.disable_cards(["CWELD"])
+    with warnings.catch_warnings(record=True) as caught:  # pyNastran 1.5 also uses warnings.warn
+        warnings.simplefilter("always")
+        _read(model, path, punch, encoding)
+        try:
+            model.safe_cross_reference()
+        except Exception as exc:  # keep going with whatever got cross-referenced
+            messages.append(f"ERROR: cross-referencing failed: {exc}")
+    for w in caught:
+        log_func("WARNING", None, None, str(w.message))
 
     if model.nodes:
         nid_cp_cd, xyz, *_ = model.get_xyz_in_coord_array(cid=0, fdtype="float64", idtype="int64")

@@ -129,7 +129,7 @@ def orientation_vector(deck: Deck, elem, ga_xyz: np.ndarray, basic: bool = False
         v = np.array([c or 0.0 for c in elem.x], dtype=float)
         if basic:
             return v
-        return deck.vector_to_basic(int(deck.cd[deck.index([elem.Ga()])[0]]), v, ga_xyz)
+        return deck.vector_to_basic(int(deck.cd[deck.index([int(elem.nodes[0])])[0]]), v, ga_xyz)
     return None
 
 
