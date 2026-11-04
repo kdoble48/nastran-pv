@@ -83,7 +83,8 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
 
 - `deck.py`: reads with pyNastran using `xref=False` followed by `safe_cross_reference()`, so
   geometry-only includes still load.
-  - Encoding is latin-1.
+  - Encoding is latin-1. pyNastran reads the primary file's `$ pyNastran:` header with the
+    locale's encoding (UTF-8 on Linux/macOS), so `_header_encoding` feeds it the decoded header.
   - Bulk-only files are detected by `CEND`. A file with `BEGIN BULK` but no `CEND` is read by path
     with `punch=None` (pyNastran's own detection); never through a `StringIO`, which breaks
     INCLUDEs on pyNastran main.
