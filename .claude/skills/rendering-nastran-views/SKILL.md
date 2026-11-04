@@ -27,10 +27,15 @@ python -m nastran_pv render $DECK --preset loads  --views showcase     --out sho
    modal deck has no LOAD. See `troubleshooting-nastran-models` for the other cases.
    Mode animation: `nv.animate_modes(modes, frames=24, out=DIR)` saves `mode<NN>_<frame>.png`
    in the view as it is (apply `masses`, `pid`, ... first); `nv.save_mode_animations(modes,
-   folder=DIR)` writes one looping GIF per mode (PIL, shipped with ParaView). The GUI buttons are
-   *NPV Animate Mode* / *NPV Animate All Modes* / *NPV Save Mode Animations*. All of them put the
-   view back on its step and deformation afterwards, and raise for a mode with no displacement.
-   A converted single-step `.vtm` (`--results` without `--all-steps`) animates as one mode.
+   folder=DIR)` writes one looping GIF per mode (PIL, shipped with ParaView); both show the
+   mode's label and frequency (upper right). All of them put the view back on its step and
+   deformation afterwards, and raise for a mode with no displacement. A converted single-step
+   `.vtm` (`--results` without `--all-steps`) animates as one mode. `nv.play_mode(mode,
+   frames=24)` makes the time steps one cycle of phases (`nv._set_time(view, k / frames)` then
+   shows phase k; don't call `scene.Play()` with Loop on from a script, it never returns);
+   `nv.stop_mode_animation()` or any `nv.apply` undoes it. The GUI buttons are *NPV Animate Mode*
+   (vibrates, then leaves Play looping it) / *NPV Stop Mode Animation* / *NPV Animate All Modes* /
+   *NPV Save Mode Animations*.
    A `.vtm`/`.vtkhdf` from `convert` also works (and skips the slow deck read on big models), but
    not with `--results`/`--nsm-set`: convert with those instead.
 2. **Run renders in the background** (`run_in_background`; the user asked for this) and tell the

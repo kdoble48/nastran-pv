@@ -155,7 +155,13 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   8 %-of-the-model scale; `Deformer` gathers a model's moving points once and `apply(scale)` is
   per frame (the plugin keeps one per input object + MTime). The views draw through the plugin's *Nastran Deform* (`NPV deform`),
   so `nastran_views.animate_modes` vibrates whatever view is shown; analysis filters stay on the
-  undeformed model.
+  undeformed model. `play_mode` (after Animate Mode) sets every Nastran Deform downstream of the
+  reader to *Vibrate Mode*: the filter holds its input at *Mode Time* (`RequestUpdateExtent`) and
+  publishes one cycle of phases as `TimestepValues`, the reader's own time is suppressed in the
+  time keeper, and the play button loops the mode; `held_time` makes `Model()`/`current_step` read
+  the held mode, and every view (`apply`) and `_prepare_modes` call `stop_mode_animation` first.
+  The undeformed ghost goes through a scale-0 deform (`NPV undeformed model`) so nothing reads the
+  reader at a phase time.
 - `glyphs.py`: mass ellipsoids and bush triads as real `vtkPolyData`.
 - `paraview/nastran_bdf_reader.py`: one plugin file containing the reader, three glyph filters
   (masses, bushes, beam sections), the deform filter, three field filters and four topology
