@@ -162,13 +162,18 @@ def fetch(src, port=0):
     * ParaView 6 drops a partitioned collection's data assembly; it is copied back from the
       proxy's data information.
     * ParaView 5.x gathers into a vtkMultiBlockDataSet, which cannot hold a partitioned
-      collection, so Fetch returns an empty multiblock. Then the output is copied from this
-      process instead: ParaView running locally (builtin) has it here. With a remote server it
-      does not, and that is reported.
+      collection: Fetch logs "vtkPartitionedDataSetCollection cannot be added as a block" and
+      returns an empty multiblock. So there a collection is not fetched but copied from this
+      process: ParaView running locally (builtin) has it here. With a remote server it does
+      not, and that is reported.
     """
     from vtkmodules.vtkCommonDataModel import vtkDataAssembly
 
-    data = servermanager.Fetch(src, idx=port) if port else servermanager.Fetch(src)  # updates src
+    data = None
+    if _paraview_major() < 6:
+        src.UpdatePipeline()  # what Fetch would do, so the data information is current
+    if _paraview_major() >= 6 or not _is_collection(src, port):
+        data = servermanager.Fetch(src, idx=port) if port else servermanager.Fetch(src)  # updates src
     if _is_collection(src, port) and (data is None or not data.IsA("vtkPartitionedDataSetCollection")):
         local = _local_output(src, port)
         if local is None or not local.IsA("vtkPartitionedDataSetCollection"):
