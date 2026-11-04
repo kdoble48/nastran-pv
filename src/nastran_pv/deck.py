@@ -13,6 +13,7 @@ import time
 import warnings
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from io import StringIO
 from pathlib import Path
 
 import numpy as np
@@ -138,7 +139,41 @@ def has_executive_control(path: Path) -> bool:
     return scan_sections(path)[0]
 
 
+@contextmanager
+def _header_encoding(model: BDF, encoding: str):
+    """Read the primary file's ``$ pyNastran:`` header with ``encoding``.
+
+    ``BDF._parse_primary_file_header`` opens the file with the locale's encoding and ignores
+    ``encoding``, so a latin-1 deck (``$ Kräfte``) fails on a UTF-8 locale (Linux, macOS)
+    before any card is read. The header is only the leading ``$`` lines, so pass those, decoded,
+    as a stream (pyNastran's own StringIO branch); the cards are still read by path.
+    """
+    original = model._parse_primary_file_header
+
+    def parse(bdf_filename):
+        if isinstance(bdf_filename, (str, Path)):
+            lines = []
+            with open(bdf_filename, "r", encoding=encoding, errors="replace") as f:
+                for line in f:
+                    if not line.startswith("$"):
+                        break
+                    lines.append(line)
+            bdf_filename = StringIO("".join(lines))
+        return original(bdf_filename)
+
+    model._parse_primary_file_header = parse  # the instance attribute shadows the method
+    try:
+        yield
+    finally:
+        del model._parse_primary_file_header
+
+
 def _read(model: BDF, path: Path, punch: bool | None, encoding: str) -> None:
+    with _header_encoding(model, encoding):
+        _read_bdf(model, path, punch, encoding)
+
+
+def _read_bdf(model: BDF, path: Path, punch: bool | None, encoding: str) -> None:
     has_cend, has_bulk = scan_sections(path)
     if punch is None and has_bulk and not has_cend:
         # "BEGIN BULK" without executive/case control: only pyNastran's own guess

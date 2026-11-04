@@ -1,0 +1,61 @@
+# Changelog
+
+All notable changes to nastran-pv are listed here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow the
+[version policy](docs/versioning.md).
+
+## [Unreleased]
+
+### Added
+
+- Test CI: pytest and pyflakes on Linux, Windows and macOS with Python 3.10 to 3.12 (#42).
+- This changelog and a written [version policy](docs/versioning.md) (#42).
+- Selection from a CSV/ID file: `convert --select`, the reader's Selection File, and NPV Show Only/Hide/Highlight File (#43).
+- Model diff: a report, the differences on the mesh, and the two models side by side (#44).
+- Random vibration from normal modes, with RMS response shown on the mesh (#41).
+- Play button vibrates the current mode; mode animations show the mode's frequency (#40).
+- `auditing-nastran-pv` project skill for reviewing merged code (#39).
+- Bush Rotations view and clearer CBUSH stiffness glyphs (#34).
+- NPV Save Mode Animations: one looping GIF per mode (#26).
+- ParaView 5.13 support for the views, macros and mode animation (#25).
+- NPV Animate Mode / Animate All Modes buttons that animate modes in any view (#23).
+- Views recognize converted result series (temporal VTKHDF, `.pvd`) (#22).
+- Views and the `view`/`render` launchers work on converted `.vtm`/VTKHDF files (#21).
+- Convert progress on stderr (#19).
+- Python 3.14, pyNastran main and VTK 9.7 support (#18).
+- Beam cross-section viewer: CBAR/CBEAM sections swept in 3D, and the `sections` command (#17).
+- Nonstructural mass layer: NSM arrays, totals and an `nsm` view (#16).
+- Femap-style model tree and visibility in ParaView (#15).
+- Model tools: grow, parts, path and model checks with per-card-type traversal rules (#5).
+- Project skills for using and extending nastran-pv (#4).
+- Interactive 3D gallery and docs site on GitHub Pages (#1).
+
+### Changed
+
+- Simplified the plugin: shared setters and `RequestData`, one upstream walk, one screenshot view (#38).
+- Simplified the core: a shared results base, builder helpers and field tables in `vtkutil` (#37).
+- One id lookup, shared VTK helpers, plugin constants taken from `src`, and dead code removed (#36).
+- Mode animations keep the view's step and scale, report skipped modes; the CLI shows deck warnings (#33).
+- Faster mode animation saving, 3.8x on a 270k-element model (#27).
+- VTKHDF series compress each array once while compacting, 5.6 s to 1.5 s (#24).
+- Nonstructural mass indexes card targets instead of scanning every element (#20).
+- Faster solid element mass (#19).
+- Gallery scene URLs are tagged with the build version (#3).
+
+### Fixed
+
+- Decks with latin-1 characters (`$ Kräfte`) failed to load on Linux and macOS, because pyNastran reads the file header with the locale's encoding (#42).
+- Decks that fail to load raise an error instead of rendering as an empty model (#35).
+- `install_deps.py` keeps the working pyNastran on a failed install and reinstalls wheels for another Python (#32).
+- ParaView 5.x copies the model locally instead of a failing `Fetch` (#31).
+- VTKHDF series keep every root table, so beam sections work on converted modes (#30).
+- Physical mass glyphs keep their disc and rod shapes and warn on impossible inertia (#29).
+- Mode GIFs are captured with SaveScreenshot, and modes whose frames never change are reported (#28).
+- Empty 3D window on categorical gallery views (#2).
+
+## [0.1.0]
+
+- First version: deck to VTK conversion, derived and mapped fields, the run store and the ParaView
+  plugin with views and toolbar macros.
+
+[Unreleased]: https://github.com/kdoble48/nastran-pv/compare/5932d5e...HEAD

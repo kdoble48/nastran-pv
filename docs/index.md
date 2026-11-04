@@ -45,6 +45,8 @@ you use.
 
 - [Development](development.md): tests, lint, the pvpython smoke test, and the rules for writing
   these docs.
+- [Versioning](versioning.md): the version policy, what counts as public API, and the
+  CHANGELOG.
 
 ```{toctree}
 :hidden:
@@ -88,4 +90,5 @@ beam-sections
 :caption: Development
 
 development
+versioning
 ```
