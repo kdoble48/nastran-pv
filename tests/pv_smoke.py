@@ -173,6 +173,60 @@ ENDDATA
 """
 
 
+def play_checks(pv, nv, reader, view, full, deform, glyphs, mesh, bounds, m0, g0):
+    """The play button vibrates one mode: phases as time steps, the mode held upstream, the
+    frequency shown, every shown object moving, a show-only subset too; views undo it."""
+    tk = pv.GetTimeKeeper()
+    phases = [k / 24 for k in range(24)]  # Animate Mode just set mode 3 up with 24 frames
+    check(nv.held_time(reader) == full[2] and nv.current_step(reader, view) == 3
+          and np.allclose(list(tk.TimestepValues), phases),
+          f"Animate Mode leaves the play button on mode 3: {len(list(tk.TimestepValues))} phases")
+    # the fixture's modes come back from write_op2 as displacement steps without a frequency
+    label = pv.FindSource(nv._name(nv._ReaderOnly(reader), "mode label"))
+    check(label is not None and label.Text == "Subcase 2 step 2" and label in nv.shown_sources(view),
+          f"the vibrating mode's label is shown: {label.Text if label else None!r}")
+
+    class Stub:
+        def __init__(self, label, freq):
+            self.label, self.freq = label, freq
+
+        def field_strings(self, block, name):
+            return [self.label] if self.label else []
+
+        def field(self, name, block=None):
+            return None if self.freq is None else np.array([self.freq])
+
+    got = [nv.mode_label(Stub(*a), 4) for a in (("Subcase 1 mode 3 (45.2 Hz)", 45.2),
+                                                 ("Subcase 2 step 2", 12.5), ("Subcase 1", np.nan), (None, None))]
+    check(got == ["Subcase 1 mode 3 (45.2 Hz)", "Subcase 2 step 2 (12.5 Hz)", "Subcase 1", "Step 4"],
+          f"mode labels carry the frequency once: {got}")
+    nv.play_mode(2, frames=8, reader=reader, view=view)  # mode 1 of the fixture: T1 = 1.0
+    amp = deform.Amplitude
+    check(np.allclose(list(tk.TimestepValues), [k / 8 for k in range(8)]) and amp > 0
+          and label.Text == "Subcase 2 step 1", f"play_mode(2): 8 phases, amplitude {amp:.3g}, {label.Text!r}")
+    moved = {}
+    for phase, sign in ((0.0, 0.0), (0.25, 1.0), (0.75, -1.0)):
+        nv._set_time(view, phase)
+        moved[phase] = (bounds(mesh)[0] - m0[0], bounds(glyphs)[0] - g0[0], sign * amp)
+    check(all(abs(m - want) < 1e-6 and abs(g - want) < 1e-6 for m, g, want in moved.values()),
+          f"shells and mass glyphs follow amp x sin(2 pi phase): {moved}")
+    model = nv.Model(reader)  # no time given: the held mode, not the phase
+    check(nv.mode_label(model, 2) == "Subcase 2 step 1", "Model() reads the vibrating mode")
+    reader.ShowOnlyElements = "3"  # a small subset (CTRIA3 3 on grids 4, 5, 7)
+    nv._set_time(view, 0.25)
+    sub = bounds(mesh)
+    check(abs(sub[1] - sub[0] - 1.0) < 1e-6 and abs(sub[0] - (0.0 + amp)) < 1e-6,
+          f"the show-only subset vibrates: x {sub[0]:.3g}..{sub[1]:.3g}")
+    reader.ShowOnlyElements = ""
+    check(nv.stop_mode_animation(reader, view) and nv.held_time(reader) is None
+          and view.ViewTime == full[1] and len(list(tk.TimestepValues)) == len(full)
+          and label not in nv.shown_sources(view),
+          "Stop Mode Animation: time controls step modes again, on the mode that vibrated")
+    nv.play_mode(3, frames=8, reader=reader, view=view)
+    nv.apply("masses", reader=reader, view=view)
+    check(nv.held_time(reader) is None and view.ViewTime == full[2], "a view stops the vibration")
+
+
 def load_error_checks(pv, nv, tmp):
     """A deck pyNastran rejects (integer CORD2R fields) must fail loudly, not look like an empty model."""
     path = os.path.join(tmp, "bad.bdf")
@@ -483,6 +537,7 @@ def main():
         pv.SetActiveSource(reader)
         pv.SetActiveView(anim)
         check(nv.animate_mode(cycles=1) == [3], "Animate Mode plays the mode the view is on")
+        play_checks(pv, nv, reader, anim, full, deform, glyphs, mesh, bounds, m0, g0)
         real_peak = nv.peak_deformation
         nv.peak_deformation = lambda model: 0.0  # a step without displacements
         try:

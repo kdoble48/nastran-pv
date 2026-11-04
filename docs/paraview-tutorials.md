@@ -123,11 +123,15 @@ Femap's "select connected" from a point, without crossing into the next group:
    undeformed mesh. The overlay names the mode and its frequency.
 3. Step through the modes with the *VCR* toolbar (or the time field next to it). To change the
    amplification, select *NPV deform* and change *Scale Factor*.
-4. Click **NPV Animate Mode** to see the mode vibrate (two cycles, then the view is back as it
-   was), or **NPV Animate All Modes** to play every mode in turn. The animation works in
-   whatever view is shown: click *NPV Masses* (or *NPV PID*, *NPV Loads*, ...) first, and the
-   mass glyphs, the mesh and everything else in that view move with the mode.
-5. Click **NPV Save Mode Animations** to keep them: one looping GIF per mode, saved next to the
+4. Click **NPV Animate Mode** to see the mode vibrate (two cycles), or **NPV Animate All Modes**
+   to play every mode in turn; the mode and its frequency show in the upper right corner. The
+   animation works in whatever is shown: click *NPV Group* (or *NPV PID*, ...), switch on
+   *NPV mass glyphs* with its eye, uncheck groups on the reader to keep a small subset, and the
+   subset's mesh, its masses and everything else shown move with the mode.
+5. After NPV Animate Mode, the **play button** loops that mode (turn on *Loop* in the VCR
+   toolbar's menu if it stops after one cycle): the time steps are now the phases of one
+   vibration. Click **NPV Stop Mode Animation** (or any NPV view) to step through the modes again.
+6. Click **NPV Save Mode Animations** to keep them: one looping GIF per mode, saved next to the
    model file (`demo_mode01.gif`, ...), in the same view and camera.
 
 ![Mode 2 of the demo tray at 11.0 Hz](images/paraview-tutorials-results.png)

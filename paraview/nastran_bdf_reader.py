@@ -664,11 +664,19 @@ class NastranPVBeamSections(_GlyphFilter):
 class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
     """The whole model moved by Scale Factor x Displacement (blocks without one follow their grids
     by NID). The NPV views draw from it, so every view can show, and animate, a mode shape.
-    Scale Factor 0 passes the model through unchanged."""
+    Scale Factor 0 passes the model through unchanged.
+
+    Vibrate Mode makes the play button vibrate one mode: the input is held at Mode Time (the
+    reader's time step of that mode), the output's time steps become one cycle of Frames Per Cycle
+    phases 0, 1/n, ... (n-1)/n, and the model moves by Amplitude x sin(2 pi phase) x Displacement."""
 
     def __init__(self):
         VTKPythonAlgorithmBase.__init__(self, nInputPorts=1, nOutputPorts=1, outputType="vtkDataObject")
         self._scale = 0.0
+        self._vibrate = 0
+        self._mode_time = 0.0
+        self._amplitude = 0.0
+        self._frames = 24
         self._deformer = None  # (input object, its MTime, Deformer): rebuilt when the input changes
 
     def FillInputPortInformation(self, port, info):
@@ -689,7 +697,55 @@ class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
     def SetScaleFactor(self, value):
         self._set("_scale", float(value))
 
+    @smproperty.intvector(name="VibrateMode", default_values=0)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetVibrateMode(self, value):
+        """Play button vibrates the mode at Mode Time (time steps become phases of one cycle)."""
+        self._set("_vibrate", int(value))
+
+    @smproperty.doublevector(name="ModeTime", default_values=0.0)
+    def SetModeTime(self, value):
+        """Input time step held while vibrating (the mode's time on the reader)."""
+        self._set("_mode_time", float(value))
+
+    @smproperty.doublevector(name="Amplitude", default_values=0.0)
+    def SetAmplitude(self, value):
+        """Peak scale of the vibration (0: hold the mode's time step, move nothing)."""
+        self._set("_amplitude", float(value))
+
+    @smproperty.intvector(name="FramesPerCycle", default_values=24)
+    @smdomain.intrange(min=4, max=240)
+    def SetFramesPerCycle(self, value):
+        self._set("_frames", max(int(value), 4))
+
+    @smproperty.doublevector(name="TimestepValues", information_only="1", si_class="vtkSITimeStepsProperty")
+    def GetTimestepValues(self):
+        return self.phases() if self._vibrate else None
+
+    def phases(self):
+        return [k / self._frames for k in range(self._frames)]
+
+    def RequestInformation(self, request, inInfo, outInfo):
+        if self._vibrate:  # otherwise the input's time steps pass through (the executive copied them)
+            info = outInfo.GetInformationObject(0)
+            steps, trange = vtkStreamingDemandDrivenPipeline.TIME_STEPS(), vtkStreamingDemandDrivenPipeline.TIME_RANGE()
+            info.Remove(steps)
+            info.Remove(trange)
+            phases = self.phases()
+            for t in phases:
+                info.Append(steps, t)
+            info.Append(trange, phases[0])
+            info.Append(trange, phases[-1])
+        return 1
+
+    def RequestUpdateExtent(self, request, inInfo, outInfo):
+        if self._vibrate:  # every phase reads the same mode: upstream executes once
+            inInfo[0].GetInformationObject(0).Set(vtkStreamingDemandDrivenPipeline.UPDATE_TIME_STEP(), self._mode_time)
+        return 1
+
     def RequestData(self, request, inInfo, outInfo):
+        import math
+
         try:
             from nastran_pv.deform import Deformer
         except ImportError as exc:
@@ -699,7 +755,15 @@ class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
         key = (inp, inp.GetMTime())
         if self._deformer is None or self._deformer[:2] != key:  # new input or new time step
             self._deformer = key + (Deformer(inp),)
-        out.ShallowCopy(self._deformer[2].apply(self._scale))
+        scale, phase = self._scale, None
+        if self._vibrate:
+            info = outInfo.GetInformationObject(0)
+            key_t = vtkStreamingDemandDrivenPipeline.UPDATE_TIME_STEP()
+            phase = info.Get(key_t) if info.Has(key_t) else 0.0
+            scale = self._amplitude * round(math.sin(2 * math.pi * phase), 9)
+        out.ShallowCopy(self._deformer[2].apply(scale))
+        if phase is not None:
+            out.GetInformation().Set(vtkDataObject.DATA_TIME_STEP(), phase)
         return 1
 
 
