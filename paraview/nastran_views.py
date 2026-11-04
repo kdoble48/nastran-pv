@@ -1329,20 +1329,21 @@ def animate_modes(modes=None, cycles=1, frames=24, out=None, reader=None, view=N
     return played
 
 
-def capture_view(view):
-    """The view's current image as an RGB PIL image, read from its render window (no file)."""
+def capture_view(view, scratch):
+    """The view's current image as an RGB PIL image, via SaveScreenshot to ``scratch`` (an
+    uncompressed PNG, removed again). Reading the render window directly is faster, but on some
+    graphics drivers its back buffer still holds an older frame, which gave GIFs that never moved."""
     from PIL import Image
-    from vtkmodules.util.numpy_support import vtk_to_numpy
-    from vtkmodules.vtkRenderingCore import vtkWindowToImageFilter
 
-    w2i = vtkWindowToImageFilter()
-    w2i.SetInput(view.GetRenderWindow())
-    w2i.ReadFrontBufferOff()
-    w2i.Update()
-    img = w2i.GetOutput()
-    w, h, _ = img.GetDimensions()
-    rgb = vtk_to_numpy(img.GetPointData().GetScalars()).reshape(h, w, -1)[::-1, :, :3]
-    return Image.fromarray(np.ascontiguousarray(rgb))
+    pv.SaveScreenshot(scratch, view, CompressionLevel="0")
+    try:
+        with Image.open(scratch) as im:
+            return im.convert("RGB")
+    finally:
+        try:
+            os.remove(scratch)
+        except OSError:
+            pass
 
 
 def _shows_deform(reader, view):
@@ -1392,8 +1393,9 @@ def save_mode_animations(modes=None, cycles=1, frames=24, folder=None, fps=ANIMA
     ``<model>_mode<NN>.gif`` in ``folder`` (default: next to the model file). ``modes`` are 1-based
     steps (default all). The view returns to the step it showed. Returns the GIF paths.
 
-    Each distinct shape is rendered once (a sine cycle of 24 frames has 13), captured from the
-    render window in memory, and every frame of a mode shares one palette (taken from its peak).
+    Each distinct shape is rendered once (a sine cycle of 24 frames has 13) and every frame of a
+    mode shares one palette (taken from its peak). A mode whose frames come out identical (nothing
+    shown moves, or the capture failed) is reported as an error after the others are saved.
     """
     from PIL import Image
 
@@ -1405,7 +1407,8 @@ def save_mode_animations(modes=None, cycles=1, frames=24, folder=None, fps=ANIMA
     os.makedirs(folder, exist_ok=True)
     start_time = view.ViewTime
     times, modes = _prepare_modes(reader, view, modes, None)
-    written = []
+    scratch = os.path.join(folder, f".npv_frame_{os.getpid()}.png")
+    written, still = [], []
     try:
         for mode, deflect in _mode_sweeps(reader, view, times, modes):
             shots = {}  # phase -> image: equal shapes are rendered once
@@ -1413,7 +1416,11 @@ def save_mode_animations(modes=None, cycles=1, frames=24, folder=None, fps=ANIMA
             for key in dict.fromkeys(keys):
                 deflect(key)
                 pv.Render(view)
-                shots[key] = capture_view(view)
+                shots[key] = capture_view(view, scratch)
+            peak, rest = shots[max(shots)], shots[min(shots, key=abs)]  # largest vs smallest swing
+            if len(shots) > 1 and np.array_equal(np.asarray(peak), np.asarray(rest)):
+                still.append(mode)
+                continue
             palette = shots[max(shots)].quantize(256, method=Image.Quantize.FASTOCTREE)
             indexed = {key: im.quantize(palette=palette, dither=Image.Dither.NONE) for key, im in shots.items()}
             images = [indexed[key] for key in keys]
@@ -1424,6 +1431,10 @@ def save_mode_animations(modes=None, cycles=1, frames=24, folder=None, fps=ANIMA
     finally:
         _set_time(view, start_time)
         pv.Render(view)
+    if still:
+        raise RuntimeError(f"mode(s) {still}: the view did not change while deforming, so no GIF was "
+                           f"saved for them ({len(written)} other(s) saved in {folder}). Show an NPV "
+                           "view of the model (e.g. NPV Masses) and check that the mode has displacements.")
     return written
 
 

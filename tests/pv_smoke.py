@@ -441,6 +441,18 @@ def main():
                                                    [k[0] for k, v in pv.GetSources().items()
                                                     if v in nv.shown_sources(anim)]),
               f"Save Mode Animations: {names}, frames {counts}, no leftovers, time back, still the masses view")
+        # a capture that never changes (a stale render-window buffer) must not give still GIFs
+        real_capture = nv.capture_view
+        frozen = {}
+        nv.capture_view = lambda view, scratch: frozen.setdefault("img", real_capture(view, scratch))
+        try:
+            nv.save_mode_animations([2], frames=4, folder=os.path.join(tmp, "still"), reader=reader, view=anim)
+            check(False, "frames that never change should be reported")
+        except RuntimeError as exc:
+            check("mode(s) [2]" in str(exc) and not os.listdir(os.path.join(tmp, "still")),
+                  "a mode whose frames never change is reported, and no still GIF is written")
+        finally:
+            nv.capture_view = real_capture
         try:
             nv.animate_modes([99], reader=reader, view=anim)
             check(False, "a mode past the last step should be refused")
