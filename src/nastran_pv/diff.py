@@ -482,6 +482,8 @@ def annotate(b, a, tol: Tolerances | None = None, against: str | None = None) ->
         _put(pd, "DiffStatus", d.masses_b["status"])
         _put(pd, "DiffReason", d.masses_b["reason"])
         _put(pd, "DeltaMass", d.masses_b["delta_mass"])
+        if vtkutil.is_vertex_only(blocks["Masses"]):  # one vertex per point: color it with the mesh
+            _put(blocks["Masses"].GetCellData(), "DiffStatus", d.masses_b["status"])
         vtkutil.set_field_strings(blocks["Masses"], "DiffStatusNames", STATUS_NAMES)
     _remove_block(b, "Removed")
     vtkutil.add_block(b, "Removed", removed_block(a, d))
@@ -572,6 +574,20 @@ def removed_block(a, d: ModelDiff):
 
 
 # ------------------------------------------------------------------- report
+def table_rows(d: ModelDiff) -> list[dict]:
+    """:attr:`ModelDiff.rows` with one type per column (for a vtkTable): ``A B Delta Rel`` as floats
+    (NaN when empty or text) and the text values (element types, connectivity) in ``Text``."""
+    out = []
+    for r in d.rows:
+        text = " -> ".join("" if r[k] is None else str(r[k]) for k in ("A", "B")) \
+            if isinstance(r["A"], str) or isinstance(r["B"], str) else ""
+        row = {k: str(r[k]) for k in ("Item", "Id", "Name", "Status", "Field")}
+        row.update({k: float(r[k]) if isinstance(r[k], (int, float)) else np.nan for k in ("A", "B", "Delta", "Rel")})
+        row["Text"] = text
+        out.append(row)
+    return out
+
+
 def report_lines(d: ModelDiff, name_a="A", name_b="B") -> list[str]:
     """The text summary the CLI prints above the tables."""
     br = d.element_breakdown()

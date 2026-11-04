@@ -11,7 +11,20 @@ description: Use when comparing two or more Nastran decks or meshes in nastran_p
 by key (PID, MID, FAMILY, ETYPE, BLOCK, EID) even when the meshes differ. The user-facing page is
 `docs/store.md`. This skill covers the workflow and the traps.
 
-## Workflow
+**Two versions of one model (before/after a design change, same ids)?** Use `diff` first, no store:
+
+```bash
+python -m nastran_pv diff A.bdf B.bdf --csv out/diff.csv            # added/removed/changed + mass/CG deltas
+python -m nastran_pv convert B.bdf --diff-against A.bdf -o out/diff.vtm   # DiffStatus etc. + Removed block
+python -m nastran_pv view B.bdf --view diff --against A.bdf         # NPV Diff; nv.side_by_side() for two views
+```
+
+It matches by id (NID, EID per block, PID, MID), so it says nothing useful for remeshed models:
+everything is added/removed. For coarse vs fine use the store by FAMILY/PID below. Sides can be
+decks, `.vtm` or `.vtkhdf`. Rigid/connectors/bushes/loads/SPCs are not diffed. User page:
+`docs/diff.md`.
+
+## Store workflow
 
 ```bash
 export PYTHONPATH=src            # or use the installed `nastran-pv`

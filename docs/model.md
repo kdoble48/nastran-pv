@@ -20,6 +20,7 @@ deck has nothing for it.
 | `BushLines` | CBUSH GA–GB lines | cell: `EID PID`; point: `NID` |
 | `Constraints` | SPC/SPC1/SPCADD/GRID PS points per set | `SPCSet SPC_DOF DOFCode CD` |
 | `Loads/SID_n`, `Loads/LOAD_n` | FORCE/MOMENT(1,2) per set, LOAD combinations resolved | `Force Moment ForceMagnitude`; field `ResultantForce GravityAcceleration` |
+| `Removed` | the reference model's removed elements (only with `convert --diff-against` or the Nastran Diff filter) | cell: `EID PID ElementType ElementMass DiffStatus DeltaElementMass`; see [Model diff](diff.md#diff-on-the-mesh) |
 | `BeamSections` | CBAR/CBEAM cross sections swept in 3D (only with `--beam-sections`) | cell: `EID PID MID ElementType BeamPart Face`; point: `GA GB StationT`, with results `Displacement DisplacementMagnitude` |
 
 Root field data: `DeckPath SOL WTMASS ActiveLoadSets ActiveSPCSets StructuralMass ConcentratedMass ModelMass ModelCG Warnings`,
@@ -31,6 +32,9 @@ bulk sets, when the deck has any) and, when there is NSM, the
 A [random response](random-vibration.md) (`--random`) replaces the result arrays with point
 `AccelRMS AccelN0 DispRMS DominantMode DominantModeShare AccelASD` and adds the `RANDOM_*` and
 `RANDOMIN_*` tables and `RandomDrive RandomInputRMS RandomAccelASDRange RandomFrameFrequencies`.
+A [model diff](diff.md#diff-on-the-mesh) (`--diff-against`) adds `DiffStatus DiffReason
+DeltaElementMass PIDChanged DeltaThickness DeltaArea GridStatus DeltaXYZ DeltaMass`, the `Removed`
+block, `DiffAgainst DiffCG` and the `DIFF_*` and `DIFFMASS_*` tables.
 The [model tools](tools.md) add `Hops`, `PartId` and `OnPath` (cell and point) and the `PART_*`,
 `LINK_*` and `PathLength` root arrays; `nastran-pv check` writes `CHECK_*`.
 With an OP2 file loaded, the mesh blocks also get `Displacement Rotation DisplacementMagnitude`

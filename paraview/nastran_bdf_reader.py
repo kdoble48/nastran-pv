@@ -1383,3 +1383,65 @@ class NastranPVModelCheck(_TopologyFilter):
         _fill_table(vtkTable.GetData(outInfo, 1), res.summary)
         self._report(res.warnings)
         return res.findings
+
+
+# ---------------------------------------------------------- model diff
+@smproxy.filter(name="NastranPVDiff", label="Nastran Diff")
+@smhint.xml('<ShowInMenu category="Nastran" />')
+@smproperty.input(name="Reference", port_index=1)
+@smdomain.datatype(dataTypes=["vtkMultiBlockDataSet", "vtkPartitionedDataSetCollection"],
+                  composite_data_supported=True)
+@smproperty.input(name="Input", port_index=0)
+@smdomain.datatype(dataTypes=["vtkMultiBlockDataSet", "vtkPartitionedDataSetCollection"],
+                  composite_data_supported=True)
+class NastranPVDiff(_Settable, VTKPythonAlgorithmBase):
+    """What changed from the Reference model (A) to the Input model (B): two readers, or .vtm/VTKHDF
+    files written by nastran-pv.
+
+    Output 0: B's blocks (a multiblock) with ``DiffStatus``, ``DiffReason`` and the deltas, plus a
+    ``Removed`` block of A's removed elements; output 1: every difference as a table.
+    """
+
+    def __init__(self):
+        VTKPythonAlgorithmBase.__init__(self, nInputPorts=2, nOutputPorts=2, outputType="vtkDataObject")
+        self._grid_tol = 1e-6
+        self._rel_tol = 1e-6
+
+    def FillInputPortInformation(self, port, info):
+        info.Set(self.INPUT_REQUIRED_DATA_TYPE(), "vtkDataObject")
+        return 1
+
+    def FillOutputPortInformation(self, port, info):
+        info.Set(vtkDataObject.DATA_TYPE_NAME(), "vtkMultiBlockDataSet" if port == 0 else "vtkTable")
+        return 1
+
+    @smproperty.doublevector(name="GridTolerance", default_values=1e-6)
+    def SetGridTolerance(self, v):
+        """A grid moved when it moved more than this fraction of A's bounding-box diagonal."""
+        self._set("_grid_tol", float(v))
+
+    @smproperty.doublevector(name="RelativeTolerance", default_values=1e-6)
+    def SetRelativeTolerance(self, v):
+        """Values differ when |b - a| > this x max(|a|, |b|)."""
+        self._set("_rel_tol", float(v))
+
+    def RequestData(self, request, inInfo, outInfo):
+        from vtkmodules.vtkCommonDataModel import vtkTable
+
+        try:
+            from nastran_pv.diff import Tolerances, annotate, table_rows
+            from nastran_pv.fields import shallow_clone
+            from nastran_pv.tree import as_multiblock
+        except ImportError as exc:
+            return _missing(exc)
+        b_in, a_in = vtkDataObject.GetData(inInfo[0], 0), vtkDataObject.GetData(inInfo[1], 0)
+        if b_in is None or a_in is None:
+            return 1
+        b = shallow_clone(as_multiblock(b_in))
+        try:
+            d = annotate(b, as_multiblock(a_in), Tolerances(self._grid_tol, self._rel_tol))
+            _fill_table(vtkTable.GetData(outInfo, 1), table_rows(d))
+        except Exception as exc:  # report, pass B through unchanged
+            _message(f"nastran-pv Diff: {exc}", error=True)
+        vtkMultiBlockDataSet.GetData(outInfo, 0).ShallowCopy(b)
+        return 1

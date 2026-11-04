@@ -128,6 +128,8 @@ def test_annotate_arrays(models):
     masses = get_block(b, "Masses")
     assert by_eid(masses, "DiffStatus", "point") == {100: CHANGED, 101: ADDED}
     assert by_eid(masses, "DeltaMass", "point") == pytest.approx({100: 0.5, 101: 1.0})
+    assert vtkutil.to_numpy(masses.GetCellData().GetArray("DiffStatus")).tolist() \
+        == vtkutil.to_numpy(masses.GetPointData().GetArray("DiffStatus")).tolist()  # one vertex per point
 
     removed = get_block(b, "Removed")
     assert by_eid(removed, "DiffStatus") == {3: REMOVED, 8: REMOVED}
@@ -228,6 +230,31 @@ def test_models_without_masses_or_materials(tmp_path):
     out = shallow_clone(a)
     annotate(out, b)  # A has no Masses block: the removed CONM2s go to Removed
     assert set(by_eid(get_block(out, "Removed"), "EID")) >= {100, 101}
+
+
+def test_table_rows_have_one_type_per_column(models):
+    from nastran_pv.diff import table_rows
+
+    rows = table_rows(diff_models(*models))
+    for col in ("A", "B", "Delta", "Rel"):
+        assert all(isinstance(r[col], float) for r in rows)
+    for col in ("Item", "Id", "Name", "Status", "Field", "Text"):
+        assert all(isinstance(r[col], str) for r in rows)
+
+
+def test_launchers_pass_the_reference(capsys):
+    from nastran_pv.cli import main
+
+    try:
+        assert main(["view", str(B_DECK), "--view", "diff", "--against", str(A_DECK), "--dry-run"]) == 0
+        assert main(["render", str(B_DECK), "--preset", "diff", "--against", str(A_DECK), "--dry-run"]) == 0
+    except FileNotFoundError:
+        pytest.skip("ParaView not installed")
+    out = capsys.readouterr().out
+    assert f"nv.load_reader({str(A_DECK.resolve())!r})" in out and "nv.apply('diff'" in out
+    assert f"--against {A_DECK.resolve()}" in out
+    with pytest.raises(SystemExit, match="reference model not found"):
+        main(["view", str(B_DECK), "--view", "diff", "--against", "missing.bdf", "--dry-run"])
 
 
 def test_keyed_diff():
