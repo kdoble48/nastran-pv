@@ -10,6 +10,7 @@ All notable changes to nastran-pv are listed here. The format follows
 
 - Test CI: pytest and pyflakes on Linux, Windows and macOS with Python 3.10 to 3.12 (#42).
 - This changelog and a written [version policy](docs/versioning.md) (#42).
+- Model diff: a report, the differences on the mesh, and the two models side by side (#44).
 - Random vibration from normal modes, with RMS response shown on the mesh (#41).
 - Play button vibrates the current mode; mode animations show the mode's frequency (#40).
 - `auditing-nastran-pv` project skill for reviewing merged code (#39).
