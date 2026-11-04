@@ -38,9 +38,9 @@ def shallow_clone(mb: vtkMultiBlockDataSet) -> vtkMultiBlockDataSet:
     return out
 
 
-def get_array(attr, name):
+def get_array(attr, name, default=None):
     a = attr.GetArray(name)
-    return vtkutil.to_numpy(a) if a is not None else None
+    return vtkutil.to_numpy(a) if a is not None else default
 
 
 def field_value(mb, name):

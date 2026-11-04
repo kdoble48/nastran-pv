@@ -32,14 +32,7 @@ def render(deck, presets, cameras, out, size, op2=None, step=0, nsm_set=None, ra
     base = os.path.splitext(os.path.basename(deck))[0]
     written = []
     for preset in presets:
-        view = pv.CreateRenderView()
-        view.ViewSize = list(size)
-        view.ViewTime = t
-        view.Background = [1, 1, 1]
-        try:
-            view.UseColorPaletteForBackground = 0
-        except AttributeError:
-            pass
+        view = nv.white_view(size, t)
         nv.apply(preset, reader=reader, view=view, model=model)
         for cam in cameras:
             nv.set_camera(view, cam)
@@ -68,8 +61,13 @@ def main(argv=None):
     args = ap.parse_args(argv)
     random = dict(asd=args.random, drive=args.drive, damping=args.damping, g=args.g,
                   frames=args.random_frames) if args.random else None
-    for p in render(os.path.abspath(args.deck), args.preset, args.views, args.out, args.size, args.op2, args.step,
-                    args.nsm_set, random):
+    try:
+        written = render(os.path.abspath(args.deck), args.preset, args.views, args.out, args.size, args.op2,
+                         args.step, args.nsm_set, random)
+    except RuntimeError as exc:  # a deck that does not load, a converted file with --op2, ...
+        print(f"nastran-pv render: {exc}", file=sys.stderr)
+        return 1
+    for p in written:
         print(p)
     return 0
 

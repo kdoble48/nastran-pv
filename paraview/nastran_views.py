@@ -10,9 +10,10 @@ pile up duplicates. Available views::
     nsm  elementtype  results  random  randomsweep  parts  grow  path  check
 
 ``grow_from_selection`` and ``path_from_selection`` seed the grow and path
-views from the current selection. ``animate_mode`` vibrates the current mode,
-``animate_modes`` plays every mode in turn and ``save_mode_animations`` writes each mode as a GIF
-(all in the view as it is). ``show_only_selected``, ``hide_selected``, ``show_all``,
+views from the current selection. ``animate_mode`` vibrates the current mode and leaves the play
+button looping it (``play_mode``; ``stop_mode_animation`` undoes it), ``animate_modes`` plays every
+mode in turn and ``save_mode_animations`` writes each mode as a GIF (all in the view as it is, with
+the mode's frequency shown). ``show_only_selected``, ``hide_selected``, ``show_all``,
 ``show_only_property``, ``show_only_material``, ``show_only_reached`` and ``hide_reached`` are
 Femap-style visibility commands: they set the reader's visibility checklists and element ID lists,
 so they need the deck (:func:`deck_reader`).
@@ -120,18 +121,36 @@ def _is_model_source(proxy):
     return _xml_name(proxy) == READER_XML or is_model_file(proxy)
 
 
+def upstream(src, limit=50):
+    """``src``, its first input, that one's first input, ... (at most ``limit`` steps)."""
+    while src is not None and limit > 0:
+        yield src
+        inp = getattr(src, "Input", None)
+        src = inp[0] if isinstance(inp, (list, tuple)) and inp else inp
+        limit -= 1
+
+
+def white_view(size, time=None):
+    """A new render view of ``size`` on a white background (not the palette's), for screenshots."""
+    view = pv.CreateRenderView()
+    view.ViewSize = list(size)
+    if time is not None:
+        view.ViewTime = time
+    view.Background = [1, 1, 1]
+    try:
+        view.UseColorPaletteForBackground = 0
+    except AttributeError:  # ParaView 5.10 and older
+        pass
+    return view
+
+
 def find_reader(source=None):
     """The model source: ``source``, the active source or anything upstream of it, else any open
     Nastran reader, else any open nastran-pv ``.vtm``/VTKHDF. A Nastran reader is the deck;
     a converted file works for every view but not for the visibility commands (:func:`deck_reader`)."""
-    src = source or pv.GetActiveSource()
-    seen = 0
-    while src is not None and seen < 50:
+    for src in upstream(source or pv.GetActiveSource()):
         if _is_model_source(src):
             return src
-        inp = getattr(src, "Input", None)
-        src = inp[0] if isinstance(inp, (list, tuple)) and inp else inp
-        seen += 1
     sources = list(pv.GetSources().values())
     for test in (lambda p: _xml_name(p) == READER_XML, is_model_file):
         for proxy in sources:
@@ -221,15 +240,31 @@ def timesteps(reader):
     return [float(t) for t in tv] if hasattr(tv, "__len__") else [float(tv)]
 
 
+def raise_load_error(reader):
+    """Raise RuntimeError when the deck reader's last read failed: an empty output would otherwise
+    read as a model with no masses, bushes, ... and views and screenshots would say so."""
+    if _xml_name(reader) != READER_XML:
+        return
+    reader.UpdatePropertyInformation()
+    prop = reader.GetProperty("LoadError")
+    error = prop.GetElement(0) if prop is not None and len(prop) else ""
+    if error:
+        name = os.path.basename(str(getattr(reader, "FileName", "") or "the deck"))
+        raise RuntimeError(f"cannot read {name}: {error} (full traceback in Output Messages)")
+
+
 class Model:
     """Reader plus a client-side copy of its output (block names, arrays, size)."""
 
     def __init__(self, reader, time=None):
         self.reader = reader
         if time is None:
+            time = held_time(reader)  # the vibrating mode: the view time is a phase then
+        if time is None:
             view = pv.GetActiveView()
             time = getattr(view, "ViewTime", 0.0) if view is not None else 0.0
         reader.UpdatePipeline(time)
+        raise_load_error(reader)
         from nastran_pv.tree import as_multiblock
 
         self.data = as_multiblock(fetch(reader))  # the reader outputs the model tree
@@ -351,8 +386,9 @@ def _extract(model, *blocks, what=None, undeformed=False):
     if not blocks:
         return None
     name = what or "+".join(blocks)
-    if undeformed:
-        return _named(model, f"undeformed {name}", lambda: extract_blocks(model.reader, blocks))
+    if undeformed:  # through a deform filter at scale 0, which holds the mode while it vibrates
+        rest = _named(model, "undeformed model", lambda: pv.NastranDeform(Input=model.reader))
+        return _named(model, f"undeformed {name}", lambda: extract_blocks(rest, blocks))
     return _named(model, name, lambda: extract_blocks(deformed(model), blocks))
 
 
@@ -1359,6 +1395,7 @@ def apply(name, reader=None, view=None, model=None, reset_camera=True, **kwargs)
     ensure_plugin()
     view = view or pv.GetActiveViewOrCreate("RenderView")
     reader = reader or find_reader()
+    stop_mode_animation(reader, view)  # back on the mode's time step, time controls step modes again
     model = model or Model(reader, getattr(view, "ViewTime", 0.0))
     _reset_view(view)
     pv.SetActiveView(view)
@@ -1428,17 +1465,134 @@ def mode_times(reader, view=None):
 
 
 def current_step(reader, view=None):
-    """1-based step (mode) the view shows: the time step nearest its time."""
+    """1-based step (mode) the view shows: the vibrating mode, else the time step nearest its time."""
     view = view or pv.GetActiveViewOrCreate("RenderView")
-    times = mode_times(reader, view)
+    t = held_time(reader)
+    times = timesteps(reader) if t is not None else mode_times(reader, view)
     if not times:
         return None
-    t = getattr(view, "ViewTime", times[0])
+    if t is None:
+        t = getattr(view, "ViewTime", times[0])
     return int(np.argmin([abs(x - t) for x in times])) + 1
+
+
+def model_deforms(reader):
+    """{deform filter: pipeline name} for every Nastran Deform downstream of ``reader`` (the NPV
+    ones and any the user added)."""
+    return {src: key[0] for key, src in pv.GetSources().items()
+            if _xml_name(src) == DEFORM_XML and any(node == reader for node in upstream(src))}
+
+
+def held_time(reader):
+    """The reader time of the mode the play button vibrates, or None when no mode vibrates."""
+    for f in model_deforms(reader):
+        if f.VibrateMode:
+            return float(f.ModeTime)
+    return None
+
+
+def mode_label(model, step):
+    """'Subcase 1 mode 3 (45.2 Hz)': the step's ResultLabel, with its frequency when it has one."""
+    labels = model.field_strings(None, "ResultLabel")
+    label = labels[0] if labels else f"Step {step}"
+    freq = model.field("Frequency")
+    if freq is not None and freq.size and np.isfinite(freq[0]) and "Hz" not in label:
+        label += f" ({float(freq[0]):.6g} Hz)"
+    return label
+
+
+def _show_mode_label(model, view, text):
+    t = _named(model, "mode label", lambda: pv.Text())
+    t.Text = text
+    d = pv.Show(t, view)
+    d.WindowLocation = "Upper Right Corner"
+    d.FontSize = 16
+    d.Bold = 1
+    return t
+
+
+def _hide_mode_label(reader, view):
+    t = pv.FindSource(_name(_ReaderOnly(reader), "mode label"))
+    if t is not None:
+        pv.Hide(t, view)
+
+
+def _suppress_time(reader, on):
+    """Drop (or restore) the reader's time steps in the time keeper, like the GUI's Ignore Time."""
+    tk = pv.GetTimeKeeper()
+    servermanager.vtkSMTimeKeeperProxy.SetSuppressTimeSource(tk.SMProxy, reader.SMProxy, bool(on))
+    try:
+        tk.TimeLabel = "Phase" if on else "Time"
+    except AttributeError:
+        pass
+
+
+_LOOP_BEFORE = {}  # reader id -> the animation scene's Loop before play_mode turned it on
+
+
+def play_mode(mode=None, frames=ANIMATE_FPS, reader=None, view=None):
+    """Set the play button up to vibrate ``mode`` (1-based step; default the one the view is on)
+    in the view as it is: every Nastran Deform of the model holds the mode's time step and turns
+    the time steps into one looping cycle of ``frames`` phases, so whatever is shown (masses,
+    groups, a show-only subset, ...) moves. The mode and its frequency are shown in the view, and
+    the view is left at the peak of the cycle. Any view, :func:`stop_mode_animation` or Animate All
+    Modes gives the time controls back to the modes. Returns the mode."""
+    reader = reader or find_reader()
+    view = view or pv.GetActiveViewOrCreate("RenderView")
+    mode = mode or current_step(reader, view)
+    stop_mode_animation(reader, view)
+    if mode is None:
+        raise RuntimeError(NO_STEPS)
+    times, _ = _prepare_modes(reader, view, [mode], None)
+    t = times[mode - 1]
+    _set_time(view, t)
+    model = Model(reader, t)
+    amp = peak_deformation(model)
+    if amp <= 0:
+        raise RuntimeError(f"step {mode} ({mode_label(model, mode)}) has no displacement to vibrate.")
+    for f, name in model_deforms(reader).items():
+        f.Amplitude = 0.0 if name.startswith("NPV undeformed") else amp
+        f.ModeTime = t
+        f.FramesPerCycle = int(frames)
+        f.VibrateMode = 1
+        f.UpdatePipelineInformation()
+    _suppress_time(reader, True)
+    scene = pv.GetAnimationScene()
+    _LOOP_BEFORE.setdefault(reader.GetGlobalIDAsString(), scene.Loop)
+    scene.UpdateAnimationUsingDataTimeSteps()
+    scene.PlayMode = "Snap To TimeSteps"
+    scene.Loop = 1
+    _set_time(view, round(frames / 4) / frames)  # sin = 1: the peak
+    _show_mode_label(model, view, mode_label(model, mode))
+    pv.Render(view)
+    return mode
+
+
+def stop_mode_animation(reader=None, view=None):
+    """Undo :func:`play_mode`: the time controls step through the modes again, on the mode that
+    vibrated. Returns True if a mode was vibrating."""
+    reader = reader or find_reader()
+    filters = [f for f in model_deforms(reader) if f.VibrateMode]
+    if not filters:
+        return False
+    view = view or pv.GetActiveViewOrCreate("RenderView")
+    held = float(filters[0].ModeTime)
+    for f in filters:
+        f.VibrateMode = 0
+        f.UpdatePipelineInformation()
+    _suppress_time(reader, False)
+    scene = pv.GetAnimationScene()
+    scene.UpdateAnimationUsingDataTimeSteps()
+    scene.Loop = _LOOP_BEFORE.pop(reader.GetGlobalIDAsString(), scene.Loop)
+    _set_time(view, held)
+    _hide_mode_label(reader, view)
+    pv.Render(view)
+    return True
 
 
 def _prepare_modes(reader, view, modes, camera):
     """(times, 1-based modes) after checking them; a view with no NPV objects gets the results view."""
+    stop_mode_animation(reader, view)
     times = mode_times(reader, view)
     if not times:
         raise RuntimeError(NO_STEPS)
@@ -1472,21 +1626,26 @@ def _kept_view(reader, view):
 def _mode_sweeps(reader, view, times, modes, skipped):
     """For each mode with a displacement: go to its time step and yield ``(mode, deflect)``, where
     ``deflect(u)`` sets every NPV deform filter to ``u`` x the mode's peak scale. Modes whose step
-    has no displacement are appended to ``skipped``. Run it inside :func:`_kept_view`."""
-    for mode in modes:
-        _set_time(view, times[mode - 1])
-        model = Model(reader, times[mode - 1])
-        filters = deform_filters(model)
-        amp = peak_deformation(model)
-        if not filters or amp <= 0:  # the step has no displacement (missing, all NaN or all 0)
-            skipped.append(mode)
-            continue
+    has no displacement are appended to ``skipped``. The mode and its frequency are shown in the
+    view while it plays. Run it inside :func:`_kept_view`."""
+    try:
+        for mode in modes:
+            _set_time(view, times[mode - 1])
+            model = Model(reader, times[mode - 1])
+            filters = deform_filters(model)
+            amp = peak_deformation(model)
+            if not filters or amp <= 0:  # the step has no displacement (missing, all NaN or all 0)
+                skipped.append(mode)
+                continue
+            _show_mode_label(model, view, mode_label(model, mode))
 
-        def deflect(u, filters=filters, amp=amp):
-            for f in filters:
-                f.ScaleFactor = amp * u
+            def deflect(u, filters=filters, amp=amp):
+                for f in filters:
+                    f.ScaleFactor = amp * u
 
-        yield mode, deflect
+            yield mode, deflect
+    finally:
+        _hide_mode_label(reader, view)
 
 
 def _no_displacement(skipped, done, what):
@@ -1553,24 +1712,22 @@ def capture_view(view, scratch):
 def _shows_deform(reader, view):
     """True when something visible in ``view`` is drawn through one of the reader's deform filters."""
     filters = deform_filters(_ReaderOnly(reader))
-    for src in shown_sources(view):
-        seen, node = 0, src
-        while node is not None and seen < 20:
-            if any(node == f for f in filters):
-                return True
-            inp = getattr(node, "Input", None)
-            node = inp[0] if isinstance(inp, (list, tuple)) and inp else inp
-            seen += 1
-    return False
+    return any(node == f for src in shown_sources(view) for node in upstream(src, 20) for f in filters)
 
 
-def animate_mode(cycles=2):
-    """Vibrate the mode the time controls are on (``cycles`` cycles); step to another mode, click again."""
+def animate_mode(cycles=2, frames=ANIMATE_FPS):
+    """Vibrate the mode the time controls are on (``cycles`` cycles), then leave the play button
+    set up to loop it (:func:`play_mode`). Stop Mode Animation (or any view) gives the time controls
+    back to the modes: step to another mode and click again."""
     reader = find_reader()
-    step = current_step(reader)
+    view = pv.GetActiveViewOrCreate("RenderView")
+    step = current_step(reader, view)
     if step is None:
         raise RuntimeError(NO_STEPS)
-    return animate_modes([step], cycles=cycles, reader=reader)
+    played = animate_modes([step], cycles=cycles, frames=frames, reader=reader, view=view)
+    if played:
+        play_mode(step, frames=frames, reader=reader, view=view)
+    return played
 
 
 def _model_path(reader):
@@ -1652,7 +1809,7 @@ def save_mode_animations_macro():
     return paths
 
 
-ACTIONS = {"animate_mode": animate_mode, "animate_modes": animate_modes,
+ACTIONS = {"animate_mode": animate_mode, "animate_modes": animate_modes, "stop_mode_animation": stop_mode_animation,
            "save_mode_animations": save_mode_animations_macro, "index_colors": index_colors, "grow_from_selection": grow_from_selection,
            "path_from_selection": path_from_selection, "show_only_selected": show_only_selected,
            "hide_selected": hide_selected, "show_all": show_all, "show_only_property": show_only_property,

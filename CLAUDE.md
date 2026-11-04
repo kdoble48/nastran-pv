@@ -34,6 +34,7 @@ Project skills in `.claude/skills/` hold the task workflows. Load the matching o
 | Missing mass/MID, "(partial)" arrays, empty views, import or locate errors | `troubleshooting-nastran-models` |
 | Code changes: new card, block, array, view, flag or format | `extending-nastran-pv` |
 | Gallery assets, Sphinx site, `sphinx -W` failures | `regenerating-nastran-gallery` |
+| Whole-codebase simplification audit (duplication, dead code, plugin copies of src) | `auditing-nastran-pv` |
 
 ## Data
 
@@ -154,7 +155,13 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   8 %-of-the-model scale; `Deformer` gathers a model's moving points once and `apply(scale)` is
   per frame (the plugin keeps one per input object + MTime). The views draw through the plugin's *Nastran Deform* (`NPV deform`),
   so `nastran_views.animate_modes` vibrates whatever view is shown; analysis filters stay on the
-  undeformed model.
+  undeformed model. `play_mode` (after Animate Mode) sets every Nastran Deform downstream of the
+  reader to *Vibrate Mode*: the filter holds its input at *Mode Time* (`RequestUpdateExtent`) and
+  publishes one cycle of phases as `TimestepValues`, the reader's own time is suppressed in the
+  time keeper, and the play button loops the mode; `held_time` makes `Model()`/`current_step` read
+  the held mode, and every view (`apply`) and `_prepare_modes` call `stop_mode_animation` first.
+  The undeformed ghost goes through a scale-0 deform (`NPV undeformed model`) so nothing reads the
+  reader at a phase time.
 - `randvib.py`: base-drive random vibration from normal modes (no SOL 111 needed). `RandomResponse`
   has the results interface (`steps`/`times`/`attach`): steps are frequency frames, every frame
   carries the static `AccelRMS AccelN0 DispRMS DominantMode*` and its own `AccelASD`. Participation

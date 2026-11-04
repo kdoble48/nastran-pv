@@ -113,4 +113,7 @@ The presets are the views from the toolbar macros: `masses`, `bushes`, `bushrota
 `family`, `group`, `pid`, `mid`, `elementtype`, `thickness`, `nsm`, `results`, `random`, `randomsweep`,
 `parts` and `check`. The two random views need `--random` (or a converted random series).
 
+If the deck cannot be read, `render` writes no screenshots and exits with status 1 after printing
+`cannot read DECK: <error>`. The toolbar macros show the same message in Output Messages.
+
 Cameras: `iso` (default), `top`, `front`, `side`, and `showcase` (Z up, three-quarter view from ahead; used by the web gallery).

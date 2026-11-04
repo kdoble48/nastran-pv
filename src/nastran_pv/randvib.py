@@ -322,8 +322,6 @@ class RandomResponse:
                 f"{len(self.steps)} frame(s)"]
 
     def attach(self, mb, step_index: int = 0, deck=None) -> None:
-        from .topology.common import write_table
-
         i = int(np.clip(step_index, 0, len(self.steps) - 1))
         names = block_names(mb)
         for name in RESULT_BLOCKS:
@@ -358,8 +356,9 @@ class RandomResponse:
         for arr_name in ("ResultLabel", "Frequency", "ResultStep", "RandomDrive", "RandomInputRMS",
                          "RandomAccelASDRange", "RandomFrameFrequencies"):
             fd.RemoveArray(arr_name)
-        write_table(mb, "RANDOM_", self.modes)
-        write_table(mb, "RANDOMIN_", [{"Frequency": float(a), "ASD": float(b)} for a, b in zip(self.asd_f, self.asd)])
+        vtkutil.write_field_table(mb, "RANDOM_", self.modes)
+        vtkutil.write_field_table(mb, "RANDOMIN_", [{"Frequency": float(a), "ASD": float(b)}
+                                                    for a, b in zip(self.asd_f, self.asd)])
         vtkutil.add_string_array(fd, "RandomDrive", [self.drive])
         vtkutil.add_array(fd, "RandomInputRMS", np.array([self.input_rms]))
         vtkutil.add_array(fd, "RandomAccelASDRange", np.array(self.asd_range), skip_all_nan=True)

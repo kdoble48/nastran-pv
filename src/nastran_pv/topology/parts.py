@@ -7,7 +7,8 @@ import numpy as np
 from scipy.sparse import csgraph
 
 from ..fields.common import get_array, iter_blocks
-from .common import cell_values, write_cells, write_points, write_table
+from ..vtkutil import write_field_table
+from .common import cell_values, write_cells, write_points
 from .graph import Graph, Rules
 
 
@@ -80,6 +81,6 @@ def parts(mb, rules: Rules | None = None, graph: Graph | None = None) -> PartsRe
     write_points(mb, graph, "PartId", part_grid)
     summary = _summary(mb, graph, part_cell, part_grid, n)
     links = _links(graph, allowed, part_grid)
-    write_table(mb, "PART_", summary)
-    write_table(mb, "LINK_", links)
+    write_field_table(mb, "PART_", summary)
+    write_field_table(mb, "LINK_", links)
     return PartsResult(n, summary, links, warnings)

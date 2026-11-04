@@ -12,7 +12,7 @@ from vtkmodules.vtkCommonDataModel import VTK_LINE
 from .. import vtkutil
 from ..deck import Deck
 from ..sections.beams import BEAM_TYPES, bar_frame
-from .common import CellTable, compact_mesh, line_area, material_density, property_info
+from .common import CellTable, add_mid_density, compact_mesh, line_area, property_info
 
 LINE_TYPES = ("CBAR", "CBEAM", "CROD", "CONROD", "CTUBE", "CVISC", "CBEND")
 
@@ -40,9 +40,7 @@ def build_lines(deck: Deck):
         return None
     ug, *_ = compact_mesh(deck, table)
     mids = np.asarray(mids, dtype=np.int64)
-    vtkutil.add_array(ug.GetCellData(), "MID", mids)
-    rho = {m: material_density(model, m) for m in np.unique(mids)}
-    vtkutil.add_array(ug.GetCellData(), "Density", np.array([rho[m] for m in mids], dtype=float), skip_all_nan=True)
+    add_mid_density(ug.GetCellData(), model, mids)
     vtkutil.add_array(ug.GetCellData(), "Area", np.asarray(areas, dtype=float), skip_all_nan=True)
     frames = np.asarray(frames, dtype=float)  # (n, 5, 3): x, y, z, WA, WB
     for i, name in enumerate(("Axis1", "Axis2", "Axis3", "OffsetA", "OffsetB")):

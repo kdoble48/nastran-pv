@@ -88,6 +88,35 @@ class CellTable:
         return len(self.eids)
 
 
+def add_mid_density(cd, model, mids: np.ndarray) -> None:
+    """``MID`` and its ``Density`` (NaN where unknown) cell arrays."""
+    vtkutil.add_array(cd, "MID", mids)
+    rho = {m: material_density(model, m) for m in np.unique(mids)}
+    vtkutil.add_array(cd, "Density", np.array([rho[m] for m in mids], dtype=float), skip_all_nan=True)
+
+
+def as_int(value) -> int:
+    """``int(value)``, 0 for blanks and non-numbers (DOF strings, missing fields)."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def grid_legs(deck: Deck, pairs, what: str, unknown: str = "unknown grids"):
+    """(line polydata with a ``NID`` point array, kept mask) for (n, 2) grid-id ``pairs``.
+
+    Legs with a grid missing from the deck are warned about and left out."""
+    gidx = deck.lookup(np.asarray(pairs, dtype=np.int64).ravel()).reshape(-1, 2)
+    ok = np.all(gidx >= 0, axis=1)
+    if not ok.all():
+        deck.warn(f"{what}: {int((~ok).sum())} leg(s) reference {unknown}, skipped")
+    used, local = np.unique(gidx[ok].ravel(), return_inverse=True)
+    pd = vtkutil.polydata(deck.xyz[used], verts=False, lines=local.reshape(-1, 2))
+    vtkutil.add_array(pd.GetPointData(), "NID", deck.nids[used])
+    return pd, ok
+
+
 def compact_mesh(deck: Deck, table: CellTable):
     """Turn a CellTable into (ugrid, local point ids per cell, used global indices).
 

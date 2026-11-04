@@ -26,7 +26,6 @@ import numpy as np
 from .. import vtkutil
 from ..builders.common import element_axes, orientation_vector, perpendicular, unit
 from ..deck import Deck
-from ..topology.common import write_table
 from .props import Section, equivalent_section, library_section
 
 BEAM_TYPES = ("CBAR", "CBEAM")
@@ -235,9 +234,9 @@ def section_rows(deck: Deck, pids) -> tuple[list[dict], list[np.ndarray]]:
 
 def write_section_tables(obj, rows, rings) -> None:
     """``SECTION_*``, ``SECRING_*`` and ``SECPT_*`` field arrays on ``obj`` (replacing old ones)."""
-    write_table(obj, "SECTION_", rows)
-    write_table(obj, "SECRING_", [])
-    write_table(obj, "SECPT_", [])
+    vtkutil.write_field_table(obj, "SECTION_", rows)
+    vtkutil.write_field_table(obj, "SECRING_", [])
+    vtkutil.write_field_table(obj, "SECPT_", [])
     if not rings:
         return
     fd = obj.GetFieldData()

@@ -13,7 +13,7 @@ from vtkmodules.vtkFiltersGeometry import vtkDataSetSurfaceFilter, vtkGeometryFi
 
 from .. import vtkutil
 from ..fields.common import get_array, iter_blocks, replace_array
-from .common import gather_cells, write_table
+from .common import gather_cells
 from .graph import LINK_GROUPS, MESH_GROUPS, Graph, Rules
 from .parts import label_parts
 
@@ -166,5 +166,5 @@ def check(mb, rules: Rules | None = None, tol: float = 1e-6, checks=CHECKS, grap
             # the check's code on every cell, for categorical coloring of all findings at once
             replace_array(block.GetCellData(), "Check", np.full(block.GetNumberOfCells(), CHECKS.index(name), np.int32))
             vtkutil.add_block(out, name, block)
-    write_table(out, "CHECK_", rows)
+    vtkutil.write_field_table(out, "CHECK_", rows)
     return CheckResult(out, rows)
