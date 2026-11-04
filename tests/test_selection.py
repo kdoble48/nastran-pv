@@ -1,0 +1,233 @@
+"""Selection from an ID file (nastran_pv.selection): reading, matching, keep/mark, the CLI.
+
+Expected values are counted by hand from tests/data/tiny_bulk.bdf:
+  Shells 1 (grids 1 2 5 4), 3 (4 5 7), 2 (2 3 6 5); Solids 11 12 (PID 11), 13 (PID 12, MID 3)
+  CONM2 201 on grid 5 (with an offset line), 202 on grid 7
+  RBE2 301: 5 -> 2 3 6 (3 legs); RBE3 401: 7 -> 4 5 (2 legs)
+  CBUSH 501 (3-8), 502 (grounded on 6, no line), 503 (4-12)
+  SPCs on grids 1 3 4 2; loads SID 1 on 3 6, SID 2 on 6, LOAD 1001 on 3 6
+"""
+import numpy as np
+import pytest
+
+from nastran_pv import selection, tree
+from nastran_pv.assemble import block_names, get_block
+from nastran_pv.cli import main
+from nastran_pv.fields.common import iter_blocks, shallow_clone
+from nastran_pv.vtkio import read_vtm
+from conftest import DATA, arr, strings
+
+DECK = str(DATA / "tiny_run.bdf")
+
+
+def ids_file(tmp_path, text, name="ids.csv"):
+    p = tmp_path / name
+    p.write_text(text)
+    return p
+
+
+def counts(masks):
+    return {p: int(m.sum()) for p, m in masks.items() if m.sum()}
+
+
+def eids(ds, where="cell"):
+    return sorted(int(v) for v in arr(ds, "EID", where))
+
+
+# ------------------------------------------------------------------ parsing
+def test_parse_ids_thru_and_by():
+    assert tree.parse_ids("1 THRU 3, 10 thru 14 BY 2") == {1, 2, 3, 10, 12, 14}
+    assert tree.parse_ids("7 - 9 20:21") == {7, 8, 9, 20, 21}
+    with pytest.raises(ValueError):
+        tree.parse_ids("1 THRU")
+
+
+@pytest.mark.parametrize("text, key, ids", [
+    ("1\n2-3\n", "EID", {1, 2, 3}),                                   # no header: an ID list
+    ("1, 5 7\n", "EID", {1, 5, 7}),
+    ("$ comment\n# another\n100 THRU 103\n", "EID", {100, 101, 102, 103}),
+    ("Element ID, stress\n1, 5.0\n3, 2.0\n", "EID", {1, 3}),          # header names the key
+    ("GRID\n4 THRU 7\n", "NID", {4, 5, 6, 7}),                         # one-column header: free text
+    ("PID,name\n1,a\n2,b\n", "PID", {1, 2}),
+    ("material;x\n3;1\n", "MID", {3}),
+    ("foo,bar\n7,8\n", "EID", {7}),                                    # unknown header: first column, EID
+    ("value,id\n7,8\n", "EID", {8}),                                   # an ID column
+    ("stress\tNode\n1.5\t11\n2.5\t12-13\n", "NID", {11, 12, 13}),     # a range inside a cell
+])
+def test_read_ids_detects_header_and_key(tmp_path, text, key, ids):
+    sel = selection.read_ids(ids_file(tmp_path, text))
+    assert (sel.key, set(sel.ids)) == (key, ids)
+
+
+def test_read_ids_explicit_key_and_column(tmp_path):
+    p = ids_file(tmp_path, "EID,PID\n1,2\n3,4\n")
+    assert set(selection.read_ids(p, key="pid").ids) == {2, 4}
+    assert set(selection.read_ids(p, key="PID", column="EID").ids) == {1, 3}
+    with pytest.raises(KeyError):
+        selection.read_ids(p, column="nope")
+    with pytest.raises(ValueError):
+        selection.read_ids(p, key="XYZ")
+
+
+def test_read_family_names(tmp_path):
+    no_header = selection.read_ids(ids_file(tmp_path, "WING_SPARS/LE_SPAR/SEG.00\n"), key="FAMILY")
+    assert no_header.key == "FAMILY" and no_header.ids == frozenset({"WING_SPARS/LE_SPAR/SEG.00"})
+    header = selection.read_ids(ids_file(tmp_path, "Family,t\nA,1\nB,2\n"))
+    assert header.key == "FAMILY" and header.ids == frozenset({"A", "B"})
+
+
+def test_read_json_rows(tmp_path):
+    sel = selection.read_ids(ids_file(tmp_path, '[{"PID": 11}, {"PID": 12}]', "ids.json"))
+    assert (sel.key, set(sel.ids)) == ("PID", {11, 12})
+
+
+def test_bad_id_text_is_an_error(tmp_path):
+    with pytest.raises(ValueError):
+        selection.read_ids(ids_file(tmp_path, "1\n2 x\n"), key="EID")
+
+
+# ------------------------------------------------------------------ matching
+def test_eid_selection_with_attachments(run_mb):
+    masks, report = selection.item_masks(run_mb, selection.IdList("EID", frozenset({1, 2})))
+    assert counts(masks) == {"Shells": 2, "Masses": 1, "MassOffsets": 1, "Constraints": 4, "Loads/SID_1": 2,
+                             "Loads/SID_2": 1, "Loads/LOAD_1001": 2}
+    assert report.missing == [] and report.warnings == []
+
+
+def test_eid_selection_without_attachments(run_mb):
+    masks, _ = selection.item_masks(run_mb, selection.IdList("EID", frozenset({1, 2, 202})), attach=False)
+    assert counts(masks) == {"Shells": 2, "Masses": 1}
+
+
+def test_eid_closure_and_missing_ids(run_mb):
+    masks, report = selection.item_masks(run_mb, selection.IdList("EID", frozenset({503, 999, 1000, 1001})))
+    assert counts(masks)["Bushes"] == 1 and counts(masks)["BushLines"] == 1
+    assert report.missing == [999, 1000, 1001]
+    assert report.warnings == ["selection: 3 of 4 EID(s) not in the model: 999-1001"]
+
+
+def test_nid_all_and_any(run_mb):
+    sel = selection.IdList("NID", frozenset({4, 5, 7}))
+    masks, _ = selection.item_masks(run_mb, sel)
+    # shell 3 and both RBE3 legs lie on listed grids; masses on 5 and 7; the SPC on 4
+    assert counts(masks) == {"Shells": 1, "Masses": 2, "MassOffsets": 1, "Rigid": 2, "Constraints": 1}
+    masks, _ = selection.item_masks(run_mb, sel, grids="any")
+    # every shell, every rigid leg (all touch 5 or 7 or 4), CBUSH 503 (4-12) and its glyph; then the
+    # SPCs and loads on the grids those cells use (1-7, 12)
+    assert counts(masks) == {"Shells": 3, "Masses": 2, "MassOffsets": 1, "Rigid": 5, "Bushes": 1, "BushLines": 1,
+                             "Constraints": 4, "Loads/SID_1": 2, "Loads/SID_2": 1, "Loads/LOAD_1001": 2}
+
+
+def test_pid_mid_family_group(run_mb):
+    def c(key, ids):
+        return counts(selection.item_masks(run_mb, selection.IdList(key, frozenset(ids)))[0])
+
+    assert c("PID", {11}) == {"Solids": 2}
+    assert c("PID", {51}) == {"Bushes": 3, "BushLines": 2, "Constraints": 2, "Loads/SID_1": 1,
+                              "Loads/LOAD_1001": 1}  # bush lines use grids 3 4 (SPC 3 4, FORCE on 3)
+    assert c("MID", {3}) == {"Solids": 1}
+    assert c("FAMILY", {"WING_SPARS/LE_SPAR/SEG.00"})["Shells"] == 1  # the name before ':'
+    assert c("GROUP", {"WING_SKIN"})["Shells"] == 2
+    _, report = selection.item_masks(run_mb, selection.IdList("FAMILY", frozenset({"NOPE"})))
+    assert report.missing == ["NOPE"]
+
+
+def test_mpc_legs_are_not_elements(topo_mb):
+    masks, _ = selection.item_masks(topo_mb, selection.IdList("EID", frozenset({1})), attach=False)
+    assert counts(masks) == {"Shells": 1}  # MPC 1's leg carries EID 1 too
+
+
+# ------------------------------------------------------------------ keep / mark
+def test_keep_subset(run_mb):
+    sel = selection.IdList("EID", frozenset({1, 2}), source="ids.csv")
+    out, report = selection.apply_selection(run_mb, sel, mode="keep")
+    assert block_names(out) == ["Shells", "Masses", "MassOffsets", "Constraints", "Loads"]
+    shells = get_block(out, "Shells")
+    assert eids(shells) == [1, 2] and shells.GetNumberOfPoints() == 6
+    assert sorted(arr(shells, "NID").tolist()) == [1, 2, 3, 4, 5, 6]
+    assert block_names(get_block(out, "Loads")) == ["SID_1", "SID_2", "LOAD_1001"]
+    assert eids(get_block(out, "Masses"), "point") == [201]
+    assert arr(out, "ModelMass", "field").tolist() == arr(run_mb, "ModelMass", "field").tolist()  # whole deck
+    assert strings(out, "SelectionInfo") == [report.info]
+    assert get_block(run_mb, "Solids") is not None  # the input is untouched
+
+
+def test_mark(run_mb):
+    mb = shallow_clone(run_mb)
+    out, _ = selection.apply_selection(mb, selection.IdList("MID", frozenset({1})), mode="mark")
+    assert out is mb
+    shells, solids = get_block(mb, "Shells"), get_block(mb, "Solids")
+    assert dict(zip(eids(shells), arr(shells, "Selected", "cell")[np.argsort(arr(shells, "EID", "cell"))])) \
+        == {1: 1, 2: 0, 3: 1}
+    assert arr(solids, "Selected", "cell").tolist() == [1, 1, 0]
+    for _, ds in iter_blocks(mb):
+        assert ds.GetCellData().GetArray("Selected") is not None
+    assert get_block(run_mb, "Shells").GetCellData().GetArray("Selected") is None
+
+
+def test_keep_nothing_is_an_error(run_mb):
+    with pytest.raises(ValueError, match="matched nothing"):
+        selection.apply_selection(run_mb, selection.IdList("EID", frozenset({999})), mode="keep")
+
+
+def test_keep_then_results_series(tmp_path, run_deck, run_mb):
+    from op2_fixture import make_op2
+
+    from nastran_pv.results import Op2Results
+    from nastran_pv.vtkhdf import read_vtkhdf, write_vtkhdf_series
+
+    out, _ = selection.apply_selection(run_mb, selection.IdList("EID", frozenset({3})), mode="keep")
+    path = write_vtkhdf_series(out, Op2Results(make_op2()), tmp_path / "s.vtkhdf", deck=run_deck)
+    pdc = read_vtkhdf(path)
+    asm = pdc.GetDataAssembly()
+    assert [asm.GetNodeName(n) for n in asm.GetChildNodes(asm.GetRootNode(), False)][0] == "Shells"
+
+
+def test_threshold_ranges(run_mb):
+    assert selection.threshold_ranges(run_mb, selection.IdList("EID", frozenset({1, 2, 3, 7}))) \
+        == ("EID", "CELL", [(1, 3), (7, 7)])
+    assert selection.threshold_ranges(run_mb, selection.IdList("NID", frozenset({4}))) == ("NID", "POINT", [(4, 4)])
+    assert selection.threshold_ranges(run_mb, selection.IdList("FAMILY", frozenset({"WING_SPARS/LE_SPAR/SEG.00"}))) \
+        == ("FamilyId", "CELL", [(1, 1)])
+
+
+def test_visibility_with_selection(run_mb):
+    vis = tree.Visibility(select=selection.IdList("EID", frozenset({1, 2})))
+    pdc = tree.build_tree(run_mb, vis).output(run_mb)
+    mb = tree.gather(pdc)[0]
+    assert eids(get_block(mb, "Shells")) == [1, 2] and get_block(mb, "Solids") is None
+    hide = tree.Visibility(select=selection.IdList("EID", frozenset({1, 2})), select_hide=True)
+    mb = tree.gather(tree.build_tree(run_mb, hide).output(run_mb))[0]
+    assert eids(get_block(mb, "Shells")) == [3]
+    assert eids(get_block(mb, "Masses"), "point") == [201, 202]  # hide leaves masses on shared grids
+    assert vis.key() != hide.key() != tree.Visibility().key()
+
+
+# ------------------------------------------------------------------ CLI
+def test_convert_select_keep_and_mark(tmp_path, capsys):
+    ids = ids_file(tmp_path, "EID\n1\n2\n999\n")
+    out = tmp_path / "keep.vtm"
+    assert main(["convert", DECK, "-o", str(out), "--select", str(ids)]) == 0
+    text = capsys.readouterr().out
+    assert "warning: selection: 1 of 3 EID(s) not in the model: 999" in text
+    mb = read_vtm(out)
+    assert block_names(mb)[:2] == ["Shells", "Masses"] and eids(get_block(mb, "Shells")) == [1, 2]
+    out = tmp_path / "mark.vtm"
+    assert main(["convert", DECK, "-o", str(out), "--select", str(ids), "--select-mode", "mark",
+                 "--select-key", "EID"]) == 0
+    mb = read_vtm(out)
+    assert int(arr(get_block(mb, "Shells"), "Selected", "cell").sum()) == 2
+    assert int(arr(get_block(mb, "Solids"), "Selected", "cell").sum()) == 0
+
+
+def test_convert_select_nothing_exits(tmp_path):
+    with pytest.raises(SystemExit, match="matched nothing"):
+        main(["convert", DECK, "-o", str(tmp_path / "x.vtm"), "--select", str(ids_file(tmp_path, "999\n"))])
+
+
+def test_stats_select(tmp_path, capsys):
+    ids = ids_file(tmp_path, "GRID\n4 5 7\n")
+    assert main(["stats", DECK, "--by", "PID", "--field", "ElementMass", "--select", str(ids),
+                 "--select-grids", "any"]) == 0
+    rows = capsys.readouterr().out.splitlines()
+    assert [r.split()[0] for r in rows[1:]] == ["1", "2"]  # shells only: no solid touches those grids
