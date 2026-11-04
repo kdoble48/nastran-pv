@@ -1,0 +1,31 @@
+$ Reference model (A) for the model-diff tests; diff_b.bdf is the modified copy.
+$ Unit-area shells (CQUAD4 mass = area x T x rho) and unit-length rods (L x A x rho).
+$ Hand-computed masses: E1 0.2, E2 0.2, E3 0.4, E6 0.1, E4 4.0, E8 4.0 (structural 8.9),
+$ CONM2 100 2.0 -> model mass 10.9.
+GRID,1,,0.,0.,0.
+GRID,2,,1.,0.,0.
+GRID,3,,2.,0.,0.
+GRID,4,,0.,1.,0.
+GRID,5,,1.,1.,0.
+GRID,6,,2.,1.,0.
+GRID,7,,3.,0.,0.
+GRID,8,,3.,1.,0.
+GRID,9,,0.,2.,0.
+GRID,10,,1.,2.,0.
+GRID,12,,2.,2.,0.
+$ Shell element data for family SKIN
+CQUAD4,1,10,1,2,5,4
+CQUAD4,2,10,2,3,6,5
+CQUAD4,3,20,3,7,8,6
+$ Shell element data for family RIB
+CQUAD4,6,40,4,5,10,9
+CROD,4,30,4,5
+CROD,8,30,10,12
+CONM2,100,7,,2.0
+PSHELL,10,1,0.1
+PSHELL,20,1,0.2
+PSHELL,40,3,0.1
+PROD,30,2,0.5
+MAT1,1,70000.,,0.3,2.0
+MAT1,2,200000.,,0.3,8.0
+MAT1,3,1000.,,0.3,1.0

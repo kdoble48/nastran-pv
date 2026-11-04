@@ -14,6 +14,10 @@ works across meshes too: the uCRM-9 coarse and fine wings agree on total structu
 3e-5, and on the mass of each family to within about 1e-3 (the largest differences are in the
 wingtip ribs). `query` runs any SQL against the tables, and `open` shows a run in ParaView.
 
+To see item by item what changed between two versions of one model (added, removed and changed
+grids, elements, properties and materials, and the mass and CG change), use
+[`nastran-pv diff`](diff.md) instead. It needs no store and colors the changes on the mesh.
+
 ```bash
 nastran-pv store add coarse.bdf --db runs.sqlite --derive size --only ElementMass Area
 nastran-pv store add fine.bdf   --db runs.sqlite --derive size --only ElementMass Area

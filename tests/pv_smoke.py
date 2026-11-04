@@ -525,6 +525,100 @@ def random_checks(pv, nv):
     pv.Delete(view)
 
 
+def _diff_counts(nv, diff):
+    rows, masses = nv.diff_summary(diff)
+    counts = {r["Item"]: (int(r["Added"]), int(r["Removed"]), int(r["Changed"])) for r in rows}
+    total = next(m for m in masses if m["Key"] == "ModelMass")
+    return counts, total["Delta"]
+
+
+def diff_checks(pv, nv):
+    """Nastran Diff, the diff view and side_by_side on tests/data/diff_a.bdf (A) and diff_b.bdf (B);
+    the expected counts are the hand-computed ones of tests/test_diff.py."""
+    want = {"grids": (1, 1, 1), "elements": (2, 2, 3), "masses": (1, 0, 1), "properties": (0, 0, 2),
+            "materials": (0, 0, 1)}
+    a = rm.load_reader(os.path.join(HERE, "data", "diff_a.bdf"))
+    b = rm.load_reader(os.path.join(HERE, "data", "diff_b.bdf"))
+    d = pv.NastranDiff(Input=b, Reference=a)
+    d.UpdatePipeline()
+    data = nv.fetch(d)
+    check(nv.block_names(data) == ["Shells", "Lines", "Masses", "Removed"], f"diff blocks {nv.block_names(data)}")
+    status = _by_eid(d, "Shells", "DiffStatus")
+    check(status == {1: 3, 2: 2, 5: 1, 6: 0}, f"Nastran Diff: DiffStatus by EID {status}")
+    check(_by_eid(d, "Removed", "DeltaElementMass") == {3: -0.4, 8: -4.0} or
+          np.allclose(sorted(_by_eid(d, "Removed", "DeltaElementMass").values()), [-4.0, -0.4]),
+          "Removed block: E3 and E8 with their negative masses")
+    counts, delta = _diff_counts(nv, d)
+    check(counts == want and abs(delta - 3.5) < 1e-9, f"diff summary {counts}, mass delta {delta}")
+    table = nv.fetch(d, 1)
+    check(table.GetNumberOfRows() > 10 and table.GetColumnByName("Text") is not None, "diff table output")
+
+    pv.SetActiveSource(b)
+    view = pv.CreateRenderView()
+    nv.apply("diff", reader=b, view=view)
+    text = pv.FindSource(nv._name(nv.Model(b), "info")).Text
+    check("elements: 2 added, 2 removed, 3 changed" in text and "10.9 -> 14.4" in text, f"diff view text {text!r}")
+    check(nv.diff_of(nv.Model(b)) == d, "the diff view reuses the Nastran Diff on B")
+    lut = pv.GetColorTransferFunction("DiffStatus")
+    check(lut.InterpretValuesAsCategories == 1 and "removed" in list(lut.Annotations), "DiffStatus legend")
+
+    pv.SetActiveView(view)
+    left, right = nv.side_by_side(array="Thickness", view=view)
+    check(right in pv.GetViews() and right != left, "side by side: a second view")
+    names = {v: k[0] for k, v in pv.GetSources().items()}
+    sides = [sorted(names.get(s, "?") for s in nv.shown_sources(v)) for v in (left, right)]
+    check(sides == [["NPV info [diff_a.bdf]", "NPV mesh [diff_a.bdf]"],
+                    ["NPV diff elements [diff_b.bdf]", "NPV info [diff_b.bdf]"]], f"A left, B's diff right: {sides}")
+    rgb = list(pv.GetColorTransferFunction("Thickness").RGBPoints)
+    check(abs(rgb[0] - 0.1) < 1e-9 and abs(rgb[-4] - 0.25) < 1e-9, f"shared Thickness range {rgb[0]}..{rgb[-4]}")
+    again = nv.side_by_side(array="ElementMass", view=left)
+    check(again[1] == right, "side by side reuses its right view")
+    rgb = list(pv.GetColorTransferFunction("ElementMass").RGBPoints)
+    check(abs(rgb[0] - 0.1) < 1e-9 and abs(rgb[-4] - 4.8) < 1e-9, f"shared ElementMass range {rgb[0]}..{rgb[-4]}")
+    left.CameraPosition = [10.0, -20.0, 30.0]
+    pv.Render(left)
+    check(np.allclose(right.CameraPosition, [10.0, -20.0, 30.0]), f"linked camera {list(right.CameraPosition)}")
+    nv.side_by_side(array="DiffStatus", view=left)  # removed elements on the left
+    names = {v: k[0] for k, v in pv.GetSources().items()}
+    shown = sorted(names.get(s, "?") for s in nv.shown_sources(left))
+    check(nv._shown_array(right) == ("CELLS", "DiffStatus"), "DiffStatus on the right")
+    check(shown == ["NPV diff removed [diff_b.bdf]", "NPV info [diff_a.bdf]", "NPV mesh [diff_a.bdf]"],
+          f"side by side DiffStatus, left: {shown}")
+
+    # hidden elements are still part of the model: a reader's hidden EID 6 is not "removed"
+    same_a = rm.load_reader(os.path.join(HERE, "data", "diff_a.bdf"))
+    same_b = rm.load_reader(os.path.join(HERE, "data", "diff_a.bdf"))
+    same_b.HiddenElements = "6"
+    same_b.UpdatePipeline()
+    check(6 not in _by_eid(same_b, "Shells", "EID"), "reader hides EID 6")
+    sd = pv.NastranDiff(Input=same_b, Reference=same_a)
+    sd.UpdatePipeline()
+    counts, delta = _diff_counts(nv, sd)
+    check(all(c == (0, 0, 0) for c in counts.values()) and delta == 0.0
+          and _by_eid(sd, "Shells", "DiffStatus").get(6) == 0, f"diff ignores hidden elements: {counts}, {delta}")
+    derived = pv.NastranDerivedFields(Input=same_b)  # a filter in between: it sees what it is passed
+    vd = pv.NastranDiff(Input=derived, Reference=same_a)
+    vd.UpdatePipeline()
+    counts, _ = _diff_counts(nv, vd)
+    check(counts["elements"] == (0, 1, 0) and _by_eid(vd, "Shells", "Area"),
+          f"through another filter: only the shown elements, with that filter's arrays ({counts['elements']})")
+    for s in (vd, derived, sd, same_b, same_a):
+        pv.Delete(s)
+
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:  # converted files as both inputs
+        paths = []
+        for name, suffix in (("diff_a", ".vtm"), ("diff_b", ".vtkhdf")):
+            paths.append(os.path.join(tmp, name + suffix))
+            convert(["convert", os.path.join(HERE, "data", name + ".bdf"), "-o", paths[-1], "-q"])
+        fa, fb = nv.load_reader(paths[0]), nv.load_reader(paths[1])
+        fd = pv.NastranDiff(Input=fb, Reference=fa)
+        fd.UpdatePipeline()
+        counts, delta = _diff_counts(nv, fd)
+        check(counts == want and abs(delta - 3.5) < 1e-9, f"diff of a .vtm and a .vtkhdf: {counts}")
+        for s in (fd, fa, fb):
+            pv.Delete(s)
+
+
 def main():
     reader = rm.load_reader(DECK)
     model = rm.Model(reader)
@@ -873,6 +967,7 @@ def main():
     converted_checks(pv, nv, reader)
     random_checks(pv, nv)
     topology_checks(pv, nv)
+    diff_checks(pv, nv)
     print("pv_smoke: all checks passed")
 
 

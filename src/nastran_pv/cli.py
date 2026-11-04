@@ -6,6 +6,8 @@
     nastran-pv stats DECK|VTM --by PID --field ElementMass   group statistics table
     nastran-pv check DECK|VTM [--strict] [-o findings.vtm]   model checks
     nastran-pv sections DECK|VTM [--csv FILE]                CBAR/CBEAM section properties per PID
+    nastran-pv diff A B [--csv FILE]                         what changed from model A to model B
+    nastran-pv convert B --diff-against A -o diff.vtm        B with the diff on its mesh (+ Removed)
     nastran-pv store add|list|fields|query|compare|open ...  model/results store (SQLite)
     nastran-pv view DECK --view masses                       open the ParaView GUI on a deck
     nastran-pv render DECK --preset ...                      batch screenshots (pvpython)
@@ -27,7 +29,7 @@ from pathlib import Path
 
 from .assemble import Options, add_beam_sections, block_names, build_multiblock, get_block
 from .progress import Progress
-from .vtkio import read_vtm, write_series, write_vtm
+from .vtkio import MODEL_SUFFIXES, read_model, write_series, write_vtm
 
 BLOCK_FLAGS = ("shells", "lines", "solids", "masses", "rigid", "connectors", "bushes", "constraints", "loads")
 
@@ -54,16 +56,16 @@ def progress_for(args) -> Progress:
 
 
 def load_model(args, verbose=False):
-    """Deck or .vtm -> (multiblock, deck or None, results or None)."""
+    """Deck, .vtm or VTKHDF -> (multiblock, deck or None, results or None)."""
     from .deck import load_deck
 
     progress = progress_for(args)
     src = Path(args.input)
-    if src.suffix.lower() == ".vtm":
+    if src.suffix.lower() in MODEL_SUFFIXES:
         if getattr(args, "results", None):
-            raise SystemExit("--results needs a deck input (a .vtm has no deck to rotate CD systems)")
+            raise SystemExit(f"--results needs a deck input (a {src.suffix} has no deck to rotate CD systems)")
         with progress.stage(f"reading {src.name}"):
-            mb = read_vtm(src)
+            mb = read_model(src)
         if getattr(args, "beam_sections", False):
             add_beam_sections(mb)
         progress.done()
@@ -136,7 +138,8 @@ def apply_field_options(mb, args) -> list[str]:
 def add_model_arguments(p, results=True):
     from .launch import add_random_arguments, nsm_set_id
 
-    p.add_argument("input", help="run deck (.bdf/.dat with INCLUDEs), bulk-data file, or a .vtm written by nastran-pv")
+    p.add_argument("input", help="run deck (.bdf/.dat with INCLUDEs), bulk-data file, or a .vtm/.vtkhdf "
+                                 "written by nastran-pv")
     if results:
         p.add_argument("--results", "--op2", dest="results", help="OP2 or MSC/NX HDF5 (.h5) results to attach")
         p.add_argument("--step", type=int, default=0, help="result step (mode/subcase index) to attach")
@@ -175,7 +178,7 @@ def _print_rows(rows: list[dict], limit=None):
         return
     cols = list(rows[0])
     shown = rows if limit is None else rows[:limit]
-    widths = [max(len(c), *(len(_fmt(r.get(c))) for r in shown)) for c in cols]
+    widths = [max([len(c)] + [len(_fmt(r.get(c))) for r in shown]) for c in cols]
     print("  ".join(c.ljust(w) for c, w in zip(cols, widths)))
     for r in shown:
         print("  ".join(_fmt(r.get(c)).ljust(w) for c, w in zip(cols, widths)))
@@ -216,6 +219,8 @@ def cmd_convert(args) -> int:
     progress = progress_for(args)
     with progress.stage("fields"):
         notes = apply_field_options(mb, args)
+    if args.diff_against:
+        notes += diff_against(mb, args)
     with progress.stage(f"writing {output_format(args)}"):
         path = write_output(mb, args, deck, results)
     progress.done()
@@ -231,6 +236,69 @@ def cmd_convert(args) -> int:
     for n in notes:
         print(n)
     print_warnings(deck)
+    return 0
+
+
+def _load_other(path, args):
+    """The other model of a diff (deck, .vtm or VTKHDF), built with the same block/NSM options."""
+    other = argparse.Namespace(**{k: v for k, v in vars(args).items() if k not in ("results", "random")})
+    other.input = path
+    if not Path(path).is_file():
+        raise SystemExit(f"nastran-pv: model not found: {Path(path).resolve()}")
+    mb, deck, _ = load_model(other, getattr(args, "verbose", False))
+    return mb, deck
+
+
+def diff_tolerances(args):
+    from .diff import Tolerances
+
+    return Tolerances(grid=args.grid_tol, rel=args.rel_tol)
+
+
+def diff_against(mb, args) -> list[str]:
+    """``convert --diff-against A``: the diff arrays, the Removed block and the DIFF_* tables on ``mb``."""
+    from .diff import annotate, report_lines
+
+    with progress_for(args).stage(f"diff against {Path(args.diff_against).name}"):
+        ref, _ = _load_other(args.diff_against, args)
+        d = annotate(mb, ref, diff_tolerances(args), against=Path(args.diff_against).resolve())
+    return report_lines(d, args.diff_against, args.input)[2:4]
+
+
+def add_diff_tolerances(p) -> None:
+    p.add_argument("--grid-tol", type=float, default=1e-6, metavar="R",
+                   help="a grid moved when it moved more than R x A's bounding-box diagonal (default 1e-6)")
+    p.add_argument("--rel-tol", type=float, default=1e-6, metavar="R",
+                   help="values differ when |b - a| > R x max(|a|, |b|) (default 1e-6)")
+
+
+def cmd_diff(args) -> int:
+    from .diff import diff_models, report_lines
+    from .fields.tables import write_csv
+
+    a, deck_a = _load_other(args.a, args)
+    b, deck_b = _load_other(args.b, args)
+    d = diff_models(a, b, diff_tolerances(args))
+    for line in report_lines(d, args.a, args.b):
+        print(line)
+    print()
+    _print_rows(d.summary)
+    print()
+    shown = [r for r in d.masses if r["Kind"] == "model" or (r["Delta"] or 0) != 0]
+    _print_rows(shown, None)
+    for item, title in (("property", "properties"), ("material", "materials"), ("element", "elements"),
+                        ("mass", "concentrated masses"), ("grid", "grids")):
+        part = [r for r in d.rows if r["Item"] == item]
+        if part:
+            print()
+            print(f"{title}:")
+            _print_rows([{k: v for k, v in r.items() if k != "Item"} for r in part], args.limit)
+    if args.csv:
+        print(f"wrote {write_csv(d.rows, args.csv)}")
+    for label, deck in (("A", deck_a), ("B", deck_b)):
+        if deck is not None and deck.warnings:
+            print(f"{label}: ", end="", file=sys.stderr)
+            print_warnings(deck, file=sys.stderr, limit=3)
     return 0
 
 
@@ -351,6 +419,8 @@ def cmd_store(args) -> int:
 
 
 def main(argv=None) -> int:
+    from .launch import nsm_set_id
+
     p = argparse.ArgumentParser(prog="nastran-pv", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="command", required=True)
@@ -366,7 +436,22 @@ def main(argv=None) -> int:
     c.add_argument("--no-compact", action="store_true",
                    help="VTKHDF series: keep per-step copies of arrays that never change")
     c.add_argument("--ascii", action="store_true", help="write ASCII XML (debugging)")
+    c.add_argument("--diff-against", metavar="A", help="reference model (deck, .vtm or .vtkhdf): add the diff "
+                                                      "arrays, a Removed block and the DIFF_* tables")
+    add_diff_tolerances(c)
     c.set_defaults(func=cmd_convert)
+
+    df = sub.add_parser("diff", help="what changed from model A to model B: grids, elements, properties, "
+                                     "materials, mass and CG")
+    df.add_argument("a", help="reference model: deck, .vtm or .vtkhdf")
+    df.add_argument("b", help="modified model: deck, .vtm or .vtkhdf")
+    df.add_argument("--csv", help="write every difference to CSV (Item Id Name Status Field A B Delta Rel)")
+    df.add_argument("--limit", type=int, default=30, help="rows per list in the terminal (default 30)")
+    df.add_argument("--nsm-set", type=nsm_set_id, default=None, metavar="ID",
+                    help="bulk NSM set for both decks (default: Case Control NSM=; 0 = none)")
+    add_diff_tolerances(df)
+    add_common_arguments(df)
+    df.set_defaults(func=cmd_diff)
 
     s = sub.add_parser("stats", help="group statistics of a cell field (e.g. mass per PID)")
     add_model_arguments(s)
