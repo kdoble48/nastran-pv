@@ -19,7 +19,7 @@ def nsm_set_id(text: str) -> int:
         raise argparse.ArgumentTypeError("give a set id, or 0 for none (leave it out for Case Control NSM=)")
     return value
 
-VIEW_NAMES = ("masses", "bushes", "beams", "loads", "spc", "rigid", "family", "group", "pid", "mid",
+VIEW_NAMES = ("masses", "bushes", "bushrotations", "beams", "loads", "spc", "rigid", "family", "group", "pid", "mid",
               "elementtype", "thickness", "nsm", "results", "parts", "check", "none")
 
 GUI_SCRIPT = """\

@@ -503,8 +503,23 @@ def main():
     check(mg.GetDataInformation().GetNumberOfPoints() > 0, "Nastran Mass Glyphs filter produces ellipsoids")
     bg = pv.NastranBushGlyphs(Input=reader)
     bg.UpdatePipeline()
-    check(bg.GetDataInformation().GetNumberOfCells() > 0, "Nastran Bush Glyphs filter produces triads")
+    check(bg.GetDataInformation().GetNumberOfCells() > 0, "Nastran Bush Glyphs filter produces bars")
+    bg.Stiffness = 1
+    bg.UpdatePipeline()
+    check(bg.GetDataInformation().GetNumberOfCells() > 0, "Nastran Bush Glyphs Stiffness=Rotation produces rings")
+    pv.Delete(bg)
     view = pv.CreateRenderView()
+    bmodel = nv.apply("bushes", reader=reader, view=view)
+    btext = pv.FindSource(nv._name(bmodel, "info")).Text
+    check("K1" in btext and "released" not in btext, f"bushes view text: {btext!r}")
+    pv.FindSource(nv._name(bmodel, "bush glyphs")).ShowTriads = 0  # a user switched the bars off
+    nv.apply("bushes", reader=reader, view=view)
+    btext = pv.FindSource(nv._name(bmodel, "info")).Text
+    check("No translational" not in btext and "K_ref = 1e+06" in btext,
+          f"bushes view turns the bars back on: {btext!r}")
+    rmodel = nv.apply("bushrotations", reader=reader, view=view)
+    rtext = pv.FindSource(nv._name(rmodel, "info")).Text
+    check("K4" in rtext and "K_rot_ref = 10" in rtext, f"bush rotations view text: {rtext!r}")
     for name in nv.VIEWS:
         nv.apply(name, reader=reader, view=view)
     check(True, f"all views build: {', '.join(nv.VIEWS)}")

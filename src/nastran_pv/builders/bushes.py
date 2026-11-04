@@ -17,6 +17,11 @@ offset) the block carries:
 * ``KTransTensor``/``KRotTensor``: R^T diag(K1..K3 / K4..K6) R
 * ``KTransLogTensor``: the same with the normalised log values, for
   TensorGlyph ellipsoids/axes.
+* ``K4dir``/``K5dir``/``K6dir`` and ``KRotLogTensor``: the rotational
+  equivalents, normalised on their own scale (the units differ).
+* Field data ``KRef``/``KLogMax`` and ``KRotRef``/``KRotLogMax``: the reference
+  stiffness and the largest ``log10(1 + K/K_ref)``, so glyphs of a subset of
+  the bushes keep the model-wide scale.
 """
 from __future__ import annotations
 
@@ -90,6 +95,20 @@ def pbush_k(model, pid: int) -> np.ndarray:
     return np.array([0.0 if v is None else float(v) for v in k[:6]])
 
 
+def _log_stiffness(k: np.ndarray, k_ref: float | None):
+    """``(k_ref, log_max, normalised)`` for one group of three stiffnesses.
+
+    ``k_ref`` defaults to the smallest positive value; ``log_max`` is the largest
+    ``log10(1 + K/k_ref)`` (1.0 when every K is 0) and ``normalised`` is that log
+    divided by ``log_max``, in [0, 1]."""
+    positive = k[k > 0]
+    if k_ref is None or k_ref <= 0:
+        k_ref = float(positive.min()) if positive.size else 1.0
+    klog = np.log10(1.0 + np.clip(k, 0.0, None) / k_ref)
+    log_max = float(klog.max()) if klog.size and klog.max() > 0 else 1.0
+    return float(k_ref), log_max, klog / log_max
+
+
 def build_bushes(deck: Deck, k_ref: float | None = None):
     """Return ``(points_block, lines_block)``; either may be None."""
     model = deck.model
@@ -117,12 +136,8 @@ def build_bushes(deck: Deck, k_ref: float | None = None):
 
     kt = np.nan_to_num(K[:, :3])
     kr = np.nan_to_num(K[:, 3:])
-    positive = kt[kt > 0]
-    if k_ref is None or k_ref <= 0:
-        k_ref = float(positive.min()) if positive.size else 1.0
-    klog = np.log10(1.0 + np.clip(kt, 0.0, None) / k_ref)
-    if klog.max() > 0:
-        klog = klog / klog.max()
+    k_ref, klog_max, klog = _log_stiffness(kt, k_ref)
+    k_rot_ref, krot_log_max, krot_log = _log_stiffness(kr, None)
 
     def rotate(diag):
         return np.einsum("nji,nj,njk->nik", R, diag, R)  # R^T diag R
@@ -137,10 +152,17 @@ def build_bushes(deck: Deck, k_ref: float | None = None):
     for i in range(3):
         vtkutil.add_array(pd, f"Axis{i + 1}", R[:, i, :])
         vtkutil.add_array(pd, f"K{i + 1}dir", R[:, i, :] * klog[:, i:i + 1])
+    for i in range(3):
+        vtkutil.add_array(pd, f"K{i + 4}dir", R[:, i, :] * krot_log[:, i:i + 1])
     vtkutil.add_array(pd, "KTransTensor", rotate(kt))
     vtkutil.add_array(pd, "KRotTensor", rotate(kr))
     vtkutil.add_array(pd, "KTransLogTensor", rotate(klog))
-    vtkutil.add_array(pts.GetFieldData(), "KRef", np.array([k_ref]))
+    vtkutil.add_array(pd, "KRotLogTensor", rotate(krot_log))
+    fd = pts.GetFieldData()
+    vtkutil.add_array(fd, "KRef", np.array([k_ref]))
+    vtkutil.add_array(fd, "KLogMax", np.array([klog_max]))
+    vtkutil.add_array(fd, "KRotRef", np.array([k_rot_ref]))
+    vtkutil.add_array(fd, "KRotLogMax", np.array([krot_log_max]))
 
     lines = None
     gb_idx = deck.lookup(gb)

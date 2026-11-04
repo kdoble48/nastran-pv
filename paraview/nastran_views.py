@@ -6,7 +6,7 @@ ParaView's own reader. It hides what else is shown in the active view, and build
 reuses named pipeline objects ("NPV ..."), so running a view twice does not
 pile up duplicates. Available views::
 
-    masses  bushes  beams  loads  spc  rigid  family  group  pid  mid  thickness
+    masses  bushes  bushrotations  beams  loads  spc  rigid  family  group  pid  mid  thickness
     nsm  elementtype  results  parts  grow  path  check
 
 ``grow_from_selection`` and ``path_from_selection`` seed the grow and path
@@ -550,27 +550,73 @@ def view_masses(model, view, mode="Auto", relative=0.025, law="cbrt", minimum=0.
                                   "\nResize: select 'NPV mass glyphs', change RelativeSize / RadiusLaw, Apply")
 
 
-def view_bushes(model, view, size=0.04, ellipsoids=False):
+BUSH_RGB = {0: (0.55, 0.55, 0.6), 1: (0.85, 0.12, 0.12), 2: (0.15, 0.65, 0.2), 3: (0.15, 0.3, 0.9)}
+BUSH_LINE_RGB = (0.55, 0.55, 0.58)
+
+
+def _glyph_field(src, name, default=0.0):
+    """First value of a field array of a pipeline object's output (from its data information)."""
+    a = src.GetDataInformation().DataInformation.GetFieldDataInformation().GetArrayInformation(name)
+    return a.GetComponentRange(0)[0] if a is not None else default
+
+
+def _bush_view(model, view, kind, size, ellipsoids=False):
+    """Shared body of the bushes (translation) and bush rotations views."""
+    rotation = kind == "rotation"
     ghost_mesh(model, view)
     if not model.has("Bushes"):
         info_text(model, view, "No CBUSH elements in this deck.")
         return
-    glyphs = _named(model, "bush glyphs", lambda: pv.NastranBushGlyphs(Input=deformed(model)))
+    what = "bush rotation glyphs" if rotation else "bush glyphs"
+    glyphs = _named(model, what, lambda: pv.NastranBushGlyphs(Input=deformed(model)))
+    glyphs.Stiffness = int(rotation)
+    glyphs.ShowTriads = 1
     glyphs.Size = size
-    glyphs.ShowEllipsoids = int(ellipsoids)
-    d = pv.Show(glyphs, view)
-    axes = [0, 1, 2, 3] if ellipsoids else [1, 2, 3]
-    colors = {0: (0.55, 0.55, 0.6), 1: (0.85, 0.12, 0.12), 2: (0.15, 0.65, 0.2), 3: (0.15, 0.3, 0.9)}
-    categorical(d, "Axis", axes, labels_for(model, "Axis", axes), [colors[a] for a in axes], view=view)
+    glyphs.ShowEllipsoids = int(ellipsoids and not rotation)
+    glyphs.UpdatePipeline()
     if model.has("BushLines"):
         ld = pv.Show(_extract(model, "BushLines"), view)
-        solid(ld, [0.1, 0.1, 0.1])
-        ld.LineWidth = 3.0
-    kref = model.field("KRef", "Bushes")
+        solid(ld, list(BUSH_LINE_RGB))
+        ld.LineWidth = 1.5
     n = model.block("Bushes").GetNumberOfPoints()
-    info_text(model, view, f"{n} CBUSH: arrows along element axes K1/K2/K3\n"
-                           f"length ~ log10(1 + K/K_ref), K_ref = {kref[0]:.4g}"
-                           "\nColour by Log10Stiffness to compare values")
+    first = 4 if rotation else 1
+    names = [f"K{first + i}" for i in range(3)]
+    span = f"{names[0]}-{names[2]}"
+    if glyphs.GetDataInformation().GetNumberOfCells() == 0:
+        pv.Hide(glyphs, view)
+        info_text(model, view, f"{n} CBUSH. No {'rotational' if rotation else 'translational'} stiffness "
+                               f"({span}) on any CBUSH.")
+        return
+    d = pv.Show(glyphs, view)
+    released = int(_glyph_field(glyphs, "ReleasedCount"))
+    missing = int(_glyph_field(glyphs, "NoStiffnessCount"))
+    ellipsoid = bool(ellipsoids and not rotation)
+    grey = "ellipsoid / released" if ellipsoid and released else "ellipsoid" if ellipsoid else "released"
+    axes = ([0] if released or ellipsoid else []) + [1, 2, 3]
+    labels = [grey if a == 0 else names[a - 1] for a in axes]
+    categorical(d, "Axis", axes, labels, [BUSH_RGB[a] for a in axes], view=view)
+    ref = _glyph_field(glyphs, "StiffnessReference", 1.0)  # what the glyphs used (old files: a fallback)
+    ref_text = f"K_rot_ref = {ref:.4g}" if rotation else f"K_ref = {ref:.4g}"
+    shape = ("rings around the element axes, radius" if rotation
+             else "bars along the element axes, length")
+    lines = [f"{n} CBUSH, {'rotational' if rotation else 'translational'} stiffness {span}: {shape} "
+             f"~ log10(1 + K/K_ref), {ref_text}",
+             "thick = clearly the stiffest axis; colour by Log10Stiffness to compare values"]
+    if released:
+        lines.append(f"{released} with a released axis (grey)")
+    if missing:
+        lines.append(f"{missing} without PBUSH stiffness (not drawn)")
+    info_text(model, view, "\n".join(lines))
+
+
+def view_bushes(model, view, size=0.04, ellipsoids=False):
+    """Translational CBUSH stiffness K1-K3 as bars along the element axes."""
+    _bush_view(model, view, "translation", size, ellipsoids)
+
+
+def view_bushrotations(model, view, size=0.04):
+    """Rotational CBUSH stiffness K4-K6 as rings around the element axes."""
+    _bush_view(model, view, "rotation", size)
 
 
 BEAM_PART_RGB = {1: (0.05, 0.05, 0.05), 2: (0.95, 0.55, 0.05), 3: (0.85, 0.12, 0.12),
@@ -1189,7 +1235,7 @@ def show_only_material():
 
 
 VIEWS = {
-    "masses": view_masses, "bushes": view_bushes, "beams": view_beams, "loads": view_loads, "spc": view_spc,
+    "masses": view_masses, "bushes": view_bushes, "bushrotations": view_bushrotations, "beams": view_beams, "loads": view_loads, "spc": view_spc,
     "rigid": view_rigid, "family": view_family, "group": view_group, "pid": view_pid,
     "mid": view_mid, "elementtype": view_elementtype, "thickness": view_thickness, "nsm": view_nsm,
     "results": view_results, "parts": view_parts, "grow": view_grow, "path": view_path, "check": view_check,

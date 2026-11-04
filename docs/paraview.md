@@ -86,7 +86,8 @@ summary. Running a view again reuses its pipeline objects, which are named `NPV 
 | Macro | Shows |
 |---|---|
 | NPV Masses | Mass ellipsoids from mass and inertia, colored by mass; grid→CG offsets; model CG marker; total mass |
-| NPV Bushes | CBUSH stiffness triads (K1/K2/K3 arrows, length ~ log stiffness) and GA–GB lines |
+| NPV Bushes | CBUSH translational stiffness: K1/K2/K3 bars along the element axes (length ~ log stiffness, the clearly stiffest axis thicker, released directions grey) and thin GA–GB lines |
+| NPV Bush Rotations | CBUSH rotational stiffness: K4/K5/K6 rings around the element axes (radius ~ log stiffness, on their own scale); says so when no CBUSH has rotational stiffness |
 | NPV Beams | CBAR/CBEAM cross sections swept along the beams, colored by PID, with the shear-center axis (black), neutral axis (orange) and, up to 500 beams, x/y/z triads; undeformed like the ghost mesh (`nv.apply("beams", scale=10)` or the filter's *DeformationScale* deforms it; [Beam sections](beam-sections.md)) |
 | NPV Loads | Force arrows for the active LOAD set, scaled by magnitude (at most 1,500 arrows, every Nth loaded grid, on large models); resultant force |
 | NPV SPC | Constrained grids colored by DOF code |
@@ -144,9 +145,17 @@ from `render_model.py`, and as `nastran-pv render` presets (see [CLI](cli.md#bat
   (2.5% of model)". To resize, select *NPV mass glyphs* in the Pipeline Browser, change the
   properties and click Apply. From Python:
   `nastran_views.apply("masses", law="linear", relative=0.03, minimum=0.15)`.
-* **Nastran Bush Glyphs** builds arrows along each CBUSH's element axes, with lengths
-  proportional to `log10(1+Kᵢ/K_ref)`, and optional log-stiffness ellipsoids. Cell arrays
-  `Axis`, `Stiffness`, `Log10Stiffness` and `EID` are available for coloring.
+* **Nastran Bush Glyphs** draws each CBUSH's stiffness along its element axes. *Stiffness* picks
+  *Translation (K1-K3)*: double-ended bars of length `2 s (0.25 + 0.75 k)`, or *Rotation (K4-K6)*:
+  rings of radius `s (0.25 + 0.6 k)`, where `k = log10(1+Kᵢ/K_ref)` normalized to [0, 1] over the
+  whole model (translations and rotations each on their own scale).
+  - The glyph scale `s` is 0.45 × the median distance between neighbouring bushes, capped by
+    *Size* × the model diagonal, so dense models don't overlap.
+  - An axis more than 1.5× stiffer than the next one is drawn thicker; a released direction
+    (K = 0) is a small grey glyph; a bush without PBUSH stiffness gets none.
+  - *ShowEllipsoids* adds log-stiffness ellipsoids (translation only).
+  - Cell arrays `Axis` (0 = released or ellipsoid), `Stiffness`, `Log10Stiffness`, `EID`,
+    `Released` and `Dominant` are available for coloring.
 * **Nastran Beam Sections** sweeps each CBAR/CBEAM's cross section along it (see
   [Beam sections](beam-sections.md)). *ShowSections*, *ShowAxes* (shear-center and neutral axes) and
   *ShowTriads* (x/y/z arrows, *TriadSize* × model diagonal) pick the parts; the `BeamPart` cell array
