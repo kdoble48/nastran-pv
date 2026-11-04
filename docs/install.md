@@ -25,6 +25,20 @@ winding changed in VTK 9.7, and the solid builder follows the VTK it runs under.
 and the reverse. Convert with the same VTK generation you view with, or open the deck itself in
 ParaView.
 
+## ParaView versions
+
+The plugin, the views and the toolbar macros are tested on **ParaView 6.0** and **ParaView
+5.13.1**, and both read the `.vtm`, `.pvd` and `.vtkhdf` files that `convert` writes. On
+ParaView 5.x:
+
+* Run ParaView locally. ParaView 5.x cannot copy the model tree out of a remote `pvserver`, so
+  the views report that and stop.
+* Convert with your own Python (`nastran-pv convert`), not from inside ParaView. Writing VTKHDF
+  needs VTK 9.5 or newer (`pip install "vtk>=9.5"`), and ParaView 5.13 is built on an older VTK.
+* Run `install_deps.py` with that ParaView's `pvpython` (5.13 uses Python 3.10, 6.0 uses 3.12).
+  One checkout's `paraview/_vendor` serves one ParaView Python, so keep a separate checkout
+  for each ParaView you use on a machine.
+
 ## ParaView-side dependencies
 
 `setup` runs two scripts, which can also be run on their own:

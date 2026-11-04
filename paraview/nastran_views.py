@@ -134,12 +134,47 @@ def deck_reader(reader, what="This command"):
     return reader
 
 
+def _is_collection(src, port):
+    """True when ``src``'s output on ``port`` is a vtkPartitionedDataSetCollection (the model tree,
+    a VTKHDF file)."""
+    from vtkmodules.vtkCommonDataModel import vtkDataObjectTypes
+
+    info = src.GetDataInformation(port).DataInformation
+    get = getattr(info, "GetCompositeDataSetType", None)
+    return get is not None and get() == vtkDataObjectTypes.GetTypeIdFromClassName("vtkPartitionedDataSetCollection")
+
+
+def _local_output(src, port):
+    """A copy of ``src``'s output from this process (builtin session), or None."""
+    algo = src.GetClientSideObject()
+    out = algo.GetOutputDataObject(port) if algo is not None else None
+    if out is None:
+        return None
+    copy = out.NewInstance()
+    copy.DeepCopy(out)
+    return copy
+
+
 def fetch(src, port=0):
-    """``servermanager.Fetch`` that keeps the model tree: Fetch drops a partitioned collection's
-    data assembly, so it is copied back from the proxy's data information."""
+    """``servermanager.Fetch`` that keeps the model tree.
+
+    * ParaView 6 drops a partitioned collection's data assembly; it is copied back from the
+      proxy's data information.
+    * ParaView 5.x gathers into a vtkMultiBlockDataSet, which cannot hold a partitioned
+      collection, so Fetch returns an empty multiblock. Then the output is copied from this
+      process instead: ParaView running locally (builtin) has it here. With a remote server it
+      does not, and that is reported.
+    """
     from vtkmodules.vtkCommonDataModel import vtkDataAssembly
 
-    data = servermanager.Fetch(src, idx=port) if port else servermanager.Fetch(src)
+    data = servermanager.Fetch(src, idx=port) if port else servermanager.Fetch(src)  # updates src
+    if _is_collection(src, port) and (data is None or not data.IsA("vtkPartitionedDataSetCollection")):
+        local = _local_output(src, port)
+        if local is None or not local.IsA("vtkPartitionedDataSetCollection"):
+            raise RuntimeError("This ParaView cannot copy the model out of a remote server (ParaView 5.x "
+                               "Fetch drops partitioned collections). Use ParaView 6, or run ParaView "
+                               "locally (not connected to a pvserver).")
+        data = local
     if data is not None and data.IsA("vtkPartitionedDataSetCollection") and data.GetDataAssembly() is None:
         asm = src.GetDataInformation(port).DataInformation.GetDataAssembly()
         if asm is not None:
@@ -426,7 +461,7 @@ def index_colors(source=None, view=None):
     assoc, array = rep.ColorArrayName
     if not array:
         raise RuntimeError("The selected object is not coloured by an array (choose e.g. PID first).")
-    data = servermanager.Fetch(source)
+    data = fetch(source)
     values = sorted({int(v) for v in _gather(data, array, assoc)})
     if len(values) > 1024:
         raise RuntimeError(f"{array} has {len(values)} distinct values; too many for indexed colours.")
@@ -498,7 +533,7 @@ def view_masses(model, view, mode="Auto", relative=0.025, law="cbrt", minimum=0.
         md = pv.Show(marker, view)
         solid(md, [0.05, 0.05, 0.05])
         text += f"\nCG (black sphere): ({cg[0]:.4g}, {cg[1]:.4g}, {cg[2]:.4g})"
-    glyph_fd = servermanager.Fetch(glyphs).GetFieldData()
+    glyph_fd = fetch(glyphs).GetFieldData()
     sizing = glyph_fd.GetAbstractArray("GlyphSizing")
     if sizing is not None:
         text += f"\nSphere size: {sizing.GetValue(0)}"
@@ -785,7 +820,7 @@ def _at_least(model, src, array, lower, what):
 def _root_value(src, name, default=None):
     from vtkmodules.util.numpy_support import vtk_to_numpy
 
-    a = servermanager.Fetch(src).GetFieldData().GetArray(name)
+    a = fetch(src).GetFieldData().GetArray(name)
     return vtk_to_numpy(a).tolist()[0] if a is not None else default
 
 
@@ -810,7 +845,7 @@ def view_parts(model, view, exclude=()):
     d = pv.Show(_topology_blocks(model, p, "parts"), view)
     d.Representation = "Surface"
     d.LineWidth = 2.5
-    values = sorted({int(v) for v in _gather(servermanager.Fetch(p), "PartId", "CELLS")})
+    values = sorted({int(v) for v in _gather(fetch(p), "PartId", "CELLS")})
     colors = palette(len(values))
     colors = [GHOST_RGB if v < 0 else colors[i] for i, v in enumerate(values)]
     labels = ["excluded" if v < 0 else f"Part {v}" for v in values]
@@ -834,7 +869,7 @@ def view_grow(model, view, seeds=None, exclude=()):
     d.Representation = "Surface"
     d.LineWidth = 2.5
     continuous(d, "CELLS", "Hops", preset="Turbo", view=view)
-    hops = _gather(servermanager.Fetch(g), "Hops", "CELLS")
+    hops = _gather(fetch(g), "Hops", "CELLS")
     top = int(hops.max()) if hops.size else -1
     seeds = g.SeedIDs if len(g.SeedIDs) <= 40 else g.SeedIDs[:37] + "..."
     info_text(model, view, f"Grow from {seeds}\nup to {top} element hops")
@@ -879,7 +914,7 @@ def view_check(model, view):
     findings opaque on top. Colored by the ``Check`` array, one color per check."""
     c = _named(model, "check", lambda: pv.NastranModelCheck(Input=model.reader))
     ghost_mesh(model, view, opacity=0.2)
-    codes = sorted({int(v) for v in _gather(servermanager.Fetch(c), "Check", "CELLS")})
+    codes = sorted({int(v) for v in _gather(fetch(c), "Check", "CELLS")})
     if codes:
         di = _check_layer(model, c, view, "check surfaces", SURFACE_INFO_CHECKS, codes)
         di.Opacity = 0.3
@@ -887,7 +922,7 @@ def view_check(model, view):
         d.LineWidth = 4
         d.PointSize = 10
         d.RenderPointsAsSpheres = 1
-    fd = servermanager.Fetch(c).GetFieldData()
+    fd = fetch(c).GetFieldData()
     names = fd.GetAbstractArray("CHECK_Name")
     counts = fd.GetArray("CHECK_Count")
     sev = fd.GetAbstractArray("CHECK_Severity")
@@ -947,7 +982,7 @@ def _fetch_selection():
         raise RuntimeError("Select cells or grids in the view first (Select Cells On / Select Points On).")
     ex = pv.ExtractSelection(Input=src, Selection=sel)
     try:
-        data = servermanager.Fetch(ex)
+        data = fetch(ex)
     finally:
         pv.Delete(ex)
         pv.SetActiveSource(active or src)  # the extract became active; give the user's source back
@@ -1185,10 +1220,17 @@ def set_camera(view, which):
 ANIMATE_FPS = 24  # frames per second when playing in a view (rendering slower than this just plays slower)
 
 
+def _paraview_major():
+    return servermanager.vtkSMProxyManager.GetVersionMajor()
+
+
 def _set_time(view, t):
     view.ViewTime = t
     try:
-        pv.GetAnimationScene().AnimationTime = t  # keeps the GUI's time widget in step
+        if _paraview_major() >= 6:
+            pv.GetAnimationScene().AnimationTime = t  # keeps the GUI's time widget in step
+        else:  # ParaView 5.x's GUI hangs when Python sets the scene time; the time keeper works
+            pv.GetTimeKeeper().Time = t
     except Exception:
         pass
 

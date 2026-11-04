@@ -98,7 +98,27 @@ def _copy_root_field_data(mb, pdc, only=None) -> None:
         pdc.SetPartition(i, 0, clone)
 
 
+MIN_WRITER_VTK = (9, 5)  # VTK 9.3's writer drops a collection's field data and its time steps
+
+
+def vtk_version() -> tuple[int, int]:
+    from vtkmodules.vtkCommonCore import vtkVersion
+
+    return vtkVersion.GetVTKMajorVersion(), vtkVersion.GetVTKMinorVersion()
+
+
+def check_writer_vtk() -> None:
+    """Refuse a VTK whose vtkHDFWriter writes broken nastran-pv files (no model summary, no steps)."""
+    if vtk_version() < MIN_WRITER_VTK:
+        have = ".".join(map(str, vtk_version()))
+        need = ".".join(map(str, MIN_WRITER_VTK))
+        raise RuntimeError(f"writing VTKHDF needs VTK {need} or newer (this is VTK {have}): "
+                           f'pip install "vtk>={need}", or write .vtm instead. Any ParaView from 5.13 '
+                           "on reads the VTKHDF files written that way.")
+
+
 def _writer(path, compression: int, chunk_size: int | None):
+    check_writer_vtk()
     path = Path(path)
     if path.suffix.lower() not in SUFFIXES:
         path = path.with_suffix(".vtkhdf")

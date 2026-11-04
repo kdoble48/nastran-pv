@@ -23,6 +23,25 @@ import render_model as rm  # noqa: E402  (also bootstraps nastran_pv via the plu
 DECK = os.path.join(HERE, "data", "tiny_run.bdf")
 
 
+def convert(args):
+    """`nastran-pv convert ...`. ParaView 5.x's VTK cannot write a VTKHDF time series (its writer
+    lacks temporal composite output), so there it runs in the system Python, as a user would."""
+    from vtkmodules.vtkCommonCore import vtkVersion
+
+    if (vtkVersion.GetVTKMajorVersion(), vtkVersion.GetVTKMinorVersion()) >= (9, 5):
+        from nastran_pv.cli import main as cli_main
+
+        return cli_main(args)
+    import shutil
+    import subprocess
+
+    python = os.environ.get("NASTRAN_PV_PYTHON") or shutil.which("python")
+    if not python:
+        raise RuntimeError("ParaView 5.x: set NASTRAN_PV_PYTHON to a Python with nastran-pv's deps")
+    env = dict(os.environ, PYTHONPATH=os.path.join(ROOT, "src"))
+    return subprocess.check_call([python, "-m", "nastran_pv", *args], env=env)
+
+
 def check(cond, msg):
     if not cond:
         print(f"FAIL: {msg}")
@@ -43,16 +62,14 @@ def _by_eid(src, block, name):
 
 
 def _root(src, name, port=0):
-    from paraview import servermanager
     from vtkmodules.util.numpy_support import vtk_to_numpy
 
-    return vtk_to_numpy(servermanager.Fetch(src, idx=port).GetFieldData().GetArray(name)).tolist()
+    return vtk_to_numpy(rm.nv.fetch(src, port).GetFieldData().GetArray(name)).tolist()
 
 
 def topology_checks(pv, nv):
     import time
 
-    from paraview import servermanager
 
     topo = rm.load_reader(os.path.join(HERE, "data", "topology.bdf"))
     check("Connectors" in rm.Model(topo).names, "Connectors block on the topology deck")
@@ -80,19 +97,19 @@ def topology_checks(pv, nv):
     g.LimitHops = 0
     p = pv.NastranParts(Input=topo)
     p.UpdatePipeline()
-    check(servermanager.Fetch(p, idx=1).GetNumberOfRows() == 2, "Nastran Parts: 2 parts in the summary table")
+    check(rm.nv.fetch(p, 1).GetNumberOfRows() == 2, "Nastran Parts: 2 parts in the summary table")
     p.TraverseRigid = 0
     p.UpdatePipeline()
-    check(servermanager.Fetch(p, idx=2).GetNumberOfRows() == 1, "Nastran Parts: the RBE2 is the one link")
+    check(rm.nv.fetch(p, 2).GetNumberOfRows() == 1, "Nastran Parts: the RBE2 is the one link")
     path = pv.NastranPath(Input=topo, FromGrid=4, ToGrid=42)
     path.UpdatePipeline()
     check(_root(path, "PathLength") == [9], "Nastran Path: 9 elements from grid 4 to grid 42")
     mc = pv.NastranModelCheck(Input=topo)
     mc.UpdatePipeline()
-    check(servermanager.Fetch(mc, idx=1).GetNumberOfRows() == 6, "Nastran Model Check: 6 checks in the table")
+    check(rm.nv.fetch(mc, 1).GetNumberOfRows() == 6, "Nastran Model Check: 6 checks in the table")
     mc.CheckFreeEdges = 0
     mc.UpdatePipeline()
-    check(servermanager.Fetch(mc, idx=1).GetNumberOfRows() == 5, "check toggles drop a check")
+    check(rm.nv.fetch(mc, 1).GetNumberOfRows() == 5, "check toggles drop a check")
     g.SeedIDs = "EID x"
     g.UpdatePipeline()
     check(True, "bad seed text reports and passes the data through")
@@ -125,7 +142,7 @@ def topology_checks(pv, nv):
 
     nv.apply("parts", reader=topo, view=view, exclude=["rigid"])
     parts_src = pv.FindSource(nv._name(nv.Model(topo), "parts"))
-    check(servermanager.Fetch(parts_src, idx=1).GetNumberOfRows() == 3, "parts view exclude=['rigid'] -> 3 parts")
+    check(rm.nv.fetch(parts_src, 1).GetNumberOfRows() == 3, "parts view exclude=['rigid'] -> 3 parts")
     nv.apply("grow", reader=topo, view=view, seeds="PID 6")
     check(grow_src.SeedIDs == "PID 6", "grow view seeds= sets Seed IDs")
     nv.apply("check", reader=topo, view=view)
@@ -145,7 +162,6 @@ def _select(pv, reader, query):
 
 def beam_checks(pv, nv, view, tmp):
     """Nastran Beam Sections filter on tests/data/beams.bdf: sweep, tree visibility, deformation, view."""
-    from paraview import servermanager
     from vtkmodules.util.numpy_support import vtk_to_numpy
 
     from op2_fixture import make_op2
@@ -161,7 +177,7 @@ def beam_checks(pv, nv, view, tmp):
     nv.show_all(beams)
     bs.ShowSections, bs.ShowAxes, bs.ShowTriads = 0, 1, 1
     bs.UpdatePipeline()
-    parts = vtk_to_numpy(servermanager.Fetch(bs).GetCellData().GetArray("BeamPart"))
+    parts = vtk_to_numpy(rm.nv.fetch(bs).GetCellData().GetArray("BeamPart"))
     check(set(parts.tolist()) == {1, 2, 3, 4, 5}, f"axes and triads: BeamPart {sorted(set(parts.tolist()))}")
     op2_path = os.path.join(tmp, "beams.op2")
     make_op2().write_op2(op2_path)  # T3 = 0.1 * NID for grids 1-7
@@ -170,7 +186,7 @@ def beam_checks(pv, nv, view, tmp):
     bs.ShowSections, bs.ShowAxes, bs.ShowTriads = 1, 0, 0
     bs.DeformationScale = 10.0
     bs.UpdatePipeline(rm.timesteps(beams)[0])
-    out = servermanager.Fetch(bs)
+    out = rm.nv.fetch(bs)
     ga = vtk_to_numpy(out.GetPointData().GetArray("GA"))
     t = vtk_to_numpy(out.GetPointData().GetArray("StationT"))
     z = vtk_to_numpy(out.GetPoints().GetData())[:, 2]
@@ -197,12 +213,10 @@ def beam_checks(pv, nv, view, tmp):
 
 def converted_checks(pv, nv, reader):
     """Views on a .vtm/.vtkhdf written by `nastran-pv convert`, opened with ParaView's own readers."""
-    from nastran_pv.cli import main as cli_main
-
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         for suffix in (".vtm", ".vtkhdf"):
             path = os.path.join(tmp, "tiny" + suffix)
-            cli_main(["convert", DECK, "-o", path, "-q"])
+            convert(["convert", DECK, "-o", path, "-q"])
             src = nv.load_reader(path)
             check(nv.is_model_file(src) and not nv.is_model_file(reader), f"{suffix} is a nastran-pv model file")
             pv.SetActiveSource(src)
@@ -230,7 +244,7 @@ def converted_checks(pv, nv, reader):
         make_op2().write_op2(op2)
         for out in ("series.vtkhdf", os.path.join("pvd", "series.vtm")):
             path = os.path.join(tmp, out)
-            cli_main(["convert", DECK, "--results", op2, "--all-steps", "-o", path, "-q"])
+            convert(["convert", DECK, "--results", op2, "--all-steps", "-o", path, "-q"])
             if path.endswith(".vtm"):
                 path = path[:-4] + ".pvd"
             src = nv.load_reader(path)
@@ -498,14 +512,13 @@ def main():
               f"PID legend captured: {[lg['array'] for lg in legends]}")
         pv.Delete(sview)
 
-    from paraview import servermanager
 
     derived = pv.NastranDerivedFields(Input=reader)
     stats = pv.NastranGroupStats(Input=derived, GroupBy="PID", Field="ElementMass")
     stats.UpdatePipeline()
-    table = servermanager.Fetch(stats, idx=1) if hasattr(servermanager, "Fetch") else None
+    table = rm.nv.fetch(stats, 1)
     check(table is not None and table.GetNumberOfRows() == 4, "Nastran Group Stats table has one row per PID")
-    check(servermanager.Fetch(derived).IsA("vtkPartitionedDataSetCollection"),
+    check(rm.nv.fetch(derived).IsA("vtkPartitionedDataSetCollection"),
           "field filters keep the model tree")
     shells = nv.Model(reader).block("Shells")  # unchanged input
     check(shells.GetCellData().GetArray("Area") is None, "field filters leave the reader output untouched")
@@ -525,14 +538,10 @@ def main():
         pv.Delete(mapped)
 
         # VTKHDF written by nastran-pv opens natively in ParaView, with time steps and block names
-        from nastran_pv.deck import load_deck
-        from nastran_pv.assemble import build_multiblock
-        from nastran_pv.results import Op2Results
-        from nastran_pv.vtkhdf import write_vtkhdf_series
-
-        deck = load_deck(DECK, echo=False)
-        path = write_vtkhdf_series(build_multiblock(deck), Op2Results(make_op2()),
-                                   os.path.join(tmp2, "series.vtkhdf"), deck=deck)
+        series_op2 = os.path.join(tmp2, "series.op2")
+        make_op2().write_op2(series_op2)
+        path = os.path.join(tmp2, "series.vtkhdf")
+        convert(["convert", DECK, "--results", series_op2, "--all-steps", "-o", path, "-q"])
         hdf = pv.OpenDataFile(str(path))
         hdf.UpdatePipelineInformation()
         check(nv.timesteps(hdf) == [0.0, 1.0, 2.0], f"VTKHDF series time steps {nv.timesteps(hdf)}")
