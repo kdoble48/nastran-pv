@@ -173,8 +173,8 @@ def map_table(mb, table: dict[str, np.ndarray], key: str, key_column: str | None
             model_keys = get_array(attr, "EID")
         if model_keys is None:
             continue
-        pos = np.minimum(np.searchsorted(skeys, model_keys), max(len(skeys) - 1, 0))
-        hit = (skeys[pos] == model_keys) if len(skeys) else np.zeros(len(model_keys), dtype=bool)
+        pos = vtkutil.match_ids(skeys, model_keys)
+        hit = pos >= 0
         found_keys.update(np.unique(model_keys[hit]).tolist())
         for c in cols:
             values = table[c][valid][order]

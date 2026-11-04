@@ -69,10 +69,31 @@ def add_string_array(field_data, name: str, values: Iterable[str]) -> None:
 def match_ids(sorted_ids: np.ndarray, query: np.ndarray) -> np.ndarray:
     """Index of each ``query`` id in ``sorted_ids`` or -1."""
     sorted_ids, query = np.asarray(sorted_ids), np.asarray(query)
-    if sorted_ids.size == 0:
-        return np.full(len(query), -1, dtype=np.int64)
+    if sorted_ids.size == 0 or query.size == 0:
+        return np.full(query.shape, -1, dtype=np.int64)
     i = np.minimum(np.searchsorted(sorted_ids, query), len(sorted_ids) - 1)
-    return np.where(sorted_ids[i] == query, i, -1)
+    return np.where(sorted_ids[i] == query, i, -1).astype(np.int64, copy=False)
+
+
+def shallow_copy(obj):
+    """New instance of ``obj``'s class sharing its data (arrays, points, blocks)."""
+    out = obj.NewInstance()
+    out.ShallowCopy(obj)
+    return out
+
+
+def add_block(mb, name: str, block) -> None:
+    """Append ``block`` to multiblock ``mb`` under ``name`` (None is skipped)."""
+    if block is None:
+        return
+    i = mb.GetNumberOfBlocks()
+    mb.SetBlock(i, block)
+    mb.GetMetaData(i).Set(mb.NAME(), name)
+
+
+def is_vertex_only(ds) -> bool:
+    """True for polydata made only of one vertex per point (Masses, Bushes, ...)."""
+    return ds.IsA("vtkPolyData") and ds.GetNumberOfVerts() == ds.GetNumberOfCells() == ds.GetNumberOfPoints()
 
 
 def make_points(xyz: np.ndarray) -> vtkPoints:
@@ -135,6 +156,9 @@ __all__ = [
     "make_cell_array",
     "make_points",
     "match_ids",
+    "shallow_copy",
+    "add_block",
+    "is_vertex_only",
     "polydata",
     "set_field_strings",
     "to_numpy",

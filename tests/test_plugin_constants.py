@@ -1,0 +1,33 @@
+"""Literals the ParaView plugin keeps as copies of nastran_pv constants stay in sync.
+
+The plugin files need pvpython, so they are read with ``ast`` instead of imported. The copies
+exist because the proxies and the GUI-script launcher run before nastran_pv (or scipy) can be
+imported.
+"""
+import ast
+from pathlib import Path
+
+from nastran_pv import launch
+from nastran_pv.topology import CHECKS, GROUPS
+
+PARAVIEW = Path(__file__).resolve().parents[1] / "paraview"
+
+
+def _assignments(name):
+    tree = ast.parse((PARAVIEW / name).read_text(encoding="utf-8"))
+    return {t.id: node.value for node in tree.body if isinstance(node, ast.Assign)
+            for t in node.targets if isinstance(t, ast.Name)}
+
+
+def test_reader_groups_and_checks_match_topology():
+    found = _assignments("nastran_bdf_reader.py")
+    assert ast.literal_eval(found["_GROUPS"]) == tuple(GROUPS)
+    assert ast.literal_eval(found["_CHECKS"]) == tuple(CHECKS)
+
+
+def test_views_model_files_and_view_names_match_launch():
+    found = _assignments("nastran_views.py")
+    assert ast.literal_eval(found["MODEL_FILES"]) == launch.MODEL_FILES
+    views = {k.value for k in found["VIEWS"].keys}
+    # every launcher choice is a view; grow and path need a selection, so `view` leaves them out
+    assert set(launch.VIEW_NAMES) - {"none"} == views - {"grow", "path"}

@@ -921,8 +921,9 @@ class NastranPVGroupStats(_FieldFilter):
 
 
 # ---------------------------------------------------- topology filters
-_GROUP_PROPS = {"shells": "TraverseShells", "solids": "TraverseSolids", "lines": "TraverseLines",
-                "rigid": "TraverseRigid", "bushes": "TraverseBushes", "connectors": "TraverseConnectors"}
+# copies of topology.graph.GROUPS / topology.check.CHECKS: the proxies are built before nastran_pv
+# (and scipy) can be imported; tests/test_plugin_constants.py keeps them in sync
+_GROUPS = ("shells", "solids", "lines", "rigid", "bushes", "connectors")
 _WITHIN = ("", "pid", "mid", "family", "group")  # StayWithin entries -> Rules.within
 _CHECKS = ("FreeEdges", "FreeFaces", "CoincidentGrids", "DuplicateElements", "DanglingConnectors", "FloatingParts")
 
@@ -1015,7 +1016,7 @@ class _TopologyFilter(_FieldFilter):
         self._listing = False
         self._cards = vtkDataArraySelection()
         self._cards.AddObserver("ModifiedEvent", lambda *args: None if self._listing else self.Modified())
-        self._groups = {g: 1 for g in _GROUP_PROPS}
+        self._groups = {g: 1 for g in _GROUPS}
         self._exclude_pids = ""
         self._within = 0
         self._limit = 0

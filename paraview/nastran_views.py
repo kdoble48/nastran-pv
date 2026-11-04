@@ -446,7 +446,9 @@ def labels_for(model, array, values):
         names = next((model.field_strings(b, "ElementTypeNames") for b in MESH if model.has(b)), [])
         return [names[v] if 0 <= v < len(names) else str(v) for v in values]
     if array == "NSMSource":
-        return [{0: "none", 1: "property", 2: "bulk", 3: "property + bulk"}.get(v, str(v)) for v in values]
+        from nastran_pv.nsm import SOURCE_NAMES
+
+        return [SOURCE_NAMES[v] if 0 <= v < len(SOURCE_NAMES) else str(v) for v in values]
     if array == "Axis":
         return [{0: "ellipsoid", 1: "K1", 2: "K2", 3: "K3"}.get(v, str(v)) for v in values]
     if array == "BeamPart":
@@ -830,16 +832,14 @@ def _root_value(src, name, default=None):
     return vtk_to_numpy(a).tolist()[0] if a is not None else default
 
 
-GROUP_PROPS = {"shells": "TraverseShells", "solids": "TraverseSolids", "lines": "TraverseLines",
-               "rigid": "TraverseRigid", "bushes": "TraverseBushes", "connectors": "TraverseConnectors"}
-
-
 def _exclude(src, names):
     """Uncheck card types and groups (``rigid``, ``RBE3``, ...) on a topology filter."""
+    from nastran_pv.topology import GROUPS
+
     for name in names:
-        if name.lower() in GROUP_PROPS:
-            setattr(src, GROUP_PROPS[name.lower()], 0)
-    cards = {n.upper() for n in names if n.lower() not in GROUP_PROPS}
+        if name.lower() in GROUPS:
+            setattr(src, "Traverse" + name.lower().capitalize(), 0)  # TraverseShells, ...
+    cards = {n.upper() for n in names if n.lower() not in GROUPS}
     if cards:
         src.UpdatePipelineInformation()
         src.CardTypes = [c for c in list(src.GetProperty("CardTypesInfo"))[0::2] if c not in cards]
@@ -897,7 +897,6 @@ def view_path(model, view):
               else f"No path from grid {p.FromGrid} to grid {p.ToGrid} through the checked card types.")
 
 
-CHECKS = ("FreeEdges", "FreeFaces", "CoincidentGrids", "DuplicateElements", "DanglingConnectors", "FloatingParts")
 CHECK_RGB = {"FreeEdges": (1.0, 0.5, 0.0), "FreeFaces": (0.95, 0.75, 0.35), "CoincidentGrids": (0.89, 0.10, 0.11),
              "DuplicateElements": (0.80, 0.0, 0.60), "DanglingConnectors": (0.45, 0.10, 0.75),
              "FloatingParts": (0.22, 0.49, 0.72)}
@@ -906,6 +905,8 @@ LINE_CHECKS = ("FreeEdges", "CoincidentGrids", "DuplicateElements", "DanglingCon
 
 
 def _check_layer(model, c, view, what, blocks, codes):
+    from nastran_pv.topology import CHECKS
+
     ex = _named(model, what, lambda: extract_blocks(c, blocks))
     d = pv.Show(ex, view)
     # both layers share the "Check" lookup table, so there is one legend naming the checks found

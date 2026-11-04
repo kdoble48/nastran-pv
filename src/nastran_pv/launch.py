@@ -28,7 +28,6 @@ import sys
 sys.path.insert(0, {scripts!r})
 import nastran_views as nv
 reader = nv.load_reader({deck!r}, {results!r}, {nsm_set!r})
-{extra}
 if {view!r} != "none":
     nv.apply({view!r}, reader=reader)
 else:
@@ -38,11 +37,10 @@ else:
 """
 
 
-def gui_script(deck: str, view: str, results: str | None, extra_lines: list[str] | None = None,
-               nsm_set: int | None = None) -> str:
+def gui_script(deck: str, view: str, results: str | None, nsm_set: int | None = None) -> str:
     return GUI_SCRIPT.format(scripts=str(paraview_scripts_dir()), deck=str(Path(deck).resolve()),
                              results=str(Path(results).resolve()) if results else None, nsm_set=nsm_set,
-                             view=view, extra="\n".join(extra_lines or []))
+                             view=view)
 
 
 MODEL_FILES = (".vtm", ".pvd", ".vtkhdf", ".hdf")  # converted models: opened with ParaView's own readers
