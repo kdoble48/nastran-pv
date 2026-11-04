@@ -16,7 +16,9 @@ mode in turn and ``save_mode_animations`` writes each mode as a GIF (all in the 
 the mode's frequency shown). ``show_only_selected``, ``hide_selected``, ``show_all``,
 ``show_only_property``, ``show_only_material``, ``show_only_reached`` and ``hide_reached`` are
 Femap-style visibility commands: they set the reader's visibility checklists and element ID lists,
-so they need the deck (:func:`deck_reader`).
+so they need the deck (:func:`deck_reader`). ``show_only_file``, ``hide_file`` and
+``highlight_file`` do the same from a CSV/text file of IDs (the reader's ``SelectionFile``);
+highlight makes a real ParaView selection.
 Plus :func:`index_colors`, which turns whatever integer array the active representation is
 coloured by into an indexed lookup table with names.
 
@@ -1300,6 +1302,7 @@ def show_all(reader=None):
     reader = deck_reader(reader or find_reader(), "Show All")
     reader.ShowOnlyElements = ""
     reader.HiddenElements = ""
+    reader.SelectionMode = "Off"  # keeps the SelectionFile for NPV Show Only/Hide/Highlight File
     reader.UpdatePipelineInformation()
     for prop in VISIBILITY_PROPS:
         setattr(reader, prop, _listed(reader, prop))
@@ -1380,6 +1383,85 @@ def show_only_property():
 def show_only_material():
     """Uncheck every material but those of the selected elements."""
     return _show_only_category("MID", "VisibleMaterials", "material")
+
+
+# ---------------------------------------------------- selection from an ID file
+NO_SELECTION_FILE = ("Set 'Selection File' on the Nastran reader (a CSV/text/Excel file of IDs; the header "
+                     "names EID, GRID, PID, MID, FAMILY or GROUP), then run this again.")
+
+
+def _file_reader(path, key, reader, what):
+    """The deck reader with its SelectionFile (and SelectionKey) set from the arguments."""
+    reader = deck_reader(reader or find_reader(), what)
+    if path is not None:
+        reader.SelectionFile = os.path.abspath(str(path))
+    if key is not None:
+        reader.SelectionKey = str(key).upper() if str(key).upper() != "AUTO" else "Auto"
+    if not reader.SelectionFile:
+        raise RuntimeError(NO_SELECTION_FILE)
+    return reader
+
+
+def file_ids(reader=None):
+    """The reader's SelectionFile as a ``nastran_pv.selection.IdList`` (key resolved)."""
+    from nastran_pv.selection import read_ids
+
+    reader = deck_reader(reader or find_reader(), "Selection File")
+    if not reader.SelectionFile:
+        raise RuntimeError(NO_SELECTION_FILE)
+    return read_ids(reader.SelectionFile, key=enum_text(reader, "SelectionKey"))
+
+
+def enum_text(proxy, prop):
+    """The entry text of an enumeration property ("Auto", "Show only", ...)."""
+    value = proxy.GetPropertyValue(prop)
+    value = value.GetData() if hasattr(value, "GetData") else value  # an EnumerationProperty
+    if isinstance(value, str):
+        return value
+    domain = proxy.GetProperty(prop).SMProperty.GetDomain("enum")
+    for i in range(domain.GetNumberOfEntries()):
+        if domain.GetEntryValue(i) == int(value):
+            return domain.GetEntryText(i)
+    return str(value)
+
+
+def _file_mode(path, key, reader, mode, what):
+    reader = _file_reader(path, key, reader, what)
+    reader.SelectionMode = mode
+    _refresh(reader)
+    raise_load_error(reader)
+    return reader, file_ids(reader)
+
+
+def show_only_file(path=None, key=None, reader=None):
+    """Show only what an ID file lists, with the masses, SPCs and loads on its grids (the reader's
+    Selection File unless ``path`` is given). Combines with the checklists and ID boxes."""
+    return _file_mode(path, key, reader, "Show only", "Show Only File")[1]
+
+
+def hide_file(path=None, key=None, reader=None):
+    """Hide what an ID file lists (masses, SPCs and loads stay unless the file names them)."""
+    return _file_mode(path, key, reader, "Hide", "Hide File")[1]
+
+
+def highlight_file(path=None, key=None, reader=None, view=None):
+    """Select what an ID file lists as a ParaView selection on the reader (grids for a NID file,
+    elements otherwise), so Grow/Path from Selection and Show Only/Hide work on it."""
+    from nastran_pv.selection import threshold_ranges
+
+    reader, ids = _file_mode(path, key, reader, "Off", "Highlight File")
+    view = view or pv.GetActiveViewOrCreate("RenderView")
+    array, field, runs = threshold_ranges(Model(reader).data, ids)
+    if not runs:
+        raise RuntimeError(f"Nothing to highlight: {ids.describe()} matches no {array} in the model.")
+    rep = pv.GetDisplayProperties(reader, view)
+    if not rep.Visibility:
+        pv.Show(reader, view)
+    pv.SetActiveSource(reader)
+    pv.SelectThresholds(Thresholds=[float(v) for r in runs for v in r], ArrayName=array, FieldType=field,
+                        Source=reader)
+    pv.Render(view)
+    return ids
 
 
 VIEWS = {
@@ -1815,6 +1897,7 @@ ACTIONS = {"animate_mode": animate_mode, "animate_modes": animate_modes, "stop_m
            "hide_selected": hide_selected, "show_all": show_all, "show_only_property": show_only_property,
            "show_only_material": show_only_material, "show_only_reached": show_only_reached,
            "hide_reached": hide_reached}
+ACTIONS.update({"show_only_file": show_only_file, "hide_file": hide_file, "highlight_file": highlight_file})
 
 
 def run_macro(name):

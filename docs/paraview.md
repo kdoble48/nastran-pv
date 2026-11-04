@@ -69,6 +69,26 @@ For Femap's AND visibility, use these lists in the reader's Properties panel:
 The selection macros below fill these in. The model totals (`ModelMass`, CG, material table) always
 describe the whole deck, whatever is hidden.
 
+### Selection from an ID file
+
+A CSV/text/Excel file of IDs (from a stress report, a supplier, a test) can drive the visibility
+too. Set these on the reader, in the *Selection File* properties:
+
+* **Selection File**: the file. Its header says what the IDs are (EID, GRID, PID, MID, FAMILY,
+  GROUP); a file without a header lists element IDs. Ranges and `THRU` work. The format and what
+  each key selects are in [CLI](cli.md#selection-from-an-id-file).
+* **Selection Key**: *Auto* (from the header) or the key.
+* **Selection Mode**: *Show only* the selection, with the masses, SPCs and loads on its grids;
+  *Hide* it (masses, SPCs and loads stay unless the file names them); or *Off*.
+* **Selection Grids**: for grid lists, whether an element needs *All grids* or *Any grid* listed.
+
+It combines with the checklists and ID lists (AND), survives Apply and time steps, and the file is
+read again when it changes. IDs that match nothing are listed in Output Messages. The *NPV Show Only
+File*, *NPV Hide File* and *NPV Highlight File* macros below use the same file; Highlight makes a
+real ParaView selection, so *NPV Grow from Selection*, *NPV Show Only* and the other selection
+commands work on it. From Python: `nv.show_only_file("failing.csv")`, `nv.hide_file(...)`,
+`nv.highlight_file("grids.txt", key="NID")`.
+
 On a large model the tree is capped at 1,000 pieces. Above that, Families, Groups, Element types and
 then Materials leave the tree, with a message in Output Messages; the checklists still work.
 
@@ -111,10 +131,12 @@ summary. Running a view again reuses its pipeline objects, which are named `NPV 
 | NPV Index Colors | Turns the selected object's current integer coloring (PID, MID, FamilyId, …) into an indexed LUT with annotations |
 | NPV Show Only | Shows only the selected elements (Select Cells On first); loads and SPCs stay |
 | NPV Hide | Adds the selected elements to the reader's *Hidden Elements* |
-| NPV Show All | Clears both element lists and checks every property, material, type, family and group |
+| NPV Show All | Clears both element lists, checks every property, material, type, family and group, and sets *Selection Mode* to Off |
 | NPV Only Property | Unchecks every property except those of the selected elements |
 | NPV Only Material | Unchecks every material except those of the selected elements |
 | NPV Show Only Reached / NPV Hide Reached | Shows only, or hides, what *NPV grow* reached; with *Stay Within* that is "everything connected to this point inside its group" ([Model tools](tools.md#paraview)) |
+| NPV Show Only File / NPV Hide File | Shows only, or hides, what the reader's *Selection File* lists ([above](#selection-from-an-id-file)); set the file on the reader first, since macros cannot open a file dialog |
+| NPV Highlight File | Selects what the *Selection File* lists, as a ParaView selection on the reader (grids for a GRID file, elements otherwise), without hiding anything |
 
 The same views can be called from the Python shell (`import nastran_views as nv; nv.apply("masses")`),
 from `render_model.py`, and as `nastran-pv render` presets (see [CLI](cli.md#batch-screenshots)).

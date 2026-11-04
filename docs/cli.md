@@ -3,7 +3,7 @@
 ```bash
 nastran-pv view   DECK [--view masses] [--results run.op2|run.h5]   # opens the ParaView GUI, view applied
 nastran-pv render DECK --preset masses loads --views iso top        # batch screenshots
-nastran-pv convert DECK|VTM -o out.vtm [field options] [--results F [--all-steps]]
+nastran-pv convert DECK|VTM -o out.vtm [field options] [--results F [--all-steps]] [--select ids.csv]
 nastran-pv convert DECK --results modes.op2 --random asd.csv [--drive Z --damping 0.05 --g 9806.65]
 nastran-pv stats  DECK|VTM --by PID|MID|FAMILY|GROUP|ELEMENTTYPE --field ElementMass [--csv t.csv]
 nastran-pv check  DECK|VTM [--strict] [--rules TEXT] [-o findings.vtm]
@@ -16,7 +16,8 @@ nastran-pv setup  [--pvpython PATH] [--no-macros] [--dry-run]
 with `--help` for the full option list.
 
 The field options `--derive`, `--map` and `--calc` (for `convert`, `stats` and `store add`) are
-described in [Fields](fields.md); `--parts`, `--grow` and `--rules` in [Model tools](tools.md). The `store` commands are described in [Run store](store.md).
+described in [Fields](fields.md); `--parts`, `--grow` and `--rules` in [Model tools](tools.md);
+`--select` below, in [Selection from an ID file](#selection-from-an-id-file). The `store` commands are described in [Run store](store.md).
 
 ## Converting
 
@@ -73,6 +74,58 @@ per PID and station, and flags differences above 2% as MISMATCH. It takes a deck
 section tables themselves are part of every conversion of a deck with CBAR/CBEAM, so a `.vtm`
 written without `--beam-sections` can still be swept or tabled later. See
 [Beam sections](beam-sections.md).
+
+## Selection from an ID file
+
+`--select FILE` (on `convert`, `stats` and `store add`) keeps only what a file of IDs lists, or
+marks it:
+
+```bash
+nastran-pv convert run.bdf --select failing.csv -o out/failing.vtm             # only those elements
+nastran-pv convert run.bdf --select failing.csv --select-mode mark -o out/m.vtm  # Selected = 0/1
+nastran-pv stats run.bdf --select grids.txt --select-grids any --by PID --field ElementMass
+```
+
+The file is CSV, TSV, whitespace-separated text, Excel or JSON. `$` and `#` lines are comments. IDs
+can be single numbers, ranges (`100-200`, `100:200`) or Nastran `100 THRU 200` and
+`1 THRU 99 BY 2`. Three example files, side by side:
+
+```text
+EID,margin          GRID              1001
+1001,-0.12          4 THRU 5          2000-2010
+1002,-0.03          7                 3001 THRU 3099 BY 2
+```
+
+**Which IDs.** The column header names the key: `EID`/`ELEMENT`, `NID`/`GRID`/`NODE`, `PID`/`PROPERTY`,
+`MID`/`MATERIAL`, `FAMILY` or `GROUP` (case, spaces and `_` don't matter). The first such column
+wins. Otherwise a column named `ID`, `KEY` or `NAME` is used, else the first column, as element IDs.
+A file whose first line is already IDs has no header and lists element IDs. `--select-key` sets the
+key and `--select-column` the column. FAMILY and GROUP files list names: the family name, or its
+part before `:`, as for `--map`.
+
+**What is selected.**
+
+| Key | Selected |
+|---|---|
+| EID | elements, rigid elements, connectors, masses and bushes with that ID (MPC legs never: their ID is the MPC set) |
+| PID / MID | everything with that property or material |
+| FAMILY / GROUP | the shells of that family or group |
+| NID | elements whose grids are **all** listed (`--select-grids any`: at least one), and masses, SPCs and loads on listed grids |
+
+Masses, SPCs and loads on the grids of a selected element come along, as do the parts of a
+selected element in other blocks (a CONM2's offset line, a CBUSH's glyph). Rigid elements and
+connectors join only when the file selects them.
+
+**Modes.** `keep` (the default) writes only the selection and the grids it uses; empty blocks are
+left out, and a file that selects nothing is an error. The root summary (`ModelMass`, CG, material
+table) still describes the whole deck; sum `ElementMass` with `stats` for the selection's mass.
+`mark` writes the whole model with an int8 `Selected` cell array (1 = selected) on every block. Both
+add a root `SelectionInfo` string. IDs that match nothing are listed as `warning:` lines (on stderr
+for `stats`) and are not an error. The selection is applied after `--derive`, `--map`, `--grow` and
+`--calc`, which see the whole model; results (`--results --all-steps`) work on a subset.
+
+In ParaView, the reader's *Selection File* does the same (see
+[ParaView](paraview.md#selection-from-an-id-file)).
 
 ## Statistics
 

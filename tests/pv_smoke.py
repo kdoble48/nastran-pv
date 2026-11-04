@@ -463,6 +463,65 @@ def tree_checks(pv, nv, reader):
     pv.Delete(view)
 
 
+def selection_file_checks(pv, nv, reader):
+    """Selection from an ID file: the reader properties (across a time step) and the three commands."""
+    from op2_fixture import make_op2
+
+    tmp = tempfile.mkdtemp()
+    eids = os.path.join(tmp, "eids.csv")
+    with open(eids, "w") as f:
+        f.write("EID,margin\n1,0.1\n2,-0.3\n999,0.0\n")
+    grids = os.path.join(tmp, "grids.txt")
+    with open(grids, "w") as f:
+        f.write("$ grids from a test\nGRID\n4 THRU 5\n7\n")
+    try:
+        nv.show_only_file()
+        check(False, "Show Only File without a Selection File should be refused")
+    except RuntimeError as exc:
+        check("Selection File" in str(exc), "NPV Show Only File asks for the reader's Selection File")
+    ids = nv.show_only_file(eids, reader=reader)
+    check(ids.key == "EID" and _cells(reader, "Shells") == 2 and _cells(reader, "Solids") == 0
+          and _cells(reader, "Masses") == 1 and _cells(reader, "Constraints") == 4,
+          "NPV Show Only File: EIDs 1 2 with the mass and SPCs on their grids")
+    op2_path = os.path.join(tmp, "sel.op2")
+    make_op2().write_op2(op2_path)
+    reader.OP2FileName = op2_path
+    reader.UpdatePipelineInformation()
+    last = rm.timesteps(reader)[-1]
+    shells = rm.Model(reader, last).block("Shells")
+    check(shells.GetNumberOfCells() == 2 and shells.GetPointData().GetArray("Displacement") is not None,
+          "the file selection survives a time step")
+    reader.OP2FileName = ""
+    nv.hide_file(reader=reader)
+    check(nv.enum_text(reader, "SelectionMode") == "Hide" and _cells(reader, "Shells") == 1 and _cells(reader, "Masses") == 2,
+          "NPV Hide File: EID 3 left, both masses stay")
+    reader.SelectionFile = grids
+    reader.SelectionMode = "Show only"
+    check(_cells(reader, "Shells") == 1 and _cells(reader, "Rigid") == 2, "GRID file: elements on listed grids only")
+    reader.SelectionGrids = "Any grid"
+    check(_cells(reader, "Shells") == 3, "SelectionGrids = Any grid: every shell touching 4, 5 or 7")
+    reader.SelectionGrids = "All grids"
+
+    view = pv.CreateRenderView()
+    pv.SetActiveView(view)
+    ids = nv.highlight_file(reader=reader, view=view)
+    check(nv.enum_text(reader, "SelectionMode") == "Off" and _cells(reader, "Shells") == 3 and nv.selected_ids() == ("GRID", [4, 5, 7]),
+          "NPV Highlight File: a grid selection, nothing hidden")
+    nv.grow_from_selection()
+    grow_src = pv.FindSource(nv._name(nv.Model(reader), "grow"))
+    check(grow_src.SeedIDs == "GRID 4 5 7", f"Grow from Selection on a highlighted file: {grow_src.SeedIDs!r}")
+    pv.Delete(grow_src)
+    pv.SetActiveSource(reader)
+    nv.highlight_file(eids, reader=reader, view=view)
+    check(nv.selected_ids() == ("EID", [1, 2]), "NPV Highlight File: an element selection from an EID file")
+    nv.show_all(reader)
+    check(nv.enum_text(reader, "SelectionMode") == "Off" and reader.SelectionFile == eids and _cells(reader, "Shells") == 3,
+          "Show All turns the file selection off and keeps the file")
+    pv.ClearSelection(reader)
+    reader.SelectionFile = ""
+    pv.Delete(view)
+
+
 def random_checks(pv, nv):
     """Random response from synthesized modes: reader properties, both views, a converted series."""
     from op2_fixture import make_modes_op2
@@ -540,6 +599,7 @@ def main():
     import nastran_views as nv
 
     tree_checks(pv, nv, reader)
+    selection_file_checks(pv, nv, reader)
 
     from op2_fixture import make_op2  # synthesized results, written with pyNastran
 

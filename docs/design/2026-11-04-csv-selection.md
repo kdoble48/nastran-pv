@@ -43,9 +43,9 @@ Elements*. This change turns a CSV/text/Excel file of IDs into a selection:
 | FAMILY / GROUP | shells whose `FamilyId`/`GroupId` name is listed (also the name before `:`, as `--map`) |
 | NID | cells whose grids are **all** listed (`grids="any"`: at least one), grid points of vertex blocks (masses, SPCs, loads) whose NID is listed |
 
-Then, when `attach` is on: grid points of vertex blocks (masses, SPCs, loads) on a grid used by a
-selected cell, and every item sharing an EID with a selected item (mass offsets of a selected CONM2,
-the bush glyph of a selected CBUSH line). Elements are never added because they touch selected
+Then, when `attach` is on, grid points of vertex blocks (masses, SPCs, loads) on a grid used by a
+selected item; and always every item sharing an EID with a selected item (mass offsets of a
+selected CONM2, the bush glyph of a selected CBUSH line). Elements are never added because they touch selected
 grids: rigid elements and connectors join only when the key selects them.
 
 Listed IDs that match nothing are reported (`SelectionReport.warnings`), never an error.
@@ -86,7 +86,7 @@ ParaView macros cannot prompt, so they use the reader's `SelectionFile`):
 - `highlight_file(...)`: sets `SelectionMode` = Off and makes a ParaView threshold selection on the
   reader's key array (`selection.threshold_ranges`: `EID`/`PID`/`MID`/`FamilyId`/`GroupId` cells,
   `NID` points; ID runs become threshold pairs). A NID file gives a grid selection.
-- `show_all` also clears `SelectionFile`.
+- `show_all` also sets `SelectionMode` = Off (the file stays, for the commands above).
 
 ## Non-goals
 

@@ -7,7 +7,8 @@
   `--only FIELD ...` to keep the file small
 - the full model as `<db>_vtm/run_<id>.vtm` (or VTKHDF with `--format vtkhdf`; `--no-vtm` skips it)
 
-`add` takes the same [field options](fields.md#cli-options) as `convert`.
+`add` takes the same [field options](fields.md#cli-options) as `convert`, and `--select` to store
+only part of a model ([Selection from an ID file](cli.md#selection-from-an-id-file)).
 
 `compare` aggregates a field per PID, MID, FAMILY, ETYPE, BLOCK or EID between two runs. That
 works across meshes too: the uCRM-9 coarse and fine wings agree on total structural mass to about
