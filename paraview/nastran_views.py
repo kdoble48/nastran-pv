@@ -1252,6 +1252,52 @@ def current_step(reader, view=None):
     return int(np.argmin([abs(x - t) for x in times])) + 1
 
 
+def _prepare_modes(reader, view, modes, camera):
+    """(times, 1-based modes) after checking them; a view with no NPV objects gets the results view."""
+    times = timesteps(reader)
+    if not times:
+        raise RuntimeError("No result steps: set 'OP2 File Name' on the reader, or open a converted "
+                           "series (convert --results ... --all-steps).")
+    modes = list(modes) if modes else list(range(1, len(times) + 1))
+    bad = [m for m in modes if not 1 <= m <= len(times)]
+    if bad:
+        raise ValueError(f"mode(s) {bad} not in 1..{len(times)}")
+    if not _shows_deform(reader, view):
+        apply("results", reader=reader, view=view)
+    if camera:
+        set_camera(view, camera)
+    return times, modes
+
+
+def _mode_sweeps(reader, view, times, modes):
+    """For each mode with a displacement: go to its time step and yield ``(mode, deflect)``, where
+    ``deflect(u)`` sets every NPV deform filter to ``u`` x the mode's peak scale. The filters get
+    their previous state back afterwards (0 in most views, full deflection in the results view)."""
+    for mode in modes:
+        _set_time(view, times[mode - 1])
+        model = Model(reader, times[mode - 1])
+        filters = deform_filters(model)
+        amp = peak_deformation(model)
+        if not filters or amp <= 0:  # the step has no displacement
+            continue
+        rest = [f.ScaleFactor for f in filters]
+
+        def deflect(u, filters=filters, amp=amp):
+            for f in filters:
+                f.ScaleFactor = amp * u
+
+        try:
+            yield mode, deflect
+        finally:
+            for f, r in zip(filters, rest):
+                f.ScaleFactor = amp if r else 0.0
+
+
+def _phase(k, frames):
+    """sin(2 pi k / frames), rounded so that equal shapes (k and frames/2 - k) share one key."""
+    return round(math.sin(2 * math.pi * k / frames), 9)
+
+
 def animate_modes(modes=None, cycles=1, frames=24, out=None, reader=None, view=None, camera=None,
                   fps=ANIMATE_FPS):
     """Vibrate each mode in turn in the view as it is (masses, PID, loads, ... or results): every
@@ -1265,44 +1311,38 @@ def animate_modes(modes=None, cycles=1, frames=24, out=None, reader=None, view=N
 
     reader = reader or find_reader()
     view = view or pv.GetActiveViewOrCreate("RenderView")
-    times = timesteps(reader)
-    if not times:
-        raise RuntimeError("No result steps: set 'OP2 File Name' on the reader, or open a converted "
-                           "series (convert --results ... --all-steps).")
-    modes = list(modes) if modes else list(range(1, len(times) + 1))
-    bad = [m for m in modes if not 1 <= m <= len(times)]
-    if bad:
-        raise ValueError(f"mode(s) {bad} not in 1..{len(times)}")
+    times, modes = _prepare_modes(reader, view, modes, camera)
     if out:
         os.makedirs(out, exist_ok=True)
-    if not _shows_deform(reader, view):
-        apply("results", reader=reader, view=view)
-    if camera:
-        set_camera(view, camera)
     played = []
-    for mode in modes:
-        _set_time(view, times[mode - 1])
-        model = Model(reader, times[mode - 1])
-        filters = deform_filters(model)
-        amp = peak_deformation(model)
-        if not filters or amp <= 0:  # the step has no displacement
-            continue
-        rest = [f.ScaleFactor for f in filters]
+    for mode, deflect in _mode_sweeps(reader, view, times, modes):
         for k in range(cycles * frames):
             start = time.perf_counter()
-            scale = amp * math.sin(2 * math.pi * k / frames)
-            for f in filters:
-                f.ScaleFactor = scale
+            deflect(_phase(k, frames))
             pv.Render(view)
             if out:
                 pv.SaveScreenshot(os.path.join(out, f"mode{mode:02d}_{k:03d}.png"), view)
             elif fps:
                 time.sleep(max(0.0, 1.0 / fps - (time.perf_counter() - start)))
-        for f, s in zip(filters, rest):
-            f.ScaleFactor = amp if s else 0.0  # results view: this mode's full deflection
-        pv.Render(view)
         played.append(mode)
+    pv.Render(view)  # the restored state
     return played
+
+
+def capture_view(view):
+    """The view's current image as an RGB PIL image, read from its render window (no file)."""
+    from PIL import Image
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+    from vtkmodules.vtkRenderingCore import vtkWindowToImageFilter
+
+    w2i = vtkWindowToImageFilter()
+    w2i.SetInput(view.GetRenderWindow())
+    w2i.ReadFrontBufferOff()
+    w2i.Update()
+    img = w2i.GetOutput()
+    w, h, _ = img.GetDimensions()
+    rgb = vtk_to_numpy(img.GetPointData().GetScalars()).reshape(h, w, -1)[::-1, :, :3]
+    return Image.fromarray(np.ascontiguousarray(rgb))
 
 
 def _shows_deform(reader, view):
@@ -1350,10 +1390,11 @@ def _model_path(reader):
 def save_mode_animations(modes=None, cycles=1, frames=24, folder=None, fps=ANIMATE_FPS, reader=None, view=None):
     """Save each mode's vibration, in the view as it is, as a looping GIF
     ``<model>_mode<NN>.gif`` in ``folder`` (default: next to the model file). ``modes`` are 1-based
-    steps (default all). The view returns to the step it showed. Returns the GIF paths."""
-    import shutil
-    import tempfile
+    steps (default all). The view returns to the step it showed. Returns the GIF paths.
 
+    Each distinct shape is rendered once (a sine cycle of 24 frames has 13), captured from the
+    render window in memory, and every frame of a mode shares one palette (taken from its peak).
+    """
     from PIL import Image
 
     reader = reader or find_reader()
@@ -1362,25 +1403,25 @@ def save_mode_animations(modes=None, cycles=1, frames=24, folder=None, fps=ANIMA
     folder = folder or (os.path.dirname(model_file) if model_file else os.getcwd())
     stem = os.path.splitext(os.path.basename(model_file))[0] if model_file else "model"
     os.makedirs(folder, exist_ok=True)
-    frames_dir = tempfile.mkdtemp(prefix=".npv_frames_", dir=folder)  # beside the GIFs, not in %TEMP%
     start_time = view.ViewTime
+    times, modes = _prepare_modes(reader, view, modes, None)
     written = []
     try:
-        played = animate_modes(modes, cycles=cycles, frames=frames, out=frames_dir, reader=reader, view=view)
-        for mode in played:
-            pngs = sorted(f for f in os.listdir(frames_dir) if f.startswith(f"mode{mode:02d}_"))
-            images = []
-            for name in pngs:
-                with Image.open(os.path.join(frames_dir, name)) as im:
-                    images.append(im.convert("RGB").convert("P", palette=Image.ADAPTIVE, colors=256))
-            if not images:
-                continue
+        for mode, deflect in _mode_sweeps(reader, view, times, modes):
+            shots = {}  # phase -> image: equal shapes are rendered once
+            keys = [_phase(k, frames) for k in range(cycles * frames)]
+            for key in dict.fromkeys(keys):
+                deflect(key)
+                pv.Render(view)
+                shots[key] = capture_view(view)
+            palette = shots[max(shots)].quantize(256, method=Image.Quantize.FASTOCTREE)
+            indexed = {key: im.quantize(palette=palette, dither=Image.Dither.NONE) for key, im in shots.items()}
+            images = [indexed[key] for key in keys]
             path = os.path.join(folder, f"{stem}_mode{mode:02d}.gif")
             images[0].save(path, save_all=True, append_images=images[1:], loop=0,
                            duration=max(int(round(1000 / (fps or ANIMATE_FPS))), 20), disposal=1)
             written.append(path)
     finally:
-        shutil.rmtree(frames_dir, ignore_errors=True)
         _set_time(view, start_time)
         pv.Render(view)
     return written

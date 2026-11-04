@@ -648,6 +648,7 @@ class NastranPVDeform(VTKPythonAlgorithmBase):
     def __init__(self):
         VTKPythonAlgorithmBase.__init__(self, nInputPorts=1, nOutputPorts=1, outputType="vtkDataObject")
         self._scale = 0.0
+        self._deformer = None  # (input object, its MTime, Deformer): rebuilt when the input changes
 
     def FillInputPortInformation(self, port, info):
         info.Set(self.INPUT_REQUIRED_DATA_TYPE(), "vtkDataObject")
@@ -671,13 +672,16 @@ class NastranPVDeform(VTKPythonAlgorithmBase):
 
     def RequestData(self, request, inInfo, outInfo):
         try:
-            from nastran_pv.deform import deform
+            from nastran_pv.deform import Deformer
         except ImportError as exc:
             _message(_HELP.format(missing=getattr(exc, "name", "a dependency"), err=exc), error=True)
             return 0
         inp = vtkDataObject.GetData(inInfo[0], 0)
         out = vtkDataObject.GetData(outInfo, 0)
-        out.ShallowCopy(deform(inp, self._scale))
+        key = (inp, inp.GetMTime())
+        if self._deformer is None or self._deformer[:2] != key:  # new input or new time step
+            self._deformer = key + (Deformer(inp),)
+        out.ShallowCopy(self._deformer[2].apply(self._scale))
         return 1
 
 

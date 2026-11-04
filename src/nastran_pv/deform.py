@@ -61,30 +61,39 @@ def displacement_of(ds, grid_nids, grid_disp) -> np.ndarray | None:
     return np.where(hit[:, None], grid_disp[idx], 0.0)
 
 
-def deform(data, scale: float):
-    """Copy of ``data`` (multiblock or tree) with points moved by ``scale`` x displacement.
+class Deformer:
+    """Deformed copies of one model at any scale. The leaves' base points and displacements (with
+    the NID lookup for blocks that follow their grids) are gathered once, so each :meth:`apply`
+    only computes ``points + scale x displacement``: cheap enough for every animation frame."""
 
-    Leaves without points or displacement are shared, not copied. ``scale`` 0 returns a plain
-    shallow copy."""
-    out = data.NewInstance()
-    out.ShallowCopy(data)
-    if not scale or not isinstance(out, vtkDataObjectTree):
-        return out
-    leaves = list(_leaves(out))
-    grid_nids, grid_disp = _grid_displacements(leaves)
-    moved = {}
-    for flat, ds in leaves:
-        d = displacement_of(ds, grid_nids, grid_disp)
-        if d is None:
-            continue
-        xyz = vtkutil.to_numpy(ds.GetPoints().GetData()).reshape(-1, 3)
-        copy = ds.NewInstance()
-        copy.ShallowCopy(ds)
-        pts = vtkPoints()
-        pts.SetData(vtkutil.to_vtk_array("Points", xyz + float(scale) * d))
-        copy.SetPoints(pts)
-        moved[flat] = copy
-    if moved:
+    def __init__(self, data):
+        self.data = data
+        self.moving = []  # (flat index, leaf, base xyz, displacement)
+        if not isinstance(data, vtkDataObjectTree):
+            return
+        leaves = list(_leaves(data))
+        grid_nids, grid_disp = _grid_displacements(leaves)
+        for flat, ds in leaves:
+            d = displacement_of(ds, grid_nids, grid_disp)
+            if d is not None and np.any(d):
+                xyz = vtkutil.to_numpy(ds.GetPoints().GetData()).reshape(-1, 3).astype(float)
+                self.moving.append((flat, ds, xyz, np.ascontiguousarray(d, dtype=float)))
+
+    def apply(self, scale: float):
+        """Copy of the model with points moved by ``scale`` x displacement; leaves that do not
+        move are shared, and ``scale`` 0 gives a plain shallow copy."""
+        out = self.data.NewInstance()
+        out.ShallowCopy(self.data)
+        if not scale or not self.moving:
+            return out
+        moved = {}
+        for flat, ds, xyz, d in self.moving:
+            copy = ds.NewInstance()
+            copy.ShallowCopy(ds)
+            pts = vtkPoints()
+            pts.SetData(vtkutil.to_vtk_array("Points", xyz + float(scale) * d))
+            copy.SetPoints(pts)
+            moved[flat] = copy
         it = out.NewTreeIterator()
         it.SkipEmptyNodesOn()
         it.VisitOnlyLeavesOn()
@@ -94,7 +103,19 @@ def deform(data, scale: float):
             if new is not None:
                 out.SetDataSet(it, new)
             it.GoToNextItem()
-    return out
+        return out
+
+
+def deform(data, scale: float):
+    """Copy of ``data`` (multiblock or tree) with points moved by ``scale`` x displacement.
+
+    Leaves without points or displacement are shared, not copied. ``scale`` 0 returns a plain
+    shallow copy. To deform one model at many scales, keep a :class:`Deformer`."""
+    if not scale:
+        out = data.NewInstance()
+        out.ShallowCopy(data)
+        return out
+    return Deformer(data).apply(scale)
 
 
 def peak_scale(data, fraction: float = 0.08) -> float:

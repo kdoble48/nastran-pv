@@ -96,3 +96,16 @@ def test_peak_scale_is_a_fraction_of_the_diagonal(model):
     lo = np.min([_xyz(get_block(mb, b)).min(0) for b in ("Shells", "Solids")], axis=0)
     hi = np.max([_xyz(get_block(mb, b)).max(0) for b in ("Shells", "Solids")], axis=0)
     assert s * peak <= 0.1 * np.linalg.norm(hi - lo) * 1.5 and s > 0
+
+
+def test_deformer_reused_across_scales_matches_deform(model):
+    # one Deformer per mode, many frames: each apply() equals a fresh deform() at that scale
+    from nastran_pv.deform import Deformer
+
+    _, mb = model
+    ref = _xyz(get_block(mb, "Shells")).copy()
+    d = Deformer(mb)
+    for s in (0.5, -1.0, 0.0, 2.0):
+        np.testing.assert_array_equal(_xyz(get_block(d.apply(s), "Shells")),
+                                      _xyz(get_block(deform(mb, s), "Shells")))
+    np.testing.assert_array_equal(_xyz(get_block(mb, "Shells")), ref)

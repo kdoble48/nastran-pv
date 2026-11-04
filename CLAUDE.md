@@ -150,8 +150,11 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   progress bar.
 - `deform.py`: `deform(data, scale)` moves every block of a multiblock or model tree by
   `scale` x `Displacement` (blocks without one follow their grids by NID); `peak_scale` gives the
-  8 %-of-the-model scale. The views draw through the plugin's *Nastran Deform* (`NPV deform`),
+  8 %-of-the-model scale; `Deformer` gathers a model's moving points once and `apply(scale)` is
+  per frame (the plugin keeps one per input object + MTime). The views draw through the plugin's *Nastran Deform* (`NPV deform`),
   so `animate_modes` vibrates whatever view is shown; analysis filters stay on the undeformed model.
+  `save_mode_animations` renders each distinct sine phase once, captures the render window in
+  memory (`capture_view`) and quantizes every frame of a mode to one palette.
 - `glyphs.py`: mass ellipsoids and bush triads as real `vtkPolyData`.
 - `paraview/nastran_bdf_reader.py`: one plugin file containing the reader, three glyph filters
   (masses, bushes, beam sections), the deform filter, three field filters and four topology
