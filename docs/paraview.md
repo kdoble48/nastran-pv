@@ -23,6 +23,19 @@ cards often live in the run deck. A bare geometry file still loads, but without 
 When ParaView asks which reader to use, pick *Nastran Bulk Data (nastran-pv)* and click *Set
 reader as default*. Its built-in "BDF Reader" reads geometry only.
 
+### Converted files
+
+A `.vtm` or `.vtkhdf` written by `nastran-pv convert` opens with ParaView's own reader (File >
+Open). Every view and toolbar macro works on it, as on a deck, and `nastran-pv view out/model.vtm`
+opens one directly. When a deck and a converted file are both open, the views use the active
+source (or the source upstream of it).
+
+A converted file is fixed at conversion time, so a few things still need the deck:
+
+* *OP2 File Name* and *NSMSet*: convert again with `--results` or `--nsm-set` instead.
+* The visibility checklists and the Show Only / Hide / Show All macros. On a converted file,
+  use ParaView's Extract Selection or Threshold.
+
 ## Model tree and visibility
 
 The reader outputs a model tree, in the spirit of Femap's Model Info tree. Open it with

@@ -155,7 +155,9 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
     built multiblock by its options, so changing the time step only re-attaches results. The cut
     model tree is cached by the visibility settings too; its checklists are filled in
     `RequestInformation`, before the first Apply.
-- `paraview/nastran_views.py`: view functions (`apply(name)`), `index_colors`, the selection
+- `paraview/nastran_views.py`: view functions (`apply(name)`) on the deck reader or a converted
+  `.vtm`/VTKHDF (`find_reader`, `is_model_file`: root field `DeckPath`; `deck_reader` guards the
+  commands that need the deck), `index_colors`, the selection
   commands (grow/path from selection, Femap-style show only/hide/show all), and the macro entry
   point `run_macro`. It creates named, reused pipeline objects (`NPV <what> [<reader>]`).
   `render_model.py` is a thin batch wrapper around it.

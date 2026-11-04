@@ -25,6 +25,8 @@ python -m nastran_pv render $DECK --preset loads  --views showcase     --out sho
 1. **Pick the run deck** (the file with `INCLUDE`s and case control). It is the one that has
    materials and properties, and the `LOAD`/`SPC` selection. For loads, pick a static deck. A
    modal deck has no LOAD. See `troubleshooting-nastran-models` for the other cases.
+   A `.vtm`/`.vtkhdf` from `convert` also works (and skips the slow deck read on big models), but
+   not with `--results`/`--nsm-set`: convert with those instead.
 2. **Run renders in the background** (`run_in_background`; the user asked for this) and tell the
    user in one line what is rendering. Two presets on uCRM-9 medium take about 15 s; series and
    gallery exports take minutes.

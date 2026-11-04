@@ -74,6 +74,22 @@ def test_launchers_dry_run(capsys):
         and "--views showcase" in out
 
 
+def test_launchers_open_converted_models(tmp_path, capsys):
+    vtm = tmp_path / "m.vtm"
+    assert main(["convert", DECK, "-o", str(vtm), "-q"]) == 0
+    capsys.readouterr()
+    try:
+        assert main(["view", str(vtm), "--view", "pid", "--dry-run"]) == 0
+    except FileNotFoundError:
+        pytest.skip("ParaView not installed")
+    assert f"nv.load_reader({str(vtm.resolve())!r}, None, None)" in capsys.readouterr().out
+    for flags in (["--results", DECK], ["--nsm-set", "0"]):
+        with pytest.raises(SystemExit, match="need the deck"):
+            main(["view", str(vtm), *flags, "--dry-run"])
+        with pytest.raises(SystemExit, match="need the deck"):
+            main(["render", str(vtm), "--preset", "pid", *flags, "--dry-run"])
+
+
 def test_convert_and_store_vtkhdf(tmp_path, capsys):
     from nastran_pv.vtkhdf import read_vtkhdf
 
