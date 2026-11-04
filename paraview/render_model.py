@@ -31,14 +31,7 @@ def render(deck, presets, cameras, out, size, op2=None, step=0, nsm_set=None):
     base = os.path.splitext(os.path.basename(deck))[0]
     written = []
     for preset in presets:
-        view = pv.CreateRenderView()
-        view.ViewSize = list(size)
-        view.ViewTime = t
-        view.Background = [1, 1, 1]
-        try:
-            view.UseColorPaletteForBackground = 0
-        except AttributeError:
-            pass
+        view = nv.white_view(size, t)
         nv.apply(preset, reader=reader, view=view, model=model)
         for cam in cameras:
             nv.set_camera(view, cam)
