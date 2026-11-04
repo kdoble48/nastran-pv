@@ -82,7 +82,7 @@ def test_launchers_open_converted_models(tmp_path, capsys):
         assert main(["view", str(vtm), "--view", "pid", "--dry-run"]) == 0
     except FileNotFoundError:
         pytest.skip("ParaView not installed")
-    assert f"nv.load_reader({str(vtm.resolve())!r}, None, None)" in capsys.readouterr().out
+    assert f"nv.load_reader({str(vtm.resolve())!r}, None, None, None)" in capsys.readouterr().out
     for flags in (["--results", DECK], ["--nsm-set", "0"]):
         with pytest.raises(SystemExit, match="need the deck"):
             main(["view", str(vtm), *flags, "--dry-run"])

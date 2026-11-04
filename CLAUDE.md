@@ -155,6 +155,13 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   per frame (the plugin keeps one per input object + MTime). The views draw through the plugin's *Nastran Deform* (`NPV deform`),
   so `nastran_views.animate_modes` vibrates whatever view is shown; analysis filters stay on the
   undeformed model.
+- `randvib.py`: base-drive random vibration from normal modes (no SOL 111 needed). `RandomResponse`
+  has the results interface (`steps`/`times`/`attach`): steps are frequency frames, every frame
+  carries the static `AccelRMS AccelN0 DispRMS DominantMode*` and its own `AccelASD`. Participation
+  uses a lumped mass from the built blocks (`lumped_mass`), so mode normalization does not matter.
+  CLI `--random/--drive/--damping/--g`; reader `Random*` properties; views `random`/`randomsweep`
+  (the sweep's frequency label indexes `RandomFrameFrequencies` by `time_index`: a temporal VTKHDF
+  has no root field data, and `min`/`max` are numpy reductions in PythonAnnotation).
 - `glyphs.py`: mass ellipsoids and bush triads as real `vtkPolyData`.
 - `paraview/nastran_bdf_reader.py`: one plugin file containing the reader, three glyph filters
   (masses, bushes, beam sections), the deform filter, three field filters and four topology
@@ -211,7 +218,9 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   builtin session's output instead (remote pvserver: a clear error). Setting
   `GetAnimationScene().AnimationTime` from Python hangs its GUI; `_set_time` sets the TimeKeeper
   there. Its VTK 9.3 cannot write VTKHDF (`vtkhdf.check_writer_vtk`), so `pv_smoke.convert` runs
-  the CLI in the system Python on ParaView < 6. Run pv_smoke under both before merging plugin or
+  the CLI in the system Python on ParaView < 6. Its VTKHDF reader stamps the previous request's time
+  on its output, so a PythonAnnotation's `time_index` lags one step there (the randomsweep label on
+  a converted series; the data itself is right). Run pv_smoke under both before merging plugin or
   view changes.
 - Gallery scene export (`paraview/scene_export.py`) calls trame-vtk's serializers directly. ParaView 6
   mappers take a `vtkPartitionedDataSetCollection`, which trame-vtk 2.11 drops silently unless the

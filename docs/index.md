@@ -27,6 +27,8 @@ you use.
 - [Model tools](tools.md): connectivity traversal (grow), parts, shortest paths and model checks,
   with per-card-type rules, from the CLI, Python and ParaView.
 - [Run store](store.md): keep runs in SQLite and compare fields across runs and meshes.
+- [Random vibration](random-vibration.md): base-drive random response from a normal-modes run
+  (RMS, response ASD per frequency, dominant mode), as colors on the mesh.
 
 ## Reference
 
@@ -59,6 +61,7 @@ cli
 fields
 tools
 store
+random-vibration
 ```
 
 ```{toctree}

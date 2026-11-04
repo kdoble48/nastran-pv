@@ -35,6 +35,7 @@ deck parsing, which is much faster on large models.
 | One snapshot for ParaView or VTK | `.vtm` (default) |
 | All result steps, or a large model | `.vtkhdf` with `--all-steps` (1/5 the size of a `.pvd` series on uCRM-9) |
 | One result step | `--results F --step N` |
+| Random vibration (base drive) from SOL 103 modes: RMS, N0, dominant mode, response ASD per frequency frame | `--results modes.op2 --random "20:0.01,2000:0.01" [--drive Z --damping 0.05 --g 9806.65] --all-steps` (docs/random-vibration.md); check the printed captured-mass fraction |
 | Per-part mass breakdown | `--derive pidmass`, or `stats --by PID --field ElementMass` |
 | Mesh quality | `--derive quality` → `EdgeRatio ScaledJacobian Skew Warpage` |
 | Connected parts, and what joins them | `--parts --rules "exclude=rigid"` → `PartId`, `PART_*`, `LINK_*` (docs/tools.md) |

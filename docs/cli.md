@@ -4,6 +4,7 @@
 nastran-pv view   DECK [--view masses] [--results run.op2|run.h5]   # opens the ParaView GUI, view applied
 nastran-pv render DECK --preset masses loads --views iso top        # batch screenshots
 nastran-pv convert DECK|VTM -o out.vtm [field options] [--results F [--all-steps]]
+nastran-pv convert DECK --results modes.op2 --random asd.csv [--drive Z --damping 0.05 --g 9806.65]
 nastran-pv stats  DECK|VTM --by PID|MID|FAMILY|GROUP|ELEMENTTYPE --field ElementMass [--csv t.csv]
 nastran-pv check  DECK|VTM [--strict] [--rules TEXT] [-o findings.vtm]
 nastran-pv sections DECK|VTM [--pid ID ...] [--csv t.csv]          # CBAR/CBEAM section table
@@ -30,6 +31,10 @@ nastran-pv convert run.bdf --no-loads --k-ref 1e5 -o out/model.vtm
 (default: Case Control `NSM=`; `0` = none; see [Nonstructural mass](model.md#nonstructural-mass));
 `view` and `render` take it too. An output ending in `.vtkhdf`, or
 `--format vtkhdf`, writes VTKHDF instead (see [Output formats](output-formats.md)).
+
+`--random ASD` turns the `--results` normal modes into a base-drive random response, with
+`--drive`, `--damping`, `--g` and `--random-frames`; `view` and `render` take the same options
+(see [Random vibration](random-vibration.md)).
 
 ### Progress
 
@@ -105,6 +110,7 @@ nastran-pv render out/modes.vtkhdf --step 3 --preset results   # a converted ser
 ```
 
 The presets are the views from the toolbar macros: `masses`, `bushes`, `bushrotations`, `beams`, `loads`, `spc`, `rigid`,
-`family`, `group`, `pid`, `mid`, `elementtype`, `thickness`, `nsm`, `results`, `parts` and `check`.
+`family`, `group`, `pid`, `mid`, `elementtype`, `thickness`, `nsm`, `results`, `random`, `randomsweep`,
+`parts` and `check`. The two random views need `--random` (or a converted random series).
 
 Cameras: `iso` (default), `top`, `front`, `side`, and `showcase` (Z up, three-quarter view from ahead; used by the web gallery).

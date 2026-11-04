@@ -34,7 +34,8 @@ source (or the source upstream of it).
 
 A converted file is fixed at conversion time, so a few things still need the deck:
 
-* *OP2 File Name* and *NSMSet*: convert again with `--results` or `--nsm-set` instead.
+* *OP2 File Name*, *NSMSet* and the *Random* properties: convert again with `--results`,
+  `--nsm-set` or `--random` instead.
 * The visibility checklists and the Show Only / Hide / Show All macros. On a converted file,
   use ParaView's Extract Selection or Threshold.
 
@@ -96,6 +97,8 @@ summary. Running a view again reuses its pipeline objects, which are named `NPV 
 | NPV Thickness | Shell thickness |
 | NPV NSM | Nonstructural mass: shells by NSM per area, lines by NSM per length (two legends); totals by source and per NSM set, or the defined sets when none is selected. The reader's *NSMSet* picks the bulk set (-1 = Case Control `NSM=`, or the only set of a bulk-only file; 0 = none; see [Nonstructural mass](model.md#nonstructural-mass)) |
 | NPV Results | Deformed shape colored by displacement over the undeformed outline, for the current time step; the largest displacement is drawn at 8 % of the model size (*NPV deform* > *Scale Factor*) |
+| NPV Random RMS | Random response (reader *Random ASD* set, see [Random vibration](random-vibration.md)): the mesh colored by acceleration RMS on a log scale, with the drive, input RMS and captured mass |
+| NPV Random Sweep | The response ASD at the current frequency frame on one fixed log range, with the frame's frequency: press play to sweep |
 | NPV Animate Mode | Vibrates the mode the time controls are on, in the view as it is (masses, PID, loads, results, ...): two cycles at 24 frames/s, then the view is back as it was (same step and deformation). Step to another mode and click again. A converted single-step file (`convert --results` without `--all-steps`) has one mode |
 | NPV Animate All Modes | Plays every mode in turn, one cycle each, in the view as it is, then returns to the step it was on. A view with nothing drawn through *NPV deform* gets NPV Results first. Modes whose step has no displacement are listed in Output Messages |
 | NPV Save Mode Animations | Saves every mode's vibration, in the view as it is, as a looping GIF `<model>_mode01.gif`, `<model>_mode02.gif`, ... next to the model file (24 frames each, at the view's size); Output Messages lists them, and any mode with no displacement or whose frames never change. The view keeps its step and deformation. From Python: `nv.save_mode_animations([1, 2], folder=..., frames=36)` |

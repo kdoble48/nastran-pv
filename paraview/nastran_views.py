@@ -7,7 +7,7 @@ reuses named pipeline objects ("NPV ..."), so running a view twice does not
 pile up duplicates. Available views::
 
     masses  bushes  bushrotations  beams  loads  spc  rigid  family  group  pid  mid  thickness
-    nsm  elementtype  results  parts  grow  path  check
+    nsm  elementtype  results  random  randomsweep  parts  grow  path  check
 
 ``grow_from_selection`` and ``path_from_selection`` seed the grow and path
 views from the current selection. ``animate_mode`` vibrates the current mode,
@@ -52,11 +52,14 @@ def ensure_plugin():
         pv.LoadPlugin(os.path.join(HERE, "nastran_bdf_reader.py"))
 
 
-def load_reader(deck, op2=None, nsm_set=None):
-    """The Nastran reader on ``deck``, or ParaView's own reader on a nastran-pv ``.vtm``/VTKHDF."""
+def load_reader(deck, op2=None, nsm_set=None, random=None):
+    """The Nastran reader on ``deck``, or ParaView's own reader on a nastran-pv ``.vtm``/VTKHDF.
+
+    ``random``: ``{"asd", "drive", "damping", "g", "frames"}`` (only ``asd`` is required) turns the
+    OP2 modes into a random response (the reader's Random* properties)."""
     ensure_plugin()
     if os.path.splitext(deck)[1].lower() in MODEL_FILES:
-        if op2 or nsm_set is not None:
+        if op2 or nsm_set is not None or random:
             raise RuntimeError(f"{os.path.basename(deck)} is a converted model: results and NSM sets "
                                "need the deck (or convert with --results / --nsm-set)")
         src = pv.OpenDataFile(deck)
@@ -80,8 +83,19 @@ def load_reader(deck, op2=None, nsm_set=None):
         reader.OP2FileName = op2
     if nsm_set is not None:
         reader.NSMSet = int(nsm_set)
+    if random:
+        set_random(reader, **random)
     reader.UpdatePipelineInformation()
     return reader
+
+
+def set_random(reader, asd, drive="Z", damping=0.05, g=None, frames=100):
+    """Random response from the reader's OP2 modes (see nastran_pv.randvib)."""
+    reader.RandomASD = str(asd)
+    reader.RandomDrive = "XYZ".index(str(drive).upper())
+    reader.RandomDamping = float(damping)
+    reader.RandomG = float(g or 0.0)
+    reader.RandomFrames = int(frames)
 
 
 def _xml_name(proxy):
@@ -859,8 +873,106 @@ def view_results(model, view):
     info_text(model, view, f"{label[0] if label else ''}\nDeformation x{scale:.3g}", "Upper Center")
 
 
+# ----------------------------------------------------------------- random vibration
+NO_RANDOM = ("No random response: set 'Random ASD' on the reader (with an OP2 of normal modes), "
+             "or convert with --results MODES --random ASD.")
+
+
+def _positive_range(model, blocks, array):
+    """(min, max) of the positive values (vector magnitudes) of a point array over ``blocks``."""
+    vals = [model.array(b, array) for b in blocks]
+    vals = [np.linalg.norm(v, axis=1) if v.ndim == 2 else v for v in vals if v is not None and v.size]
+    v = np.concatenate(vals) if vals else np.zeros(0)
+    v = v[np.isfinite(v) & (v > 0)]
+    return (float(v.min()), float(v.max())) if v.size else None
+
+
+def _random_mesh(model, view, array, rng):
+    """Mesh coloured by ``array`` on a log scale over ``rng``, undeformed (random has no phase)."""
+    blocks = [b for b in MESH if model.has(b)]
+    mesh = _extract(model, *blocks, what="mesh")
+    set_deformation(model, 0.0)
+    d = pv.Show(mesh, view)
+    d.Representation = "Surface"
+    d.Opacity = 1.0
+    lut = continuous(d, "POINTS", array, preset="Turbo", view=view)
+    lo, hi = rng
+    if hi <= lo:
+        hi = lo * 10.0
+    lut.AutomaticRescaleRangeMode = "Never"
+    lut.RescaleTransferFunction(lo, hi)
+    lut.MapControlPointsToLogSpace()  # else the preset's colours bunch up at the top decade
+    lut.UseLogScale = 1
+    return d
+
+
+def _random_ready(model, view):
+    blocks = [b for b in MESH if model.has(b)]
+    if not blocks or not model.field_strings(None, "RandomDrive"):
+        info_text(model, view, NO_RANDOM)
+        return None
+    return blocks
+
+
+def _random_header(model):
+    drive = model.field_strings(None, "RandomDrive")
+    rms = model.field("RandomInputRMS")
+    frac = model.field("RANDOM_EffectiveMassFraction")
+    zeta = model.field("RANDOM_Damping")
+    parts = [f"Random base drive {drive[0] if drive else ''}"]
+    if rms is not None:
+        parts.append(f"input {float(rms[0]):.4g} RMS")
+    if zeta is not None and len(zeta):
+        parts.append(f"zeta {float(zeta[0]):g}")
+    if frac is not None:
+        parts.append(f"{len(frac)} modes, {float(np.sum(frac)):.0%} of the mass")
+    return ", ".join(parts)
+
+
+def view_random(model, view):
+    """Mesh coloured by the RMS of the absolute acceleration (vector magnitude), log scale."""
+    blocks = _random_ready(model, view)
+    if blocks is None:
+        return
+    rng = _positive_range(model, blocks, "AccelRMS")
+    if rng is None:
+        info_text(model, view, "The random response is zero on the mesh (no eigenvector output there?).")
+        return
+    _random_mesh(model, view, "AccelRMS", rng)
+    info_text(model, view, f"{_random_header(model)}\nAcceleration RMS: peak {rng[1]:.4g}", "Upper Center")
+
+
+def view_randomsweep(model, view):
+    """Mesh coloured by the response ASD at the current frequency frame, on one log range for
+    every frame (``RandomAccelASDRange``), so playing the time steps sweeps the frequency."""
+    blocks = _random_ready(model, view)
+    if blocks is None:
+        return
+    rng = model.field("RandomAccelASDRange")
+    rng = (float(rng[0]), float(rng[1])) if rng is not None and len(rng) == 2 else \
+        _positive_range(model, blocks, "AccelASD")
+    if rng is None:
+        info_text(model, view, "The response ASD is zero on the mesh.")
+        return
+    lo = max(rng[0], rng[1] * 1e-6)  # six decades: the far tails would wash out the colours
+    _random_mesh(model, view, "AccelASD", (lo, rng[1]))
+    label = _named(model, "frequency label", lambda: pv.PythonAnnotation(Input=model.reader))
+    label.ArrayAssociation = "Field Data"
+    # the frame labels from time_index: a temporal VTKHDF has no root field data to read per step
+    drive = (model.field_strings(None, "RandomDrive") or [""])[0]
+    freqs = model.field("RandomFrameFrequencies")
+    labels = [f"Random {drive} {float(f):.4g} Hz" for f in freqs] if freqs is not None else []
+    # (min/max are numpy reductions in the annotation namespace: index directly)
+    label.Expression = f"{labels!r}[int(time_index) % {len(labels)}]" if labels else "''"
+    ld = pv.Show(label, view)
+    ld.WindowLocation = "Upper Right Corner"
+    ld.FontSize = 14
+    info_text(model, view, f"{_random_header(model)}\nResponse ASD (sum of X, Y, Z): play the time steps "
+                           "to sweep frequency", "Upper Left Corner")
+
+
 # ----------------------------------------------------------------- topology
-TOPOLOGY_BLOCKS = ("Shells", "Solids", "Lines", "Rigid", "Connectors", "BushLines", "Masses")
+TOPOLOGY_BLOCKS =("Shells", "Solids", "Lines", "Rigid", "Connectors", "BushLines", "Masses")
 
 
 def _topology_blocks(model, src, what):
@@ -1238,7 +1350,7 @@ VIEWS = {
     "masses": view_masses, "bushes": view_bushes, "bushrotations": view_bushrotations, "beams": view_beams, "loads": view_loads, "spc": view_spc,
     "rigid": view_rigid, "family": view_family, "group": view_group, "pid": view_pid,
     "mid": view_mid, "elementtype": view_elementtype, "thickness": view_thickness, "nsm": view_nsm,
-    "results": view_results, "parts": view_parts, "grow": view_grow, "path": view_path, "check": view_check,
+    "results": view_results, "random": view_random, "randomsweep": view_randomsweep, "parts": view_parts, "grow": view_grow, "path": view_path, "check": view_check,
 }
 
 

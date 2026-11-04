@@ -1,6 +1,8 @@
 """nastran-pv command line.
 
     nastran-pv convert DECK|VTM -o out.vtm [field options]   write a VTK multiblock
+    nastran-pv convert DECK --results modes.op2 --random asd.csv --all-steps -o rv.vtkhdf
+                                                             random vibration from the modes
     nastran-pv stats DECK|VTM --by PID --field ElementMass   group statistics table
     nastran-pv check DECK|VTM [--strict] [-o findings.vtm]   model checks
     nastran-pv sections DECK|VTM [--csv FILE]                CBAR/CBEAM section properties per PID
@@ -79,6 +81,18 @@ def load_model(args, verbose=False):
 
         with progress.stage(f"results {Path(args.results).name}"):
             results = attach_op2(mb, deck, args.results, args.step)
+        if getattr(args, "random", None):
+            from .randvib import random_response
+
+            with progress.stage("random response"):
+                try:
+                    results = random_response(results, mb, args.random, args.drive, args.damping, args.g,
+                                              args.random_frames, deck)
+                except ValueError as exc:
+                    raise SystemExit(f"nastran-pv: {exc}") from None
+                results.attach(mb, args.step, deck)
+    elif getattr(args, "random", None):
+        raise SystemExit("--random needs --results with normal modes (SOL 103)")
     progress.done()
     return mb, deck, results
 
@@ -120,12 +134,13 @@ def apply_field_options(mb, args) -> list[str]:
 
 
 def add_model_arguments(p, results=True):
-    from .launch import nsm_set_id
+    from .launch import add_random_arguments, nsm_set_id
 
     p.add_argument("input", help="run deck (.bdf/.dat with INCLUDEs), bulk-data file, or a .vtm written by nastran-pv")
     if results:
         p.add_argument("--results", "--op2", dest="results", help="OP2 or MSC/NX HDF5 (.h5) results to attach")
         p.add_argument("--step", type=int, default=0, help="result step (mode/subcase index) to attach")
+        add_random_arguments(p.add_argument_group("random vibration (from the --results modes)"))
     p.add_argument("--k-ref", type=float, default=None, help="bush stiffness reference for log scaling")
     p.add_argument("--nsm-set", type=nsm_set_id, default=None, metavar="ID",
                    help="bulk NSM set to apply (default: Case Control NSM=; 0 = none)")
@@ -206,7 +221,10 @@ def cmd_convert(args) -> int:
     progress.done()
     t2 = time.perf_counter()
     print(f"{Path(args.input).name}: load+build {t1 - t0:.1f}s, fields+write {t2 - t1:.1f}s -> {path}")
-    if results is not None:
+    if hasattr(results, "summary"):
+        print("\n".join(results.summary()))
+        _print_rows(results.modes)
+    elif results is not None:
         print(f"{len(results.steps)} result step(s): " + "; ".join(s.label for s in results.steps[:5])
               + (" ..." if len(results.steps) > 5 else ""))
     print("\n".join(summarize(mb)))

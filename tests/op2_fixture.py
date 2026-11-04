@@ -29,3 +29,19 @@ def make_op2() -> OP2:
     plate.stress_bits = plate.data_code["stress_bits"] = [0, 0, 0, 0, 1]
     op2.op2_results.stress.cquad4_stress[1] = plate
     return op2
+
+
+def make_modes_op2(freqs=(30.0, 120.0)) -> OP2:
+    """Normal modes only, on grids 1-7 (Z shapes), written as a real eigenvector table (table code 7)
+    so that write_op2 round-trips them as modes: the input of a random response."""
+    op2 = OP2(debug=None)
+    op2.set_mode("msc")
+    ng = np.column_stack([NIDS, np.ones(len(NIDS), dtype=int)])
+    eig = np.zeros((len(freqs), len(NIDS), 6), dtype="float32")
+    for k in range(len(freqs)):
+        eig[k, :, 2] = np.sin((k + 1) * np.pi * NIDS / (len(NIDS) + 1))
+    lam = list((2 * np.pi * np.asarray(freqs, dtype=float)) ** 2)
+    op2.eigenvectors[1] = vec = RealEigenvectorArray.add_modal_case(
+        "BOUGV1", ng, eig, 1, list(range(1, len(freqs) + 1)), lam, list(freqs))
+    vec.table_code = vec.data_code["table_code"] = 7
+    return op2
