@@ -132,6 +132,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
             self._lists[cat] = sel
         self._listed_key = None
         self._reported_key = None
+        self._load_error = ""  # last RequestData failure, for LoadError (empty after a good read)
         self._names = {}
         self._tree = None
         self._tree_key = None
@@ -245,6 +246,12 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
     def SetHiddenElements(self, v):
         """Element IDs to hide (NPV Hide adds the selected elements)."""
         self._set("_hidden", v or "")
+
+    @smproperty.stringvector(name="LoadError", information_only="1")
+    def GetLoadError(self):
+        """Why the last read failed ("" after a good read): scripts and views raise it instead of
+        treating the empty output as a model without masses, bushes, ..."""
+        return self._load_error
 
     @smproperty.doublevector(name="TimestepValues", information_only="1", si_class="vtkSITimeStepsProperty")
     def GetTimestepValues(self):
@@ -382,6 +389,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         try:
             importlib.import_module("nastran_pv.assemble")  # dependency check
         except ImportError as exc:
+            self._load_error = f"cannot import {getattr(exc, 'name', None) or 'a dependency'}: {exc}"
             _message(_HELP.format(missing=getattr(exc, "name", "a dependency"), err=exc), error=True)
             return 0
         try:
@@ -412,11 +420,13 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
                 for w in self._tree.warnings:
                     _message(f"nastran-pv: {w}")
             pdc = self._tree.output(mb)
-        except Exception:
+        except Exception as exc:
             import traceback
 
+            self._load_error = f"{type(exc).__name__}: {exc}".strip()
             _message(f"nastran-pv: failed to read {self._filename}:\n{traceback.format_exc()}", error=True)
             return 0
+        self._load_error = ""
         if rebuilt and deck.warnings:
             shown = "\n  ".join(deck.warnings[:25])
             more = f"\n  ... {len(deck.warnings) - 25} more" if len(deck.warnings) > 25 else ""

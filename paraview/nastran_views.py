@@ -225,6 +225,19 @@ def timesteps(reader):
     return [float(t) for t in tv] if hasattr(tv, "__len__") else [float(tv)]
 
 
+def raise_load_error(reader):
+    """Raise RuntimeError when the deck reader's last read failed: an empty output would otherwise
+    read as a model with no masses, bushes, ... and views and screenshots would say so."""
+    if _xml_name(reader) != READER_XML:
+        return
+    reader.UpdatePropertyInformation()
+    prop = reader.GetProperty("LoadError")
+    error = prop.GetElement(0) if prop is not None and len(prop) else ""
+    if error:
+        name = os.path.basename(str(getattr(reader, "FileName", "") or "the deck"))
+        raise RuntimeError(f"cannot read {name}: {error} (full traceback in Output Messages)")
+
+
 class Model:
     """Reader plus a client-side copy of its output (block names, arrays, size)."""
 
@@ -234,6 +247,7 @@ class Model:
             view = pv.GetActiveView()
             time = getattr(view, "ViewTime", 0.0) if view is not None else 0.0
         reader.UpdatePipeline(time)
+        raise_load_error(reader)
         from nastran_pv.tree import as_multiblock
 
         self.data = as_multiblock(fetch(reader))  # the reader outputs the model tree

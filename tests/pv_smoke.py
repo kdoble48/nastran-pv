@@ -160,6 +160,43 @@ def _select(pv, reader, query):
     pv.QuerySelect(QueryString=query, FieldType="CELL", InsideOut=False)
 
 
+BAD_DECK = """SOL 101
+CEND
+BEGIN BULK
+GRID,1,,0.,0.,0.
+GRID,2,,1.,0.,0.
+CORD2R,10,,0,0,0,0,0,1
+,1,0,0
+PBUSH,1,K,1.e3,1.e3,1.e3
+CBUSH,1,1,1,2,,,,10
+ENDDATA
+"""
+
+
+def load_error_checks(pv, nv, tmp):
+    """A deck pyNastran rejects (integer CORD2R fields) must fail loudly, not look like an empty model."""
+    path = os.path.join(tmp, "bad.bdf")
+    with open(path, "w") as f:
+        f.write(BAD_DECK)
+    bad = nv.load_reader(path)
+    view = pv.CreateRenderView()
+    try:
+        nv.apply("bushes", reader=bad, view=view)
+        check(False, "a deck that fails to load raises instead of showing an empty view")
+    except RuntimeError as exc:
+        check("bad.bdf" in str(exc) and "e1x" in str(exc), f"load error names the deck and the cause: {exc}")
+    shots = os.path.join(tmp, "bad_shots")
+    try:
+        rm.render(path, ["bushes"], ["iso"], shots, [300, 200])
+        check(False, "render refuses a deck that fails to load")
+    except RuntimeError:
+        check(not os.path.exists(os.path.join(shots, "bad_bushes_iso.png")), "render writes no misleading PNG")
+    check(rm.main([path, "--preset", "bushes", "--out", shots]) == 1, "render_model.main exits 1 on a load error")
+    pv.Delete(view)
+    for src in [s for k, s in pv.GetSources().items() if k[0] == "bad.bdf"]:
+        pv.Delete(src)
+
+
 def beam_checks(pv, nv, view, tmp):
     """Nastran Beam Sections filter on tests/data/beams.bdf: sweep, tree visibility, deformation, view."""
     from vtkmodules.util.numpy_support import vtk_to_numpy
@@ -524,6 +561,7 @@ def main():
         nv.apply(name, reader=reader, view=view)
     check(True, f"all views build: {', '.join(nv.VIEWS)}")
     with tempfile.TemporaryDirectory() as tmp:
+        load_error_checks(pv, nv, tmp)
         beam_checks(pv, nv, view, tmp)
     pv.SetActiveSource(reader)
     nsm_reader = rm.load_reader(os.path.join(HERE, "data", "nsm.bdf"))

@@ -68,7 +68,8 @@ file, not full fuel.
 (`grow` and `path` are GUI views seeded by the selection macros). `family` and `group`
 need ICEM/TACS family comments (uCRM-9 has them; Linderholt does not). `results` needs
 `--results run.op2|run.h5` and optionally `--step N`. `bushes`/`bushrotations` need CBUSH cards (rotations: PBUSH K4–K6). An empty view
-says so in its overlay text, so read the PNG.
+says so in its overlay text, so read the PNG. A deck that fails to load makes `render` exit 1
+with `cannot read DECK: <error>` and writes no PNG.
 
 ## GUI and pvpython
 
