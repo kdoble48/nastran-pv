@@ -27,7 +27,9 @@ reader as default*. Its built-in "BDF Reader" reads geometry only.
 
 A `.vtm` or `.vtkhdf` written by `nastran-pv convert` opens with ParaView's own reader (File >
 Open). Every view and toolbar macro works on it, as on a deck, and `nastran-pv view out/model.vtm`
-opens one directly. When a deck and a converted file are both open, the views use the active
+opens one directly. So does a result series from `convert --results ... --all-steps` (a temporal
+`.vtkhdf`, or the `.pvd` next to the per-step `.vtm` files): each mode or step is a time step, as
+on the reader. When a deck and a converted file are both open, the views use the active
 source (or the source upstream of it).
 
 A converted file is fixed at conversion time, so a few things still need the deck:

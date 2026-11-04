@@ -66,7 +66,7 @@ def to_pdc(mb: vtkMultiBlockDataSet, root_arrays=None) -> vtkPartitionedDataSetC
 
 # per-step values and the small model summary; field data is rewritten every time step
 SERIES_ROOT_ARRAYS = ("ResultLabel", "Frequency", "ResultStep", "SOL", "ModelMass", "StructuralMass",
-                      "ConcentratedMass", "ModelCG")
+                      "ConcentratedMass", "ModelCG", "DeckPath")
 
 
 def _copy_root_field_data(mb, pdc, only=None) -> None:

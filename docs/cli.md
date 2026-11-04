@@ -86,8 +86,8 @@ and floating parts. See [Model tools](tools.md#model-check) for what each check 
 
 `view` opens the ParaView GUI on a deck with a [view](paraview.md#one-click-views-toolbar-macros)
 already applied. `--dry-run` prints the command and the generated script instead of launching.
-`view` and `render` also take a `.vtm` or `.vtkhdf` written by `convert`, which skips the deck
-read. `--results` and `--nsm-set` need the deck, so convert with them instead
+`view` and `render` also take a `.vtm`, `.vtkhdf` or `.pvd` written by `convert`, which skips the
+deck read. `--results` and `--nsm-set` need the deck, so convert with them instead
 ([Converted files](paraview.md#converted-files)).
 
 ## Batch screenshots

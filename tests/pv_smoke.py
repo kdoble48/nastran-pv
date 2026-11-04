@@ -224,6 +224,22 @@ def converted_checks(pv, nv, reader):
             for p in [s for s in pv.GetSources().values() if s is not reader]:
                 pv.Delete(p)
             pv.Delete(view)
+        from op2_fixture import make_op2
+
+        op2 = os.path.join(tmp, "modes.op2")
+        make_op2().write_op2(op2)
+        for out in ("series.vtkhdf", os.path.join("pvd", "series.vtm")):
+            path = os.path.join(tmp, out)
+            cli_main(["convert", DECK, "--results", op2, "--all-steps", "-o", path, "-q"])
+            if path.endswith(".vtm"):
+                path = path[:-4] + ".pvd"
+            src = nv.load_reader(path)
+            n = len(nv.timesteps(src))
+            model = nv.apply("results", reader=src)
+            check(n == 3 and model.reader is src, f"{os.path.basename(path)} series: {n} steps, results view builds")
+            pv.Delete(pv.FindSource(nv._name(model, "warp")))
+            for p in [s for s in pv.GetSources().values() if s is not reader]:
+                pv.Delete(p)
     pv.SetActiveSource(None)
     check(nv.find_reader() is reader, "with no active source the deck reader is found again")
 
