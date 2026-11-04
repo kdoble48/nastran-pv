@@ -190,8 +190,19 @@ def test_bush_glyph_normals_point_outward(kind):
 
 def test_bush_old_file_without_normalisers():
     b = _bushes([[0, 0, 0], [1, 0, 0]], [[1e3, 1e4, 1e5, 1, 10, 100]] * 2)
-    for kind in ("translation", "rotation"):
-        assert bush_glyphs(b, diag=10.0, kind=kind).GetNumberOfCells() > 0
+    for kind, ref in (("translation", 1e3), ("rotation", 1.0)):
+        out = bush_glyphs(b, diag=10.0, kind=kind)
+        assert out.GetNumberOfCells() > 0
+        assert np.isclose(arr(out, "StiffnessReference", "field")[0], ref)  # the fallback actually used
+    stored = _bushes([[0, 0, 0]], [[1e3, 1e4, 1e5, 1, 10, 100]], field={"KRotRef": 5.0})
+    assert np.isclose(arr(bush_glyphs(stored, 10.0, kind="rotation"), "StiffnessReference", "field")[0], 5.0)
+
+
+def test_bush_ring_mesh_coarsens_for_many_bushes():
+    from nastran_pv.glyphs import ring_mesh
+
+    assert ring_mesh(12, 100) == (24, 6)
+    assert ring_mesh(12, 50_000) == (12, 4)  # bounded memory at ~1e5 bushes
 
 
 def test_bush_view_without_stiffness():

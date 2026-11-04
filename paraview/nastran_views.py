@@ -567,6 +567,7 @@ def _bush_view(model, view, kind, size, ellipsoids=False):
     what = "bush rotation glyphs" if rotation else "bush glyphs"
     glyphs = _named(model, what, lambda: pv.NastranBushGlyphs(Input=deformed(model)))
     glyphs.Stiffness = int(rotation)
+    glyphs.ShowTriads = 1
     glyphs.Size = size
     glyphs.ShowEllipsoids = int(ellipsoids and not rotation)
     glyphs.UpdatePipeline()
@@ -591,8 +592,8 @@ def _bush_view(model, view, kind, size, ellipsoids=False):
     axes = ([0] if released or ellipsoid else []) + [1, 2, 3]
     labels = [grey if a == 0 else names[a - 1] for a in axes]
     categorical(d, "Axis", axes, labels, [BUSH_RGB[a] for a in axes], view=view)
-    ref = model.field("KRotRef" if rotation else "KRef", "Bushes")
-    ref_text = f"K_rot_ref = {ref[0]:.4g}" if rotation else f"K_ref = {ref[0]:.4g}"
+    ref = _glyph_field(glyphs, "StiffnessReference", 1.0)  # what the glyphs used (old files: a fallback)
+    ref_text = f"K_rot_ref = {ref:.4g}" if rotation else f"K_ref = {ref:.4g}"
     shape = ("rings around the element axes, radius" if rotation
              else "bars along the element axes, length")
     lines = [f"{n} CBUSH, {'rotational' if rotation else 'translational'} stiffness {span}: {shape} "

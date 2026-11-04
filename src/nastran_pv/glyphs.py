@@ -216,9 +216,20 @@ def _frames(x: np.ndarray) -> np.ndarray:
     return np.stack([x, y, np.cross(x, y)], axis=2)
 
 
-def _rings(frames, origins, radius, tube, resolution):
-    """Tori around each frame's x axis: ring ``radius`` and ``tube`` radius per glyph (world units)."""
+RING_COARSE_ABOVE = 20_000  # bushes; beyond this the ring mesh is coarsened to bound memory
+
+
+def ring_mesh(resolution: int, count: int) -> tuple[int, int]:
+    """(segments around the ring, segments around the tube) for ``count`` bushes: 2*res x res/2,
+    coarsened to at most 12 x 4 above ``RING_COARSE_ABOVE`` bushes (3 rings each)."""
     nu, nv = max(2 * int(resolution), 12), max(int(resolution) // 2, 4)
+    if count > RING_COARSE_ABOVE:
+        nu, nv = min(nu, 12), min(nv, 4)
+    return nu, nv
+
+
+def _rings(frames, origins, radius, tube, nu, nv):
+    """Tori around each frame's x axis: ring ``radius`` and ``tube`` radius per glyph (world units)."""
     u = np.linspace(0.0, 2 * np.pi, nu, endpoint=False)
     v = np.linspace(0.0, 2 * np.pi, nv, endpoint=False)
     uu, vv = (a.reshape(-1) for a in np.meshgrid(u, v, indexing="ij"))  # point j = iu * nv + iv
@@ -247,13 +258,8 @@ def _field(pd, name):
     return v if np.isfinite(v) and v > 0 else None
 
 
-def bush_log_stiffness(bushes: vtkPolyData, kind: str = "translation") -> np.ndarray:
-    """Normalised ``log10(1 + K/K_ref) / log_max`` per bush and axis of one kind, in [0, 1].
-
-    ``K_ref``/``log_max`` come from the block's field data (``KRef``/``KLogMax`` or
-    ``KRotRef``/``KRotLogMax``), so a subset of the bushes keeps the model-wide scale.
-    Files written before they existed fall back to the bushes passed in. NaN where K is NaN.
-    """
+def _reference(bushes: vtkPolyData, kind: str):
+    """``(K, K_ref, log_max)`` of one kind: stored field data, else from the bushes passed in."""
     cols, ref_name, max_name = _KIND[kind]
     K = vtkutil.to_numpy(bushes.GetPointData().GetArray("K")).reshape(-1, 6)[:, cols].astype(float)
     kp = np.clip(np.nan_to_num(K), 0.0, None)
@@ -261,7 +267,18 @@ def bush_log_stiffness(bushes: vtkPolyData, kind: str = "translation") -> np.nda
     ref = _field(bushes, ref_name) or (float(positive.min()) if positive.size else 1.0)
     log = np.log10(1.0 + kp / ref)
     log_max = _field(bushes, max_name) or (float(log.max()) if log.size and log.max() > 0 else 1.0)
-    k = np.clip(log / log_max, 0.0, 1.0)
+    return K, ref, log_max
+
+
+def bush_log_stiffness(bushes: vtkPolyData, kind: str = "translation") -> np.ndarray:
+    """Normalised ``log10(1 + K/K_ref) / log_max`` per bush and axis of one kind, in [0, 1].
+
+    ``K_ref``/``log_max`` come from the block's field data (``KRef``/``KLogMax`` or
+    ``KRotRef``/``KRotLogMax``), so a subset of the bushes keeps the model-wide scale.
+    Files written before they existed fall back to the bushes passed in. NaN where K is NaN.
+    """
+    K, ref, log_max = _reference(bushes, kind)
+    k = np.clip(np.log10(1.0 + np.clip(np.nan_to_num(K), 0.0, None) / ref) / log_max, 0.0, 1.0)
     k[np.isnan(K)] = np.nan
     return k
 
@@ -305,6 +322,7 @@ def bush_glyphs(bushes: vtkPolyData, diag: float, size: float = 0.04, triad: boo
 
     Cell arrays: ``Axis`` (1-3; 0 = released or ellipsoid), ``Stiffness``, ``Log10Stiffness``,
     ``EID``, ``Released``, ``Dominant``. Field data: ``StiffnessKind``, ``GlyphScale``,
+    ``StiffnessReference`` (the K_ref used),
     ``ReleasedCount`` (bushes with a released axis), ``NoStiffnessCount``, ``EllipsoidCount``.
     The output is empty (field data only) when no bush has a positive stiffness of this kind.
     """
@@ -331,6 +349,7 @@ def bush_glyphs(bushes: vtkPolyData, diag: float, size: float = 0.04, triad: boo
     fd = out.GetFieldData()
     vtkutil.add_string_array(fd, "StiffnessKind", [kind])
     vtkutil.add_array(fd, "GlyphScale", np.array([s]))
+    vtkutil.add_array(fd, "StiffnessReference", np.array([_reference(bushes, kind)[1]]))
     vtkutil.add_array(fd, "ReleasedCount", np.array([int(released.any(axis=1).sum()) if has_any else 0]))
     vtkutil.add_array(fd, "NoStiffnessCount", np.array([int(missing.sum())]))
     if not has_any:
@@ -345,6 +364,7 @@ def bush_glyphs(bushes: vtkPolyData, diag: float, size: float = 0.04, triad: boo
 
     if triad:
         bar = unit_bar(resolution) if kind == "translation" else None
+        nu, nv = ring_mesh(resolution, int((~missing).sum()))
         for i in range(3):
             rows = np.nonzero(~missing)[0]
             if not rows.size:
@@ -360,7 +380,7 @@ def bush_glyphs(bushes: vtkPolyData, diag: float, size: float = 0.04, triad: boo
             else:
                 radius = np.where(rel, 0.18 * s, s * (0.25 + 0.6 * ki))
                 tube = np.where(rel, 0.03 * s, thick)
-                xyz, conn, ntri, normals = _rings(frames, loc[rows], radius, tube, resolution)
+                xyz, conn, ntri, normals = _rings(frames, loc[rows], radius, tube, nu, nv)
             add(xyz, conn, ntri, normals, rows, np.where(rel, GREY, i + 1), kz[rows, i], rel, dom)
     ell_count = 0
     if ellipsoid and kind == "translation":
