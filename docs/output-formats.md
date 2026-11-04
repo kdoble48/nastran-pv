@@ -17,11 +17,14 @@ With `--all-steps`, all result steps go into **one temporal file**. The mesh is 
 and arrays that never change between steps (properties, materials, loads, masses, ...) are also
 stored once. Only the results (`Displacement`, `VonMisesMax`, ...) are stored per step.
 `--no-compact` turns off that sharing, and `--compression 0-9` sets the gzip level (default 4).
+A compacted series is written uncompressed first, and each array is then compressed once (gzip
+with the shuffle filter) when the shared copy is made. With `--no-compact`, VTK compresses
+every array at every step, which is about four times slower.
 
 | Case | `.pvd` + `.vtm` series | temporal `.vtkhdf` |
 |---|---|---|
 | 126-grid example wing, 127 modes | 2.8 MB | 1.0 MB |
-| uCRM-9 medium (59k grids), 20 modes | 175 MB | 36 MB (one step reads in 0.06 s) |
+| uCRM-9 medium (59k grids), 20 modes | 175 MB | 31 MB, written in 1.5 s (one step reads in 0.06 s) |
 
 ## Selecting blocks
 

@@ -135,7 +135,9 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
     (`to_pdc`), because a multiblock loses its block names in VTKHDF.
   - Series are written through a `VTKPythonAlgorithmBase` time source (`_StepSource`).
   - `compact_static_arrays` then rewrites the file with h5py so that arrays identical at every
-    step are stored once, with all their step offsets set to 0.
+    step are stored once, with all their step offsets set to 0. A compacted series is written
+    uncompressed and gzipped (+shuffle) once in that rewrite; vtkHDFWriter would compress every
+    array at every step.
 - `store.py`: SQLite in long format (`runs`, `elements`, `nodes`, `element_values`,
   `node_values`), plus `<db>_vtm/run_<id>.vtm`.
 - `cli.py`: the `convert`, `stats`, `check`, `sections` and `store` commands, with shared field options.
