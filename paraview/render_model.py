@@ -1,8 +1,8 @@
 """Batch screenshots of a Nastran deck through the nastran-pv reader plugin.
 
-    pvpython paraview/render_model.py DECK [--op2 F.op2] [--step N] [--random ASD --drive Z --damping 0.05]
+    pvpython paraview/render_model.py DECK [--op2 F.op2] [--step N] [--random ASD --drive Z --damping 0.05] [--against A]
         [--preset masses bushes bushrotations beams loads spc rigid family group pid mid thickness elementtype results
-                  random randomsweep]
+                  random randomsweep diff]
         [--views iso top front side showcase] [--out shots/] [--size 1600 1000]
 
 The presets are the views in ``nastran_views.py`` (also available as GUI
@@ -23,9 +23,12 @@ PRESETS = tuple(nv.VIEWS)
 CAMERAS = ("iso", "top", "front", "side", "showcase")
 
 
-def render(deck, presets, cameras, out, size, op2=None, step=0, nsm_set=None, random=None):
+def render(deck, presets, cameras, out, size, op2=None, step=0, nsm_set=None, random=None, against=None):
     os.makedirs(out, exist_ok=True)
+    if against:
+        load_reader(against)  # the reference model (A) of the diff preset
     reader = load_reader(deck, op2, nsm_set, random)
+    pv.SetActiveSource(reader)
     times = timesteps(reader)  # results attached to a deck, or a converted series
     t = times[min(step, len(times) - 1)] if times else 0.0
     model = Model(reader, t)
@@ -54,6 +57,7 @@ def main(argv=None):
     ap.add_argument("--damping", type=float, default=0.05)
     ap.add_argument("--g", type=float, default=None)
     ap.add_argument("--random-frames", type=int, default=100)
+    ap.add_argument("--against", help="reference model (A) for the diff preset")
     ap.add_argument("--preset", nargs="+", default=["family", "masses", "loads", "spc"], choices=PRESETS)
     ap.add_argument("--views", nargs="+", default=["iso"], choices=CAMERAS)
     ap.add_argument("--out", default="shots")
@@ -63,7 +67,7 @@ def main(argv=None):
                   frames=args.random_frames) if args.random else None
     try:
         written = render(os.path.abspath(args.deck), args.preset, args.views, args.out, args.size, args.op2,
-                         args.step, args.nsm_set, random)
+                         args.step, args.nsm_set, random, args.against)
     except RuntimeError as exc:  # a deck that does not load, a converted file with --op2, ...
         print(f"nastran-pv render: {exc}", file=sys.stderr)
         return 1

@@ -17,6 +17,7 @@ PYTHONPATH=src python -m nastran_pv setup [--dry-run]   # runs both of the above
 python -m pyflakes src paraview/*.py tests              # lint (don't lint paraview/_vendor)
 PYTHONPATH=src python -m nastran_pv convert <deck> --results <op2|h5> --all-steps -o out/x.vtkhdf
 PYTHONPATH=src python -m nastran_pv sections <deck>                                # CBAR/CBEAM section table
+PYTHONPATH=src python -m nastran_pv diff <A> <B> [--csv out/d.csv]                 # model diff (decks/.vtm/.vtkhdf)
 PYTHONPATH=src python docs/build_section_figure.py      # docs/images/beam-section-shapes.svg
 python docs/build_gallery.py --ucrm9 <coarse run deck> --mystran tools/mystran-19.0.0-windows-x86_64.exe [--upload]   # gallery assets (slow: background)
 .venv/Scripts/python -m sphinx -W -b html docs docs/_build/html   # docs site (pip install -r docs/requirements.txt into .venv)
@@ -142,9 +143,19 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
     step are stored once, with all their step offsets set to 0. A compacted series is written
     uncompressed and gzipped (+shuffle) once in that rewrite; vtkHDFWriter would compress every
     array at every step.
+- `diff.py`: model diff of two built multiblocks (decks, `.vtm` via `vtkio.read_model`, VTKHDF, or
+  the gathered tree): grids by NID, elements by EID per mesh block, Masses by EID, properties per
+  PID through their elements' arrays, materials from `MAT_*`, mass/CG and mass per PID/family
+  (`group_stats` + `store.keyed_diff`). `annotate` writes `DiffStatus`/`DiffReason`/deltas, a
+  `Removed` block (in none of the mesh-block lists) and `DIFF_*`/`DIFFMASS_*` tables onto B. Used
+  by `diff`, `convert --diff-against`, the *Nastran Diff* proxy (two inputs) and the `diff` view;
+  `nastran_views.side_by_side` adds a second, camera-linked view. The reader tags its output with
+  `NPVWholeModel` (field string + array signature) so a Nastran Diff fed directly by it diffs the
+  whole cached multiblock, hidden elements included; downstream pipeline objects get copies, so
+  object identity cannot be used.
 - `store.py`: SQLite in long format (`runs`, `elements`, `nodes`, `element_values`,
   `node_values`), plus `<db>_vtm/run_<id>.vtm`.
-- `cli.py`: the `convert`, `stats`, `check`, `sections` and `store` commands, with shared field options.
+- `cli.py`: the `convert`, `stats`, `check`, `sections`, `diff` and `store` commands, with shared field options.
   `launch.py` provides `view`, `render` and `setup`, and `locate.py` finds the ParaView executables
   and the repo's `paraview/` folder.
 - `progress.py`: stderr stages and throttled counters (`Progress`, silent `NULL`). `load_deck` hooks

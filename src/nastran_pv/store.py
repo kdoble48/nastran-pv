@@ -47,6 +47,19 @@ GROUP_COLUMN = {"EID": "e.eid", "PID": "e.pid", "MID": "e.mid", "FAMILY": "e.fam
                 "BLOCK": "e.block"}
 
 
+def keyed_diff(a: dict, b: dict) -> list[tuple]:
+    """``(key, a, b, b - a, (b - a) / a)`` over the union of the keys of two ``{key: value}`` maps,
+    sorted by key (None last); a value missing on one side is None, and so are its diff and rel.
+    Shared by :meth:`Store.compare` and ``nastran_pv.diff`` (mass per PID and per family)."""
+    rows = []
+    for k in sorted(set(a) | set(b), key=lambda x: (x is None, str(x) if isinstance(x, str) else x)):
+        va, vb = a.get(k), b.get(k)
+        diff = (vb - va) if va is not None and vb is not None else None
+        rel = diff / va if diff is not None and va not in (0, None) else None
+        rows.append((k, va, vb, diff, rel))
+    return rows
+
+
 class Store:
     def __init__(self, path):
         self.path = Path(path)
@@ -178,13 +191,8 @@ class Store:
     def compare(self, run_a: int, run_b: int, field: str, by: str = "PID", agg: str = "SUM") -> list[dict]:
         a = self.element_field(run_a, field, by, agg)
         b = self.element_field(run_b, field, by, agg)
-        rows = []
-        for k in sorted(set(a) | set(b), key=lambda x: (x is None, str(x) if isinstance(x, str) else x)):
-            va, vb = a.get(k), b.get(k)
-            diff = (vb - va) if va is not None and vb is not None else None
-            rel = diff / va if diff is not None and va not in (0, None) else None
-            rows.append({by.upper(): k, f"run{run_a}": va, f"run{run_b}": vb, "diff": diff, "rel": rel})
-        return rows
+        return [{by.upper(): k, f"run{run_a}": va, f"run{run_b}": vb, "diff": diff, "rel": rel}
+                for k, va, vb, diff, rel in keyed_diff(a, b)]
 
     def load(self, run_id: int):
         vtm = self.con.execute("SELECT vtm FROM runs WHERE id=?", (run_id,)).fetchone()

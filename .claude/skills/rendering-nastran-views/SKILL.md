@@ -69,8 +69,9 @@ file, not full fuel.
 
 ## Presets
 
-`masses bushes bushrotations beams loads spc rigid family group pid mid elementtype thickness nsm results random randomsweep parts check`
-(`random`/`randomsweep` need `--results MODES --random ASD`, see `docs/random-vibration.md`)
+`masses bushes bushrotations beams loads spc rigid family group pid mid elementtype thickness nsm results random randomsweep parts check diff`
+(`random`/`randomsweep` need `--results MODES --random ASD`, see `docs/random-vibration.md`; `diff` needs
+`--against A`, and `nv.side_by_side(array=...)` puts A and B in two linked views, see `docs/diff.md`)
 (`grow` and `path` are GUI views seeded by the selection macros). `family` and `group`
 need ICEM/TACS family comments (uCRM-9 has them; Linderholt does not). `results` needs
 `--results run.op2|run.h5` and optionally `--step N`. `bushes`/`bushrotations` need CBUSH cards (rotations: PBUSH K4–K6). An empty view

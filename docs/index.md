@@ -26,6 +26,8 @@ you use.
   ParaView filters.
 - [Model tools](tools.md): connectivity traversal (grow), parts, shortest paths and model checks,
   with per-card-type rules, from the CLI, Python and ParaView.
+- [Model diff](diff.md): what changed between two versions of a model (grids, elements,
+  properties, materials, mass and CG), as a report, as colors on the mesh and side by side.
 - [Run store](store.md): keep runs in SQLite and compare fields across runs and meshes.
 - [Random vibration](random-vibration.md): base-drive random response from a normal-modes run
   (RMS, response ASD per frequency, dominant mode), as colors on the mesh.
@@ -62,6 +64,7 @@ paraview-tutorials
 cli
 fields
 tools
+diff
 store
 random-vibration
 ```
