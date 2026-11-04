@@ -235,9 +235,10 @@ def converted_checks(pv, nv, reader):
                 path = path[:-4] + ".pvd"
             src = nv.load_reader(path)
             n = len(nv.timesteps(src))
-            model = nv.apply("results", reader=src)
-            check(n == 3 and model.reader is src, f"{os.path.basename(path)} series: {n} steps, results view builds")
-            pv.Delete(pv.FindSource(nv._name(model, "warp")))
+            model = nv.apply("results", reader=src)  # first view on a fresh source
+            fresh = pv.FindSource(nv._name(model, "deform"))
+            check(n == 3 and model.reader is src and fresh is not None and fresh.ScaleFactor > 0,
+                  f"{os.path.basename(path)} series: {n} steps, results view deforms on a fresh source")
             for p in [s for s in pv.GetSources().values() if s is not reader]:
                 pv.Delete(p)
     pv.SetActiveSource(None)
@@ -371,6 +372,45 @@ def main():
         later = rm.Model(reader, full[-1]).block("Shells").GetCellData().GetArray("VonMisesMax")
         check(len(full) > 1 and first is not None and later is None,
               f"VonMisesMax at step 1 only, not carried to step {len(full)} by the tree")
+        anim = pv.CreateRenderView()
+        model = nv.apply("results", reader=reader, view=anim)  # the results view: peak deflection
+        deform = pv.FindSource(nv._name(model, "deform"))
+        check(deform is not None and deform.ScaleFactor > 0, "results view draws through NPV deform")
+        model = nv.apply("masses", reader=reader, view=anim)  # other views: undeformed
+        check(deform.ScaleFactor == 0.0, "the masses view resets the deformation")
+        glyphs = pv.FindSource(nv._name(model, "mass glyphs"))
+        mesh = nv._extract(model, "Shells")  # grids 1-7: the ones the fixture displaces
+
+        def bounds(src):
+            src.UpdatePipeline(anim.ViewTime)
+            return src.GetDataInformation().GetBounds()
+
+        g0, m0 = bounds(glyphs), bounds(mesh)
+        _set_time = nv._set_time
+        _set_time(anim, full[1])  # mode 1 of the fixture: T1 = 1.0 on every grid
+        deform.ScaleFactor = 0.5
+        g1, m1 = bounds(glyphs), bounds(mesh)
+        check(abs((g1[0] - g0[0]) - 0.5) < 1e-6 and abs((m1[0] - m0[0]) - 0.5) < 1e-6,
+              f"mass glyphs and shells move with the mode: dx {g1[0] - g0[0]:.3g}, {m1[0] - m0[0]:.3g}")
+        deform.ScaleFactor = 0.0
+        frames_dir = os.path.join(tmp, "frames")
+        played = nv.animate_modes([2, 3], frames=4, out=frames_dir, reader=reader, view=anim)
+        pngs = sorted(os.listdir(frames_dir))
+        names = {v: k[0] for k, v in pv.GetSources().items()}
+        shown = [names.get(s, "") for s in nv.shown_sources(anim)]
+        check(played == [2, 3] and len(pngs) == 8 and pngs[0] == "mode02_000.png"
+              and deform.ScaleFactor == 0.0 and any("mass glyphs" in n for n in shown),
+              f"animate_modes in the masses view: modes {played}, {len(pngs)} frames, still the masses view")
+        check(nv.current_step(reader, anim) == 3, "current_step follows the view time")
+        pv.SetActiveSource(reader)
+        pv.SetActiveView(anim)
+        check(nv.animate_mode(cycles=1) == [3], "Animate Mode plays the mode the view is on")
+        try:
+            nv.animate_modes([99], reader=reader, view=anim)
+            check(False, "a mode past the last step should be refused")
+        except ValueError as exc:
+            check("not in 1.." in str(exc), "animate_modes refuses a mode past the last step")
+        pv.Delete(anim)
         reader.OP2FileName = ""
 
         shots = rm.render(DECK, ["pid"], ["iso"], tmp, [400, 300])

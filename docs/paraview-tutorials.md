@@ -122,7 +122,11 @@ Femap's "select connected" from a point, without crossing into the next group:
 2. Click **NPV Results**: the deformed shape colored by displacement over a gray outline of the
    undeformed mesh. The overlay names the mode and its frequency.
 3. Step through the modes with the *VCR* toolbar (or the time field next to it). To change the
-   amplification, select *NPV warp* and change *Scale Factor*.
+   amplification, select *NPV deform* and change *Scale Factor*.
+4. Click **NPV Animate Mode** to see the mode vibrate (two cycles, then it rests at full
+   deflection), or **NPV Animate All Modes** to play every mode in turn. The animation works in
+   whatever view is shown: click *NPV Masses* (or *NPV PID*, *NPV Loads*, ...) first, and the
+   mass glyphs, the mesh and everything else in that view move with the mode.
 
 ![Mode 2 of the demo tray at 11.0 Hz](images/paraview-tutorials-results.png)
 
