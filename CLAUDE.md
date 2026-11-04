@@ -34,6 +34,7 @@ Project skills in `.claude/skills/` hold the task workflows. Load the matching o
 | Missing mass/MID, "(partial)" arrays, empty views, import or locate errors | `troubleshooting-nastran-models` |
 | Code changes: new card, block, array, view, flag or format | `extending-nastran-pv` |
 | Gallery assets, Sphinx site, `sphinx -W` failures | `regenerating-nastran-gallery` |
+| Whole-codebase simplification audit (duplication, dead code, plugin copies of src) | `auditing-nastran-pv` |
 
 ## Data
 
