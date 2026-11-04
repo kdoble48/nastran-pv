@@ -90,6 +90,10 @@ with `cannot read DECK: <error>` and writes no PNG.
 - Hiding parts from a script: set the reader's `VisibleProperties`/`VisibleMaterials`/
   `VisibleElementTypes`/`VisibleFamilies`/`VisibleGroups` lists or `ShowOnlyElements`/`HiddenElements`
   (`nv.show_all(reader)` resets them); `docs/paraview.md#model-tree-and-visibility`.
+- From an ID file: the reader's `SelectionFile`/`SelectionKey`/`SelectionMode` (Show only, Hide, Off)/
+  `SelectionGrids`, or `nv.show_only_file(path)`, `nv.hide_file(path)`, `nv.highlight_file(path)` (a real
+  ParaView selection, so `nv.grow_from_selection()` works on it); read enum values back with
+  `nv.enum_text(reader, "SelectionMode")`, not `str(reader.SelectionMode)`.
 
 ## Report back with
 

@@ -50,6 +50,15 @@ class MapReport:
 
 
 # -------------------------------------------------------------------- reading
+def read_text(path) -> str:
+    """A text file as UTF-8 (a byte-order mark, as Excel writes, dropped), else latin-1."""
+    data = Path(path).read_bytes()
+    try:
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return data.decode("latin-1")
+
+
 def read_table(source, sheet=None, query=None) -> dict[str, np.ndarray]:
     """Read a table into ``{column: array}`` (numeric -> float, otherwise object)."""
     src = str(source)
@@ -64,7 +73,7 @@ def read_table(source, sheet=None, query=None) -> dict[str, np.ndarray]:
 
         df = pd.read_excel(path, sheet_name=sheet if sheet is not None else 0)
         return {str(c): _column(df[c].to_numpy()) for c in df.columns}
-    text = "\n".join(line for line in path.read_text(encoding="latin-1").splitlines()
+    text = "\n".join(line for line in read_text(path).splitlines()
                      if not line.lstrip().startswith(("$", "#")))
     if suffix == ".json" or text.lstrip()[:1] in ("{", "["):
         return _from_json(json.loads(text))

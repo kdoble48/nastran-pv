@@ -10,7 +10,8 @@ gives a ``vtkPartitionedDataSetCollection`` whose ``vtkDataAssembly`` looks like
 
 Category nodes point at the same pieces as the ``Model`` nodes. :class:`Visibility` keeps only the
 items (cells, or points of vertex-only blocks) whose categories are all checked (Femap's AND
-semantics) and that pass the show-only/hidden element ID lists.
+semantics), that pass the show-only/hidden element ID lists and, with ``select``, an ID-file
+selection (:mod:`nastran_pv.selection`).
 
 :func:`gather` turns such a collection back into the plain multiblock the rest of nastran_pv works on,
 and :func:`scatter` copies the arrays a filter added to that multiblock back onto the pieces.
@@ -126,20 +127,38 @@ def category_values(mb, names=None) -> dict[str, list[str]]:
 @dataclass
 class Visibility:
     """What to keep. ``hidden`` maps a category to its *unchecked* labels, so new labels are visible;
-    ``show_only`` (None = no restriction) and ``hidden_eids`` match the item ``EID`` array."""
+    ``show_only`` (None = no restriction) and ``hidden_eids`` match the item ``EID`` array.
+    ``select`` (a :class:`nastran_pv.selection.IdList`) keeps what it selects, with masses, SPCs and
+    loads on its grids, or with ``select_hide`` hides what it selects directly."""
 
     hidden: dict = field(default_factory=dict)
     show_only: frozenset | None = None
     hidden_eids: frozenset = frozenset()
+    select: object = None
+    select_hide: bool = False
+    select_grids: str = "all"
 
     @property
     def everything(self) -> bool:
-        return not any(self.hidden.values()) and self.show_only is None and not self.hidden_eids
+        return (not any(self.hidden.values()) and self.show_only is None and not self.hidden_eids
+                and self.select is None)
 
     def key(self):
         return (tuple(sorted((c, tuple(sorted(v))) for c, v in self.hidden.items() if v)),
                 None if self.show_only is None else tuple(sorted(self.show_only)),
-                tuple(sorted(self.hidden_eids)))
+                tuple(sorted(self.hidden_eids)),
+                None if self.select is None else (self.select.key_tuple(), self.select_hide, self.select_grids))
+
+    def selection_masks(self, mb) -> tuple[dict, list]:
+        """({block path: keep per item}, warnings) of ``select`` on ``mb``; ({}, []) without one."""
+        if self.select is None:
+            return {}, []
+        from .selection import item_masks
+
+        masks, report = item_masks(mb, self.select, self.select_grids, attach=not self.select_hide)
+        if self.select_hide:
+            masks = {p: ~m for p, m in masks.items()}
+        return masks, report.warnings
 
     def mask(self, labels: dict, eid, n: int) -> np.ndarray:
         keep = np.ones(n, dtype=bool)
@@ -359,6 +378,7 @@ def _cut(ds, kind, items):
 def build_tree(mb, vis: Visibility | None = None, names=None, max_pieces: int = MAX_PIECES) -> Tree:
     """Cut ``mb`` into category pieces (``mb`` is not modified)."""
     vis = vis or Visibility()
+    selected, warnings = vis.selection_masks(mb)
     blocks = []
     for path, ds in iter_blocks(mb):
         kind = _item_kind(ds)
@@ -368,7 +388,10 @@ def build_tree(mb, vis: Visibility | None = None, names=None, max_pieces: int = 
             kept = np.arange(n)
         else:
             eid = get_array(_attr(ds, kind), "EID")
-            kept = np.flatnonzero(vis.mask(labels, eid, n))
+            keep = vis.mask(labels, eid, n)
+            if path in selected:
+                keep &= selected[path]
+            kept = np.flatnonzero(keep)
         blocks.append((path, ds, kind, labels, kept))
 
     cats = list(CATEGORIES)
@@ -381,8 +404,8 @@ def build_tree(mb, vis: Visibility | None = None, names=None, max_pieces: int = 
         c = next(c for c in DROP_ORDER if c in cats)
         cats.remove(c)
         dropped.append(c)
-    warnings = [f"model tree: more than {max_pieces} pieces; left out of the tree: {', '.join(dropped)} "
-                f"(the visibility checklists still apply)"] if dropped else []
+    warnings += [f"model tree: more than {max_pieces} pieces; left out of the tree: {', '.join(dropped)} "
+                 f"(the visibility checklists still apply)"] if dropped else []
 
     pieces = []
     for path, ds, kind, labels, kept in blocks:
@@ -566,12 +589,13 @@ def as_multiblock(data):
 
 
 # ---------------------------------------------------------------- ID lists
-_RANGE = re.compile(r"(\d+)\s*[-:]\s*(\d+)")
+_RANGE = re.compile(r"(\d+)[-:](\d+)(?:/(\d+))?")
 
 
 def parse_ids(text: str) -> set[int]:
-    """``"1001 1002, 2000-2010 7:9"`` -> set of ints."""
-    text = re.sub(r"\s*([-:])\s*", r"\1", text or "")
+    """``"1001 1002, 2000-2010 7:9 20 THRU 30 BY 2"`` -> set of ints (Nastran THRU/BY too)."""
+    text = re.sub(r"\s+BY\s+", "/", re.sub(r"\s+THRU\s+", "-", text or "", flags=re.I), flags=re.I)
+    text = re.sub(r"\s*([-:/])\s*", r"\1", text)
     out: set[int] = set()
     for tok in re.split(r"[\s,;]+", text.strip()):
         if not tok:
@@ -583,9 +607,10 @@ def parse_ids(text: str) -> set[int]:
         if m is None:
             raise ValueError(f"not an ID or a range: {tok!r}")
         a, b = sorted((int(m.group(1)), int(m.group(2))))
-        if b - a > 10_000_000:
-            raise ValueError(f"range too large: {tok!r}")
-        out.update(range(a, b + 1))
+        step = int(m.group(3) or 1)
+        if b - a > 10_000_000 or step < 1:
+            raise ValueError(f"range too large or bad step: {tok!r}")
+        out.update(range(a, b + 1, step))
     return out
 
 
