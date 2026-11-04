@@ -12,6 +12,9 @@ Every mass becomes one point at its centre of gravity with:
   (sphere source, symmetric tensor, no extra scaling) to see the
   mass distribution. Masses without inertia get a sphere with the median
   density of the others (or radius ``MassScale`` if none has inertia).
+  Flat (disc) and needle (rod) inertias keep their shape: a zero semi-axis
+  is drawn as 5 % of the largest one. Inertia no body can have (a principal
+  moment above the sum of the other two) gets the sphere and a warning.
 * ``EquivalentRadius``: (a b c)^(1/3) or that sphere radius.
 * ``HasInertia``: 1 when the ellipsoid comes from a real (non-zero) inertia.
 """
@@ -29,17 +32,21 @@ def conm2_inertia(I) -> np.ndarray:
     return np.array([[i11, -i21, -i31], [-i21, i22, -i32], [-i31, -i32, i33]])
 
 
-def ellipsoid_axes(inertia: np.ndarray, mass: float):
+def ellipsoid_axes(inertia: np.ndarray, mass: float, tol: float = 1e-6):
     """Semi-axes and principal directions of the equivalent uniform ellipsoid.
 
-    Returns ``(axes(3,), vectors(3,3) columns)``; axes are zero when the
-    inertia is zero/non-physical.
+    Returns ``(axes(3,), vectors(3,3) columns)``. A flat or needle inertia
+    gives zero axes; all axes are zero when the inertia is zero or no body
+    can have it (I_i > I_j + I_k beyond rounding ``tol``, which also covers
+    negative principal moments).
     """
     w, v = np.linalg.eigh(inertia)
     if mass <= 0 or not np.any(w > 0):
         return np.zeros(3), v
     s = w.sum()
     a2 = 5.0 / (2.0 * mass) * (s - 2.0 * w)  # I_j + I_k - I_i
+    if a2.min() < -tol * 5.0 / (2.0 * mass) * s:
+        return np.zeros(3), v
     return np.sqrt(np.clip(a2, 0.0, None)), v
 
 
@@ -55,7 +62,7 @@ def _cmass_mass(model, m) -> float:
 def build_masses(deck: Deck):
     """Return ``(points_block, offset_lines_block)``; either may be None."""
     model = deck.model
-    rows = []  # (eid, nid, cid, mass, cg, offset, inertia)
+    rows = []  # (eid, nid, cid, mass, cg, offset, inertia, card)
     skipped: dict[str, int] = {}
     for eid, m in model.masses.items():
         if m.type == "CONM2":
@@ -79,7 +86,7 @@ def build_masses(deck: Deck):
                     R = np.eye(3)
                 cg = grid + X @ R
             inertia = R.T @ I_local @ R
-            rows.append((eid, nid, cid, float(m.mass), cg, cg - grid, inertia))
+            rows.append((eid, nid, cid, float(m.mass), cg, cg - grid, inertia, m.type))
         elif m.type == "CONM1":
             nid = m.Nid()
             gi = deck.lookup([nid])[0]
@@ -94,7 +101,7 @@ def build_masses(deck: Deck):
             except (KeyError, ValueError):
                 R = np.eye(3)
             inertia = R.T @ M[3:, 3:] @ R
-            rows.append((eid, nid, cid, float(M[0, 0]), grid.copy(), np.zeros(3), inertia))
+            rows.append((eid, nid, cid, float(M[0, 0]), grid.copy(), np.zeros(3), inertia, m.type))
         elif m.type in ("CMASS1", "CMASS2"):
             nodes = [n for n in m.node_ids if n]
             gidx = deck.lookup(nodes) if nodes else np.zeros(0, dtype=np.int64)
@@ -103,7 +110,7 @@ def build_masses(deck: Deck):
                 continue
             # grounded: at the grid; between two grids: at the midpoint
             rows.append((eid, int(nodes[0]), 0, _cmass_mass(deck.model, m), deck.xyz[gidx].mean(axis=0),
-                         np.zeros(3), np.zeros((3, 3))))
+                         np.zeros(3), np.zeros((3, 3)), m.type))
         else:
             skipped[m.type] = skipped.get(m.type, 0) + 1
 
@@ -127,17 +134,26 @@ def build_masses(deck: Deck):
     vecs = np.zeros((len(rows), 3, 3))
     for i in range(len(rows)):
         axes[i], vecs[i] = ellipsoid_axes(inertia[i], mass[i])
-    has_axes = np.all(axes > 0, axis=1)
+    has_axes = axes.max(axis=1) > 0
+    bad = ~has_axes & (mass > 0) & (np.abs(inertia).max(axis=(1, 2)) > 0)
+    if bad.any():
+        names = [f"{rows[i][7]} {rows[i][0]}" for i in np.nonzero(bad)[0]]
+        more = f" (+{len(names) - 10} more)" if len(names) > 10 else ""
+        deck.warn(f"{len(names)} mass(es) with inertia no body can have (a principal moment above the sum "
+                  f"of the other two), drawn as spheres: {', '.join(names[:10])}{more}")
+    # flat (disc) and needle (rod) ellipsoids keep a sliver of thickness
+    floor = 0.05 * axes.max(axis=1, keepdims=True)
+    solid = has_axes & np.all(axes >= floor, axis=1)
+    axes = np.where(has_axes[:, None], np.maximum(axes, floor), axes)
     eq_radius = np.cbrt(np.prod(axes, axis=1))
     if has_axes.any():
-        rho = np.median(mass[has_axes] / (4.0 / 3.0 * np.pi * eq_radius[has_axes] ** 3))
+        ref = solid if solid.any() else has_axes  # slivers would overstate the density
+        rho = np.median(mass[ref] / (4.0 / 3.0 * np.pi * eq_radius[ref] ** 3))
         fallback = np.cbrt(3.0 * np.clip(mass, 0.0, None) / (4.0 * np.pi * rho))
     else:
         fallback = mass_scale
     no_axes = ~has_axes
     eq_radius[no_axes] = fallback[no_axes]
-    # partially-degenerate ellipsoids (e.g. a flat disc) keep a sliver of thickness
-    axes = np.where(axes > 0, axes, 0.05 * eq_radius[:, None])
     axes[no_axes] = fallback[no_axes, None]
     ellipsoid = np.einsum("nij,nj,nkj->nik", vecs, axes, vecs)
 

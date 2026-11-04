@@ -17,7 +17,9 @@ def _extent(pd, mask=None):
 
 def test_resolve_mode_needs_real_inertia():
     r = np.array([0.5, 1.0])
-    assert resolve_mode("physical", None, r, 20.0) == "physical"
+    assert resolve_mode("physical", np.array([1, 0]), r, 20.0) == "physical"
+    assert resolve_mode("physical", None, r, 20.0) == "relative"  # no inertia: no true size to draw
+    assert resolve_mode("physical", np.array([0, 0]), r, 20.0) == "relative"
     assert resolve_mode("auto", None, r, 20.0) == "relative"  # no inertia: sizes are not lengths
     assert resolve_mode("auto", np.array([0, 0]), r, 20.0) == "relative"
     assert resolve_mode("auto", np.array([1, 0]), r, 20.0) == "physical"  # plausible true size
