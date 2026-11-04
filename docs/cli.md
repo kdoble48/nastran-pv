@@ -49,6 +49,11 @@ every 5 s instead. Stdout (the block summary and the tables) is unchanged. `-q`/
 the progress off, and `-v`/`--verbose` also echoes pyNastran's warnings as they come. In
 ParaView, the same stages and card counts drive the reader's progress bar.
 
+`convert` ends with the deck's first ten warnings, and `stats` and `check` print them to stderr
+(so the table and `--csv` stay clean). A failed cross-reference comes first, then the warnings
+that change the mass (NSM ids that match no element, excluded structural mass, impossible
+inertia), then pyNastran's own.
+
 ## Beam sections
 
 ```bash
@@ -95,6 +100,7 @@ deck read. `--results` and `--nsm-set` need the deck, so convert with them inste
 ```bash
 nastran-pv render run_deck.bdf --preset family masses loads spc --views iso top --out shots/
 nastran-pv render run.dat --results run.op2 --step 3 --preset results
+nastran-pv render out/modes.vtkhdf --step 3 --preset results   # a converted series: no --results
 # same as: pvpython paraview/render_model.py run_deck.bdf --preset ...
 ```
 

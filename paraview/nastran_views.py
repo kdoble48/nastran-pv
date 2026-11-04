@@ -25,6 +25,7 @@ From the ParaView Python shell::
     nv.apply("masses")
 """
 import colorsys
+import contextlib
 import math
 import os
 import re
@@ -67,7 +68,7 @@ def load_reader(deck, op2=None, nsm_set=None):
             pass
         src.UpdatePipeline()
         if not is_model_file(src):
-            raise RuntimeError(f"{os.path.basename(deck)} was not written by nastran-pv (no {MODEL_MARKS[0]})")
+            raise RuntimeError(f"{os.path.basename(deck)} was not written by nastran-pv (no {' or '.join(MODEL_MARKS)})")
         return src
     # paraview.simple names the constructor after the reader label
     reader = pv.NastranBulkDatanastranpv(FileName=deck)
@@ -789,7 +790,12 @@ def view_results(model, view):
     mesh_blocks = [b for b in MESH if model.has(b)]
     scale = peak_deformation(model)
     if not mesh_blocks or scale <= 0:
-        info_text(model, view, "No results: set 'OP2 File Name' on the reader (or --op2).")
+        if timesteps(model.reader) or model.field_strings(None, "ResultLabel"):
+            info_text(model, view, "No displacement at this step: the results have none for it "
+                                   "(stresses or forces only?). Step to another one.")
+        else:
+            info_text(model, view, "No results: set 'OP2 File Name' on the reader (or --op2), or "
+                                   "convert with --results.")
         return
     mesh = _extract(model, *mesh_blocks, what="mesh")  # creates the deform filter on a fresh view
     set_deformation(model, scale)
@@ -1248,21 +1254,35 @@ class _ReaderOnly:
         self.reader = reader
 
 
+NO_STEPS = ("No result steps: set 'OP2 File Name' on the reader, or open a converted file "
+            "(convert --results ..., with --all-steps for every mode).")
+
+
+def mode_times(reader, view=None):
+    """Time values of the modes: the reader's time steps, or the view's time alone for a converted
+    single-step model that carries a Displacement (convert --results without --all-steps)."""
+    times = timesteps(reader)
+    if times:
+        return times
+    t = getattr(view or pv.GetActiveViewOrCreate("RenderView"), "ViewTime", 0.0)
+    return [t] if peak_deformation(Model(reader, t)) > 0 else []
+
+
 def current_step(reader, view=None):
     """1-based step (mode) the view shows: the time step nearest its time."""
-    times = timesteps(reader)
+    view = view or pv.GetActiveViewOrCreate("RenderView")
+    times = mode_times(reader, view)
     if not times:
         return None
-    t = getattr(view or pv.GetActiveViewOrCreate("RenderView"), "ViewTime", times[0])
+    t = getattr(view, "ViewTime", times[0])
     return int(np.argmin([abs(x - t) for x in times])) + 1
 
 
 def _prepare_modes(reader, view, modes, camera):
     """(times, 1-based modes) after checking them; a view with no NPV objects gets the results view."""
-    times = timesteps(reader)
+    times = mode_times(reader, view)
     if not times:
-        raise RuntimeError("No result steps: set 'OP2 File Name' on the reader, or open a converted "
-                           "series (convert --results ... --all-steps).")
+        raise RuntimeError(NO_STEPS)
     modes = list(modes) if modes else list(range(1, len(times) + 1))
     bad = [m for m in modes if not 1 <= m <= len(times)]
     if bad:
@@ -1274,28 +1294,45 @@ def _prepare_modes(reader, view, modes, camera):
     return times, modes
 
 
-def _mode_sweeps(reader, view, times, modes):
+@contextlib.contextmanager
+def _kept_view(reader, view):
+    """Put the view back as it was afterwards, even after an error: its time step and every NPV
+    deform filter's scale (0 in most views, the start step's full deflection in the results view)."""
+    start = view.ViewTime
+    saved = [(f, f.ScaleFactor) for f in deform_filters(_ReaderOnly(reader))]
+    try:
+        yield
+    finally:
+        _set_time(view, start)
+        for f, scale in saved:
+            if f.ScaleFactor != scale:
+                f.ScaleFactor = scale
+        pv.Render(view)
+
+
+def _mode_sweeps(reader, view, times, modes, skipped):
     """For each mode with a displacement: go to its time step and yield ``(mode, deflect)``, where
-    ``deflect(u)`` sets every NPV deform filter to ``u`` x the mode's peak scale. The filters get
-    their previous state back afterwards (0 in most views, full deflection in the results view)."""
+    ``deflect(u)`` sets every NPV deform filter to ``u`` x the mode's peak scale. Modes whose step
+    has no displacement are appended to ``skipped``. Run it inside :func:`_kept_view`."""
     for mode in modes:
         _set_time(view, times[mode - 1])
         model = Model(reader, times[mode - 1])
         filters = deform_filters(model)
         amp = peak_deformation(model)
-        if not filters or amp <= 0:  # the step has no displacement
+        if not filters or amp <= 0:  # the step has no displacement (missing, all NaN or all 0)
+            skipped.append(mode)
             continue
-        rest = [f.ScaleFactor for f in filters]
 
         def deflect(u, filters=filters, amp=amp):
             for f in filters:
                 f.ScaleFactor = amp * u
 
-        try:
-            yield mode, deflect
-        finally:
-            for f, r in zip(filters, rest):
-                f.ScaleFactor = amp if r else 0.0
+        yield mode, deflect
+
+
+def _no_displacement(skipped, done, what):
+    return RuntimeError(f"mode(s) {skipped}: no displacement at their step, so nothing to animate "
+                        f"({len(done)} other(s) {what}).")
 
 
 def _phase(k, frames):
@@ -1307,11 +1344,12 @@ def animate_modes(modes=None, cycles=1, frames=24, out=None, reader=None, view=N
                   fps=ANIMATE_FPS):
     """Vibrate each mode in turn in the view as it is (masses, PID, loads, ... or results): every
     NPV deform filter's scale follows ``sin`` for ``cycles`` cycles of ``frames`` frames, so all
-    shown objects move with the mode. The deformation is restored after each mode (0 in most views,
-    full deflection in the results view). A view with no NPV objects gets the results view first.
-    ``modes`` are 1-based steps (default all). ``camera`` (iso, top, front, side, showcase) is set
-    once; None keeps yours. ``out`` also saves ``mode<NN>_<frame>.png`` there, without the real-time
-    pacing. Returns the modes played."""
+    shown objects move with the mode. Afterwards the view is back on the step it showed, with its
+    deformation (0 in most views, full deflection in the results view). A view with no NPV objects
+    gets the results view first. ``modes`` are 1-based steps (default all). ``camera`` (iso, top,
+    front, side, showcase) is set once; None keeps yours. ``out`` also saves
+    ``mode<NN>_<frame>.png`` there, without the real-time pacing. Returns the modes played; raises
+    RuntimeError, after playing the others, for modes whose step has no displacement."""
     import time
 
     reader = reader or find_reader()
@@ -1319,18 +1357,20 @@ def animate_modes(modes=None, cycles=1, frames=24, out=None, reader=None, view=N
     times, modes = _prepare_modes(reader, view, modes, camera)
     if out:
         os.makedirs(out, exist_ok=True)
-    played = []
-    for mode, deflect in _mode_sweeps(reader, view, times, modes):
-        for k in range(cycles * frames):
-            start = time.perf_counter()
-            deflect(_phase(k, frames))
-            pv.Render(view)
-            if out:
-                pv.SaveScreenshot(os.path.join(out, f"mode{mode:02d}_{k:03d}.png"), view)
-            elif fps:
-                time.sleep(max(0.0, 1.0 / fps - (time.perf_counter() - start)))
-        played.append(mode)
-    pv.Render(view)  # the restored state
+    played, skipped = [], []
+    with _kept_view(reader, view):
+        for mode, deflect in _mode_sweeps(reader, view, times, modes, skipped):
+            for k in range(cycles * frames):
+                start = time.perf_counter()
+                deflect(_phase(k, frames))
+                pv.Render(view)
+                if out:
+                    pv.SaveScreenshot(os.path.join(out, f"mode{mode:02d}_{k:03d}.png"), view)
+                elif fps:
+                    time.sleep(max(0.0, 1.0 / fps - (time.perf_counter() - start)))
+            played.append(mode)
+    if skipped:
+        raise _no_displacement(skipped, played, "played")
     return played
 
 
@@ -1370,8 +1410,7 @@ def animate_mode(cycles=2):
     reader = find_reader()
     step = current_step(reader)
     if step is None:
-        raise RuntimeError("No result steps: set 'OP2 File Name' on the reader, or open a converted "
-                           "series (convert --results ... --all-steps).")
+        raise RuntimeError(NO_STEPS)
     return animate_modes([step], cycles=cycles, reader=reader)
 
 
@@ -1396,11 +1435,13 @@ def _model_path(reader):
 def save_mode_animations(modes=None, cycles=1, frames=24, folder=None, fps=ANIMATE_FPS, reader=None, view=None):
     """Save each mode's vibration, in the view as it is, as a looping GIF
     ``<model>_mode<NN>.gif`` in ``folder`` (default: next to the model file). ``modes`` are 1-based
-    steps (default all). The view returns to the step it showed. Returns the GIF paths.
+    steps (default all). The view returns to the step and deformation it showed. Returns the GIF
+    paths.
 
     Each distinct shape is rendered once (a sine cycle of 24 frames has 13) and every frame of a
-    mode shares one palette (taken from its peak). A mode whose frames come out identical (nothing
-    shown moves, or the capture failed) is reported as an error after the others are saved.
+    mode shares one palette (taken from its peak). A mode with no displacement at its step, or
+    whose frames come out identical (nothing shown moves, or the capture failed), is reported as an
+    error after the others are saved.
     """
     from PIL import Image
 
@@ -1410,12 +1451,11 @@ def save_mode_animations(modes=None, cycles=1, frames=24, folder=None, fps=ANIMA
     folder = folder or (os.path.dirname(model_file) if model_file else os.getcwd())
     stem = os.path.splitext(os.path.basename(model_file))[0] if model_file else "model"
     os.makedirs(folder, exist_ok=True)
-    start_time = view.ViewTime
     times, modes = _prepare_modes(reader, view, modes, None)
     scratch = os.path.join(folder, f".npv_frame_{os.getpid()}.png")
-    written, still = [], []
-    try:
-        for mode, deflect in _mode_sweeps(reader, view, times, modes):
+    written, still, skipped = [], [], []
+    with _kept_view(reader, view):
+        for mode, deflect in _mode_sweeps(reader, view, times, modes, skipped):
             shots = {}  # phase -> image: equal shapes are rendered once
             keys = [_phase(k, frames) for k in range(cycles * frames)]
             for key in dict.fromkeys(keys):
@@ -1433,9 +1473,8 @@ def save_mode_animations(modes=None, cycles=1, frames=24, folder=None, fps=ANIMA
             images[0].save(path, save_all=True, append_images=images[1:], loop=0,
                            duration=max(int(round(1000 / (fps or ANIMATE_FPS))), 20), disposal=1)
             written.append(path)
-    finally:
-        _set_time(view, start_time)
-        pv.Render(view)
+    if skipped:
+        raise _no_displacement(skipped, written, f"saved in {folder}")
     if still:
         raise RuntimeError(f"mode(s) {still}: the view did not change while deforming, so no GIF was "
                            f"saved for them ({len(written)} other(s) saved in {folder}). Show an NPV "
@@ -1448,8 +1487,6 @@ def save_mode_animations_macro():
     from vtkmodules.vtkCommonCore import vtkOutputWindow
 
     paths = save_mode_animations()
-    if not paths:
-        raise RuntimeError("No mode had a displacement to animate.")
     vtkOutputWindow.GetInstance().DisplayText(
         f"nastran-pv: saved {len(paths)} mode animation(s) in {os.path.dirname(paths[0])}:\n"
         + "\n".join(os.path.basename(p) for p in paths) + "\n")

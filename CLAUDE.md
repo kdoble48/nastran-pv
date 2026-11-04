@@ -97,7 +97,7 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   `common.CellTable` → `compact_mesh`. `categories.py` holds the *global* ElementType and RigidType
   code tables; codes must be consistent across blocks for indexed LUTs.
 - `assemble.py`: runs the builders according to `Options` and copies nodal SPC/load arrays onto the
-  mesh blocks. It adds root field data: masses from `massprops.py` (numpy volumes for linear solids, VTK cell sizes otherwise; never
+  mesh blocks. It adds root field data: masses from `massprops.py` (numpy volumes when every solid is linear, else VTK cell sizes for the block; never
   pyNastran's slow `mass_properties`) and a `MAT_*` material table from `materials.py`. Derived
   fields therefore need no deck.
 - `nsm.py`: property NSM plus the NSM/NSM1/NSML/NSML1/NSMADD set selected by `--nsm-set`/`NSM=` →
@@ -152,10 +152,8 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   `scale` x `Displacement` (blocks without one follow their grids by NID); `peak_scale` gives the
   8 %-of-the-model scale; `Deformer` gathers a model's moving points once and `apply(scale)` is
   per frame (the plugin keeps one per input object + MTime). The views draw through the plugin's *Nastran Deform* (`NPV deform`),
-  so `animate_modes` vibrates whatever view is shown; analysis filters stay on the undeformed model.
-  `save_mode_animations` renders each distinct sine phase once, captures it with SaveScreenshot
-  (`capture_view`; reading the render window directly gave stale frames on some drivers) and
-  quantizes every frame of a mode to one palette; a mode whose frames never change is an error.
+  so `nastran_views.animate_modes` vibrates whatever view is shown; analysis filters stay on the
+  undeformed model.
 - `glyphs.py`: mass ellipsoids and bush triads as real `vtkPolyData`.
 - `paraview/nastran_bdf_reader.py`: one plugin file containing the reader, three glyph filters
   (masses, bushes, beam sections), the deform filter, three field filters and four topology
@@ -167,10 +165,17 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
     model tree is cached by the visibility settings too; its checklists are filled in
     `RequestInformation`, before the first Apply.
 - `paraview/nastran_views.py`: view functions (`apply(name)`) on the deck reader or a converted
-  `.vtm`/VTKHDF (`find_reader`, `is_model_file`: root field `DeckPath`; `deck_reader` guards the
+  `.vtm`/VTKHDF (`find_reader`, `is_model_file`: root field `DeckPath` or `ModelMass`; `deck_reader` guards the
   commands that need the deck), `index_colors`, the selection
   commands (grow/path from selection, Femap-style show only/hide/show all), and the macro entry
-  point `run_macro`. It creates named, reused pipeline objects (`NPV <what> [<reader>]`).
+  point `run_macro`.
+  - Mode animation: `mode_times` (the reader's steps, or one step for a converted single-step
+    file with a `Displacement`), `animate_modes`/`animate_mode` and `save_mode_animations`. They
+    run inside `_kept_view`, which puts back the view's time and every NPV deform scale, and
+    raise for modes whose step has no displacement. `save_mode_animations` renders each distinct
+    sine phase once, captures it with SaveScreenshot (`capture_view`; reading the render window
+    directly gave stale frames on some drivers) and quantizes every frame of a mode to one
+    palette; a mode whose frames never change is an error. It creates named, reused pipeline objects (`NPV <what> [<reader>]`).
   `render_model.py` is a thin batch wrapper around it.
 
 ## Gotchas
@@ -196,8 +201,8 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   - Deleting a proxy that was the active source leaves no active source; `selected_ids` restores it.
   - `Fetch` of a `vtkPartitionedDataSetCollection` drops its data assembly (partitions, order and
     field data survive); `nastran_views.fetch` copies it back from the data information.
-  - The reader outputs the model tree: select blocks with `nastran_views.selectors` (both
-    `/Root/Model/<b>` and `/Root/<b>`), and read data through `nastran_views.Model` (gathered).
+  - The reader outputs the model tree: select blocks with `nastran_views.selectors`
+    (`/Root/Model/<b>`, `/Root/<b>` and, for VTKHDF, `/assembly/<b>`), and read data through `nastran_views.Model` (gathered).
   - Opening the same deck twice gives two readers with one label; `_name` then adds the proxy id,
     so they do not share `NPV ...` objects.
 - ParaView 5.x (tested 5.13.1, `out/pv513/` locally, gitignored): `servermanager.Fetch` returns an empty

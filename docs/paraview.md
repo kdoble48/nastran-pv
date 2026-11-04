@@ -26,7 +26,7 @@ reader as default*. Its built-in "BDF Reader" reads geometry only.
 ### Converted files
 
 A `.vtm` or `.vtkhdf` written by `nastran-pv convert` opens with ParaView's own reader (File >
-Open). Every view and toolbar macro works on it, as on a deck, and `nastran-pv view out/model.vtm`
+Open). Every view works on it, as on a deck (the visibility macros need the deck, see below), and `nastran-pv view out/model.vtm`
 opens one directly. So does a result series from `convert --results ... --all-steps` (a temporal
 `.vtkhdf`, or the `.pvd` next to the per-step `.vtm` files): each mode or step is a time step, as
 on the reader. When a deck and a converted file are both open, the views use the active
@@ -95,9 +95,9 @@ summary. Running a view again reuses its pipeline objects, which are named `NPV 
 | NPV Thickness | Shell thickness |
 | NPV NSM | Nonstructural mass: shells by NSM per area, lines by NSM per length (two legends); totals by source and per NSM set, or the defined sets when none is selected. The reader's *NSMSet* picks the bulk set (-1 = Case Control `NSM=`, or the only set of a bulk-only file; 0 = none; see [Nonstructural mass](model.md#nonstructural-mass)) |
 | NPV Results | Deformed shape colored by displacement over the undeformed outline, for the current time step; the largest displacement is drawn at 8 % of the model size (*NPV deform* > *Scale Factor*) |
-| NPV Animate Mode | Vibrates the mode the time controls are on, in the view as it is (masses, PID, loads, results, ...): two cycles at 24 frames/s, then back to rest. Step to another mode and click again |
-| NPV Animate All Modes | Plays every mode in turn, one cycle each, in the view as it is. A view with nothing from nastran-pv in it gets NPV Results first |
-| NPV Save Mode Animations | Saves every mode's vibration, in the view as it is, as a looping GIF `<model>_mode01.gif`, `<model>_mode02.gif`, ... next to the model file (24 frames each, at the view's size); Output Messages lists them. From Python: `nv.save_mode_animations([1, 2], folder=..., frames=36)` |
+| NPV Animate Mode | Vibrates the mode the time controls are on, in the view as it is (masses, PID, loads, results, ...): two cycles at 24 frames/s, then the view is back as it was (same step and deformation). Step to another mode and click again. A converted single-step file (`convert --results` without `--all-steps`) has one mode |
+| NPV Animate All Modes | Plays every mode in turn, one cycle each, in the view as it is, then returns to the step it was on. A view with nothing drawn through *NPV deform* gets NPV Results first. Modes whose step has no displacement are listed in Output Messages |
+| NPV Save Mode Animations | Saves every mode's vibration, in the view as it is, as a looping GIF `<model>_mode01.gif`, `<model>_mode02.gif`, ... next to the model file (24 frames each, at the view's size); Output Messages lists them, and any mode with no displacement or whose frames never change. The view keeps its step and deformation. From Python: `nv.save_mode_animations([1, 2], folder=..., frames=36)` |
 | NPV Parts | Connected parts in indexed colors; uncheck card types on *NPV parts* to split at connectors |
 | NPV Grow | Elements reached from the seeds, colored by element hops |
 | NPV Grow from Selection | Seeds *NPV grow* with the selected cells (EIDs) or grids, then shows NPV Grow |
@@ -126,8 +126,8 @@ from `render_model.py`, and as `nastran-pv render` presets (see [CLI](cli.md#bat
 * **Nastran Mass Glyphs** builds one ellipsoid per concentrated mass. Its sizing controls:
   - *SizeMode*:
     - **Physical** gives true semi-axes: the uniform ellipsoid with each mass's mass and inertia
-      tensor. A flat (disc) or needle (rod) inertia keeps its shape, with a zero semi-axis drawn
-      as 5 % of the largest one. Masses without inertia become spheres at the median density of
+      tensor. A flat (disc) or needle (rod) inertia keeps its shape: a semi-axis under 5 % of
+      the largest one (0 for a disc or rod) is drawn at 5 %. Masses without inertia become spheres at the median density of
       the others. When no mass has inertia it uses Relative. Inertia that no body can have (one
       principal moment above the sum of the other two) gives a sphere and a load warning.
     - **Relative** gives the heaviest mass a radius of *RelativeSize* × the model diagonal; the

@@ -229,8 +229,9 @@ def write_vtkhdf_series(mb, results, path, deck=None, steps=None, compression: i
     steps = list(range(len(results.steps))) if steps is None else list(steps)
     if not steps:
         raise ValueError("no result steps to write")
-    # vtkHDFWriter compresses every array at every step, static ones included (~5x the time of an
-    # uncompressed write). When compacting, write raw and compress each array once in that rewrite.
+    # vtkHDFWriter compresses every array at every step, static ones included (a compacted
+    # series then took about 4x as long). When compacting, write raw and compress each array once
+    # in that rewrite.
     deferred = compact and len(steps) > 1
     w, path = _writer(path, 0 if deferred else compression, chunk_size or _chunk_for(mb))
     source = _StepSource(mb, results, deck, steps)  # keep a reference: VTK calls back into it
