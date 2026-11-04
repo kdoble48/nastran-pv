@@ -124,12 +124,20 @@ def _legend(array, lut):
     return {"array": array, "kind": "continuous", "range": [stops[0][0], stops[-1][0]], "stops": stops}
 
 
+def representations(view):
+    """(source, representation) for every source that has one in ``view``. A lookup only:
+    simple.GetRepresentation would Show() the source."""
+    for src in pv.GetSources().values():
+        rep = sm.GetRepresentation(src, view)
+        if rep is not None:
+            yield src, rep
+
+
 def overlays(view):
     """Visible text sources and the legends of shown scalar bars in ``view``."""
     text, legends = [], []
-    for src in pv.GetSources().values():
-        rep = sm.GetRepresentation(src, view)  # lookup only: simple.GetRepresentation would Show()
-        if rep is None or not rep.Visibility:
+    for src, rep in representations(view):
+        if not rep.Visibility:
             continue
         if src.GetXMLName() == "TextSource":
             text.append(src.Text)
@@ -146,10 +154,7 @@ def overlays(view):
 def hide_overlays(view):
     """Hide text, scalar bars and the axes triad (for thumbnails)."""
     view.OrientationAxesVisibility = 0
-    for src in pv.GetSources().values():
-        rep = sm.GetRepresentation(src, view)  # lookup only: simple.GetRepresentation would Show()
-        if rep is None:
-            continue
+    for src, rep in representations(view):
         if src.GetXMLName() == "TextSource":
             rep.Visibility = 0
         arr = getattr(rep, "ColorArrayName", None)

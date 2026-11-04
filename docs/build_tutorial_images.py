@@ -25,14 +25,8 @@ SKIN_GROUP = "WING_U_SKIN"
 
 
 def new_view():
-    view = pv.CreateRenderView()
-    view.ViewSize = SIZE
+    view = nv.white_view(SIZE)
     view.OrientationAxesVisibility = 1
-    view.Background = [1, 1, 1]
-    try:
-        view.UseColorPaletteForBackground = 0
-    except AttributeError:
-        pass
     pv.SetActiveView(view)
     return view
 
