@@ -126,7 +126,10 @@ from `render_model.py`, and as `nastran-pv render` presets (see [CLI](cli.md#bat
 * **Nastran Mass Glyphs** builds one ellipsoid per concentrated mass. Its sizing controls:
   - *SizeMode*:
     - **Physical** gives true semi-axes: the uniform ellipsoid with each mass's mass and inertia
-      tensor.
+      tensor. A flat (disc) or needle (rod) inertia keeps its shape, with a zero semi-axis drawn
+      as 5 % of the largest one. Masses without inertia become spheres at the median density of
+      the others. When no mass has inertia it uses Relative. Inertia that no body can have (one
+      principal moment above the sum of the other two) gives a sphere and a load warning.
     - **Relative** gives the heaviest mass a radius of *RelativeSize* × the model diagonal; the
       other masses follow *RadiusLaw*.
     - **Auto** (the default) picks Physical only when the masses carry real inertia of a visible

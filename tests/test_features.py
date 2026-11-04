@@ -46,6 +46,39 @@ def test_mass_without_inertia_gets_equal_density_sphere(run_deck):
     assert np.isclose(arr(pts, "TotalMass", "field")[0], 11.25)
 
 
+def _mass_deck(tmp_path, *conm2):
+    """Grids 1 and 2 plus the given free-field CONM2 cards (one string per card)."""
+    from nastran_pv.deck import load_deck
+
+    path = tmp_path / "masses.bdf"
+    path.write_text("BEGIN BULK\nGRID,1,,0.,0.,0.\nGRID,2,,10.,0.,0.\n" + "\n".join(conm2) + "\nENDDATA\n")
+    return load_deck(path, echo=False)
+
+
+def test_degenerate_inertia_keeps_its_shape(tmp_path):
+    # thin disc (radius 2, normal Z): I11 = I22 = m r^2/4, I33 = m r^2/2; slender rod (length 6,
+    # along X): I22 = I33 = m L^2/12. Their equivalent ellipsoids are flat / a needle, not spheres.
+    deck = _mass_deck(tmp_path, "CONM2,1,1,,1.,,,,,\n,1.,0.,1.,0.,0.,2.",
+                      "CONM2,2,2,,1.,,,,,\n,0.,0.,3.,0.,0.,3.")
+    pts, _ = build_masses(deck)
+    assert list(arr(pts, "HasInertia")) == [1, 1]
+    disc = np.linalg.eigvalsh(arr(pts, "InertiaEllipsoid")[row_of(pts, "EID", 1)].reshape(3, 3))
+    np.testing.assert_allclose(disc, [0.05 * np.sqrt(5), np.sqrt(5), np.sqrt(5)])  # a^2 = 5 r^2/4
+    rod = arr(pts, "InertiaEllipsoid")[row_of(pts, "EID", 2)].reshape(3, 3)
+    a = np.sqrt(5.0 / 12.0) * 6.0  # uniform needle-ellipsoid semi-axis with I = m L^2/12
+    np.testing.assert_allclose(rod, np.diag([a, 0.05 * a, 0.05 * a]), atol=1e-12)
+    assert not deck.warnings
+
+
+def test_non_physical_inertia_warns(tmp_path):
+    # I33 > I11 + I22 is impossible for any body: drawn as an equal-density sphere, with a warning
+    deck = _mass_deck(tmp_path, "CONM2,1,1,,1.,,,,,\n,1.,0.,1.,0.,0.,3.",
+                      "CONM2,2,2,,1.,,,,,\n,1.,0.,1.,0.,0.,1.")
+    pts, _ = build_masses(deck)
+    assert list(arr(pts, "HasInertia")) == [0, 1]
+    assert any("CONM2 1" in w and "inertia" in w for w in deck.warnings)
+
+
 # ------------------------------------------------------------------ rigid
 
 

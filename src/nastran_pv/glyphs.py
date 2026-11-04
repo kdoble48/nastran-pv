@@ -116,13 +116,16 @@ def relative_radii(mass: np.ndarray, law: str = "cbrt", minimum: float = 0.0) ->
 
 
 def resolve_mode(mode: str, has_inertia, eq_radius: np.ndarray, diag: float) -> str:
-    """``auto`` -> ``physical`` only when masses carry real inertia of a plausible size."""
+    """``auto`` -> ``physical`` only when masses carry real inertia of a plausible size;
+    ``physical`` -> ``relative`` when no mass has inertia (there is no true size to draw)."""
     if mode not in MASS_SIZE_MODES:
         raise ValueError(f"mode must be one of {MASS_SIZE_MODES}")
-    if mode != "auto":
+    if mode == "relative":
         return mode
     if has_inertia is None or not np.any(has_inertia):
         return "relative"  # no inertia: sphere sizes are not physical lengths
+    if mode == "physical":
+        return mode
     med = float(np.median(eq_radius[np.asarray(has_inertia, dtype=bool)]))
     return "physical" if 0.001 * diag < med < 0.1 * diag else "relative"
 
@@ -133,6 +136,8 @@ def mass_glyph_matrices(tensors, eq_radius, mass, has_inertia, diag, mode="auto"
     mode = resolve_mode(mode, has_inertia, eq_radius, diag)
     if mode == "physical":
         text = "true size: uniform ellipsoid with the mass and inertia of each mass"
+        if not np.all(has_inertia):
+            text += "; masses without inertia: spheres at the median density"
         return tensors, mode, text, np.asarray(eq_radius, dtype=float)
     target = relative * diag * relative_radii(mass, law, minimum)
     safe = np.where(eq_radius > 0, eq_radius, 1.0)

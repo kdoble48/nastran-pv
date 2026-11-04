@@ -44,7 +44,9 @@ The [field options](fields.md) add further arrays on top of these.
 * **Masses.** `InertiaEllipsoid` is `R diag(a,b,c) Rᵀ`, where a, b and c are the semi-axes of the
   uniform solid ellipsoid with the same mass and inertia: `a² = 5/(2m)(I₂+I₃−I₁)` and cyclic. Show
   it with ParaView's TensorGlyph, using a sphere glyph and eigenvalue extraction. Masses without
-  inertia get an equal-density sphere.
+  inertia get an equal-density sphere. A flat or needle inertia (a semi-axis of 0) keeps its shape,
+  with that axis drawn as 5 % of the largest one. Inertia that violates `Iᵢ ≤ Iⱼ + Iₖ` gets the
+  sphere, `HasInertia = 0` and a warning.
 * **Bushes.** Element axes follow the CBUSH rules: CID, or GA→GB plus the X/G0 orientation vector.
   `K{i}dir` is axis *i* scaled by `log10(1+Kᵢ/K_ref)`, normalized to [0, 1], so three arrow glyphs
   compare stiffnesses across decades. `K_ref` defaults to the softest translational stiffness.
