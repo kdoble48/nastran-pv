@@ -62,10 +62,10 @@ file, not full fuel.
 
 ## Presets
 
-`masses bushes beams loads spc rigid family group pid mid elementtype thickness nsm results parts check`
+`masses bushes bushrotations beams loads spc rigid family group pid mid elementtype thickness nsm results parts check`
 (`grow` and `path` are GUI views seeded by the selection macros). `family` and `group`
 need ICEM/TACS family comments (uCRM-9 has them; Linderholt does not). `results` needs
-`--results run.op2|run.h5` and optionally `--step N`. `bushes` needs CBUSH cards. An empty view
+`--results run.op2|run.h5` and optionally `--step N`. `bushes`/`bushrotations` need CBUSH cards (rotations: PBUSH K4–K6). An empty view
 says so in its overlay text, so read the PNG.
 
 ## GUI and pvpython

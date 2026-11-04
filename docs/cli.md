@@ -25,7 +25,7 @@ nastran-pv convert run.dat --results run.op2 --all-steps -o out/modes.vtm   # .p
 nastran-pv convert run.bdf --no-loads --k-ref 1e5 -o out/model.vtm
 ```
 
-`--no-<block>` skips a block, and `--k-ref` sets the reference stiffness for bush arrows (see
+`--no-<block>` skips a block, and `--k-ref` sets the reference translational stiffness for the bush bars (see
 [Model blocks and arrays](model.md#derived-quantities)). `--nsm-set ID` picks the bulk NSM set
 (default: Case Control `NSM=`; `0` = none; see [Nonstructural mass](model.md#nonstructural-mass));
 `view` and `render` take it too. An output ending in `.vtkhdf`, or
@@ -98,7 +98,7 @@ nastran-pv render run.dat --results run.op2 --step 3 --preset results
 # same as: pvpython paraview/render_model.py run_deck.bdf --preset ...
 ```
 
-The presets are the views from the toolbar macros: `masses`, `bushes`, `beams`, `loads`, `spc`, `rigid`,
+The presets are the views from the toolbar macros: `masses`, `bushes`, `bushrotations`, `beams`, `loads`, `spc`, `rigid`,
 `family`, `group`, `pid`, `mid`, `elementtype`, `thickness`, `nsm`, `results`, `parts` and `check`.
 
 Cameras: `iso` (default), `top`, `front`, `side`, and `showcase` (Z up, three-quarter view from ahead; used by the web gallery).
