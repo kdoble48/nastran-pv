@@ -134,6 +134,21 @@ def test_bush_k_ref_override(run_deck):
     assert np.isclose(arr(pts, "KRef", "field")[0], 1e3)
 
 
+def test_bush_rotational_arrays(run_deck):
+    # PBUSH 51: K = 1e6 2e6 3e6 | 10 20 30
+    pts, _ = build_bushes(run_deck)
+    assert np.isclose(arr(pts, "KRef", "field")[0], 1e6)
+    assert np.isclose(arr(pts, "KRotRef", "field")[0], 10.0)
+    assert np.isclose(arr(pts, "KLogMax", "field")[0], np.log10(4.0))  # log10(1 + 3e6/1e6)
+    assert np.isclose(arr(pts, "KRotLogMax", "field")[0], np.log10(4.0))  # log10(1 + 30/10)
+    i = row_of(pts, "EID", 501)
+    assert np.isclose(np.linalg.norm(arr(pts, "K6dir")[i]), 1.0)
+    k4 = arr(pts, "K4dir")[i]
+    assert np.isclose(np.linalg.norm(k4), np.log10(2.0) / np.log10(4.0))
+    np.testing.assert_allclose(k4 / np.linalg.norm(k4), arr(pts, "Axis1")[i], atol=1e-12)
+    assert arr(pts, "KRotLogTensor").shape[1] == 9
+
+
 # ------------------------------------------------------------ constraints
 
 

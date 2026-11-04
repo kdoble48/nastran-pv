@@ -3,9 +3,9 @@
 Large decks spend most of their time inside one pyNastran call, so without this the CLI
 prints nothing for minutes. ``load_deck`` and ``build_multiblock`` take a ``Progress``; the
 default ``NULL`` is silent. On a terminal the current line is rewritten in place; when stderr
-is piped (logs, CI) each stage prints one line and counters print at most every
-``PIPE_INTERVAL`` seconds. A stage leaves a permanent "label: 1.2s" line only when it took
-``QUICK`` seconds or more, so small decks stay quiet. ``callback(text, fraction)`` (fraction may be None) also receives
+is piped (logs, CI) nothing is rewritten and counters print at most every ``PIPE_INTERVAL``
+seconds. Either way a stage leaves a permanent "label: 1.2s" line only when it took ``QUICK``
+seconds or more, so small decks stay quiet. ``callback(text, fraction)`` (fraction may be None) also receives
 every update, e.g. for a GUI progress bar.
 """
 from __future__ import annotations

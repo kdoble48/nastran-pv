@@ -25,7 +25,7 @@ nastran-pv convert run.dat --results run.op2 --all-steps -o out/modes.vtm   # .p
 nastran-pv convert run.bdf --no-loads --k-ref 1e5 -o out/model.vtm
 ```
 
-`--no-<block>` skips a block, and `--k-ref` sets the reference stiffness for bush arrows (see
+`--no-<block>` skips a block, and `--k-ref` sets the reference translational stiffness for the bush bars (see
 [Model blocks and arrays](model.md#derived-quantities)). `--nsm-set ID` picks the bulk NSM set
 (default: Case Control `NSM=`; `0` = none; see [Nonstructural mass](model.md#nonstructural-mass));
 `view` and `render` take it too. An output ending in `.vtkhdf`, or
@@ -48,6 +48,11 @@ On a terminal, the current stage is rewritten in place. When stderr is redirecte
 every 5 s instead. Stdout (the block summary and the tables) is unchanged. `-q`/`--quiet` turns
 the progress off, and `-v`/`--verbose` also echoes pyNastran's warnings as they come. In
 ParaView, the same stages and card counts drive the reader's progress bar.
+
+`convert` ends with the deck's first ten warnings, and `stats` and `check` print them to stderr
+(so the table and `--csv` stay clean). A failed cross-reference comes first, then the warnings
+that change the mass (NSM ids that match no element, excluded structural mass, impossible
+inertia), then pyNastran's own.
 
 ## Beam sections
 
@@ -95,10 +100,11 @@ deck read. `--results` and `--nsm-set` need the deck, so convert with them inste
 ```bash
 nastran-pv render run_deck.bdf --preset family masses loads spc --views iso top --out shots/
 nastran-pv render run.dat --results run.op2 --step 3 --preset results
+nastran-pv render out/modes.vtkhdf --step 3 --preset results   # a converted series: no --results
 # same as: pvpython paraview/render_model.py run_deck.bdf --preset ...
 ```
 
-The presets are the views from the toolbar macros: `masses`, `bushes`, `beams`, `loads`, `spc`, `rigid`,
+The presets are the views from the toolbar macros: `masses`, `bushes`, `bushrotations`, `beams`, `loads`, `spc`, `rigid`,
 `family`, `group`, `pid`, `mid`, `elementtype`, `thickness`, `nsm`, `results`, `parts` and `check`.
 
 Cameras: `iso` (default), `top`, `front`, `side`, and `showcase` (Z up, three-quarter view from ahead; used by the web gallery).

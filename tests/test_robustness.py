@@ -8,7 +8,7 @@ import pytest
 from nastran_pv.assemble import Options, build_multiblock, get_block
 from nastran_pv.deck import load_deck
 from nastran_pv.results import Op2Results, _element_ids, to_basic
-from conftest import arr, row_of
+from conftest import DATA, arr, row_of
 
 BULK = """\
 GRID,1,,0.,0.,0.
@@ -191,3 +191,29 @@ def test_bad_beams_warn_and_skip(tmp_path):
     assert "PID 99 not drawn: PID 99 not defined" in text
     swept = get_block(mb, "BeamSections")
     assert set(arr(swept, "EID", "cell")) == {1, 3}  # PID 1 with a frame (EID 1 with an arbitrary y)
+
+
+def test_failed_cross_reference_is_listed_first_and_stays_first(monkeypatch, capsys):
+    from pyNastran.bdf.bdf import BDF
+
+    from nastran_pv.cli import main
+
+    def broken(self, *args, **kwargs):
+        raise KeyError(1234)
+
+    monkeypatch.setattr(BDF, "safe_cross_reference", broken)
+    deck = load_deck(DATA / "tiny_run.bdf", echo=False)
+    first = "ERROR: cross-referencing failed: KeyError: 1234"
+    assert deck.warnings[0] == first
+    base = list(deck.warnings)
+    deck.warn("mass warning", mass=True)
+    assert deck.warnings[:2] == [first, "mass warning"]
+    deck.reset_warnings(base)  # the reader rebuilds with new options
+    deck.warn("another mass warning", mass=True)
+    assert deck.warnings[:2] == [first, "another mass warning"]
+    # stats and check print the deck warnings too, on stderr (the table stays on stdout)
+    for cmd in (["stats", str(DATA / "tiny_run.bdf"), "--by", "PID", "--field", "ElementMass"],
+                ["check", str(DATA / "tiny_run.bdf")]):
+        main(cmd)
+        out = capsys.readouterr()
+        assert first in out.err and first not in out.out, cmd
