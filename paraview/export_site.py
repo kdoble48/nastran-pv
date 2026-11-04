@@ -27,8 +27,10 @@ SIZE = [1600, 1000]
 VIEW_INFO = {
     "masses": ("Masses", "Mass ellipsoids from mass and inertia, colored by mass; grid-to-CG offsets; "
                          "model CG marker."),
-    "bushes": ("Bushes", "CBUSH stiffness triads: K1/K2/K3 arrows along the element axes, length ~ log "
-                         "stiffness, with GA–GB lines."),
+    "bushes": ("Bushes", "CBUSH translational stiffness: K1/K2/K3 bars along the element axes, length ~ log "
+                         "stiffness, the clearly stiffest axis thicker, released directions grey; GA–GB lines."),
+    "bushrotations": ("Bush rotations", "CBUSH rotational stiffness: K4/K5/K6 rings around the element axes, "
+                                        "radius ~ log stiffness, on their own scale; released directions grey."),
     "beams": ("Beams", "CBAR/CBEAM cross sections swept along the beams (PBARL/PBEAML shapes, PBAR/PBEAM "
                        "equivalent rectangles), colored by PID, with the shear-center and neutral axes."),
     "loads": ("Loads", "Force arrows for the active LOAD set, scaled by magnitude; resultant force."),

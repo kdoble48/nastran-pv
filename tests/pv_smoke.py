@@ -291,13 +291,32 @@ def converted_checks(pv, nv, reader):
             check(n == 3 and model.reader is src and fresh is not None and fresh.ScaleFactor > 0,
                   f"{os.path.basename(path)} series: {n} steps, results view deforms on a fresh source")
             # default folder: next to the converted file (its FileName is a ParaView property)
-            gifs = nv.save_mode_animations([2], frames=2, reader=src, view=pv.GetActiveView())
+            fresh.ScaleFactor = 0.123  # as if set by hand: no mode has this peak scale
+            scale0, time0 = fresh.ScaleFactor, pv.GetActiveView().ViewTime
+            gifs = nv.save_mode_animations([2, 3], frames=2, reader=src, view=pv.GetActiveView())
             stem = os.path.splitext(os.path.basename(path))[0]
-            check([os.path.normcase(g) for g in gifs]
+            check([os.path.normcase(g) for g in gifs[:1]]
                   == [os.path.normcase(os.path.join(os.path.dirname(path), f"{stem}_mode02.gif"))],
                   f"{os.path.basename(path)}: mode GIF saved next to the file ({gifs})")
+            check(fresh.ScaleFactor == scale0 and pv.GetActiveView().ViewTime == time0,
+                  f"{os.path.basename(path)}: the results view gets its step and scale back "
+                  f"({fresh.ScaleFactor:.4g} vs {scale0:.4g})")
+            shot = rm.render(path, ["results"], ["iso"], os.path.join(tmp, "step2"), [300, 200], step=2)
+            check(os.path.getsize(shot[0]) > 1000, f"{os.path.basename(path)}: render --step on a series")
             for p in [s for s in pv.GetSources().values() if s is not reader]:
                 pv.Delete(p)
+        # one step converted without --all-steps: a Displacement but no time steps
+        single = os.path.join(tmp, "single.vtm")
+        convert(["convert", DECK, "--results", op2, "-o", single, "-q"])
+        src = nv.load_reader(single)
+        view = pv.CreateRenderView()
+        nv.apply("masses", reader=src, view=view)
+        played = nv.animate_modes(frames=2, out=os.path.join(tmp, "single_frames"), reader=src, view=view)
+        check(nv.timesteps(src) == [] and played == [1] and nv.current_step(src, view) == 1,
+              f"single-step .vtm: animates its one mode ({played})")
+        pv.Delete(view)
+        for p in [s for s in pv.GetSources().values() if s is not reader]:
+            pv.Delete(p)
     pv.SetActiveSource(None)
     check(nv.find_reader() is reader, "with no active source the deck reader is found again")
 
@@ -458,10 +477,22 @@ def main():
         check(played == [2, 3] and len(pngs) == 8 and pngs[0] == "mode02_000.png"
               and deform.ScaleFactor == 0.0 and any("mass glyphs" in n for n in shown),
               f"animate_modes in the masses view: modes {played}, {len(pngs)} frames, still the masses view")
+        check(nv.current_step(reader, anim) == 2, "animate_modes returns to the step it started on")
+        nv._set_time(anim, full[2])
         check(nv.current_step(reader, anim) == 3, "current_step follows the view time")
         pv.SetActiveSource(reader)
         pv.SetActiveView(anim)
         check(nv.animate_mode(cycles=1) == [3], "Animate Mode plays the mode the view is on")
+        real_peak = nv.peak_deformation
+        nv.peak_deformation = lambda model: 0.0  # a step without displacements
+        try:
+            nv.animate_modes([2], frames=2, out=os.path.join(tmp, "none"), reader=reader, view=anim)
+            check(False, "a mode without displacement should be reported")
+        except RuntimeError as exc:
+            check("mode(s) [2]: no displacement" in str(exc) and anim.ViewTime == full[2],
+                  "a mode without displacement is reported, and the view keeps its step")
+        finally:
+            nv.peak_deformation = real_peak
         from PIL import Image
 
         gif_dir = os.path.join(tmp, "gifs")
@@ -509,8 +540,23 @@ def main():
     check(mg.GetDataInformation().GetNumberOfPoints() > 0, "Nastran Mass Glyphs filter produces ellipsoids")
     bg = pv.NastranBushGlyphs(Input=reader)
     bg.UpdatePipeline()
-    check(bg.GetDataInformation().GetNumberOfCells() > 0, "Nastran Bush Glyphs filter produces triads")
+    check(bg.GetDataInformation().GetNumberOfCells() > 0, "Nastran Bush Glyphs filter produces bars")
+    bg.Stiffness = 1
+    bg.UpdatePipeline()
+    check(bg.GetDataInformation().GetNumberOfCells() > 0, "Nastran Bush Glyphs Stiffness=Rotation produces rings")
+    pv.Delete(bg)
     view = pv.CreateRenderView()
+    bmodel = nv.apply("bushes", reader=reader, view=view)
+    btext = pv.FindSource(nv._name(bmodel, "info")).Text
+    check("K1" in btext and "released" not in btext, f"bushes view text: {btext!r}")
+    pv.FindSource(nv._name(bmodel, "bush glyphs")).ShowTriads = 0  # a user switched the bars off
+    nv.apply("bushes", reader=reader, view=view)
+    btext = pv.FindSource(nv._name(bmodel, "info")).Text
+    check("No translational" not in btext and "K_ref = 1e+06" in btext,
+          f"bushes view turns the bars back on: {btext!r}")
+    rmodel = nv.apply("bushrotations", reader=reader, view=view)
+    rtext = pv.FindSource(nv._name(rmodel, "info")).Text
+    check("K4" in rtext and "K_rot_ref = 10" in rtext, f"bush rotations view text: {rtext!r}")
     for name in nv.VIEWS:
         nv.apply(name, reader=reader, view=view)
     check(True, f"all views build: {', '.join(nv.VIEWS)}")

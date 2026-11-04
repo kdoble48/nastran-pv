@@ -28,7 +28,9 @@ python -m nastran_pv render $DECK --preset loads  --views showcase     --out sho
    Mode animation: `nv.animate_modes(modes, frames=24, out=DIR)` saves `mode<NN>_<frame>.png`
    in the view as it is (apply `masses`, `pid`, ... first); `nv.save_mode_animations(modes,
    folder=DIR)` writes one looping GIF per mode (PIL, shipped with ParaView). The GUI buttons are
-   *NPV Animate Mode* / *NPV Animate All Modes* / *NPV Save Mode Animations*.
+   *NPV Animate Mode* / *NPV Animate All Modes* / *NPV Save Mode Animations*. All of them put the
+   view back on its step and deformation afterwards, and raise for a mode with no displacement.
+   A converted single-step `.vtm` (`--results` without `--all-steps`) animates as one mode.
    A `.vtm`/`.vtkhdf` from `convert` also works (and skips the slow deck read on big models), but
    not with `--results`/`--nsm-set`: convert with those instead.
 2. **Run renders in the background** (`run_in_background`; the user asked for this) and tell the
@@ -62,10 +64,10 @@ file, not full fuel.
 
 ## Presets
 
-`masses bushes beams loads spc rigid family group pid mid elementtype thickness nsm results parts check`
+`masses bushes bushrotations beams loads spc rigid family group pid mid elementtype thickness nsm results parts check`
 (`grow` and `path` are GUI views seeded by the selection macros). `family` and `group`
 need ICEM/TACS family comments (uCRM-9 has them; Linderholt does not). `results` needs
-`--results run.op2|run.h5` and optionally `--step N`. `bushes` needs CBUSH cards. An empty view
+`--results run.op2|run.h5` and optionally `--step N`. `bushes`/`bushrotations` need CBUSH cards (rotations: PBUSH K4–K6). An empty view
 says so in its overlay text, so read the PNG. A deck that fails to load makes `render` exit 1
 with `cannot read DECK: <error>` and writes no PNG.
 

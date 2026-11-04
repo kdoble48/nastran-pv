@@ -27,14 +27,13 @@ from vtkmodules.vtkCommonExecutionModel import vtkStreamingDemandDrivenPipeline 
 from vtkmodules.vtkIOHDF import vtkHDFReader, vtkHDFWriter
 
 SUFFIXES = (".vtkhdf", ".hdf")
-MESH = ("Shells", "Solids", "Lines")
 
 
 def _valid_node_name(name: str) -> str:
     return vtkDataAssembly.MakeValidNodeName(name)
 
 
-def to_pdc(mb: vtkMultiBlockDataSet, root_arrays=None) -> vtkPartitionedDataSetCollection:
+def to_pdc(mb: vtkMultiBlockDataSet) -> vtkPartitionedDataSetCollection:
     """Flatten the block tree into partitions; the assembly keeps the hierarchy and names."""
     pdc = vtkPartitionedDataSetCollection()
     asm = vtkDataAssembly()
@@ -60,16 +59,19 @@ def to_pdc(mb: vtkMultiBlockDataSet, root_arrays=None) -> vtkPartitionedDataSetC
     visit(mb, asm.GetRootNode(), "")
     pdc.SetDataAssembly(asm)
     pdc.GetFieldData().ShallowCopy(mb.GetFieldData())
-    _copy_root_field_data(mb, pdc, root_arrays)
+    _copy_root_field_data(mb, pdc)
     return pdc
 
 
 CHUNK_ROWS = 25000  # chunk rows for datasets VTK wrote unchunked
 
-def _copy_root_field_data(mb, pdc, only=None) -> None:
+def _copy_root_field_data(mb, pdc) -> None:
     """vtkHDFWriter does not write a collection's own field data, so the model summary
     (masses, CG, material table, result label/frequency) also goes onto the mesh partitions
     (or the first partition when there is no mesh)."""
+    from . import vtkutil
+    from .fields.common import MESH
+
     root = mb.GetFieldData()
     if root.GetNumberOfArrays() == 0 or pdc.GetNumberOfPartitionedDataSets() == 0:
         return
@@ -79,16 +81,12 @@ def _copy_root_field_data(mb, pdc, only=None) -> None:
     for i in targets:
         part = pdc.GetPartition(i, 0)
         fd = part.GetFieldData()
-        copy = fd.NewInstance()  # do not touch the source block's field data
-        copy.ShallowCopy(fd)
+        copy = vtkutil.shallow_copy(fd)  # do not touch the source block's field data
         for j in range(root.GetNumberOfArrays()):
             arr = root.GetAbstractArray(j)
-            if arr is None or arr.GetNumberOfTuples() == 0 or copy.GetAbstractArray(arr.GetName()) is not None:
-                continue
-            if only is None or arr.GetName() in only:
-                    copy.AddArray(arr)
-        clone = part.NewInstance()
-        clone.ShallowCopy(part)
+            if arr is not None and arr.GetNumberOfTuples() and copy.GetAbstractArray(arr.GetName()) is None:
+                copy.AddArray(arr)
+        clone = vtkutil.shallow_copy(part)
         clone.SetFieldData(copy)
         pdc.SetPartition(i, 0, clone)
 
@@ -138,7 +136,7 @@ def _chunk_for(mb) -> int:
             biggest = max(biggest, _chunk_for(b))
         else:
             biggest = max(biggest, b.GetNumberOfPoints(), b.GetNumberOfCells())
-    return int(min(max(biggest, 256), 25000))
+    return int(min(max(biggest, 256), CHUNK_ROWS))
 
 
 def write_vtkhdf(mb, path, compression: int = 4, chunk_size: int | None = None) -> Path:
@@ -229,8 +227,9 @@ def write_vtkhdf_series(mb, results, path, deck=None, steps=None, compression: i
     steps = list(range(len(results.steps))) if steps is None else list(steps)
     if not steps:
         raise ValueError("no result steps to write")
-    # vtkHDFWriter compresses every array at every step, static ones included (~5x the time of an
-    # uncompressed write). When compacting, write raw and compress each array once in that rewrite.
+    # vtkHDFWriter compresses every array at every step, static ones included (a compacted
+    # series then took about 4x as long). When compacting, write raw and compress each array once
+    # in that rewrite.
     deferred = compact and len(steps) > 1
     w, path = _writer(path, 0 if deferred else compression, chunk_size or _chunk_for(mb))
     source = _StepSource(mb, results, deck, steps)  # keep a reference: VTK calls back into it

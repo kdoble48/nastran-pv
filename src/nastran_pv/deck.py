@@ -20,6 +20,7 @@ from cpylog import SimpleLogger
 from pyNastran.bdf.bdf import BDF
 
 from .progress import NULL, Progress
+from .vtkutil import match_ids
 
 RECTANGULAR = {"CORD1R", "CORD2R"}
 CYLINDRICAL = {"CORD1C", "CORD2C"}
@@ -35,17 +36,13 @@ class Deck:
     xyz: np.ndarray  # (n, 3) basic coordinates, aligned with ``nids``
     cd: np.ndarray  # (n,) displacement coordinate system id per node
     warnings: list[str] = field(default_factory=list)
-    _n_mass: int = field(default=0, repr=False)  # leading mass warnings (see warn)
+    _n_mass: int = field(default=0, repr=False)  # where the next mass warning goes (see warn)
+    _n_pinned: int = field(default=0, repr=False)  # leading load errors kept first (xref failure)
 
     # ------------------------------------------------------------------ nodes
     def lookup(self, node_ids) -> np.ndarray:
         """Point indices of ``node_ids`` in :attr:`nids`, -1 where the id is unknown."""
-        node_ids = np.asarray(node_ids, dtype=np.int64)
-        if node_ids.size == 0 or len(self.nids) == 0:
-            return np.full(node_ids.shape, -1, dtype=np.int64)
-        idx = np.searchsorted(self.nids, node_ids)
-        idx_c = np.minimum(idx, len(self.nids) - 1)
-        return np.where(self.nids[idx_c] == node_ids, idx_c, -1)
+        return match_ids(self.nids, np.asarray(node_ids, dtype=np.int64))
 
     def index(self, node_ids) -> np.ndarray:
         """Like :meth:`lookup` but raises KeyError on unknown ids."""
@@ -95,10 +92,6 @@ class Deck:
         """Rotate a vector given in ``cid`` (evaluated at ``at_xyz``) into basic."""
         return np.asarray(vec, dtype=float) @ self.basis(cid, at_xyz)
 
-    def point_to_basic(self, cid: int | None, xyz) -> np.ndarray:
-        if cid is None or cid == 0:
-            return np.asarray(xyz, dtype=float)
-        return np.asarray(self.model.coords[cid].transform_node_to_global(np.asarray(xyz, dtype=float)))
 
     # ---------------------------------------------------------------- summary
     @property
@@ -112,7 +105,8 @@ class Deck:
 
     def warn(self, msg: str, mass: bool = False) -> None:
         """Record a warning. ``mass`` ones (they change the model mass) go before the others, in
-        order, so the CLI and the reader still show them when they cut the list short."""
+        order, so the CLI and the reader still show them when they cut the list short. Only a
+        failed cross-reference, which explains missing MIDs and masses, stays ahead of them."""
         if mass:
             self.warnings.insert(self._n_mass, msg)
             self._n_mass += 1
@@ -122,7 +116,7 @@ class Deck:
     def reset_warnings(self, base) -> None:
         """Back to ``base`` (the load warnings) before building the model again."""
         self.warnings = list(base)
-        self._n_mass = 0
+        self._n_mass = self._n_pinned
 
 
 def scan_sections(path: Path) -> tuple[bool, bool]:
@@ -252,17 +246,24 @@ def load_deck(path, punch: bool | None = None, encoding: str = "latin-1", echo: 
         progress.note(f"reading {path.name}")
         with _read_progress(model, progress):
             _read(model, path, punch, encoding)
+        xref_error = None
         with progress.stage("cross-referencing"):
             try:
                 model.safe_cross_reference()
             except Exception as exc:  # keep going with whatever got cross-referenced
-                messages.append(f"ERROR: cross-referencing failed: {exc}")
+                xref_error = f"cross-referencing failed: {type(exc).__name__}: {exc}"
     for w in caught:
         log_func("WARNING", None, None, str(w.message))
+    pinned = 0
+    if xref_error:  # first: it explains the missing MID/Density/ElementMass further down
+        log_func("ERROR", None, None, xref_error)
+        messages.insert(0, messages.pop())
+        pinned = 1
 
     with progress.stage(f"grid coordinates ({len(model.nodes):,} grids)"):
         nids, xyz, cd = _grid_arrays(model)
-    return Deck(path=path, model=model, nids=nids, xyz=xyz, cd=cd, warnings=messages)
+    return Deck(path=path, model=model, nids=nids, xyz=xyz, cd=cd, warnings=messages,
+                _n_mass=pinned, _n_pinned=pinned)
 
 
 def _grid_arrays(model: BDF):

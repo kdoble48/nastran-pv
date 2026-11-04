@@ -552,7 +552,8 @@ class NastranPVMassGlyphs(_GlyphFilter):
 @smproperty.input(name="Input", port_index=0)
 @smdomain.datatype(dataTypes=["vtkDataObject"], composite_data_supported=True)
 class NastranPVBushGlyphs(_GlyphFilter):
-    """CBUSH stiffness triads (arrow length ~ log stiffness) and optional ellipsoids."""
+    """CBUSH stiffness glyphs: bars (K1-K3) or rings (K4-K6) along the element axes, sized from the
+    bush spacing and log stiffness, released directions in grey; optional translation ellipsoids."""
 
     BLOCK, REQUIRED = "Bushes", "KTransLogTensor"
 
@@ -562,10 +563,20 @@ class NastranPVBushGlyphs(_GlyphFilter):
         self._triad = 1
         self._ellipsoids = 0
         self._resolution = 12
+        self._stiffness = 0
+
+    @smproperty.intvector(name="Stiffness", default_values=0)
+    @smdomain.xml('<EnumerationDomain name="enum"><Entry value="0" text="Translation (K1-K3)"/>'
+                  '<Entry value="1" text="Rotation (K4-K6)"/></EnumerationDomain>')
+    def SetStiffness(self, v):
+        """Which stiffness to draw: translational bars or rotational rings."""
+        self._set("_stiffness", int(v))
 
     @smproperty.doublevector(name="Size", default_values=0.04)
     @smdomain.doublerange(min=0.001, max=0.3)
     def SetSize(self, v):
+        """Upper bound of the glyph scale as a fraction of the model diagonal; glyphs are otherwise
+        sized from the spacing between bushes."""
         self._set("_size", float(v))
 
     @smproperty.intvector(name="ShowTriads", default_values=1)
@@ -584,9 +595,10 @@ class NastranPVBushGlyphs(_GlyphFilter):
         self._set("_resolution", int(v))
 
     def _glyphs(self, block, diag, model):
-        from nastran_pv.glyphs import bush_glyphs
+        from nastran_pv.glyphs import BUSH_KINDS, bush_glyphs
 
-        return bush_glyphs(block, diag, self._size, bool(self._triad), bool(self._ellipsoids), self._resolution)
+        return bush_glyphs(block, diag, self._size, bool(self._triad), bool(self._ellipsoids), self._resolution,
+                           kind=BUSH_KINDS[self._stiffness])
 
 
 @smproxy.filter(name="NastranPVBeamSections", label="Nastran Beam Sections")
@@ -931,8 +943,9 @@ class NastranPVGroupStats(_FieldFilter):
 
 
 # ---------------------------------------------------- topology filters
-_GROUP_PROPS = {"shells": "TraverseShells", "solids": "TraverseSolids", "lines": "TraverseLines",
-                "rigid": "TraverseRigid", "bushes": "TraverseBushes", "connectors": "TraverseConnectors"}
+# copies of topology.graph.GROUPS / topology.check.CHECKS: the proxies are built before nastran_pv
+# (and scipy) can be imported; tests/test_plugin_constants.py keeps them in sync
+_GROUPS = ("shells", "solids", "lines", "rigid", "bushes", "connectors")
 _WITHIN = ("", "pid", "mid", "family", "group")  # StayWithin entries -> Rules.within
 _CHECKS = ("FreeEdges", "FreeFaces", "CoincidentGrids", "DuplicateElements", "DanglingConnectors", "FloatingParts")
 
@@ -1025,7 +1038,7 @@ class _TopologyFilter(_FieldFilter):
         self._listing = False
         self._cards = vtkDataArraySelection()
         self._cards.AddObserver("ModifiedEvent", lambda *args: None if self._listing else self.Modified())
-        self._groups = {g: 1 for g in _GROUP_PROPS}
+        self._groups = {g: 1 for g in _GROUPS}
         self._exclude_pids = ""
         self._within = 0
         self._limit = 0

@@ -12,11 +12,11 @@ Every mass becomes one point at its centre of gravity with:
   (sphere source, symmetric tensor, no extra scaling) to see the
   mass distribution. Masses without inertia get a sphere with the median
   density of the others (or radius ``MassScale`` if none has inertia).
-  Flat (disc) and needle (rod) inertias keep their shape: a zero semi-axis
-  is drawn as 5 % of the largest one. Inertia no body can have (a principal
+  Flat (disc) and needle (rod) inertias keep their shape: a semi-axis under
+  5 % of the largest one (0 for a disc or rod) is drawn at 5 %. Inertia no body can have (a principal
   moment above the sum of the other two) gets the sphere and a warning.
 * ``EquivalentRadius``: (a b c)^(1/3) or that sphere radius.
-* ``HasInertia``: 1 when the ellipsoid comes from a real (non-zero) inertia.
+* ``HasInertia``: 1 when the ellipsoid comes from a real (non-zero, physically possible) inertia.
 """
 from __future__ import annotations
 

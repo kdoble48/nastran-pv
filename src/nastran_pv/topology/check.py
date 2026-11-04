@@ -165,8 +165,6 @@ def check(mb, rules: Rules | None = None, tol: float = 1e-6, checks=CHECKS, grap
         if count and block is not None:
             # the check's code on every cell, for categorical coloring of all findings at once
             replace_array(block.GetCellData(), "Check", np.full(block.GetNumberOfCells(), CHECKS.index(name), np.int32))
-            i = out.GetNumberOfBlocks()
-            out.SetBlock(i, block)
-            out.GetMetaData(i).Set(vtkMultiBlockDataSet.NAME(), name)
+            vtkutil.add_block(out, name, block)
     write_table(out, "CHECK_", rows)
     return CheckResult(out, rows)

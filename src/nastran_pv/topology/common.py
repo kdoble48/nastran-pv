@@ -25,10 +25,6 @@ def write_cells(mb, graph, name, values) -> None:
             replace_array(ds.GetCellData(), name, values[span[0]:span[1]])
 
 
-def _vertex_only(ds) -> bool:
-    return ds.IsA("vtkPolyData") and ds.GetNumberOfVerts() == ds.GetNumberOfCells() == ds.GetNumberOfPoints()
-
-
 def write_points(mb, graph, name, values, fill=-1) -> None:
     """Per-grid ``values`` -> point array on every leaf keyed by NID (``Bushes``: GA). Point-only
     leaves (one vertex per point) get the same values as a cell array, for cell-based filters."""
@@ -39,7 +35,7 @@ def write_points(mb, graph, name, values, fill=-1) -> None:
         g = graph.grid_index(key)
         v = np.where(g >= 0, values[np.maximum(g, 0)], fill)
         replace_array(ds.GetPointData(), name, v)
-        if path not in graph.spans and _vertex_only(ds):
+        if path not in graph.spans and vtkutil.is_vertex_only(ds):
             replace_array(ds.GetCellData(), name, v)
 
 

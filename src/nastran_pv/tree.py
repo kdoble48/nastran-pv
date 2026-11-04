@@ -60,13 +60,11 @@ def names_from_deck(deck) -> dict[str, dict[int, str]]:
     }
 
 
-def _vertex_only(ds) -> bool:
-    return ds.IsA("vtkPolyData") and ds.GetNumberOfVerts() == ds.GetNumberOfCells() == ds.GetNumberOfPoints()
 
 
 def _item_kind(ds) -> str:
     """Items are points for vertex-only blocks (masses, bushes, SPCs, loads), cells otherwise."""
-    return "point" if _vertex_only(ds) else "cell"
+    return "point" if vtkutil.is_vertex_only(ds) else "cell"
 
 
 def _attr(ds, kind):
@@ -283,12 +281,6 @@ def _block_path(ds):
     return paths[0] if paths else None
 
 
-def _shallow(ds):
-    out = ds.NewInstance()
-    out.ShallowCopy(ds)
-    return out
-
-
 # -------------------------------------------------------------------- tree
 @dataclass
 class _Piece:
@@ -316,7 +308,7 @@ class Tree:
         pdc = vtkPartitionedDataSetCollection()
         pdc.SetNumberOfPartitionedDataSets(len(self.pieces))
         for i, piece in enumerate(self.pieces):
-            ds = _shallow(piece.template)
+            ds = vtkutil.shallow_copy(piece.template)
             src = blocks.get(piece.path)
             if src is not None:
                 ds.GetFieldData().ShallowCopy(src.GetFieldData())
@@ -348,7 +340,7 @@ def _cut(ds, kind, items):
     """(piece, cell_ids, point_ids) keeping ``items``; a shallow copy when all are kept."""
     n = _n_items(ds, kind)
     if len(items) == n:
-        return _shallow(ds), None, None
+        return vtkutil.shallow_copy(ds), None, None
     if kind == "point":
         piece, pts = _subset_points(ds, items)
         cell_ids = items
@@ -450,13 +442,13 @@ class _Layout:
 
 def _append(pieces):
     if len(pieces) == 1:
-        return _shallow(pieces[0])
+        return vtkutil.shallow_copy(pieces[0])
     # pieces of one block are all verts or all lines, so appending keeps their cell order
     app = vtkAppendPolyData() if all(p.IsA("vtkPolyData") for p in pieces) else vtkAppendFilter()
     for p in pieces:
         app.AddInputData(p)
     app.Update()
-    out = _shallow(app.GetOutput())
+    out = vtkutil.shallow_copy(app.GetOutput())
     out.GetFieldData().ShallowCopy(pieces[0].GetFieldData())
     return out
 
@@ -513,7 +505,7 @@ def gather(pdc) -> tuple[vtkMultiBlockDataSet, dict]:
         if head not in parents:
             outer, head_name = parent_of(head)
             parents[head] = vtkMultiBlockDataSet()
-            _add(outer, head_name, parents[head])
+            vtkutil.add_block(outer, head_name, parents[head])
         return parents[head], name
 
     for path, idx in _groups(pdc).items():
@@ -530,15 +522,10 @@ def gather(pdc) -> tuple[vtkMultiBlockDataSet, dict]:
             _pointers(block),
         )
         outer, name = parent_of(path)
-        _add(outer, name, block)
+        vtkutil.add_block(outer, name, block)
     mb.GetFieldData().ShallowCopy(pdc.GetFieldData())
     return mb, layout
 
-
-def _add(mb, name, block):
-    j = mb.GetNumberOfBlocks()
-    mb.SetBlock(j, block)
-    mb.GetMetaData(j).Set(vtkMultiBlockDataSet.NAME(), name)
 
 
 def scatter(pdc, mb, layout) -> vtkPartitionedDataSetCollection:
@@ -549,7 +536,7 @@ def scatter(pdc, mb, layout) -> vtkPartitionedDataSetCollection:
     for i in range(pdc.GetNumberOfPartitionedDataSets()):
         p = pdc.GetPartition(i, 0)
         if p is not None:
-            out.SetPartition(i, 0, _shallow(p))
+            out.SetPartition(i, 0, vtkutil.shallow_copy(p))
         if pdc.HasMetaData(i):
             out.GetMetaData(i).Copy(pdc.GetMetaData(i))
     out.SetDataAssembly(pdc.GetDataAssembly())

@@ -96,6 +96,26 @@ def test_load_deck_reports_files_and_cards_and_unhooks():
     assert sorted(deck.model.elements) == sorted(plain.model.elements)
 
 
+def test_load_deck_unhooks_when_the_read_fails(monkeypatch):
+    from pyNastran.bdf.bdf_interface.pybdf import BDFInputPy
+
+    from nastran_pv import deck as deck_mod
+
+    open_file = BDFInputPy.__dict__["_open_file"]
+    models = []
+
+    def broken_read(model, *args, **kwargs):
+        models.append(model)
+        raise RuntimeError("bad card")
+
+    monkeypatch.setattr(deck_mod, "_read", broken_read)
+    p = Progress(stream=io.StringIO(), callback=lambda text, frac: None)
+    with pytest.raises(RuntimeError, match="bad card"):
+        load_deck(DATA / "tiny_run.bdf", echo=False, progress=p)
+    assert BDFInputPy.__dict__["_open_file"] is open_file  # the class-level hook is gone
+    assert not {"_parse_cards_list", "add_card", "add_card_lax"} & set(models[0].__dict__)
+
+
 def test_cli_progress_on_stderr_and_quiet(tmp_path, capsys):
     main(["convert", str(DATA / "tiny_run.bdf"), "-o", str(tmp_path / "a.vtm")])
     loud = capsys.readouterr()

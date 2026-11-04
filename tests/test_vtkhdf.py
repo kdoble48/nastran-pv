@@ -99,6 +99,34 @@ def test_series_keeps_every_root_table(tmp_path):
         assert h["VTKHDF/Lines/FieldData/SECPT_Y"].shape[0] == n  # once, not per step
 
 
+def test_restore_field_data_refills_the_right_step(tmp_path):
+    # VTK 9.7's reader drops partition field data; older VTK reads it, so drop it by hand and
+    # check that the h5py refill takes each array's slice for the requested step
+    from nastran_pv.vtkhdf import _restore_field_data
+
+    deck = load_deck(DATA / "beams.bdf", echo=False)
+    mb = build_multiblock(deck)
+    res = Op2Results(make_op2())
+    path = write_vtkhdf_series(mb, res, tmp_path / "b.vtkhdf", deck=deck)
+    root = mb.GetFieldData()
+    for t in (0.0, 2.0):
+        pdc = read_vtkhdf(path, t)
+        fd = partition(pdc, "Lines").GetFieldData()
+        names = [fd.GetArrayName(i) or fd.GetAbstractArray(i).GetName() for i in range(fd.GetNumberOfArrays())]
+        assert {"ResultLabel", "SECPT_Y", "MAT_Type"} <= set(names)
+        for name in names:
+            fd.RemoveArray(name)
+        assert fd.GetNumberOfArrays() == 0
+        _restore_field_data(pdc, path, t)
+        assert fd.GetAbstractArray("ResultLabel").GetValue(0) == res.steps[int(t)].label
+        np.testing.assert_allclose(vtk_to_numpy(fd.GetArray("SECPT_Y")),
+                                   vtk_to_numpy(root.GetArray("SECPT_Y")))
+        mat = fd.GetAbstractArray("MAT_Type")
+        ref = root.GetAbstractArray("MAT_Type")
+        assert [mat.GetValue(i) for i in range(mat.GetNumberOfValues())] == \
+            [ref.GetValue(i) for i in range(ref.GetNumberOfValues())]
+
+
 def test_series_without_compaction_is_equivalent(model, tmp_path):
     deck, mb = model
     res = Op2Results(make_op2())

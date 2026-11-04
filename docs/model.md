@@ -16,7 +16,7 @@ deck has nothing for it.
 | `MassOffsets` | grid-to-CG lines for offset CONM2s | `EID` |
 | `Rigid` | RBE2/RBE3/RBAR/... spider legs | cell: `EID RigidType DOF` |
 | `Connectors` | MPC, CELAS1/2, CDAMP1/2, CGAP, CFAST (GA/GB form) legs | cell: `EID ConnectorType DOF PID` (MPC legs: `EID` = MPC set id); point: `NID` |
-| `Bushes` | CBUSH spring locations | `K Axis1-3 K1dir K2dir K3dir KTransTensor KRotTensor KTransLogTensor` |
+| `Bushes` | CBUSH spring locations | `K Axis1-3 K1dir…K6dir KTransTensor KRotTensor KTransLogTensor KRotLogTensor`; field: `KRef KLogMax KRotRef KRotLogMax` |
 | `BushLines` | CBUSH GA–GB lines | cell: `EID PID`; point: `NID` |
 | `Constraints` | SPC/SPC1/SPCADD/GRID PS points per set | `SPCSet SPC_DOF DOFCode CD` |
 | `Loads/SID_n`, `Loads/LOAD_n` | FORCE/MOMENT(1,2) per set, LOAD combinations resolved | `Force Moment ForceMagnitude`; field `ResultantForce GravityAcceleration` |
@@ -44,16 +44,19 @@ The [field options](fields.md) add further arrays on top of these.
 * **Masses.** `InertiaEllipsoid` is `R diag(a,b,c) Rᵀ`, where a, b and c are the semi-axes of the
   uniform solid ellipsoid with the same mass and inertia: `a² = 5/(2m)(I₂+I₃−I₁)` and cyclic. Show
   it with ParaView's TensorGlyph, using a sphere glyph and eigenvalue extraction. Masses without
-  inertia get an equal-density sphere. A flat or needle inertia (a semi-axis of 0) keeps its shape,
-  with that axis drawn as 5 % of the largest one. Inertia that violates `Iᵢ ≤ Iⱼ + Iₖ` gets the
+  inertia get an equal-density sphere. A flat or needle inertia keeps its shape: a semi-axis under
+  5 % of the largest one (0 for a disc or rod) is drawn at 5 %. Inertia that violates `Iᵢ ≤ Iⱼ + Iₖ` gets the
   sphere, `HasInertia = 0` and a warning.
 * **Bushes.** Element axes follow the CBUSH rules: CID, or GA→GB plus the X/G0 orientation vector.
-  `K{i}dir` is axis *i* scaled by `log10(1+Kᵢ/K_ref)`, normalized to [0, 1], so three arrow glyphs
+  `K{i}dir` (i = 1–3) is axis *i* scaled by `log10(1+Kᵢ/K_ref)`, normalized to [0, 1], so glyphs
   compare stiffnesses across decades. `K_ref` defaults to the softest translational stiffness.
+  `K4dir…K6dir` do the same for the rotational stiffnesses with their own `K_rot_ref` (`KRotRef`).
+  `KLogMax`/`KRotLogMax` keep the normalizers, so glyphs of a subset of the bushes stay on the
+  model-wide scale.
 * **Mass.** Element masses come from cell sizes:
-  - solids: volume × density. Linear tets, hexes, wedges and pyramids are computed in numpy (each
-    face fanned to its centroid, which is exact for a trilinear hex, warped faces included); other
-    solids use VTK's cell size filter
+  - solids: volume × density. When every cell of the Solids block is a linear tet, hex, wedge or
+    pyramid, the volumes are computed in numpy (each face fanned to its centroid, which is exact for
+    a trilinear hex, warped faces included); otherwise the whole block uses VTK's cell size filter
   - shells: area × structural mass per area (`MassPerArea`: all plies, with `LAM=SYM` expanded)
   - lines: length × area × density
 

@@ -54,8 +54,8 @@ def displacement_of(ds, grid_nids, grid_disp) -> np.ndarray | None:
     if nid is None or not len(grid_nids):
         return None
     ids = vtkutil.to_numpy(nid).astype(np.int64)
-    idx = np.clip(np.searchsorted(grid_nids, ids), 0, len(grid_nids) - 1)
-    hit = grid_nids[idx] == ids
+    idx = vtkutil.match_ids(grid_nids, ids)
+    hit = idx >= 0
     if not hit.any():
         return None
     return np.where(hit[:, None], grid_disp[idx], 0.0)
@@ -82,14 +82,12 @@ class Deformer:
     def apply(self, scale: float):
         """Copy of the model with points moved by ``scale`` x displacement; leaves that do not
         move are shared, and ``scale`` 0 gives a plain shallow copy."""
-        out = self.data.NewInstance()
-        out.ShallowCopy(self.data)
+        out = vtkutil.shallow_copy(self.data)
         if not scale or not self.moving:
             return out
         moved = {}
         for flat, ds, xyz, d in self.moving:
-            copy = ds.NewInstance()
-            copy.ShallowCopy(ds)
+            copy = vtkutil.shallow_copy(ds)
             pts = vtkPoints()
             pts.SetData(vtkutil.to_vtk_array("Points", xyz + float(scale) * d))
             copy.SetPoints(pts)
@@ -112,9 +110,7 @@ def deform(data, scale: float):
     Leaves without points or displacement are shared, not copied. ``scale`` 0 returns a plain
     shallow copy. To deform one model at many scales, keep a :class:`Deformer`."""
     if not scale:
-        out = data.NewInstance()
-        out.ShallowCopy(data)
-        return out
+        return vtkutil.shallow_copy(data)
     return Deformer(data).apply(scale)
 
 
