@@ -67,6 +67,9 @@ _FLAGS = ("shells", "lines", "solids", "masses", "rigid", "connectors", "bushes"
 # model tree checklists (reader property -> nastran_pv.tree category)
 _VISIBILITY = {"VisibleProperties": "Properties", "VisibleMaterials": "Materials",
                "VisibleElementTypes": "ElementTypes", "VisibleFamilies": "Families", "VisibleGroups": "Groups"}
+# selection from an ID file: SelectionKey entries (nastran_pv.selection.KEYS after Auto)
+_SELECTION_KEYS = ("Auto", "EID", "NID", "PID", "MID", "FAMILY", "GROUP")
+_SELECTION_EXTENSIONS = "csv tsv txt dat lst json xlsx xlsm"
 
 
 def _message(text, error=False):
@@ -196,6 +199,14 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         self._names = {}
         self._tree = None
         self._tree_key = None
+        self._sel_file = ""
+        self._sel_key = 0
+        self._sel_mode = 0
+        self._sel_grids = 0
+        self._sel_ids = None
+        self._sel_read = None  # (path, mtime, key) of _sel_ids
+        self._sel_reload = 0
+        self._sel_error = None  # the last SelectionFile problem reported
 
     # ------------------------------------------------------------ properties
     @smproperty.stringvector(name="FileName")
@@ -339,6 +350,41 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
     def SetHiddenElements(self, v):
         """Element IDs to hide (NPV Hide adds the selected elements)."""
         self._set("_hidden", v or "")
+
+    # ------------------------------------------------- selection from an ID file
+    @smproperty.stringvector(name="SelectionFile", default_values="")
+    @smdomain.filelist()
+    @smhint.filechooser(extensions=_SELECTION_EXTENSIONS, file_description="ID list (CSV, text, Excel)")
+    def SetSelectionFile(self, v):
+        """A CSV/text/Excel file of element, grid, property or material IDs, or family/group names
+        (ranges and THRU allowed). The header names the key, e.g. EID or GRID; none means EIDs."""
+        self._set("_sel_file", (v or "").strip())
+
+    @smproperty.intvector(name="SelectionKey", default_values=0)
+    @smdomain.xml('<EnumerationDomain name="enum">' + "".join(
+        f'<Entry value="{i}" text="{k}"/>' for i, k in enumerate(_SELECTION_KEYS)) + '</EnumerationDomain>')
+    def SetSelectionKey(self, v):
+        self._set("_sel_key", int(v))
+
+    @smproperty.intvector(name="SelectionMode", default_values=0)
+    @smdomain.xml('<EnumerationDomain name="enum"><Entry value="0" text="Show only"/><Entry value="1" text="Hide"/>'
+                  '<Entry value="2" text="Off"/></EnumerationDomain>')
+    def SetSelectionMode(self, v):
+        """Show only the selection (with masses, SPCs and loads on its grids), hide it, or neither
+        (Off: NPV Highlight File selects it instead)."""
+        self._set("_sel_mode", int(v))
+
+    @smproperty.intvector(name="SelectionGrids", default_values=0)
+    @smdomain.xml('<EnumerationDomain name="enum"><Entry value="0" text="All grids"/>'
+                  '<Entry value="1" text="Any grid"/></EnumerationDomain>')
+    def SetSelectionGrids(self, v):
+        """Grid (NID) lists: an element is selected when all, or any, of its grids are listed."""
+        self._set("_sel_grids", int(v))
+
+    @smproperty.intvector(name="SelectionReload", default_values=0, panel_visibility="never")
+    def SetSelectionReload(self, v):
+        """Bumped by NPV Show Only/Hide/Highlight File: re-execute, so an edited file is read again."""
+        self._set("_sel_reload", int(v))
 
     @smproperty.stringvector(name="LoadError", information_only="1")
     def GetLoadError(self):
@@ -498,7 +544,30 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
                 _message(f"nastran-pv: {what}: {exc}; ignored", error=True)
                 ids[what] = set()
         show = frozenset(ids["ShowOnlyElements"]) if ids["ShowOnlyElements"] else None
-        return Visibility(hidden, show, frozenset(ids["HiddenElements"]))
+        return Visibility(hidden, show, frozenset(ids["HiddenElements"]), select=self._selection(),
+                          select_hide=self._sel_mode == 1, select_grids=("all", "any")[self._sel_grids % 2])
+
+    def _selection(self):
+        """The SelectionFile's IdList (re-read when the file or the key changes), None when off."""
+        if not self._sel_file or self._sel_mode == 2:
+            return None
+        key = (os.path.abspath(self._sel_file), self._sel_key)
+        try:
+            key += (os.path.getmtime(self._sel_file),)
+            if key != self._sel_read:
+                from nastran_pv.selection import read_ids
+
+                self._sel_ids = self._sel_read = None
+                self._sel_ids = read_ids(self._sel_file, key=_SELECTION_KEYS[self._sel_key % len(_SELECTION_KEYS)])
+                self._sel_read = key
+        except Exception as exc:
+            problem = (key, str(exc))
+            if problem != self._sel_error:  # once per change of file, key or error
+                self._sel_error = problem
+                _message(f"nastran-pv: SelectionFile {self._sel_file}: {exc}; ignored", error=True)
+            return None
+        self._sel_error = None
+        return self._sel_ids
 
     def RequestData(self, request, inInfo, outInfo):
         if not self._filename:

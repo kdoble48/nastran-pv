@@ -19,6 +19,7 @@ Field options (convert, stats, store add):
     --calc "Name = expression"    numpy expression over existing arrays
     --parts / --grow SEEDS        PartId / Hops from "EID 1; GRID 5; PID 7",
                                   under --rules "exclude=rigid max_hops=5"
+    --select FILE                 keep (or --select-mode mark) the IDs a CSV/text/Excel file lists
 """
 from __future__ import annotations
 
@@ -135,6 +136,21 @@ def apply_field_options(mb, args) -> list[str]:
     return notes
 
 
+def apply_select_options(mb, args):
+    """``--select FILE``: (the kept or marked multiblock, notes). After the field options, so those
+    see the whole model."""
+    if not getattr(args, "select", None):
+        return mb, []
+    from .selection import apply_selection, read_ids
+
+    try:
+        ids = read_ids(args.select, key=args.select_key, column=args.select_column)
+        mb, report = apply_selection(mb, ids, mode=args.select_mode, grids=args.select_grids)
+    except (ValueError, KeyError, OSError) as exc:
+        raise SystemExit(f"nastran-pv: --select: {exc}") from None
+    return mb, [report.info] + [f"warning: {w}" for w in report.warnings]
+
+
 def add_model_arguments(p, results=True):
     from .launch import add_random_arguments, nsm_set_id
 
@@ -160,7 +176,30 @@ def add_model_arguments(p, results=True):
     p.add_argument("--parts", action="store_true", help="PartId per cell and grid, PART_*/LINK_* tables (see --rules)")
     p.add_argument("--grow", metavar="SEEDS", help='Hops from seeds, e.g. "EID 1001; GRID 55; PID 7" (see --rules)')
     p.add_argument("--rules", metavar="TEXT", help='traversal rules, e.g. "exclude=rigid,CBUSH max_hops=5"')
+    add_select_arguments(p.add_argument_group("selection from an ID file"))
     add_common_arguments(p)
+
+
+def _select_key(text):
+    from .selection import normalize_key
+
+    try:
+        return normalize_key(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
+
+
+def add_select_arguments(g):
+    g.add_argument("--select", metavar="FILE",
+                   help="CSV/text/Excel file of IDs (ranges, THRU); the key is read from the header")
+    g.add_argument("--select-key", type=_select_key, metavar="KEY",
+                   help="what the IDs are: EID NID PID MID FAMILY GROUP, or a column name such as GRID "
+                        "(default: from the column header, else EID)")
+    g.add_argument("--select-column", metavar="NAME", help="the column holding the IDs")
+    g.add_argument("--select-mode", choices=("keep", "mark"), default="keep",
+                   help="keep: write only the selection; mark: add a Selected cell array (default keep)")
+    g.add_argument("--select-grids", choices=("all", "any"), default="all",
+                   help="NID lists: an element is selected when all (default) or any of its grids are")
 
 
 def add_common_arguments(p):
@@ -221,6 +260,8 @@ def cmd_convert(args) -> int:
         notes = apply_field_options(mb, args)
     if args.diff_against:
         notes += diff_against(mb, args)
+    mb, selected = apply_select_options(mb, args)
+    notes += selected
     with progress.stage(f"writing {output_format(args)}"):
         path = write_output(mb, args, deck, results)
     progress.done()
@@ -317,7 +358,10 @@ def cmd_stats(args) -> int:
 
     mb, deck, _ = load_model(args, args.verbose)
     apply_field_options(mb, args)
+    mb, selected = apply_select_options(mb, args)
     print_warnings(deck, file=sys.stderr)  # stderr: the table (or --csv) stays clean
+    for n in selected:
+        print(n, file=sys.stderr)
     rows = group_stats(mb, args.by, args.field, broadcast=False)
     if args.sort:
         rows.sort(key=lambda r: -(r.get(f"{args.field}_{args.sort}") or 0))
@@ -383,6 +427,8 @@ def cmd_store(args) -> int:
         if args.store_cmd == "add":
             mb, _, _ = load_model(args, args.verbose)
             notes = apply_field_options(mb, args)
+            mb, selected = apply_select_options(mb, args)
+            notes += selected
             rid = st.add_run(mb, Path(args.input).resolve(), name=args.name,
                              results=Path(args.results).resolve() if args.results else None,
                              save_vtm=not args.no_vtm, only=args.only, fmt=args.format)

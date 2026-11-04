@@ -16,7 +16,9 @@ mode in turn and ``save_mode_animations`` writes each mode as a GIF (all in the 
 the mode's frequency shown). ``show_only_selected``, ``hide_selected``, ``show_all``,
 ``show_only_property``, ``show_only_material``, ``show_only_reached`` and ``hide_reached`` are
 Femap-style visibility commands: they set the reader's visibility checklists and element ID lists,
-so they need the deck (:func:`deck_reader`).
+so they need the deck (:func:`deck_reader`). ``show_only_file``, ``hide_file`` and
+``highlight_file`` do the same from a CSV/text file of IDs (the reader's ``SelectionFile``);
+highlight makes a real ParaView selection.
 ``diff`` compares the active model (B) with a second open model (A) through the Nastran Diff filter,
 and :func:`side_by_side` shows A and B in two linked views with one color range.
 Plus :func:`index_colors`, which turns whatever integer array the active representation is
@@ -1144,6 +1146,10 @@ def _selection_kinds(sel):
     srcs = list(sel.Input) if _xml_name(sel) == "AppendSelections" else [sel]
     kinds = set()
     for s in srcs:
+        array = s.GetProperty("ArrayName")
+        if array is not None and str(s.GetPropertyValue("ArrayName")) in ("EID", "PID", "MID"):
+            kinds.add("CELL")  # a threshold on element IDs: masses and bushes keep them on points
+            continue
         for prop in ("FieldType", "ElementType"):
             if s.GetProperty(prop) is not None:
                 value = str(s.GetPropertyValue(prop)).upper()
@@ -1302,6 +1308,7 @@ def show_all(reader=None):
     reader = deck_reader(reader or find_reader(), "Show All")
     reader.ShowOnlyElements = ""
     reader.HiddenElements = ""
+    reader.SelectionMode = "Off"  # keeps the SelectionFile for NPV Show Only/Hide/Highlight File
     reader.UpdatePipelineInformation()
     for prop in VISIBILITY_PROPS:
         setattr(reader, prop, _listed(reader, prop))
@@ -1382,6 +1389,129 @@ def show_only_property():
 def show_only_material():
     """Uncheck every material but those of the selected elements."""
     return _show_only_category("MID", "VisibleMaterials", "material")
+
+
+# ---------------------------------------------------- selection from an ID file
+NO_SELECTION_FILE = ("Set 'Selection File' on the Nastran reader (a CSV/text/Excel file of IDs; the header "
+                     "names EID, GRID, PID, MID, FAMILY or GROUP), then run this again.")
+
+
+def _file_reader(path, key, reader, what):
+    """The deck reader with its SelectionFile (and SelectionKey) set from the arguments."""
+    reader = deck_reader(reader or find_reader(), what)
+    if path is not None:
+        reader.SelectionFile = os.path.abspath(str(path))
+    if key is not None:
+        from nastran_pv.selection import normalize_key
+
+        reader.SelectionKey = normalize_key(key) or "Auto"  # GRID -> NID, ELEMENT -> EID, ...
+    if not reader.SelectionFile:
+        raise RuntimeError(NO_SELECTION_FILE)
+    return reader
+
+
+def file_ids(reader=None):
+    """The reader's SelectionFile as a ``nastran_pv.selection.IdList`` (key resolved)."""
+    from nastran_pv.selection import read_ids
+
+    reader = deck_reader(reader or find_reader(), "Selection File")
+    if not reader.SelectionFile:
+        raise RuntimeError(NO_SELECTION_FILE)
+    return read_ids(reader.SelectionFile, key=enum_text(reader, "SelectionKey"))
+
+
+def enum_text(proxy, prop):
+    """The entry text of an enumeration property ("Auto", "Show only", ...)."""
+    value = proxy.GetPropertyValue(prop)
+    value = value.GetData() if hasattr(value, "GetData") else value  # an EnumerationProperty
+    if isinstance(value, str):
+        return value
+    domain = proxy.GetProperty(prop).SMProperty.GetDomain("enum")
+    for i in range(domain.GetNumberOfEntries()):
+        if domain.GetEntryValue(i) == int(value):
+            return domain.GetEntryText(i)
+    return str(value)
+
+
+def _file_mode(path, key, reader, mode, what):
+    reader = _file_reader(path, key, reader, what)
+    reader.SelectionMode = mode
+    # the same file name and mode leave the proxy unmodified: bump the token so an edited file is read
+    reader.SelectionReload = int(reader.GetPropertyValue("SelectionReload")) + 1
+    _refresh(reader)
+    raise_load_error(reader)
+    return reader, file_ids(reader)
+
+
+def show_only_file(path=None, key=None, reader=None):
+    """Show only what an ID file lists, with the masses, SPCs and loads on its grids (the reader's
+    Selection File unless ``path`` is given). Combines with the checklists and ID boxes."""
+    return _file_mode(path, key, reader, "Show only", "Show Only File")[1]
+
+
+def hide_file(path=None, key=None, reader=None):
+    """Hide what an ID file lists (masses, SPCs and loads stay unless the file names them)."""
+    return _file_mode(path, key, reader, "Hide", "Hide File")[1]
+
+
+def _vertex_cell_ids(reader, array, runs):
+    """[flat index, process, cell, ...] of the vertex cells whose point ``array`` lies in ``runs``
+    (vertex i is cell i in masses and bushes)."""
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    from nastran_pv.vtkutil import is_vertex_only
+
+    out = []
+    data = fetch(reader)
+    it = data.NewIterator()
+    it.InitTraversal()
+    while not it.IsDoneWithTraversal():
+        ds = it.GetCurrentDataObject()
+        values = ds.GetPointData().GetArray(array) if ds is not None and is_vertex_only(ds) else None
+        if values is not None:
+            v = vtk_to_numpy(values)
+            hit = np.zeros(len(v), bool)
+            for lo, hi in runs:
+                hit |= (v >= lo) & (v <= hi)
+            out += [x for c in np.flatnonzero(hit) for x in (it.GetCurrentFlatIndex(), 0, int(c))]
+        it.GoToNextItem()
+    return out
+
+
+def highlight_file(path=None, key=None, reader=None, view=None):
+    """Select what an ID file lists as a ParaView selection on the reader (grids for a NID file,
+    elements otherwise), so Grow/Path from Selection and Show Only/Hide work on it."""
+    from nastran_pv.selection import threshold_selections
+
+    reader, ids = _file_mode(path, key, reader, "Off", "Highlight File")
+    view = view or pv.GetActiveViewOrCreate("RenderView")
+    parts = threshold_selections(Model(reader).data, ids)
+    if not parts:
+        raise RuntimeError(f"Nothing to highlight: {ids.describe()} match nothing in the model.")
+    rep = pv.GetDisplayProperties(reader, view)
+    if not rep.Visibility:
+        pv.Show(reader, view)
+    pv.SetActiveSource(reader)
+    if len(parts) == 1:
+        array, field, runs = parts[0]
+        pv.SelectThresholds(Thresholds=[float(v) for r in runs for v in r], ArrayName=array, FieldType=field,
+                            Source=reader)
+    else:  # also EIDs/PIDs that masses and bushes keep on their (vertex) points
+        from paraview import selection as pvsel
+
+        srcs = []
+        for array, field, runs in parts:
+            if field == "CELL":
+                srcs.append(pvsel._createSelection("ThresholdSelectionSource", ArrayName=array, FieldType="CELL",
+                                                   Thresholds=[float(v) for r in runs for v in r]))
+            else:  # their vertex cells by index: VTK cannot mix point and cell selection nodes
+                srcs.append(pvsel._createSelection("CompositeDataIDSelectionSource", FieldType="CELL",
+                                                   IDs=_vertex_cell_ids(reader, array, runs)))
+        names = [f"s{i}" for i in range(len(srcs))]
+        both = pvsel._createSelection("AppendSelections", Input=srcs, SelectionNames=names, Expression="|".join(names))
+        reader.SMProxy.SetSelectionInput(0, both.SMProxy, 0)
+    pv.Render(view)
+    return ids
 
 
 # --------------------------------------------------------------- model diff
@@ -2060,6 +2190,7 @@ ACTIONS = {"animate_mode": animate_mode, "animate_modes": animate_modes, "stop_m
            "hide_selected": hide_selected, "show_all": show_all, "show_only_property": show_only_property,
            "show_only_material": show_only_material, "show_only_reached": show_only_reached,
            "hide_reached": hide_reached, "side_by_side": side_by_side}
+ACTIONS.update({"show_only_file": show_only_file, "hide_file": hide_file, "highlight_file": highlight_file})
 
 
 def run_macro(name):

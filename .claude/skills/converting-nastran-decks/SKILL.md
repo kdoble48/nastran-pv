@@ -43,6 +43,7 @@ deck parsing, which is much faster on large models.
 | Model sanity (free edges, coincident grids, duplicates, dangling RBEs, floating parts) | `nastran-pv check DECK [--strict]` |
 | Beam section properties per PID (A, I1, I2, J, shear center vs card), swept CBAR/CBEAM sections | `nastran-pv sections DECK [--csv F]`; `convert DECK --beam-sections` (docs/beam-sections.md) |
 | External data per element/property | `--map FILE KEY` (CSV/TSV/JSON/xlsx/SQLite/SQLAlchemy URL; KEY = EID PID MID NID FAMILY GROUP) |
+| Only (or flag) the IDs a file lists: failing elements, a PID list, test grids | `--select ids.csv [--select-key KEY] [--select-mode mark] [--select-grids any]` (also `stats`, `store add`; header names the key, ranges/THRU ok; missing IDs are `warning:` lines; root mass stays whole-deck; docs/cli.md#selection-from-an-id-file) |
 
 ## Reading the result
 
