@@ -11,15 +11,9 @@ import numpy as np
 from .. import vtkutil
 from ..categories import CONNECTOR_TYPES, code_of
 from ..deck import Deck
+from .common import as_int as _int, grid_legs
 
 TWO_GRID = ("CELAS1", "CELAS2", "CDAMP1", "CDAMP2", "CGAP", "CFAST")
-
-
-def _int(value) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return 0
 
 
 def mpc_legs(mpc) -> tuple[list[tuple[int, int]], int]:
@@ -71,17 +65,9 @@ def build_connectors(deck: Deck):
 
     if not pairs:
         return None
-    pairs = np.asarray(pairs, dtype=np.int64)
-    gidx = deck.lookup(pairs.ravel()).reshape(-1, 2)
-    ok = np.all(gidx >= 0, axis=1)
-    if not ok.all():
-        deck.warn(f"connectors: {int((~ok).sum())} leg(s) reference unknown grids (or scalar points), skipped")
+    pd, ok = grid_legs(deck, pairs, "connectors", "unknown grids (or scalar points)")
     if not ok.any():
         return None
-    gidx = gidx[ok]
-    used, local = np.unique(gidx.ravel(), return_inverse=True)
-    pd = vtkutil.polydata(deck.xyz[used], verts=False, lines=local.reshape(-1, 2))
-    vtkutil.add_array(pd.GetPointData(), "NID", deck.nids[used])
     cd = pd.GetCellData()
     vtkutil.add_array(cd, "EID", np.asarray(eids, dtype=np.int64)[ok])
     vtkutil.add_array(cd, "ConnectorType", np.asarray(types, dtype=np.int32)[ok])

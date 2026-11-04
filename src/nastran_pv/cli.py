@@ -258,10 +258,10 @@ SECTION_COLUMNS = ("PID", "Station", "Property", "Shape", "A", "I1", "I2", "I12"
 def cmd_sections(args) -> int:
     from .fields.tables import write_csv
     from .sections.beams import MISMATCH
-    from .topology.common import read_table
+    from .vtkutil import read_field_table
 
     mb, deck, _ = load_model(args, args.verbose)
-    rows = read_table(mb, "SECTION_")
+    rows = read_field_table(mb, "SECTION_")
     if args.pid:
         rows = [r for r in rows if int(r["PID"]) in args.pid]
     rows = [{c: r.get(c) for c in SECTION_COLUMNS} for r in rows]
