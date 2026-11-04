@@ -5,7 +5,9 @@ of `.vtm` files. An output ending in `.vtkhdf`, or `--format vtkhdf`, writes VTK
 
 ## VTKHDF
 
-VTKHDF is VTK's HDF5 format, and ParaView 5.12 and later opens it natively.
+VTKHDF is VTK's HDF5 format, and ParaView opens it natively: the files nastran-pv writes are
+tested in ParaView 5.13.1 and 6.0 ([ParaView versions](install.md#paraview-versions)). Writing
+them needs VTK 9.5 or newer; with an older VTK, `convert` refuses and says so.
 
 ```bash
 nastran-pv convert run.bdf -o out/model.vtkhdf                                  # one snapshot

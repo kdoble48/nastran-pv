@@ -89,3 +89,14 @@ def test_series_without_compaction_is_equivalent(model, tmp_path):
         for name in ("Displacement", "NID"):
             np.testing.assert_array_equal(vtk_to_numpy(pa.GetPointData().GetArray(name)),
                                           vtk_to_numpy(pb.GetPointData().GetArray(name)))
+
+
+def test_old_vtk_writer_is_refused(model, tmp_path, monkeypatch):
+    # VTK 9.3's vtkHDFWriter drops the model summary and the time steps: refuse it, clearly
+    import nastran_pv.vtkhdf as vh
+
+    deck, mb = model
+    monkeypatch.setattr(vh, "vtk_version", lambda: (9, 3))
+    with pytest.raises(RuntimeError, match="needs VTK 9.5 or newer"):
+        vh.write_vtkhdf(mb, tmp_path / "x.vtkhdf")
+    assert not (tmp_path / "x.vtkhdf").exists()

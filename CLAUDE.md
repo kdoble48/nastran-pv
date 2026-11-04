@@ -10,6 +10,7 @@ python -m pytest tests/test_features.py::test_bush_frame_from_orientation_vector
 PYTHONPATH=src python -m nastran_pv convert <deck> -o out/x.vtm --derive          # CLI without installing
 PYTHONPATH=src python -m nastran_pv view <deck> --view masses --dry-run          # launcher: print, don't open
 "C:/Program Files/ParaView 6.0.0/bin/pvpython.exe" tests/pv_smoke.py            # plugin/views/filters (not pytest)
+out/pv513/ParaView-5.13.1-Windows-Python3.10-msvc2017-AMD64/bin/pvpython.exe tests/pv_smoke.py   # same on ParaView 5.13
 python paraview/install_deps.py --pvpython <pvpython>   # vendor pyNastran+scipy into paraview/_vendor
 python paraview/install_macros.py [--remove]            # NPV toolbar macros in %APPDATA%/ParaView/Macros
 PYTHONPATH=src python -m nastran_pv setup [--dry-run]   # runs both of the above
@@ -195,6 +196,13 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
     `/Root/Model/<b>` and `/Root/<b>`), and read data through `nastran_views.Model` (gathered).
   - Opening the same deck twice gives two readers with one label; `_name` then adds the proxy id,
     so they do not share `NPV ...` objects.
+- ParaView 5.x (tested 5.13.1, `out/pv513/` locally, gitignored): `servermanager.Fetch` returns an empty
+  multiblock for a `vtkPartitionedDataSetCollection`, so `nastran_views.fetch` copies the
+  builtin session's output instead (remote pvserver: a clear error). Setting
+  `GetAnimationScene().AnimationTime` from Python hangs its GUI; `_set_time` sets the TimeKeeper
+  there. Its VTK 9.3 cannot write VTKHDF (`vtkhdf.check_writer_vtk`), so `pv_smoke.convert` runs
+  the CLI in the system Python on ParaView < 6. Run pv_smoke under both before merging plugin or
+  view changes.
 - Gallery scene export (`paraview/scene_export.py`) calls trame-vtk's serializers directly. ParaView 6
   mappers take a `vtkPartitionedDataSetCollection`, which trame-vtk 2.11 drops silently unless the
   `vtkMultiBlockDataSet` serializer is also registered for it (`_init_serializers` does this).
