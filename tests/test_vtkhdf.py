@@ -74,6 +74,8 @@ def test_series_shares_geometry_and_static_arrays(model, tmp_path):
                                       vtk_to_numpy(ref.GetCellData().GetArray("Thickness")))
         label = got.GetFieldData().GetAbstractArray("ResultLabel").GetValue(0)
         assert label == res.steps[step].label
+        # DeckPath marks the file as a nastran-pv model for the ParaView views
+        assert got.GetFieldData().GetAbstractArray("DeckPath").GetValue(0) == str(deck.path)
 
 
 def test_series_without_compaction_is_equivalent(model, tmp_path):

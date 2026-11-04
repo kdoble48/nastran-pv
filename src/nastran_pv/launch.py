@@ -45,7 +45,7 @@ def gui_script(deck: str, view: str, results: str | None, extra_lines: list[str]
                              view=view, extra="\n".join(extra_lines or []))
 
 
-MODEL_FILES = (".vtm", ".vtkhdf", ".hdf")  # converted models: opened with ParaView's own readers
+MODEL_FILES = (".vtm", ".pvd", ".vtkhdf", ".hdf")  # converted models: opened with ParaView's own readers
 
 
 def _check_inputs(args) -> None:

@@ -32,8 +32,9 @@ from paraview import simple as pv
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 READER_XML = "NastranPVReader"
-MODEL_FILES = (".vtm", ".vtkhdf", ".hdf")  # nastran-pv output, opened with ParaView's own readers
-MODEL_MARK = "DeckPath"  # root field array every nastran-pv multiblock carries
+MODEL_FILES = (".vtm", ".pvd", ".vtkhdf", ".hdf")  # nastran-pv output, opened with ParaView's own readers
+MODEL_MARKS = ("DeckPath", "ModelMass")  # root fields of every nastran-pv model (a temporal VTKHDF
+# written before DeckPath joined its per-step arrays has only ModelMass)
 MESH = ("Shells", "Solids", "Lines")
 GHOST_RGB = [0.72, 0.75, 0.80]
 MAX_LOAD_ARROWS = 1500  # above this, glyph every Nth loaded grid (uniform over the mesh)
@@ -63,7 +64,7 @@ def load_reader(deck, op2=None, nsm_set=None):
             pass
         src.UpdatePipeline()
         if not is_model_file(src):
-            raise RuntimeError(f"{os.path.basename(deck)} was not written by nastran-pv (no {MODEL_MARK})")
+            raise RuntimeError(f"{os.path.basename(deck)} was not written by nastran-pv (no {MODEL_MARKS[0]})")
         return src
     # paraview.simple names the constructor after the reader label
     reader = pv.NastranBulkDatanastranpv(FileName=deck)
@@ -91,9 +92,10 @@ def is_model_file(proxy):
     if _xml_name(proxy) == READER_XML or getattr(proxy, "Input", None) is not None:
         return False  # the deck reader itself, or a filter (which copies its input's field data)
     try:
-        return MODEL_MARK in proxy.FieldData.keys()
+        keys = proxy.FieldData.keys()
     except Exception:
         return False
+    return any(mark in keys for mark in MODEL_MARKS)
 
 
 def _is_model_source(proxy):
