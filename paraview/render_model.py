@@ -60,8 +60,13 @@ def main(argv=None):
     ap.add_argument("--out", default="shots")
     ap.add_argument("--size", nargs=2, type=int, default=[1600, 1000])
     args = ap.parse_args(argv)
-    for p in render(os.path.abspath(args.deck), args.preset, args.views, args.out, args.size, args.op2, args.step,
-                    args.nsm_set):
+    try:
+        written = render(os.path.abspath(args.deck), args.preset, args.views, args.out, args.size, args.op2,
+                         args.step, args.nsm_set)
+    except RuntimeError as exc:  # a deck that does not load, a converted file with --op2, ...
+        print(f"nastran-pv render: {exc}", file=sys.stderr)
+        return 1
+    for p in written:
         print(p)
     return 0
 
