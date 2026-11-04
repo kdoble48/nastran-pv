@@ -44,6 +44,8 @@ VIEW_INFO = {
     "nsm": ("NSM", "Nonstructural mass: shells by NSM per area, lines by NSM per length; totals per source "
                    "and NSM set."),
     "results": ("Results", "Deformed shape colored by displacement magnitude, one scene per mode."),
+    "random": ("Random RMS", "Base-drive random response from the modes: acceleration RMS, log scale."),
+    "randomsweep": ("Random sweep", "Response ASD at each frequency frame, on one log range."),
     "parts": ("Parts", "Connected parts with the rigid elements unchecked: the RBE2/RBE3 spiders turn gray as the "
                        "links the rules cut, and the part summary shows what they carry."),
     "grow": ("Grow", "Element hops from the root rib (seed PID 238) through skins, spars, ribs and rigid elements, "

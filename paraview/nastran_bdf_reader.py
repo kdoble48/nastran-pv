@@ -122,6 +122,13 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         self._mb_key = None
         self._results = None
         self._results_key = None
+        self._random_asd = ""
+        self._random_drive = 2
+        self._random_damping = 0.05
+        self._random_g = 0.0
+        self._random_frames = 100
+        self._random = None
+        self._random_key = None
         self._show_only = ""
         self._hidden = ""
         self._listing = False  # filling the checklists must not re-execute the reader
@@ -149,6 +156,39 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
     @smhint.filechooser(extensions="op2 OP2 h5 hdf5", file_description="Nastran results (OP2, MSC/NX HDF5)")
     def SetOP2FileName(self, name):
         self._set("_op2name", name or "")
+
+    # ----------------------------------------------- random vibration
+    def _set_random(self, attr, value):
+        if getattr(self, attr) != value:
+            setattr(self, attr, value)
+            self.Modified()
+
+    @smproperty.stringvector(name="RandomASD", default_values="")
+    def SetRandomASD(self, v):
+        """Base-acceleration ASD for a random response from the OP2 modes: a two-column CSV/text
+        file or "20:0.01,80:0.04,2000:0.007" (unit^2/Hz). Empty: the OP2 steps as they are."""
+        self._set_random("_random_asd", (v or "").strip())
+
+    @smproperty.intvector(name="RandomDrive", default_values=2)
+    @smdomain.xml('<EnumerationDomain name="enum"><Entry value="0" text="X"/><Entry value="1" text="Y"/>'
+                  '<Entry value="2" text="Z"/></EnumerationDomain>')
+    def SetRandomDrive(self, v):
+        self._set_random("_random_drive", int(v))
+
+    @smproperty.doublevector(name="RandomDamping", default_values=0.05)
+    def SetRandomDamping(self, v):
+        """Modal critical-damping ratio (0.05 = Q 10)."""
+        self._set_random("_random_damping", float(v))
+
+    @smproperty.doublevector(name="RandomG", default_values=0.0)
+    def SetRandomG(self, v):
+        """Model length/s^2 per input acceleration unit (9806.65 for g in mm); 0 = no DispRMS."""
+        self._set_random("_random_g", float(v))
+
+    @smproperty.intvector(name="RandomFrames", default_values=100)
+    @smdomain.intrange(min=1)
+    def SetRandomFrames(self, v):
+        self._set_random("_random_frames", int(v))
 
     def _set_flag(self, key, value):
         self._set_key("_flags", key, bool(value))
@@ -255,7 +295,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
 
     @smproperty.doublevector(name="TimestepValues", information_only="1", si_class="vtkSITimeStepsProperty")
     def GetTimestepValues(self):
-        res = self._get_results(quiet=True)
+        res = self._get_response(quiet=True)
         return res.times if res is not None and res.steps else None
 
     # --------------------------------------------------------------- loading
@@ -296,7 +336,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         from nastran_pv.assemble import Options, build_multiblock
 
         key = (self._deck_key, tuple(sorted(self._flags.items())), self._k_ref, self._nodal, self._nsm_set,
-               self._op2name)
+               self._op2name, bool(self._random_asd))  # random arrays and mode arrays never mix
         if key != self._mb_key:
             deck.reset_warnings(self._base_warnings)
             opts = Options(k_ref=self._k_ref or None, nodal_arrays=self._nodal,
@@ -322,13 +362,37 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
             return None
         return self._results
 
+    def _get_response(self, quiet=False):
+        """The OP2 results, or the random response computed from their modes (RandomASD set)."""
+        res = self._get_results(quiet)
+        if res is None or not self._random_asd or not self._filename:
+            return res
+        try:
+            deck = self._get_deck()
+            mb, _ = self._get_multiblock(deck)
+            key = (self._results_key, self._mb_key, self._random_asd, self._files_key([self._random_asd]),
+                   self._random_drive, self._random_damping, self._random_g, self._random_frames)
+            if key != self._random_key:
+                from nastran_pv.randvib import DRIVES, RandomResponse
+
+                self._random = None
+                self._random = RandomResponse(res, mb, self._random_asd, DRIVES[self._random_drive % 3],
+                                              self._random_damping, self._random_g or None,
+                                              self._random_frames, deck=deck)
+                self._random_key = key
+        except Exception as exc:
+            if not quiet:
+                _message(f"nastran-pv: random response: {exc}", error=True)
+            return None
+        return self._random
+
     def RequestInformation(self, request, inInfo, outInfo):
         info = outInfo.GetInformationObject(0)
         key_steps = vtkStreamingDemandDrivenPipeline.TIME_STEPS()
         key_range = vtkStreamingDemandDrivenPipeline.TIME_RANGE()
         info.Remove(key_steps)
         info.Remove(key_range)
-        res = self._get_results(quiet=True)
+        res = self._get_response(quiet=True)
         if res is not None and res.steps:
             times = res.times
             for t in times:
@@ -400,7 +464,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
             rebuilt = self._reported_key != self._mb_key  # RequestInformation may have built it
             self._reported_key = self._mb_key
             self._list_categories(mb, deck)
-            res = self._get_results()
+            res = self._get_response()
             time_value = None
             if res is not None and res.steps:
                 info = outInfo.GetInformationObject(0)

@@ -34,7 +34,8 @@ source (or the source upstream of it).
 
 A converted file is fixed at conversion time, so a few things still need the deck:
 
-* *OP2 File Name* and *NSMSet*: convert again with `--results` or `--nsm-set` instead.
+* *OP2 File Name*, *NSMSet* and the *Random* properties: convert again with `--results`,
+  `--nsm-set` or `--random` instead.
 * The visibility checklists and the Show Only / Hide / Show All macros. On a converted file,
   use ParaView's Extract Selection or Threshold.
 
@@ -96,6 +97,8 @@ summary. Running a view again reuses its pipeline objects, which are named `NPV 
 | NPV Thickness | Shell thickness |
 | NPV NSM | Nonstructural mass: shells by NSM per area, lines by NSM per length (two legends); totals by source and per NSM set, or the defined sets when none is selected. The reader's *NSMSet* picks the bulk set (-1 = Case Control `NSM=`, or the only set of a bulk-only file; 0 = none; see [Nonstructural mass](model.md#nonstructural-mass)) |
 | NPV Results | Deformed shape colored by displacement over the undeformed outline, for the current time step; the largest displacement is drawn at 8 % of the model size (*NPV deform* > *Scale Factor*) |
+| NPV Random RMS | Random response (reader *Random ASD* set, see [Random vibration](random-vibration.md)): the mesh colored by acceleration RMS on a log scale, with the drive, input RMS and captured mass |
+| NPV Random Sweep | The response ASD at the current frequency frame on one fixed log range, with the frame's frequency: press play to sweep |
 | NPV Animate Mode | Vibrates the mode the time controls are on, in the view as it is (masses, PID, loads, results, a show-only subset, anything you switched on): two cycles at 24 frames/s. It then leaves the **play button** looping that mode: the time steps become the 24 phases of one cycle (the time widget reads *Phase*), and the mode and its frequency stay in the upper right corner. A converted single-step file (`convert --results` without `--all-steps`) has one mode. From Python: `nv.play_mode(3, frames=36)` |
 | NPV Stop Mode Animation | Gives the time controls back to the modes, on the mode that vibrated. Any NPV view, Animate All Modes and Save Mode Animations do this too. Step to another mode and click NPV Animate Mode again |
 | NPV Animate All Modes | Plays every mode in turn, one cycle each, in the view as it is, with each mode's frequency shown, then returns to the step it was on. A view with nothing drawn through *NPV deform* gets NPV Results first. Modes whose step has no displacement are listed in Output Messages |

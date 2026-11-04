@@ -61,6 +61,7 @@ The docs describe behavior that lives in code. Update them in the same change wh
 | `VIEW_NAMES`, `nastran_views.py`, `install_macros.py` | [paraview.md](paraview.md), [cli.md](cli.md#batch-screenshots), [paraview-tutorials.md](paraview-tutorials.md) (images: `pvpython docs/build_tutorial_images.py --ucrm9 <coarse run deck> --demo-op2 <demo.OP2>`) |
 | Plugin proxies in `nastran_bdf_reader.py`, `tree.py` | [paraview.md](paraview.md), [fields.md](fields.md#paraview-filters) |
 | Builders, `assemble.py`, `results*.py` | [model.md](model.md) |
+| `randvib.py`, the reader's *Random* properties, the `random`/`randomsweep` views | [random-vibration.md](random-vibration.md), [model.md](model.md), [cli.md](cli.md) |
 | `sections/` (shapes, properties, frames, sweep) | [beam-sections.md](beam-sections.md), [model.md](model.md) (figure: `python docs/build_section_figure.py`) |
 | `topology/`, the topology proxies, selection macros | [tools.md](tools.md), [model.md](model.md) |
 | `vtkio.py`, `vtkhdf.py`, `store.py` | [output-formats.md](output-formats.md), [store.md](store.md) |

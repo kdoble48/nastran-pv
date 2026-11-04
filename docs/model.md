@@ -28,6 +28,9 @@ bulk sets, when the deck has any) and, when there is NSM, the
 `NSM_SET NSM_SetType NSM_SetMass NSM_SetCount` (per NSM set) and `NSM_PID NSM_PIDMass` tables
 (see [Nonstructural mass](#nonstructural-mass)). Decks with CBAR/CBEAM also get the
 `SECTION_*`, `SECRING_*` and `SECPT_*` section tables (see [Beam sections](beam-sections.md)).
+A [random response](random-vibration.md) (`--random`) replaces the result arrays with point
+`AccelRMS AccelN0 DispRMS DominantMode DominantModeShare AccelASD` and adds the `RANDOM_*` and
+`RANDOMIN_*` tables and `RandomDrive RandomInputRMS RandomAccelASDRange RandomFrameFrequencies`.
 The [model tools](tools.md) add `Hops`, `PartId` and `OnPath` (cell and point) and the `PART_*`,
 `LINK_*` and `PathLength` root arrays; `nastran-pv check` writes `CHECK_*`.
 With an OP2 file loaded, the mesh blocks also get `Displacement Rotation DisplacementMagnitude`
@@ -68,6 +71,8 @@ The [field options](fields.md) add further arrays on top of these.
   system's x-axis onto the element plane.
 * **Results.** OP2 and HDF5 displacements and eigenvectors are rotated from each grid's CD system
   into basic. Complex results (SOL 107/108/110/111) are skipped with a message.
+* **Random vibration.** Computed by nastran-pv from the normal modes and an input ASD, by modal
+  superposition on a lumped mass (see [Random vibration](random-vibration.md#method)).
 * **MSC/NX HDF5.** The reader handles `/NASTRAN/RESULT/{DOMAINS, NODAL/DISPLACEMENT,
   NODAL/EIGENVECTOR, ELEMENTAL/STRESS/*}`. Von Mises is computed from the components: plates use
   `X1 Y1 XY1`/`X2 Y2 XY2` on both fibres, and solids use `X Y Z TXY TYZ TZX`, taking the maximum

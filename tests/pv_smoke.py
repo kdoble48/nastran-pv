@@ -463,6 +463,68 @@ def tree_checks(pv, nv, reader):
     pv.Delete(view)
 
 
+def random_checks(pv, nv):
+    """Random response from synthesized modes: reader properties, both views, a converted series."""
+    from op2_fixture import make_modes_op2
+
+    asd = "20:0.01,80:0.04,350:0.04,2000:0.007"
+    tmp = tempfile.mkdtemp()  # not removed: the open VTKHDF reader keeps its file locked
+    op2 = os.path.join(tmp, "modes.op2")
+    make_modes_op2().write_op2(op2)
+    rnd = rm.load_reader(DECK, op2, random={"asd": asd, "drive": "Z", "damping": 0.05, "g": 9.80665,
+                                            "frames": 10})
+    steps = rm.timesteps(rnd)
+    check(len(steps) == 12, f"random frames: 10 log-spaced + 2 modes = {len(steps)}")
+    model = rm.Model(rnd, steps[3])
+    pd = model.block("Shells").GetPointData()
+    check(all(pd.GetArray(a) is not None for a in ("AccelRMS", "AccelN0", "DispRMS", "DominantMode",
+                                                  "AccelASD")) and pd.GetArray("Displacement") is None,
+          "random arrays on Shells, no Displacement")
+    check(model.field_strings(None, "ResultLabel")[0].startswith("Random Z "), "random frame label")
+    view = pv.CreateRenderView()
+    view.ViewSize = [400, 300]
+    model = nv.apply("random", reader=rnd, view=view)
+    lut = pv.GetColorTransferFunction("AccelRMS")
+    check(lut.UseLogScale == 1, "random view: log color scale")
+    model = nv.apply("randomsweep", reader=rnd, view=view)
+    lut = pv.GetColorTransferFunction("AccelASD")
+    rng = model.field("RandomAccelASDRange")
+    check(lut.UseLogScale == 1 and lut.AutomaticRescaleRangeMode == "Never"
+          and abs(lut.RGBPoints[-4] - float(rng[1])) <= 1e-9 * float(rng[1]),
+          "randomsweep view: one fixed log range for every frame")
+    label = pv.FindSource(nv._name(model, "frequency label"))
+    label.UpdatePipeline(steps[5])
+    text = label.GetClientSideObject().GetOutput().GetValue(0, 0).ToString()
+    check(text.startswith("Random Z "), f"frequency label follows the frame: {text!r}")
+    pv.SaveScreenshot(os.path.join(tmp, "random.png"), view)
+    rnd.RandomASD = ""
+    rnd.UpdatePipelineInformation()
+    back = rm.Model(rnd, rm.timesteps(rnd)[0]).block("Shells").GetPointData()
+    check(back.GetArray("AccelRMS") is None and back.GetArray("Displacement") is not None,
+          "clearing Random ASD gives the modes back, without random arrays")
+    empty = pv.CreateRenderView()
+    nv.apply("random", reader=rnd, view=empty)  # no random response: an info text, no error
+    pv.Delete(empty)
+
+    series = os.path.join(tmp, "rv.vtkhdf")
+    convert(["convert", DECK, "--results", op2, "--random", asd, "--random-frames", "3", "--all-steps",
+             "-o", series, "-q"])
+    src = nv.load_reader(series)
+    check(len(rm.timesteps(src)) == 5, "converted random series: 3 frames + 2 modes")
+    model = nv.apply("randomsweep", reader=src, view=view)
+    label = pv.FindSource(nv._name(model, "frequency label"))
+    label.UpdatePipeline(rm.timesteps(src)[2])
+    text = label.GetClientSideObject().GetOutput().GetValue(0, 0).ToString()
+    from vtkmodules.vtkCommonCore import vtkVersion
+
+    if vtkVersion.GetVTKMajorVersion() * 100 + vtkVersion.GetVTKMinorVersion() >= 905:
+        check(text == "Random Z 120 Hz", f"converted series: frequency label at step 2 {text!r}")
+    else:  # ParaView 5.x: its VTKHDF reader stamps the previous time on the output (known, documented)
+        check(text.startswith("Random Z "), f"converted series (ParaView 5.x): frequency label {text!r}")
+    nv.apply("random", reader=src, view=view)
+    pv.Delete(view)
+
+
 def main():
     reader = rm.load_reader(DECK)
     model = rm.Model(reader)
@@ -809,6 +871,7 @@ def main():
           f"same deck twice: {nv._name(nv.Model(twin), 'mesh')!r}; the first keeps its names")
     pv.Delete(twin)
     converted_checks(pv, nv, reader)
+    random_checks(pv, nv)
     topology_checks(pv, nv)
     print("pv_smoke: all checks passed")
 
