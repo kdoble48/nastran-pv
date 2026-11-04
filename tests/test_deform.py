@@ -93,9 +93,24 @@ def test_peak_scale_is_a_fraction_of_the_diagonal(model):
                               .reshape(-1, 3), axis=1).max()
                for b in ("Shells", "Solids") if get_block(mb, b) is not None)
     assert peak == pytest.approx(0.7)  # T3 of grid 7
-    lo = np.min([_xyz(get_block(mb, b)).min(0) for b in ("Shells", "Solids")], axis=0)
-    hi = np.max([_xyz(get_block(mb, b)).max(0) for b in ("Shells", "Solids")], axis=0)
-    assert s * peak <= 0.1 * np.linalg.norm(hi - lo) * 1.5 and s > 0
+    # the diagonal spans every leaf with points (glyph-free blocks such as Masses too)
+    it = mb.NewTreeIterator()
+    it.VisitOnlyLeavesOn()
+    pts = []
+    it.InitTraversal()
+    while not it.IsDoneWithTraversal():
+        ds = it.GetCurrentDataObject()
+        if ds is not None and hasattr(ds, "GetPoints") and ds.GetPoints() is not None and ds.GetNumberOfPoints():
+            pts.append(_xyz(ds))
+        it.GoToNextItem()
+    xyz = np.vstack(pts)
+    diag = np.linalg.norm(xyz.max(0) - xyz.min(0))
+    assert s * peak == pytest.approx(0.1 * diag)
+
+
+def test_peak_scale_is_zero_without_results():
+    mb = build_multiblock(load_deck(DATA / "tiny_run.bdf", echo=False))  # no Displacement
+    assert peak_scale(mb, 0.1) == 0.0
 
 
 def test_deformer_reused_across_scales_matches_deform(model):

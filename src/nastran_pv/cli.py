@@ -212,19 +212,26 @@ def cmd_convert(args) -> int:
     print("\n".join(summarize(mb)))
     for n in notes:
         print(n)
-    if deck is not None and deck.warnings:
-        print(f"{len(deck.warnings)} warning(s); first few:")
-        for w in deck.warnings[:10]:
-            print(f"  {w}")
+    print_warnings(deck)
     return 0
+
+
+def print_warnings(deck, file=None, limit=10) -> None:
+    """The deck's first warnings (mass ones come first, see ``Deck.warn``)."""
+    if deck is None or not deck.warnings:
+        return
+    print(f"{len(deck.warnings)} warning(s); first few:", file=file)
+    for w in deck.warnings[:limit]:
+        print(f"  {w}", file=file)
 
 
 def cmd_stats(args) -> int:
     from .fields.calc import group_stats
     from .fields.tables import write_csv
 
-    mb, _, _ = load_model(args, args.verbose)
+    mb, deck, _ = load_model(args, args.verbose)
     apply_field_options(mb, args)
+    print_warnings(deck, file=sys.stderr)  # stderr: the table (or --csv) stays clean
     rows = group_stats(mb, args.by, args.field, broadcast=False)
     if args.sort:
         rows.sort(key=lambda r: -(r.get(f"{args.field}_{args.sort}") or 0))
@@ -237,7 +244,8 @@ def cmd_stats(args) -> int:
 def cmd_check(args) -> int:
     from .topology import CHECKS, Rules, check
 
-    mb, _, _ = load_model(args, args.verbose)
+    mb, deck, _ = load_model(args, args.verbose)
+    print_warnings(deck, file=sys.stderr)
     try:
         res = check(mb, Rules.parse(args.rules), tol=args.tol, checks=args.only or CHECKS)
     except ValueError as exc:

@@ -25,7 +25,7 @@ CAMERAS = ("iso", "top", "front", "side", "showcase")
 def render(deck, presets, cameras, out, size, op2=None, step=0, nsm_set=None):
     os.makedirs(out, exist_ok=True)
     reader = load_reader(deck, op2, nsm_set)
-    times = timesteps(reader) if op2 else []
+    times = timesteps(reader)  # results attached to a deck, or a converted series
     t = times[min(step, len(times) - 1)] if times else 0.0
     model = Model(reader, t)
     base = os.path.splitext(os.path.basename(deck))[0]

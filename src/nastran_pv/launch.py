@@ -84,7 +84,8 @@ def cmd_render(args) -> int:
     cmd = [str(exe), str(paraview_scripts_dir() / "render_model.py"), str(Path(args.deck).resolve()),
            "--out", args.out, "--size", *map(str, args.size), "--preset", *args.preset, "--views", *args.views]
     if args.results:
-        cmd += ["--op2", str(Path(args.results).resolve()), "--step", str(args.step)]
+        cmd += ["--op2", str(Path(args.results).resolve())]
+    cmd += ["--step", str(args.step)]  # also picks the step of a converted series
     if args.nsm_set is not None:
         cmd += ["--nsm-set", str(args.nsm_set)]
     if args.dry_run:
@@ -110,7 +111,7 @@ def cmd_setup(args) -> int:
 
 def add_parsers(sub) -> None:
     v = sub.add_parser("view", help="open the ParaView GUI on a deck with a ready-made view")
-    v.add_argument("deck", help="run deck, bulk-data file, or a .vtm/.vtkhdf written by nastran-pv convert")
+    v.add_argument("deck", help="run deck, bulk-data file, or a .vtm/.vtkhdf/.pvd written by nastran-pv convert")
     v.add_argument("--view", default="pid", choices=VIEW_NAMES)
     v.add_argument("--results", "--op2", dest="results", help="OP2 or MSC HDF5 (.h5) results file")
     v.add_argument("--nsm-set", type=nsm_set_id, default=None, metavar="ID", help="bulk NSM set (0 = none)")
@@ -119,14 +120,15 @@ def add_parsers(sub) -> None:
     v.set_defaults(func=cmd_view)
 
     r = sub.add_parser("render", help="batch screenshots via pvpython")
-    r.add_argument("deck", help="run deck, bulk-data file, or a .vtm/.vtkhdf written by nastran-pv convert")
+    r.add_argument("deck", help="run deck, bulk-data file, or a .vtm/.vtkhdf/.pvd written by nastran-pv convert")
     r.add_argument("--preset", nargs="+", default=["family", "masses", "loads", "spc"],
                    choices=[n for n in VIEW_NAMES if n != "none"])
     r.add_argument("--views", nargs="+", default=["iso"], choices=["iso", "top", "front", "side", "showcase"])
     r.add_argument("--out", default="shots")
     r.add_argument("--size", nargs=2, type=int, default=[1600, 1000])
     r.add_argument("--results", "--op2", dest="results")
-    r.add_argument("--step", type=int, default=0)
+    r.add_argument("--step", type=int, default=0,
+                   help="0-based result step: of --results, or of a converted series")
     r.add_argument("--nsm-set", type=nsm_set_id, default=None, metavar="ID", help="bulk NSM set (0 = none)")
     r.add_argument("--pvpython", help="path to pvpython")
     r.add_argument("--dry-run", action="store_true")

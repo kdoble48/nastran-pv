@@ -3,7 +3,8 @@
 pyNastran's ``mass_properties`` loops over elements in Python (~40 s for a
 200k-hex model), so masses are computed here from VTK cell sizes instead:
 
-* solids: volume x density (linear tet/hex/wedge/pyramid in numpy, the rest by VTK)
+* solids: volume x density (numpy when every cell is a linear tet/hex/wedge/pyramid, else
+  VTK's cell sizes for the whole block)
 * shells: area x structural mass-per-area (all plies), else area x thickness x density
 * lines:  length x cross-section area x density
 
