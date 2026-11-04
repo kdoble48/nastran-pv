@@ -38,16 +38,19 @@ long table with the columns `Item Id Name Status Field A B Delta Rel`.
 
 | Item | Matched by | Changed when |
 |---|---|---|
-| Grid | NID (grids used by an element, mass or connector) | it moved more than `--grid-tol` × A's bounding-box diagonal (default 1e-6) |
+| Grid | NID (grids used by an element, connector, SPC or load) | it moved more than `--grid-tol` × A's bounding-box diagonal (default 1e-6) |
 | Element | EID, within Shells, Solids or Lines | its element type, PID, MID or grid list differs, or one of its grids moved |
-| Concentrated mass | EID in `Masses` | its mass or CG position differs |
-| Property | PID | `Thickness`, `Area`, `MassPerArea`, `Density`, `MID` or `NSMPerArea`/`NSMPerLength` of its elements differ |
+| Concentrated mass | EID in `Masses` | its mass or CG position (grid plus offset) differs; a moved mass gets X/Y/Z rows like a grid |
+| Property | PID | its elements' `MID`, and `Thickness`/`NSMPerArea` (shells) or `Area`/`NSMPerLength` (lines) differ |
 | Material | MID | `Type`, `E`, `E2`, `G`, `Nu` or `Rho` (the `MAT_*` table) differ |
 
 Values differ when `|b - a| > --rel-tol × max(|a|, |b|)` (default 1e-6). Properties and materials
 are compared through the elements that use them, so a card that no element references is not
-reported. An element that moved from one block to another (a CQUAD4 that became a CBAR) counts as
-removed and added. Rigid elements, connectors, bushes, loads, SPCs and coordinate systems are not
+reported. A density change is a material change (`Rho`), not also a property change, and derived
+fields such as the shell `Area` from `--derive size` are not property values, so a converted file
+with derived fields compares cleanly with a plain one. An element that moved from one block to
+another (a CQUAD4 that became a CBAR, or a shell id reused by a solid: Shells to Solids) counts as
+removed from the one block and added to the other. Rigid elements, connectors, bushes, loads, SPCs and coordinate systems are not
 compared.
 
 The mass is the sum of `ElementMass` (structural plus NSM) and the concentrated masses, with the
@@ -116,6 +119,12 @@ to A. Output 0 is B with the arrays above and the
 such as element types and grid lists are in its `Text` column. *GridTolerance* and
 *RelativeTolerance* are `--grid-tol` and `--rel-tol`. From Python:
 `pv.NastranDiff(Input=b, Reference=a)`.
+
+Applied directly to a deck reader, the diff compares the whole model, including elements the
+reader hides (*Hidden Elements*, *Show Only*, unchecked properties and the other checklists), so
+hiding part of B does not make it "removed". When an input comes through another filter (Nastran
+Derived Fields, Extract Block, ...), the diff sees only what that filter passes, and Output Messages
+says so.
 
 ### Side by side
 

@@ -232,6 +232,50 @@ def test_models_without_masses_or_materials(tmp_path):
     assert set(by_eid(get_block(out, "Removed"), "EID")) >= {100, 101}
 
 
+def test_derived_size_arrays_are_not_property_values(models, tmp_path):
+    from nastran_pv.fields.derived import add_derived
+
+    a, b = shallow_clone(models[0]), shallow_clone(models[1])
+    add_derived(a, ["size"])  # writes the cell area as Area on Shells
+    add_derived(b, ["size"])
+    s = summary(diff_models(a, b))
+    assert s["properties"]["Changed"] == 2 and s == summary(diff_models(*models))
+    assert summary(diff_models(models[0], b)) == s  # derived vs plain input
+    # only GRID 5 moves: element areas change, no property does
+    moved = _variant(tmp_path, "moved.bdf", ("GRID,5,,1.,1.,0.", "GRID,5,,1.1,1.,0."))
+    add_derived(moved, ["size"])
+    d = diff_models(a, moved)
+    assert summary(d)["properties"]["Changed"] == 0 and summary(d)["grids"]["Changed"] == 1
+    assert not [r for r in d.rows if r["Item"] == "property"]
+
+
+def test_material_edit_is_not_also_a_property_change(models, tmp_path):
+    b = _variant(tmp_path, "rho.bdf", ("MAT1,3,1000.,,0.3,1.0", "MAT1,3,1000.,,0.3,2.0"))
+    out = shallow_clone(b)
+    d = annotate(out, models[0])
+    assert summary(d)["properties"]["Changed"] == 0 and summary(d)["materials"]["Changed"] == 1
+    assert by_eid(get_block(out, "Shells"), "DiffReason")[6] == MATERIAL_VALUES
+
+
+def test_mass_cg_is_not_a_grid_and_a_moved_mass_reports_its_position(tmp_path):
+    grid = "GRID,50,,5.,0.,9.\n"
+    a = _variant(tmp_path, "a.bdf", ("CONM2,100,7,,2.0", "CONM2,100,7,,2.0\n" + grid + "CONM2,200,50,,1.0"))
+    b = _variant(tmp_path, "b.bdf", ("CONM2,100,7,,2.0", "CONM2,100,7,,2.0\n" + grid + "CONM2,200,50,,1.0,0.,0.,1."))
+    d = diff_models(a, b)
+    assert summary(d)["grids"] == {"A": 11, "B": 11, "Same": 11, "Added": 0, "Removed": 0, "Changed": 0}
+    mass = [r for r in d.rows if r["Item"] == "mass"]
+    assert [(r["Id"], r["Status"], r["Field"], r["A"], r["B"]) for r in mass] == [(200, "changed", "Z", 9.0, 10.0)]
+    assert summary(d)["masses"]["Changed"] == 1
+
+
+def test_masses_block_without_eid_or_mass(models):
+    a = shallow_clone(models[0])
+    for name in ("EID", "Mass"):
+        get_block(a, "Masses").GetPointData().RemoveArray(name)
+    s = summary(diff_models(a, models[1]))
+    assert s["masses"]["A"] == 0 and s["masses"]["Added"] == 2
+
+
 def test_table_rows_have_one_type_per_column(models):
     from nastran_pv.diff import table_rows
 
@@ -288,3 +332,5 @@ def test_cli_diff_and_convert(tmp_path, capsys):
     assert vtkutil.to_numpy(back.GetFieldData().GetArray("ModelMass"))[0] == pytest.approx(14.4)
     with pytest.raises(SystemExit):
         main(["diff", str(A_DECK), str(tmp_path / "missing.bdf"), "-q"])
+    assert main(["diff", str(A_DECK), str(B_DECK), "--limit", "0", "-q"]) == 0  # headers only
+    assert "... 3 more rows" in capsys.readouterr().out

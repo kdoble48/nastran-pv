@@ -148,7 +148,10 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   (`group_stats` + `store.keyed_diff`). `annotate` writes `DiffStatus`/`DiffReason`/deltas, a
   `Removed` block (in none of the mesh-block lists) and `DIFF_*`/`DIFFMASS_*` tables onto B. Used
   by `diff`, `convert --diff-against`, the *Nastran Diff* proxy (two inputs) and the `diff` view;
-  `nastran_views.side_by_side` adds a second, camera-linked view.
+  `nastran_views.side_by_side` adds a second, camera-linked view. The reader tags its output with
+  `NPVWholeModel` (field string + array signature) so a Nastran Diff fed directly by it diffs the
+  whole cached multiblock, hidden elements included; downstream pipeline objects get copies, so
+  object identity cannot be used.
 - `store.py`: SQLite in long format (`runs`, `elements`, `nodes`, `element_values`,
   `node_values`), plus `<db>_vtm/run_<id>.vtm`.
 - `cli.py`: the `convert`, `stats`, `check`, `sections`, `diff` and `store` commands, with shared field options.

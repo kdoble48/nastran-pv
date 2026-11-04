@@ -80,6 +80,59 @@ def _missing(exc):
     return 0
 
 
+# Each reader output carries a WHOLE_MODEL_TAG field string naming its entry here: the whole multiblock
+# before the visibility cut and the output's array signature. A filter fed directly by the reader
+# (Nastran Diff) finds it, so hidden elements still count. Downstream pipeline objects get copies
+# of the output, so the tag is matched with the signature: a filter in between that adds arrays
+# (or cuts pieces) changes it, and its own output is used instead.
+WHOLE_MODEL_TAG = "NPVWholeModel"
+_WHOLE_MODEL = {}
+
+
+def _signature(pdc):
+    """Pieces and the array names of each: what a pass-through keeps and any filter changes."""
+    out = []
+    for i in range(pdc.GetNumberOfPartitionedDataSets()):
+        p = pdc.GetPartition(i, 0)
+        if p is None:
+            out.append(None)
+            continue
+        out.append((p.GetNumberOfCells(), p.GetNumberOfPoints(),
+                    tuple(p.GetCellData().GetArrayName(k) for k in range(p.GetCellData().GetNumberOfArrays())),
+                    tuple(p.GetPointData().GetArrayName(k) for k in range(p.GetPointData().GetNumberOfArrays()))))
+    return tuple(out)
+
+
+def _tag_whole_model(reader, output, mb):
+    from vtkmodules.vtkCommonDataModel import vtkFieldData
+
+    from nastran_pv import vtkutil
+
+    tag = f"{id(reader)}"
+    _WHOLE_MODEL[tag] = (mb, _signature(output))
+    fd = vtkFieldData()  # a copy: the tree's field data is the cached model's root
+    fd.ShallowCopy(output.GetFieldData())
+    fd.RemoveArray(WHOLE_MODEL_TAG)
+    vtkutil.add_string_array(fd, WHOLE_MODEL_TAG, [tag])
+    output.SetFieldData(fd)
+
+
+def _whole_model(data):
+    """``(multiblock, maybe_cut)``: the reader's whole model when ``data`` is a reader's own output,
+    else ``data`` gathered into a multiblock; maybe_cut is True for a model tree that came through
+    another filter, whose reader may hide elements (its pieces carry a BlockPath)."""
+    from nastran_pv.tree import BLOCK_PATH, as_multiblock
+
+    tag = data.GetFieldData().GetAbstractArray(WHOLE_MODEL_TAG)
+    found = _WHOLE_MODEL.get(tag.GetValue(0)) if tag is not None and tag.GetNumberOfValues() else None
+    if found is not None and data.IsA("vtkPartitionedDataSetCollection") and found[1] == _signature(data):
+        return found[0], False
+    first = None
+    if data.IsA("vtkPartitionedDataSetCollection") and data.GetNumberOfPartitionedDataSets():
+        first = data.GetPartition(0, 0)
+    return as_multiblock(data), first is not None and first.GetFieldData().GetAbstractArray(BLOCK_PATH) is not None
+
+
 class _Settable:
     """Property setters that re-execute only on a change. Plain methods (no ``_pvsm`` tags), so
     the proxies' XML is unchanged."""
@@ -499,6 +552,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         output.ShallowCopy(pdc)
         if time_value is not None:
             output.GetInformation().Set(vtkDataObject.DATA_TIME_STEP(), time_value)
+        _tag_whole_model(self, output, mb)  # for Nastran Diff: hidden elements still count
         return 1
 
 
@@ -1431,15 +1485,19 @@ class NastranPVDiff(_Settable, VTKPythonAlgorithmBase):
         try:
             from nastran_pv.diff import Tolerances, annotate, table_rows
             from nastran_pv.fields import shallow_clone
-            from nastran_pv.tree import as_multiblock
         except ImportError as exc:
             return _missing(exc)
         b_in, a_in = vtkDataObject.GetData(inInfo[0], 0), vtkDataObject.GetData(inInfo[1], 0)
         if b_in is None or a_in is None:
             return 1
-        b = shallow_clone(as_multiblock(b_in))
+        (b, b_cut), (a, a_cut) = _whole_model(b_in), _whole_model(a_in)
+        b = shallow_clone(b)  # never add arrays to the reader's cached model
+        if b_cut or a_cut:
+            _message("nastran-pv Diff: an input comes through another filter, so the diff sees only the "
+                     "elements that filter passes (not those the reader hides). Apply Nastran Diff directly "
+                     "to the readers to compare the whole models.")
         try:
-            d = annotate(b, as_multiblock(a_in), Tolerances(self._grid_tol, self._rel_tol))
+            d = annotate(b, a, Tolerances(self._grid_tol, self._rel_tol))
             _fill_table(vtkTable.GetData(outInfo, 1), table_rows(d))
         except Exception as exc:  # report, pass B through unchanged
             _message(f"nastran-pv Diff: {exc}", error=True)

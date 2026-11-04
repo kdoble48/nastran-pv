@@ -585,6 +585,26 @@ def diff_checks(pv, nv):
     check(shown == ["NPV diff removed [diff_b.bdf]", "NPV info [diff_a.bdf]", "NPV mesh [diff_a.bdf]"],
           f"side by side DiffStatus, left: {shown}")
 
+    # hidden elements are still part of the model: a reader's hidden EID 6 is not "removed"
+    same_a = rm.load_reader(os.path.join(HERE, "data", "diff_a.bdf"))
+    same_b = rm.load_reader(os.path.join(HERE, "data", "diff_a.bdf"))
+    same_b.HiddenElements = "6"
+    same_b.UpdatePipeline()
+    check(6 not in _by_eid(same_b, "Shells", "EID"), "reader hides EID 6")
+    sd = pv.NastranDiff(Input=same_b, Reference=same_a)
+    sd.UpdatePipeline()
+    counts, delta = _diff_counts(nv, sd)
+    check(all(c == (0, 0, 0) for c in counts.values()) and delta == 0.0
+          and _by_eid(sd, "Shells", "DiffStatus").get(6) == 0, f"diff ignores hidden elements: {counts}, {delta}")
+    derived = pv.NastranDerivedFields(Input=same_b)  # a filter in between: it sees what it is passed
+    vd = pv.NastranDiff(Input=derived, Reference=same_a)
+    vd.UpdatePipeline()
+    counts, _ = _diff_counts(nv, vd)
+    check(counts["elements"] == (0, 1, 0) and _by_eid(vd, "Shells", "Area"),
+          f"through another filter: only the shown elements, with that filter's arrays ({counts['elements']})")
+    for s in (vd, derived, sd, same_b, same_a):
+        pv.Delete(s)
+
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:  # converted files as both inputs
         paths = []
         for name, suffix in (("diff_a", ".vtm"), ("diff_b", ".vtkhdf")):

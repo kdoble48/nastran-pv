@@ -38,7 +38,13 @@ TYPE, CONNECTIVITY, PID, MID, MOVED, PROPERTY_VALUES, MATERIAL_VALUES, MASS = (1
 REASON_NAMES = {TYPE: "type", CONNECTIVITY: "connectivity", PID: "PID", MID: "MID", MOVED: "grid moved",
                 PROPERTY_VALUES: "property", MATERIAL_VALUES: "material", MASS: "mass"}
 CARD_REASONS = TYPE | CONNECTIVITY | PID | MOVED  # the element itself changed -> CHANGED, else PROPERTY
-PROPERTY_FIELDS = ("Thickness", "Area", "MassPerArea", "Density", "MID", "NSMPerArea", "NSMPerLength")
+# property values per mesh block. Only property-card inputs: Density and MassPerArea follow the
+# material (reported there), and `--derive size` writes the cell area as Area on Shells.
+BLOCK_PROPERTY_FIELDS = {"Shells": ("Thickness", "MID", "NSMPerArea"), "Lines": ("Area", "MID", "NSMPerLength"),
+                         "Solids": ("MID",)}
+PROPERTY_FIELDS = tuple(dict.fromkeys(f for fs in BLOCK_PROPERTY_FIELDS.values() for f in fs))
+# blocks whose points sit on grids (Masses and MassOffsets points are CGs, Bushes points CBUSH locations)
+GRID_BLOCKS = MESH + ("Connectors", "BushLines", "Constraints")
 MATERIAL_FIELDS = ("Type",) + MAT_COLUMNS
 IDS = ("PID", "MID")  # fields compared as ids: no delta
 DELTA_ARRAYS = {"Shells": ("Thickness", "DeltaThickness"), "Lines": ("Area", "DeltaArea")}
@@ -155,7 +161,9 @@ class _Side:
         self.blocks = {k: v for k, v in iter_blocks(mb) if k != "Removed"}  # a diff output's A part
         self.mesh = {b: self.blocks[b] for b in MESH if b in self.blocks and self.blocks[b].GetNumberOfCells()}
         nids, xyz = [], []
-        for ds in self.blocks.values():
+        for path, ds in self.blocks.items():
+            if path not in GRID_BLOCKS and not path.startswith("Loads/"):
+                continue
             nid = get_array(ds.GetPointData(), "NID")
             if nid is not None and ds.GetPoints() is not None:
                 nids.append(nid.astype(np.int64))
@@ -179,8 +187,8 @@ class _Side:
             }
         masses = self.blocks.get("Masses")
         self.conc = None
-        if masses is not None and masses.GetNumberOfPoints():
-            pd = masses.GetPointData()
+        pd = masses.GetPointData() if masses is not None else None
+        if masses is not None and masses.GetNumberOfPoints() and pd.GetArray("EID") and pd.GetArray("Mass"):
             self.conc = {"eid": get_array(pd, "EID").astype(np.int64), "mass": get_array(pd, "Mass").astype(float),
                          "xyz": vtkutil.to_numpy(masses.GetPoints().GetData()).reshape(-1, 3).astype(float)}
 
@@ -205,8 +213,10 @@ class _Side:
             cd = ds.GetCellData()
             n = ds.GetNumberOfCells()
             pids.append(self.cells[name]["pid"])
+            own = BLOCK_PROPERTY_FIELDS.get(name, ())
             for f in PROPERTY_FIELDS:
-                cols[f].append(get_array(cd, f, np.full(n, np.nan)).astype(float))
+                v = get_array(cd, f) if f in own else None
+                cols[f].append(v.astype(float) if v is not None else np.full(n, np.nan))
         if not pids:
             return {}
         pid = np.concatenate(pids)
@@ -413,8 +423,18 @@ def diff_models(a, b, tol: Tolerances | None = None) -> ModelDiff:
         conc_counts["Same"] = int((status == SAME).sum())
         conc_counts["Changed"] = int((status == CHANGED).sum())
         for k in np.flatnonzero(status != SAME):
-            va = float(A.conc["mass"][j[k]]) if m[k] else None
-            row("mass", int(eb[k]), STATUS_NAMES[status[k]], "Mass", va, float(mb_mass[k]))
+            st = STATUS_NAMES[status[k]]
+            if not m[k]:
+                row("mass", int(eb[k]), st, "Mass", None, float(mb_mass[k]))
+                continue
+            va = float(A.conc["mass"][j[k]])
+            if differs(va, mb_mass[k], tol.rel):
+                row("mass", int(eb[k]), st, "Mass", va, float(mb_mass[k]))
+            xa = A.conc["xyz"][j[k]]
+            if np.linalg.norm(mb_xyz[k] - xa) > tol.grid * A.diagonal():  # CG position (grid or offset)
+                for c, axis in enumerate("XYZ"):
+                    if mb_xyz[k, c] != xa[c]:
+                        row("mass", int(eb[k]), st, axis, float(xa[c]), float(mb_xyz[k, c]))
     if A.conc is not None:
         gone = np.flatnonzero(vtkutil.match_ids(np.sort(eb), ea) < 0)
         conc_counts["Removed"] = len(gone)

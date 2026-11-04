@@ -36,10 +36,10 @@ nastran-pv model has), never on the deck. So decks, `.vtm`, VTKHDF and the reade
 
 | Item | Key | Changed when |
 |---|---|---|
-| Grid | NID (grids used by any block with a `NID` point array) | moved by more than `grid_tol` x A's bounding-box diagonal (default 1e-6) |
+| Grid | NID (points of the blocks that sit on grids: mesh, Connectors, BushLines, Constraints, Loads; never the Masses CG points) | moved by more than `grid_tol` x A's bounding-box diagonal (default 1e-6) |
 | Element | EID within the Shells/Solids/Lines blocks (block counts: a CQUAD4 that became a CBAR is removed + added) | element type, PID, MID or connectivity (ordered grid list) differs, or one of its grids moved |
 | Concentrated mass | EID in `Masses` | `Mass` or the CG position differs |
-| Property | PID over the mesh blocks | the per-element values of that PID differ: `Thickness`, `Area`, `MassPerArea`, `Density`, `MID`, `NSMPerArea`/`NSMPerLength` (mean over the PID's elements) |
+| Property | PID over the mesh blocks | the per-element property inputs of that PID differ (mean over its elements): `MID` everywhere, `Thickness NSMPerArea` on Shells, `Area NSMPerLength` on Lines. Not `Density`/`MassPerArea` (the material's), and not derived size arrays (`--derive` writes `Area` on Shells) |
 | Material | MID in the `MAT_*` root table | `Type`, `E`, `E2`, `G`, `Nu` or `Rho` differs |
 
 Values compare with `|b - a| > rel_tol x max(|a|, |b|)` (default `rel_tol` 1e-6); NaN equals NaN.

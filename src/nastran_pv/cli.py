@@ -178,7 +178,7 @@ def _print_rows(rows: list[dict], limit=None):
         return
     cols = list(rows[0])
     shown = rows if limit is None else rows[:limit]
-    widths = [max(len(c), *(len(_fmt(r.get(c))) for r in shown)) for c in cols]
+    widths = [max([len(c)] + [len(_fmt(r.get(c))) for r in shown]) for c in cols]
     print("  ".join(c.ljust(w) for c, w in zip(cols, widths)))
     for r in shown:
         print("  ".join(_fmt(r.get(c)).ljust(w) for c, w in zip(cols, widths)))
