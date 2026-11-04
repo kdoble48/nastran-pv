@@ -135,6 +135,8 @@ summary. Running a view again reuses its pipeline objects, which are named `NPV 
 | NPV Show All | Clears both element lists, checks every property, material, type, family and group, and sets *Selection Mode* to Off |
 | NPV Only Property | Unchecks every property except those of the selected elements |
 | NPV Only Material | Unchecks every material except those of the selected elements |
+| NPV Diff | What changed from a second open model (A) to the active one (B): B's elements by `DiffStatus` (same, added, changed, property), A's removed elements red and translucent, the counts and the mass change ([Model diff](diff.md#paraview)) |
+| NPV Side by Side | A and B (or B's diff) in two views with linked cameras, colored by the active view's array over one shared range ([Side by side](diff.md#side-by-side)) |
 | NPV Show Only Reached / NPV Hide Reached | Shows only, or hides, what *NPV grow* reached; with *Stay Within* that is "everything connected to this point inside its group" ([Model tools](tools.md#paraview)) |
 | NPV Show Only File / NPV Hide File | Shows only, or hides, what the reader's *Selection File* lists ([above](#selection-from-an-id-file)); set the file on the reader first, since macros cannot open a file dialog |
 | NPV Highlight File | Selects what the *Selection File* lists, as a ParaView selection on the reader (grids for a GRID file, elements otherwise), without hiding anything |
@@ -196,6 +198,8 @@ The field filters (*Nastran Derived Fields*, *Nastran Map Table*, *Nastran Group
 described in [Fields](fields.md#paraview-filters).
 The topology filters (*Nastran Grow*, *Nastran Parts*, *Nastran Path*, *Nastran Model Check*) are
 described in [Model tools](tools.md#paraview).
+*Nastran Diff* (two inputs: the model and its reference) is described in
+[Model diff](diff.md#paraview).
 
 ## Indexed colors
 

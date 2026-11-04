@@ -7,7 +7,7 @@ reuses named pipeline objects ("NPV ..."), so running a view twice does not
 pile up duplicates. Available views::
 
     masses  bushes  bushrotations  beams  loads  spc  rigid  family  group  pid  mid  thickness
-    nsm  elementtype  results  random  randomsweep  parts  grow  path  check
+    nsm  elementtype  results  random  randomsweep  parts  grow  path  check  diff
 
 ``grow_from_selection`` and ``path_from_selection`` seed the grow and path
 views from the current selection. ``animate_mode`` vibrates the current mode and leaves the play
@@ -19,6 +19,8 @@ Femap-style visibility commands: they set the reader's visibility checklists and
 so they need the deck (:func:`deck_reader`). ``show_only_file``, ``hide_file`` and
 ``highlight_file`` do the same from a CSV/text file of IDs (the reader's ``SelectionFile``);
 highlight makes a real ParaView selection.
+``diff`` compares the active model (B) with a second open model (A) through the Nastran Diff filter,
+and :func:`side_by_side` shows A and B in two linked views with one color range.
 Plus :func:`index_colors`, which turns whatever integer array the active representation is
 coloured by into an indexed lookup table with names.
 
@@ -1512,11 +1514,254 @@ def highlight_file(path=None, key=None, reader=None, view=None):
     return ids
 
 
+# --------------------------------------------------------------- model diff
+DIFF_XML = "NastranPVDiff"
+# DiffStatus 0-4: same, added, changed, property, removed (nastran_pv.diff.STATUS_NAMES)
+DIFF_RGB = [(0.78, 0.80, 0.83), (0.20, 0.65, 0.25), (1.0, 0.55, 0.0), (0.22, 0.49, 0.85), (0.85, 0.12, 0.12)]
+NO_REFERENCE = ("The diff compares two models: open the reference model (A) too,\n"
+                "select the modified model (B) and click 'NPV Diff' again.")
+SIDE_LINK = "NPV side-by-side"
+CATEGORICAL = ("PID", "MID", "ElementType", "FamilyId", "GroupId", "DiffStatus", "PartId", "NSMSource")
+_SIDE_VIEWS = {}  # left view id -> its right view
+
+
+def _label(src):
+    return next((k[0] for k, v in pv.GetSources().items() if v == src), "model")
+
+
+def _input_of(proxy, prop="Input"):
+    inp = getattr(proxy, prop, None)
+    inp = inp[0] if isinstance(inp, (list, tuple)) and inp else inp
+    return getattr(inp, "Proxy", inp)  # an OutputPort -> its proxy
+
+
+def reference_model(model_src):
+    """The model to compare ``model_src`` (B) with: the other open model, the most recently opened
+    one when there are several; None when it is the only model."""
+    others = [p for p in pv.GetSources().values() if _is_model_source(p) and p != model_src]
+    return max(others, key=lambda p: int(p.GetGlobalIDAsString())) if others else None
+
+
+def diff_filters(model_src):
+    """The Nastran Diff filters whose Input is ``model_src``."""
+    return [p for p in pv.GetSources().values() if _xml_name(p) == DIFF_XML and _input_of(p) == model_src]
+
+
+def diff_of(model, reference=None):
+    """The diff of ``model`` (B): an existing Nastran Diff on it, else a new ``NPV diff`` against
+    ``reference`` (default: :func:`reference_model`). None when there is nothing to compare with."""
+    found = diff_filters(model.reader)
+    if found and reference is None:
+        return found[-1]
+    reference = reference or reference_model(model.reader)
+    if reference is None:
+        return None
+    d = _named(model, "diff", lambda: pv.NastranDiff(Input=model.reader, Reference=reference))
+    if _input_of(d, "Reference") != reference:
+        d.Reference = reference
+    return d
+
+
+def diff_summary(diff):
+    """``(DIFF_ rows, DIFFMASS_ rows)`` of a Nastran Diff's output."""
+    from nastran_pv.vtkutil import read_field_table
+
+    data = fetch(diff)
+    return read_field_table(data, "DIFF_"), read_field_table(data, "DIFFMASS_")
+
+
+def _diff_text(diff, model):
+    rows, masses = diff_summary(diff)
+    lines = [f"{_label(model.reader)} vs {_label(_input_of(diff, 'Reference'))}"]
+    for r in rows:
+        lines.append(f"{r['Item']}: {int(r['Added'])} added, {int(r['Removed'])} removed, "
+                     f"{int(r['Changed'])} changed")
+    total = next((m for m in masses if m["Key"] == "ModelMass"), None)
+    if total is not None:
+        lines.append(f"model mass {total['A']:.6g} -> {total['B']:.6g} ({total['Delta']:+.4g})")
+    return "\n".join(lines)
+
+
+def _diff_layers(model, diff, view):
+    """B's mesh and masses by DiffStatus, and A's removed elements red and translucent."""
+    from nastran_pv.diff import STATUS_NAMES
+
+    mesh = _named(model, "diff mesh", lambda: extract_blocks(diff, list(MESH) + ["Masses"]))
+    d = pv.Show(mesh, view)
+    d.Representation = "Surface"
+    d.Opacity = 1.0
+    d.LineWidth = 3
+    d.PointSize = 10
+    d.RenderPointsAsSpheres = 1
+    categorical(d, "DiffStatus", list(range(len(STATUS_NAMES))), list(STATUS_NAMES), colors=DIFF_RGB, view=view)
+    removed = _named(model, "diff removed", lambda: extract_blocks(diff, ["Removed"]))
+    r = pv.Show(removed, view)
+    r.Representation = "Surface"
+    r.Opacity = 0.4
+    r.LineWidth = 3
+    r.PointSize = 10
+    r.RenderPointsAsSpheres = 1
+    solid(r, list(DIFF_RGB[-1]))
+    return (d, mesh), (r, removed)
+
+
+def view_diff(model, view, reference=None):
+    """What changed from the reference model (A) to this one (B): B's elements by DiffStatus,
+    A's removed elements red and translucent, the counts and the mass change as text."""
+    diff = diff_of(model, reference)
+    if diff is None:
+        ghost_mesh(model, view, opacity=0.35)
+        info_text(model, view, NO_REFERENCE)
+        return
+    _diff_layers(model, diff, view)
+    info_text(model, view, _diff_text(diff, model))
+    pv.SetActiveSource(model.reader)  # B stays active, so side_by_side (and a rerun) find it
+
+
+def _shown_array(view):
+    """``(association, array)`` the view's first coloured representation shows, or None."""
+    for rep in list(getattr(view, "Representations", None) or []):
+        try:
+            if rep.Visibility and rep.ColorArrayName[1]:
+                return tuple(rep.ColorArrayName)
+        except AttributeError:
+            continue
+    return None
+
+
+def _partner_view(left):
+    """The right-hand view of ``left``'s side-by-side pair: reused, else a new render view split off
+    ``left``'s layout cell."""
+    right = _SIDE_VIEWS.get(left.GetGlobalIDAsString())
+    if right is not None and right in pv.GetViews():
+        return right
+    right = pv.CreateView("RenderView")
+    right.ViewSize = list(left.ViewSize)
+    for prop in ("Background", "UseColorPaletteForBackground"):
+        try:
+            setattr(right, prop, getattr(left, prop))
+        except AttributeError:
+            pass
+    layout = pv.GetLayout(left)
+    if layout is not None:
+        cell = layout.GetViewLocation(left)
+        first = layout.SplitHorizontal(cell, 0.5)  # left moves to the first child
+        layout.AssignView(first + 1, right)
+    _SIDE_VIEWS[left.GetGlobalIDAsString()] = right
+    return right
+
+
+def _array_range(srcs, assoc, array):
+    lo, hi = math.inf, -math.inf
+    for s in srcs:
+        data = s.CellData if assoc == "CELLS" else s.PointData
+        info = data[array] if array in data.keys() else None
+        if info is not None:
+            r = info.GetRange(-1 if info.GetNumberOfComponents() > 1 else 0)
+            lo, hi = min(lo, r[0]), max(hi, r[1])
+    return (lo, hi) if lo <= hi else None
+
+
+def _color_pair(pair, assoc, array, labels_model, views):
+    """Colour both ``(display, source)`` by ``array`` with one LUT over the values or range of both."""
+    if array in CATEGORICAL:
+        values = sorted({int(v) for _, s in pair for v in _gather(fetch(s), array, assoc)})
+        if array == "DiffStatus":
+            from nastran_pv.diff import STATUS_NAMES
+
+            values, labels, colors = list(range(len(STATUS_NAMES))), list(STATUS_NAMES), DIFF_RGB
+        else:
+            labels, colors = labels_for(labels_model, array, values), None
+        for (d, _), v in zip(pair, views):
+            lut = categorical(d, array, values, labels, colors=colors, association=assoc, view=v)
+        return lut
+    for (d, _), v in zip(pair, views):
+        lut = continuous(d, assoc, array, view=v)
+    rng = _array_range([s for _, s in pair], assoc, array)
+    if rng is not None:
+        lut.AutomaticRescaleRangeMode = "Never"
+        lut.RescaleTransferFunction(rng[0], rng[1])
+        try:
+            pv.GetOpacityTransferFunction(array).RescaleTransferFunction(rng[0], rng[1])
+        except Exception:
+            pass
+    return lut
+
+
+def side_by_side(array=None, reference=None, view=None):
+    """The reference model (A) in the active view and this model (B, or its diff) in a second view
+    beside it, cameras linked, both coloured by ``array`` (default: what the active view shows, else
+    PID) over one shared range. Returns ``(left view, right view)``; running it again reuses them."""
+    ensure_plugin()
+    left = view or pv.GetActiveViewOrCreate("RenderView")
+    shown = _shown_array(left)
+    b_src = find_reader()
+    time = getattr(left, "ViewTime", 0.0)
+    model_b = Model(b_src, time)
+    diffs = diff_filters(b_src)
+    diff = diffs[-1] if diffs else None
+    a_src = reference or (_input_of(diff, "Reference") if diff is not None else reference_model(b_src))
+    if a_src is None:
+        raise RuntimeError("Side by side needs two models: open the reference model (A) too, then select "
+                           "the modified model (B) and run it again.")
+    model_a = Model(a_src, time)
+    if array:
+        assoc = "POINTS" if array in ("GridStatus", "DeltaXYZ") else "CELLS"
+    elif shown and not (shown[1] == "DiffStatus" and diff is None):
+        assoc, array = shown
+    else:
+        assoc, array = "CELLS", "DiffStatus" if diff is not None else "PID"
+    right = _partner_view(left)
+    for v in (left, right):
+        _reset_view(v)
+    if array == "DiffStatus":
+        if diff is None:
+            raise RuntimeError("DiffStatus needs a diff: run 'NPV Diff' first (or pass another array).")
+        ghost_mesh(model_a, left, opacity=0.25)
+        mesh_b, (_, removed) = _diff_layers(model_b, diff, right)
+        pv.Hide(removed, right)
+        r = pv.Show(removed, left)
+        r.Representation = "Surface"
+        r.Opacity = 1.0
+        r.LineWidth = 3
+        r.PointSize = 10
+        r.RenderPointsAsSpheres = 1
+        _color_pair([(r, removed), mesh_b], assoc, array, model_b, (left, right))
+    else:
+        mesh_a = _extract(model_a, *[b for b in MESH if model_a.has(b)], what="mesh")
+        src_b = (_named(model_b, "diff elements", lambda: extract_blocks(diff, list(MESH)))
+                 if diff is not None else _extract(model_b, *[b for b in MESH if model_b.has(b)], what="mesh"))
+        if mesh_a is None or src_b is None:
+            raise RuntimeError("Side by side shows the mesh blocks (Shells, Solids, Lines); a model has none.")
+        da, db = pv.Show(mesh_a, left), pv.Show(src_b, right)
+        for d in (da, db):
+            d.Representation = "Surface"
+            d.Opacity = 1.0
+            d.LineWidth = 3
+        _color_pair([(da, mesh_a), (db, src_b)], assoc, array, model_b, (left, right))
+    info_text(model_a, left, f"A: {_label(a_src)}")
+    info_text(model_b, right, f"B: {_label(b_src)}" + (f"\n{_diff_text(diff, model_b)}" if diff is not None else ""))
+    left.ResetCamera(False)
+    for prop in ("CameraPosition", "CameraFocalPoint", "CameraViewUp", "CameraParallelScale"):
+        setattr(right, prop, list(getattr(left, prop)) if prop != "CameraParallelScale" else left.CameraParallelScale)
+    try:
+        pv.RemoveCameraLink(SIDE_LINK)
+    except Exception:
+        pass
+    pv.AddCameraLink(left, right, SIDE_LINK)
+    pv.SetActiveSource(b_src)  # creating filters made them active: B stays the model a rerun finds
+    pv.SetActiveView(left)
+    pv.Render(left)
+    pv.Render(right)
+    return left, right
+
+
 VIEWS = {
     "masses": view_masses, "bushes": view_bushes, "bushrotations": view_bushrotations, "beams": view_beams, "loads": view_loads, "spc": view_spc,
     "rigid": view_rigid, "family": view_family, "group": view_group, "pid": view_pid,
     "mid": view_mid, "elementtype": view_elementtype, "thickness": view_thickness, "nsm": view_nsm,
     "results": view_results, "random": view_random, "randomsweep": view_randomsweep, "parts": view_parts, "grow": view_grow, "path": view_path, "check": view_check,
+    "diff": view_diff,
 }
 
 
@@ -1944,7 +2189,7 @@ ACTIONS = {"animate_mode": animate_mode, "animate_modes": animate_modes, "stop_m
            "path_from_selection": path_from_selection, "show_only_selected": show_only_selected,
            "hide_selected": hide_selected, "show_all": show_all, "show_only_property": show_only_property,
            "show_only_material": show_only_material, "show_only_reached": show_only_reached,
-           "hide_reached": hide_reached}
+           "hide_reached": hide_reached, "side_by_side": side_by_side}
 ACTIONS.update({"show_only_file": show_only_file, "hide_file": hide_file, "highlight_file": highlight_file})
 
 

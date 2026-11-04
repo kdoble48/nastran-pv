@@ -8,6 +8,8 @@ nastran-pv convert DECK --results modes.op2 --random asd.csv [--drive Z --dampin
 nastran-pv stats  DECK|VTM --by PID|MID|FAMILY|GROUP|ELEMENTTYPE --field ElementMass [--csv t.csv]
 nastran-pv check  DECK|VTM [--strict] [--rules TEXT] [-o findings.vtm]
 nastran-pv sections DECK|VTM [--pid ID ...] [--csv t.csv]          # CBAR/CBEAM section table
+nastran-pv diff   A B [--csv diff.csv]                                # what changed from model A to B
+nastran-pv convert B --diff-against A -o diff.vtm                   # B with the diff on its mesh
 nastran-pv store  add|list|fields|query|compare|open --db runs.sqlite ...
 nastran-pv setup  [--pvpython PATH] [--no-macros] [--dry-run]
 ```
@@ -17,7 +19,9 @@ with `--help` for the full option list.
 
 The field options `--derive`, `--map` and `--calc` (for `convert`, `stats` and `store add`) are
 described in [Fields](fields.md); `--parts`, `--grow` and `--rules` in [Model tools](tools.md);
-`--select` below, in [Selection from an ID file](#selection-from-an-id-file). The `store` commands are described in [Run store](store.md).
+`--select` below, in [Selection from an ID file](#selection-from-an-id-file). The `store` commands are described in [Run store](store.md),
+and `diff` and `--diff-against` in [Model diff](diff.md). Wherever a command takes a deck, it also
+takes a `.vtm` or `.vtkhdf` written by `convert` (`--results` and `--random` need the deck).
 
 ## Converting
 
@@ -155,7 +159,8 @@ and floating parts. See [Model tools](tools.md#model-check) for what each check 
 already applied. `--dry-run` prints the command and the generated script instead of launching.
 `view` and `render` also take a `.vtm`, `.vtkhdf` or `.pvd` written by `convert`, which skips the
 deck read. `--results` and `--nsm-set` need the deck, so convert with them instead
-([Converted files](paraview.md#converted-files)).
+([Converted files](paraview.md#converted-files)). `--against A` opens a reference model A first,
+for `--view diff` and [side by side](diff.md#side-by-side).
 
 ## Batch screenshots
 
@@ -168,7 +173,8 @@ nastran-pv render out/modes.vtkhdf --step 3 --preset results   # a converted ser
 
 The presets are the views from the toolbar macros: `masses`, `bushes`, `bushrotations`, `beams`, `loads`, `spc`, `rigid`,
 `family`, `group`, `pid`, `mid`, `elementtype`, `thickness`, `nsm`, `results`, `random`, `randomsweep`,
-`parts` and `check`. The two random views need `--random` (or a converted random series).
+`parts`, `check` and `diff`. The two random views need `--random` (or a converted random series),
+and `diff` needs `--against A`.
 
 If the deck cannot be read, `render` writes no screenshots and exits with status 1 after printing
 `cannot read DECK: <error>`. The toolbar macros show the same message in Output Messages.

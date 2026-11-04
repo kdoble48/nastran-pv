@@ -52,6 +52,8 @@ VIEW_INFO = {
                      "to the tip."),
     "check": ("Model check", "Free edges and faces, coincident grids, duplicate elements, dangling connectors and "
                              "floating parts, one color per check, with counts."),
+    "diff": ("Diff", "What changed from a reference model: elements added, changed or changed through their "
+                     "property, removed elements in red, with the mass change."),
 }
 
 
