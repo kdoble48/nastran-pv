@@ -7,6 +7,13 @@ pvpython tests/pv_smoke.py                # the plugin, views and filters, insid
 python -m pyflakes src paraview/*.py tests  # lint (skip paraview/_vendor)
 ```
 
+Every push to `main` and every pull request runs the tests and lint on Linux, Windows and macOS
+with Python 3.10 to 3.12 (`.github/workflows/tests.yml`), and builds this site
+(`.github/workflows/docs.yml`). Tests that need ParaView, MYSTRAN or the real datasets skip there.
+Changes that affect users get a line in the
+[CHANGELOG](https://github.com/kdoble48/nastran-pv/blob/main/CHANGELOG.md); see
+[Versioning](versioning.md) for what bumps which version.
+
 The architecture, the repository layout and the known VTK, ParaView and pyNastran quirks are
 described in [CLAUDE.md](https://github.com/kdoble48/nastran-pv/blob/main/CLAUDE.md). Task
 workflows for Claude Code (converting, rendering, comparing runs, troubleshooting, extending, the
