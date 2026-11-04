@@ -127,6 +127,8 @@ Femap's "select connected" from a point, without crossing into the next group:
    deflection), or **NPV Animate All Modes** to play every mode in turn. The animation works in
    whatever view is shown: click *NPV Masses* (or *NPV PID*, *NPV Loads*, ...) first, and the
    mass glyphs, the mesh and everything else in that view move with the mode.
+5. Click **NPV Save Mode Animations** to keep them: one looping GIF per mode, saved next to the
+   model file (`demo_mode01.gif`, ...), in the same view and camera.
 
 ![Mode 2 of the demo tray at 11.0 Hz](images/paraview-tutorials-results.png)
 

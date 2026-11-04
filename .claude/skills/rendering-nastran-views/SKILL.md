@@ -26,8 +26,9 @@ python -m nastran_pv render $DECK --preset loads  --views showcase     --out sho
    materials and properties, and the `LOAD`/`SPC` selection. For loads, pick a static deck. A
    modal deck has no LOAD. See `troubleshooting-nastran-models` for the other cases.
    Mode animation: `nv.animate_modes(modes, frames=24, out=DIR)` saves `mode<NN>_<frame>.png`
-   in the view as it is (apply `masses`, `pid`, ... first); the GUI buttons are *NPV Animate
-   Mode* / *NPV Animate All Modes*.
+   in the view as it is (apply `masses`, `pid`, ... first); `nv.save_mode_animations(modes,
+   folder=DIR)` writes one looping GIF per mode (PIL, shipped with ParaView). The GUI buttons are
+   *NPV Animate Mode* / *NPV Animate All Modes* / *NPV Save Mode Animations*.
    A `.vtm`/`.vtkhdf` from `convert` also works (and skips the slow deck read on big models), but
    not with `--results`/`--nsm-set`: convert with those instead.
 2. **Run renders in the background** (`run_in_background`; the user asked for this) and tell the

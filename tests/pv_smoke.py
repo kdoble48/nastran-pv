@@ -253,6 +253,12 @@ def converted_checks(pv, nv, reader):
             fresh = pv.FindSource(nv._name(model, "deform"))
             check(n == 3 and model.reader is src and fresh is not None and fresh.ScaleFactor > 0,
                   f"{os.path.basename(path)} series: {n} steps, results view deforms on a fresh source")
+            # default folder: next to the converted file (its FileName is a ParaView property)
+            gifs = nv.save_mode_animations([2], frames=2, reader=src, view=pv.GetActiveView())
+            stem = os.path.splitext(os.path.basename(path))[0]
+            check([os.path.normcase(g) for g in gifs]
+                  == [os.path.normcase(os.path.join(os.path.dirname(path), f"{stem}_mode02.gif"))],
+                  f"{os.path.basename(path)}: mode GIF saved next to the file ({gifs})")
             for p in [s for s in pv.GetSources().values() if s is not reader]:
                 pv.Delete(p)
     pv.SetActiveSource(None)
@@ -419,6 +425,22 @@ def main():
         pv.SetActiveSource(reader)
         pv.SetActiveView(anim)
         check(nv.animate_mode(cycles=1) == [3], "Animate Mode plays the mode the view is on")
+        from PIL import Image
+
+        gif_dir = os.path.join(tmp, "gifs")
+        nv._set_time(anim, full[0])
+        gifs = nv.save_mode_animations([2, 3], frames=4, folder=gif_dir, reader=reader, view=anim)
+        names = sorted(os.listdir(gif_dir))
+        counts = []
+        for g in gifs:
+            with Image.open(g) as im:
+                counts.append(im.n_frames)
+        check([os.path.basename(g) for g in gifs] == ["tiny_run_mode02.gif", "tiny_run_mode03.gif"]
+              and names == ["tiny_run_mode02.gif", "tiny_run_mode03.gif"] and counts == [4, 4]
+              and anim.ViewTime == full[0] and any("mass glyphs" in n for n in
+                                                   [k[0] for k, v in pv.GetSources().items()
+                                                    if v in nv.shown_sources(anim)]),
+              f"Save Mode Animations: {names}, frames {counts}, no leftovers, time back, still the masses view")
         try:
             nv.animate_modes([99], reader=reader, view=anim)
             check(False, "a mode past the last step should be refused")
