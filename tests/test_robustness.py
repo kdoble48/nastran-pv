@@ -1,5 +1,9 @@
 """Regression tests for deck variants found in review: laminates, CMASS, CONROD,
 SPOINTs, BEGIN BULK without CEND, non-UTF-8 comments, CD-rotated results."""
+import os
+import subprocess
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -9,6 +13,8 @@ from nastran_pv.assemble import Options, build_multiblock, get_block
 from nastran_pv.deck import load_deck
 from nastran_pv.results import Op2Results, _element_ids, to_basic
 from conftest import DATA, arr, row_of
+
+SRC = Path(__file__).resolve().parents[1] / "src"
 
 BULK = """\
 GRID,1,,0.,0.,0.
@@ -60,6 +66,22 @@ def test_begin_bulk_without_cend_and_latin1_comment(tmp_path):
     text = "$ Kr\xe4fte 45\xb0\nBEGIN BULK\nINCLUDE 'inc.bdf'\nENDDATA\n"
     deck = load_deck(write(tmp_path, "main.bdf", text, "latin-1"), echo=False)
     assert 1 in deck.model.elements and len(deck.nids) == 5
+
+
+@pytest.mark.parametrize("head", ["", "SOL 101\nCEND\n"])
+def test_latin1_deck_loads_under_a_utf8_locale(tmp_path, head):
+    """pyNastran reads the file header with the locale's encoding: UTF-8 on Linux and macOS."""
+    write(tmp_path, "inc.bdf", BULK)
+    text = f"$ Kr\xe4fte 45\xb0\n{head}BEGIN BULK\nINCLUDE 'inc.bdf'\nENDDATA\n"
+    main = write(tmp_path, "main.bdf", text, "latin-1")
+    code = ("import sys; from nastran_pv.deck import load_deck; "
+            "d = load_deck(sys.argv[1], echo=False); print(len(d.nids))")
+    env = {**os.environ, "PYTHONUTF8": "1",
+           "PYTHONPATH": os.pathsep.join([str(SRC), os.environ.get("PYTHONPATH", "")])}
+    r = subprocess.run([sys.executable, "-c", code, str(main)], env=env, capture_output=True,
+                       text=True)
+    assert r.returncode == 0, r.stderr[-2000:]
+    assert r.stdout.split()[-1] == "5"
 
 
 def test_results_rotated_from_cd_to_basic(tmp_path):
