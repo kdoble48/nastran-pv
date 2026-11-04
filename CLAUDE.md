@@ -153,8 +153,9 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   8 %-of-the-model scale; `Deformer` gathers a model's moving points once and `apply(scale)` is
   per frame (the plugin keeps one per input object + MTime). The views draw through the plugin's *Nastran Deform* (`NPV deform`),
   so `animate_modes` vibrates whatever view is shown; analysis filters stay on the undeformed model.
-  `save_mode_animations` renders each distinct sine phase once, captures the render window in
-  memory (`capture_view`) and quantizes every frame of a mode to one palette.
+  `save_mode_animations` renders each distinct sine phase once, captures it with SaveScreenshot
+  (`capture_view`; reading the render window directly gave stale frames on some drivers) and
+  quantizes every frame of a mode to one palette; a mode whose frames never change is an error.
 - `glyphs.py`: mass ellipsoids and bush triads as real `vtkPolyData`.
 - `paraview/nastran_bdf_reader.py`: one plugin file containing the reader, three glyph filters
   (masses, bushes, beam sections), the deform filter, three field filters and four topology
