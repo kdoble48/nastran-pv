@@ -635,6 +635,52 @@ class NastranPVBeamSections(_GlyphFilter):
         return out
 
 
+# ---------------------------------------------------------------- deform
+@smproxy.filter(name="NastranPVDeform", label="Nastran Deform")
+@smhint.xml('<ShowInMenu category="Nastran" />')
+@smproperty.input(name="Input", port_index=0)
+@smdomain.datatype(dataTypes=["vtkDataObject"], composite_data_supported=True)
+class NastranPVDeform(VTKPythonAlgorithmBase):
+    """The whole model moved by Scale Factor x Displacement (blocks without one follow their grids
+    by NID). The NPV views draw from it, so every view can show, and animate, a mode shape.
+    Scale Factor 0 passes the model through unchanged."""
+
+    def __init__(self):
+        VTKPythonAlgorithmBase.__init__(self, nInputPorts=1, nOutputPorts=1, outputType="vtkDataObject")
+        self._scale = 0.0
+
+    def FillInputPortInformation(self, port, info):
+        info.Set(self.INPUT_REQUIRED_DATA_TYPE(), "vtkDataObject")
+        return 1
+
+    def RequestDataObject(self, request, inInfo, outInfo):
+        inp = vtkDataObject.GetData(inInfo[0], 0)
+        if inp is None:
+            return 1
+        info = outInfo.GetInformationObject(0)
+        out = info.Get(vtkDataObject.DATA_OBJECT())
+        if out is None or out.GetClassName() != inp.GetClassName():
+            info.Set(vtkDataObject.DATA_OBJECT(), inp.NewInstance())
+        return 1
+
+    @smproperty.doublevector(name="ScaleFactor", default_values=0.0)
+    def SetScaleFactor(self, value):
+        if value != self._scale:
+            self._scale = float(value)
+            self.Modified()
+
+    def RequestData(self, request, inInfo, outInfo):
+        try:
+            from nastran_pv.deform import deform
+        except ImportError as exc:
+            _message(_HELP.format(missing=getattr(exc, "name", "a dependency"), err=exc), error=True)
+            return 0
+        inp = vtkDataObject.GetData(inInfo[0], 0)
+        out = vtkDataObject.GetData(outInfo, 0)
+        out.ShallowCopy(deform(inp, self._scale))
+        return 1
+
+
 # ------------------------------------------------------- field filters
 def _enum_xml(labels):
     entries = "".join(f'<Entry value="{i}" text="{k}"/>' for i, k in enumerate(labels))

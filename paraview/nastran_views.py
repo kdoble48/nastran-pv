@@ -10,7 +10,8 @@ pile up duplicates. Available views::
     nsm  elementtype  results  parts  grow  path  check
 
 ``grow_from_selection`` and ``path_from_selection`` seed the grow and path
-views from the current selection. ``show_only_selected``, ``hide_selected``, ``show_all``,
+views from the current selection. ``animate_mode`` vibrates the current mode and
+``animate_modes`` plays every mode in turn (both build the results view). ``show_only_selected``, ``hide_selected``, ``show_all``,
 ``show_only_property``, ``show_only_material``, ``show_only_reached`` and ``hide_reached`` are
 Femap-style visibility commands: they set the reader's visibility checklists and element ID lists,
 so they need the deck (:func:`deck_reader`).
@@ -23,6 +24,7 @@ From the ParaView Python shell::
     nv.apply("masses")
 """
 import colorsys
+import math
 import os
 import re
 
@@ -264,21 +266,60 @@ def extract_blocks(src, blocks):
     return pv.ExtractBlock(Input=src, Assembly=assembly, Selectors=selectors(blocks))
 
 
-def _extract(model, *blocks, what=None):
+DEFORM_XML = "NastranPVDeform"
+
+
+def deformed(model, src=None, what=None):
+    """The ``NPV deform`` filter over ``src`` (default: the model source). Views draw from it, so
+    its Scale Factor (0 unless the results view or an animation set it) moves every view."""
+    src = src or model.reader
+    name = "deform" if src is model.reader else f"deform {what}"
+    return _named(model, name, lambda: pv.NastranDeform(Input=src))
+
+
+def deform_filters(model):
+    """Every NPV deform filter of this model's views."""
+    tag = _name(model, "")[len("NPV "):].strip()  # "[label]"
+    return [v for k, v in pv.GetSources().items()
+            if _xml_name(v) == DEFORM_XML and k[0].startswith("NPV deform") and k[0].endswith(tag)]
+
+
+def set_deformation(model, scale):
+    for f in deform_filters(model):
+        if f.ScaleFactor != scale:
+            f.ScaleFactor = scale
+
+
+def _extract(model, *blocks, what=None, undeformed=False):
     blocks = [b for b in blocks if model.has(b) or "/" in b]
     if not blocks:
         return None
-    return _named(model, what or "+".join(blocks),
-                  lambda: extract_blocks(model.reader, blocks))
+    name = what or "+".join(blocks)
+    if undeformed:
+        return _named(model, f"undeformed {name}", lambda: extract_blocks(model.reader, blocks))
+    return _named(model, name, lambda: extract_blocks(deformed(model), blocks))
+
+
+def shown_sources(view):
+    """Sources visible in ``view``. Walks the view's existing representations: GetRepresentation
+    would create one for every source it is asked about, and so execute that source."""
+    out = []
+    for rep in list(getattr(view, "Representations", None) or []):
+        try:
+            visible, inp = rep.Visibility, rep.Input
+        except AttributeError:  # scalar bars and other non-data representations
+            continue
+        if visible and inp is not None:
+            out.append(inp)
+    return out
 
 
 def _reset_view(view):
-    for src in pv.GetSources().values():
-        rep = pv.GetRepresentation(src, view) if view is not None else None
-        if rep is not None and rep.Visibility:
-            pv.Hide(src, view)
-    if view is not None:
-        view.OrientationAxesVisibility = 1
+    if view is None:
+        return
+    for src in shown_sources(view):
+        pv.Hide(src, view)
+    view.OrientationAxesVisibility = 1
 
 
 def solid(disp, rgb):
@@ -430,7 +471,7 @@ def view_masses(model, view, mode="Auto", relative=0.025, law="cbrt", minimum=0.
     if not model.has("Masses"):
         info_text(model, view, "No concentrated masses (CONM1/CONM2/CMASS) in this deck.")
         return
-    glyphs = _named(model, "mass glyphs", lambda: pv.NastranMassGlyphs(Input=model.reader))
+    glyphs = _named(model, "mass glyphs", lambda: pv.NastranMassGlyphs(Input=deformed(model)))
     glyphs.SizeMode = mode
     glyphs.RelativeSize = relative
     glyphs.RadiusLaw = LAW_NAMES[law]
@@ -470,7 +511,7 @@ def view_bushes(model, view, size=0.04, ellipsoids=False):
     if not model.has("Bushes"):
         info_text(model, view, "No CBUSH elements in this deck.")
         return
-    glyphs = _named(model, "bush glyphs", lambda: pv.NastranBushGlyphs(Input=model.reader))
+    glyphs = _named(model, "bush glyphs", lambda: pv.NastranBushGlyphs(Input=deformed(model)))
     glyphs.Size = size
     glyphs.ShowEllipsoids = int(ellipsoids)
     d = pv.Show(glyphs, view)
@@ -503,14 +544,14 @@ def view_beams(model, view, triads=None, max_triads=500, scale=0.0):
     if not n or pids is None:
         info_text(model, view, "No CBAR/CBEAM with a section (PBARL, PBEAML, PBAR, PBEAM) in this deck.")
         return
-    sections = _named(model, "beam sections", lambda: pv.NastranBeamSections(Input=model.reader))
+    sections = _named(model, "beam sections", lambda: pv.NastranBeamSections(Input=deformed(model)))
     sections.ShowSections, sections.ShowAxes, sections.ShowTriads = 1, 0, 0
     sections.DeformationScale = scale
     d = pv.Show(sections, view)
     values = sorted({int(p) for p in pids})
     categorical(d, "PID", values, labels_for(model, "PID", values), view=view)
     triads = n <= max_triads if triads is None else triads
-    axes = _named(model, "beam axes", lambda: pv.NastranBeamSections(Input=model.reader))
+    axes = _named(model, "beam axes", lambda: pv.NastranBeamSections(Input=deformed(model)))
     axes.ShowSections, axes.ShowAxes, axes.ShowTriads = 0, 1, int(triads)
     axes.DeformationScale = scale
     ad = pv.Show(axes, view)
@@ -696,24 +737,31 @@ def view_nsm(model, view, top=8):
     pv.GetDisplayProperties(t, view).Justification = "Left"
 
 
+def peak_deformation(model):
+    """Scale at which the step's largest displacement is 8 % of the model size (0: no results)."""
+    from nastran_pv.deform import peak_scale
+
+    return peak_scale(model.data, 0.08)
+
+
 def view_results(model, view):
-    mesh = _extract(model, *[b for b in MESH if model.has(b)], what="mesh")
-    dmax = max((float(a.max()) for b in MESH
-                if (a := model.array(b, "DisplacementMagnitude")) is not None and a.size), default=0.0)
-    if mesh is None or dmax <= 0:
+    mesh_blocks = [b for b in MESH if model.has(b)]
+    scale = peak_deformation(model)
+    if not mesh_blocks or scale <= 0:
         info_text(model, view, "No results: set 'OP2 File Name' on the reader (or --op2).")
         return
-    warp = _named(model, "warp", lambda: pv.WarpByVector(Input=mesh))
-    warp.Vectors = ["POINTS", "Displacement"]
-    warp.ScaleFactor = 0.08 * model.diag / dmax
-    d = pv.Show(warp, view)
+    mesh = _extract(model, *mesh_blocks, what="mesh")  # creates the deform filter on a fresh view
+    set_deformation(model, scale)
+    d = pv.Show(mesh, view)
+    d.Representation = "Surface"
+    d.Opacity = 1.0
     continuous(d, "POINTS", "DisplacementMagnitude", preset="Turbo", view=view)
-    ghost = pv.Show(mesh, view)
+    ghost = pv.Show(_extract(model, *mesh_blocks, what="mesh", undeformed=True), view)
     ghost.Representation = "Wireframe"
     ghost.Opacity = 0.15
     solid(ghost, [0.3, 0.3, 0.3])
     label = model.field_strings(None, "ResultLabel")
-    info_text(model, view, f"{label[0] if label else ''}\nDeformation x{warp.ScaleFactor:.3g}", "Upper Center")
+    info_text(model, view, f"{label[0] if label else ''}\nDeformation x{scale:.3g}", "Upper Center")
 
 
 # ----------------------------------------------------------------- topology
@@ -723,7 +771,7 @@ TOPOLOGY_BLOCKS = ("Shells", "Solids", "Lines", "Rigid", "Connectors", "BushLine
 def _topology_blocks(model, src, what):
     blocks = [b for b in TOPOLOGY_BLOCKS if model.has(b)]
     return _named(model, f"{what} blocks",
-                  lambda: extract_blocks(src, blocks))
+                  lambda: extract_blocks(deformed(model, src, what), blocks))
 
 
 def _at_least(model, src, array, lower, what):
@@ -1108,6 +1156,7 @@ def apply(name, reader=None, view=None, model=None, reset_camera=True, **kwargs)
     model = model or Model(reader, getattr(view, "ViewTime", 0.0))
     _reset_view(view)
     pv.SetActiveView(view)
+    set_deformation(model, 0.0)  # views show the undeformed model; results sets its own scale
     VIEWS[name](model, view, **kwargs)
     if reset_camera:
         view.ResetCamera(False)
@@ -1132,7 +1181,112 @@ def set_camera(view, which):
     view.ResetCamera(False)
 
 
-ACTIONS = {"index_colors": index_colors, "grow_from_selection": grow_from_selection,
+# ----------------------------------------------------------- mode animation
+ANIMATE_FPS = 24  # frames per second when playing in a view (rendering slower than this just plays slower)
+
+
+def _set_time(view, t):
+    view.ViewTime = t
+    try:
+        pv.GetAnimationScene().AnimationTime = t  # keeps the GUI's time widget in step
+    except Exception:
+        pass
+
+
+class _ReaderOnly:
+    """Enough of a Model for :func:`_name` (which needs only the reader), without fetching data."""
+
+    def __init__(self, reader):
+        self.reader = reader
+
+
+def current_step(reader, view=None):
+    """1-based step (mode) the view shows: the time step nearest its time."""
+    times = timesteps(reader)
+    if not times:
+        return None
+    t = getattr(view or pv.GetActiveViewOrCreate("RenderView"), "ViewTime", times[0])
+    return int(np.argmin([abs(x - t) for x in times])) + 1
+
+
+def animate_modes(modes=None, cycles=1, frames=24, out=None, reader=None, view=None, camera=None,
+                  fps=ANIMATE_FPS):
+    """Vibrate each mode in turn in the view as it is (masses, PID, loads, ... or results): every
+    NPV deform filter's scale follows ``sin`` for ``cycles`` cycles of ``frames`` frames, so all
+    shown objects move with the mode. The deformation is restored after each mode (0 in most views,
+    full deflection in the results view). A view with no NPV objects gets the results view first.
+    ``modes`` are 1-based steps (default all). ``camera`` (iso, top, front, side, showcase) is set
+    once; None keeps yours. ``out`` also saves ``mode<NN>_<frame>.png`` there, without the real-time
+    pacing. Returns the modes played."""
+    import time
+
+    reader = reader or find_reader()
+    view = view or pv.GetActiveViewOrCreate("RenderView")
+    times = timesteps(reader)
+    if not times:
+        raise RuntimeError("No result steps: set 'OP2 File Name' on the reader, or open a converted "
+                           "series (convert --results ... --all-steps).")
+    modes = list(modes) if modes else list(range(1, len(times) + 1))
+    bad = [m for m in modes if not 1 <= m <= len(times)]
+    if bad:
+        raise ValueError(f"mode(s) {bad} not in 1..{len(times)}")
+    if out:
+        os.makedirs(out, exist_ok=True)
+    if not _shows_deform(reader, view):
+        apply("results", reader=reader, view=view)
+    if camera:
+        set_camera(view, camera)
+    played = []
+    for mode in modes:
+        _set_time(view, times[mode - 1])
+        model = Model(reader, times[mode - 1])
+        filters = deform_filters(model)
+        amp = peak_deformation(model)
+        if not filters or amp <= 0:  # the step has no displacement
+            continue
+        rest = [f.ScaleFactor for f in filters]
+        for k in range(cycles * frames):
+            start = time.perf_counter()
+            scale = amp * math.sin(2 * math.pi * k / frames)
+            for f in filters:
+                f.ScaleFactor = scale
+            pv.Render(view)
+            if out:
+                pv.SaveScreenshot(os.path.join(out, f"mode{mode:02d}_{k:03d}.png"), view)
+            elif fps:
+                time.sleep(max(0.0, 1.0 / fps - (time.perf_counter() - start)))
+        for f, s in zip(filters, rest):
+            f.ScaleFactor = amp if s else 0.0  # results view: this mode's full deflection
+        pv.Render(view)
+        played.append(mode)
+    return played
+
+
+def _shows_deform(reader, view):
+    """True when something visible in ``view`` is drawn through one of the reader's deform filters."""
+    filters = deform_filters(_ReaderOnly(reader))
+    for src in shown_sources(view):
+        seen, node = 0, src
+        while node is not None and seen < 20:
+            if any(node == f for f in filters):
+                return True
+            inp = getattr(node, "Input", None)
+            node = inp[0] if isinstance(inp, (list, tuple)) and inp else inp
+            seen += 1
+    return False
+
+
+def animate_mode(cycles=2):
+    """Vibrate the mode the time controls are on (``cycles`` cycles); step to another mode, click again."""
+    reader = find_reader()
+    step = current_step(reader)
+    if step is None:
+        raise RuntimeError("No result steps: set 'OP2 File Name' on the reader, or open a converted "
+                           "series (convert --results ... --all-steps).")
+    return animate_modes([step], cycles=cycles, reader=reader)
+
+
+ACTIONS = {"animate_mode": animate_mode, "animate_modes": animate_modes, "index_colors": index_colors, "grow_from_selection": grow_from_selection,
            "path_from_selection": path_from_selection, "show_only_selected": show_only_selected,
            "hide_selected": hide_selected, "show_all": show_all, "show_only_property": show_only_property,
            "show_only_material": show_only_material, "show_only_reached": show_only_reached,

@@ -145,10 +145,14 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   pyNastran's include opener and the model's `add_card` only for the read and removes the hooks
   afterward. The CLI's `-q` disables it; the reader passes a callback that drives ParaView's
   progress bar.
+- `deform.py`: `deform(data, scale)` moves every block of a multiblock or model tree by
+  `scale` x `Displacement` (blocks without one follow their grids by NID); `peak_scale` gives the
+  8 %-of-the-model scale. The views draw through the plugin's *Nastran Deform* (`NPV deform`),
+  so `animate_modes` vibrates whatever view is shown; analysis filters stay on the undeformed model.
 - `glyphs.py`: mass ellipsoids and bush triads as real `vtkPolyData`.
 - `paraview/nastran_bdf_reader.py`: one plugin file containing the reader, three glyph filters
-  (masses, bushes, beam sections), three field filters and four topology filters (grow, parts,
-  path, model check).
+  (masses, bushes, beam sections), the deform filter, three field filters and four topology
+  filters (grow, parts, path, model check).
   - At import it bootstraps `sys.path` with `../src`, then `_vendor`, then
     `NASTRAN_PV_SITE_PACKAGES`, and imports nastran_pv lazily.
   - The reader caches the deck by the mtimes of the main file and every INCLUDE, and caches the

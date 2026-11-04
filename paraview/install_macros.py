@@ -17,7 +17,8 @@ PREFIX = "NPV "
 MACROS = {
     "Masses": "masses", "Bushes": "bushes", "Beams": "beams", "Loads": "loads", "SPC": "spc", "Rigid": "rigid",
     "Family": "family", "Group": "group", "PID": "pid", "MID": "mid", "Element Type": "elementtype",
-    "Thickness": "thickness", "NSM": "nsm", "Results": "results", "Index Colors": "index_colors",
+    "Thickness": "thickness", "NSM": "nsm", "Results": "results", "Animate Mode": "animate_mode",
+    "Animate All Modes": "animate_modes", "Index Colors": "index_colors",
     "Parts": "parts", "Grow": "grow", "Grow from Selection": "grow_from_selection",
     "Path from Selection": "path_from_selection", "Model Check": "check",
     "Show Only": "show_only_selected", "Hide": "hide_selected", "Show All": "show_all",
