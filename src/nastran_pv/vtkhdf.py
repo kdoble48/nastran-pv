@@ -66,11 +66,6 @@ def to_pdc(mb: vtkMultiBlockDataSet, root_arrays=None) -> vtkPartitionedDataSetC
 
 CHUNK_ROWS = 25000  # chunk rows for datasets VTK wrote unchunked
 
-# per-step values and the small model summary; field data is rewritten every time step
-SERIES_ROOT_ARRAYS = ("ResultLabel", "Frequency", "ResultStep", "SOL", "ModelMass", "StructuralMass",
-                      "ConcentratedMass", "ModelCG", "DeckPath")
-
-
 def _copy_root_field_data(mb, pdc, only=None) -> None:
     """vtkHDFWriter does not write a collection's own field data, so the model summary
     (masses, CG, material table, result label/frequency) also goes onto the mesh partitions
@@ -217,7 +212,9 @@ class _StepSource(VTKPythonAlgorithmBase):
         self.results.attach(self.mb, int(step), self.deck)
         _fill_missing(self.mb, self.union)
         out = vtkPartitionedDataSetCollection.GetData(outInfo, 0)
-        out.ShallowCopy(to_pdc(self.mb, SERIES_ROOT_ARRAYS))
+        # every root table (sections, materials, NSM, ...), as in a static file: the views and
+        # filters need them at every step, and compact_static_arrays stores the static ones once
+        out.ShallowCopy(to_pdc(self.mb))
         out.GetInformation().Set(out.DATA_TIME_STEP(), float(step))
         return 1
 
