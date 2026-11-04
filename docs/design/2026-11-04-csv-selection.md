@@ -77,15 +77,19 @@ Reader properties (group *Selection File*), read in `RequestData` and folded int
   `SelectionMode` (Show only, Hide, Off), `SelectionGrids` (All grids, Any grid).
 - Show only: the selection with its attachments. Hide: removes the directly selected items only
   (`attach=False`), so a mass on a shared grid stays.
-- The file is re-read when its mtime changes. Missing IDs go to Output Messages once per change.
+- The file is re-read when its mtime changes, the next time the reader runs; the commands bump a hidden
+  `SelectionReload` property so running one again re-executes the reader. Missing IDs and read errors
+  go to Output Messages once per change.
 
 `nastran_views` commands (macros *NPV Show Only File*, *NPV Hide File*, *NPV Highlight File*;
 ParaView macros cannot prompt, so they use the reader's `SelectionFile`):
 
 - `show_only_file(path=None, key=None, reader=None)`, `hide_file(...)`: set the reader properties.
 - `highlight_file(...)`: sets `SelectionMode` = Off and makes a ParaView threshold selection on the
-  reader's key array (`selection.threshold_ranges`: `EID`/`PID`/`MID`/`FamilyId`/`GroupId` cells,
-  `NID` points; ID runs become threshold pairs). A NID file gives a grid selection.
+  reader's key array (`selection.threshold_selections`: `EID`/`PID`/`MID`/`FamilyId`/`GroupId` cells,
+  `NID` points; ID runs become threshold pairs). A NID file gives a grid selection. EIDs/PIDs that
+  masses and bushes keep on their points become a cell-index selection of their vertex cells, appended
+  to the threshold (VTK cannot mix point and cell selection nodes). A file matching nothing is an error.
 - `show_all` also sets `SelectionMode` = Off (the file stays, for the commands above).
 
 ## Non-goals

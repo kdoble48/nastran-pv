@@ -76,6 +76,55 @@ def test_read_family_names(tmp_path):
     assert header.key == "FAMILY" and header.ids == frozenset({"A", "B"})
 
 
+@pytest.mark.parametrize("text, key, ids", [
+    ("\ufeffGRID\n4\n5\n", "NID", {4, 5}),                     # Excel's UTF-8 byte-order mark
+    ("\ufeffPID,EID\n4,1\n5,2\n", "PID", {4, 5}),
+    ("Element ID\n1 THRU 3\n", "EID", {1, 2, 3}),                # a one-column header with a space
+    ("Grid ID\n4 THRU 7\n", "NID", {4, 5, 6, 7}),
+    ("Node ID\n9\n", "NID", {9}),
+    ("EID PID\n1 2\n3 4\n", "EID", {1, 3}),                     # a whitespace header of names
+    ('"GRID"\n4\n', "NID", {4}),                                 # quotes
+    ('GRID\n"4"\n"5-6"\n', "NID", {4, 5, 6}),
+    ('"EID","x"\n"7","1"\n', "EID", {7}),
+])
+def test_read_ids_bom_spaces_quotes(tmp_path, text, key, ids):
+    p = tmp_path / "ids.csv"
+    p.write_text(text, encoding="utf-8")
+    sel = selection.read_ids(p)
+    assert (sel.key, set(sel.ids)) == (key, ids) and sel.notes == ()
+
+
+def test_read_table_strips_bom(tmp_path):
+    from nastran_pv.fields.tables import read_table
+
+    p = tmp_path / "t.csv"
+    p.write_text("\ufeffPID,MS\n1,0.5\n", encoding="utf-8")
+    assert list(read_table(p)) == ["PID", "MS"]
+
+
+def test_family_name_header_with_space(tmp_path):
+    sel = selection.read_ids(ids_file(tmp_path, "Family Name\nWING SKIN\n"))
+    assert sel.key == "FAMILY" and sel.ids == frozenset({"WING SKIN"})
+
+
+def test_key_aliases():
+    assert [selection.normalize_key(k) for k in ("grid", "Node", "element", "eid", "Auto", None)] \
+        == ["NID", "NID", "EID", "EID", None, None]
+
+
+def test_selections_that_select_nothing_warn(tmp_path, run_mb):
+    def warnings(text, **kw):
+        ids = selection.read_ids(ids_file(tmp_path, text), **kw)
+        return selection.item_masks(run_mb, ids)[1].warnings
+
+    assert warnings("$ nothing here\n") == ["selection: the file lists no IDs"]
+    assert warnings("SET 1 = 1 THRU 5\n") == [
+        "selection: the file lists no IDs",
+        "selection: its first line was read as a column header: 'SET 1 = 1 THRU 5'"]
+    assert warnings("EID,x\n1002.5,1\n1,2\n") == [
+        "selection: 1 value(s) are not whole numbers and were skipped, e.g. 1002.5"]
+
+
 def test_read_json_rows(tmp_path):
     sel = selection.read_ids(ids_file(tmp_path, '[{"PID": 11}, {"PID": 12}]', "ids.json"))
     assert (sel.key, set(sel.ids)) == ("PID", {11, 12})
@@ -183,12 +232,17 @@ def test_keep_then_results_series(tmp_path, run_deck, run_mb):
     assert [asm.GetNodeName(n) for n in asm.GetChildNodes(asm.GetRootNode(), False)][0] == "Shells"
 
 
-def test_threshold_ranges(run_mb):
-    assert selection.threshold_ranges(run_mb, selection.IdList("EID", frozenset({1, 2, 3, 7}))) \
-        == ("EID", "CELL", [(1, 3), (7, 7)])
-    assert selection.threshold_ranges(run_mb, selection.IdList("NID", frozenset({4}))) == ("NID", "POINT", [(4, 4)])
-    assert selection.threshold_ranges(run_mb, selection.IdList("FAMILY", frozenset({"WING_SPARS/LE_SPAR/SEG.00"}))) \
-        == ("FamilyId", "CELL", [(1, 1)])
+def test_threshold_selections(run_mb):
+    def t(key, ids):
+        return selection.threshold_selections(run_mb, selection.IdList(key, frozenset(ids)))
+
+    assert t("EID", {1, 2, 3, 7}) == [("EID", "CELL", [(1, 3)])]  # only IDs the model has
+    assert t("EID", {1, 502}) == [("EID", "CELL", [(1, 1)]), ("EID", "POINT", [(502, 502)])]
+    assert t("EID", {502}) == [("EID", "POINT", [(502, 502)])]  # grounded CBUSH: a bush point only
+    assert t("PID", {51}) == [("PID", "CELL", [(51, 51)]), ("PID", "POINT", [(51, 51)])]
+    assert t("NID", {4}) == [("NID", "POINT", [(4, 4)])]
+    assert t("FAMILY", {"WING_SPARS/LE_SPAR/SEG.00"}) == [("FamilyId", "CELL", [(1, 1)])]
+    assert t("EID", {999}) == [] and t("NID", {999}) == []
 
 
 def test_visibility_with_selection(run_mb):
@@ -218,6 +272,15 @@ def test_convert_select_keep_and_mark(tmp_path, capsys):
     mb = read_vtm(out)
     assert int(arr(get_block(mb, "Shells"), "Selected", "cell").sum()) == 2
     assert int(arr(get_block(mb, "Solids"), "Selected", "cell").sum()) == 0
+
+
+def test_select_key_alias_on_the_cli(tmp_path):
+    out = tmp_path / "g.vtm"
+    assert main(["convert", DECK, "-o", str(out), "--select", str(ids_file(tmp_path, "4 5 7\n")),
+                 "--select-key", "grid", "-q"]) == 0
+    assert eids(get_block(read_vtm(out), "Shells")) == [3]
+    with pytest.raises(SystemExit):
+        main(["convert", DECK, "--select", str(ids_file(tmp_path, "1\n")), "--select-key", "nope"])
 
 
 def test_convert_select_nothing_exits(tmp_path):

@@ -86,7 +86,8 @@ nastran-pv convert run.bdf --select failing.csv --select-mode mark -o out/m.vtm 
 nastran-pv stats run.bdf --select grids.txt --select-grids any --by PID --field ElementMass
 ```
 
-The file is CSV, TSV, whitespace-separated text, Excel or JSON. `$` and `#` lines are comments. IDs
+The file is CSV, TSV, whitespace-separated text, Excel or JSON, in UTF-8 (with or without Excel's
+byte-order mark) or latin-1; quotes around names and IDs are fine. `$` and `#` lines are comments. IDs
 can be single numbers, ranges (`100-200`, `100:200`) or Nastran `100 THRU 200` and
 `1 THRU 99 BY 2`. Three example files, side by side:
 
@@ -97,10 +98,13 @@ EID,margin          GRID              1001
 ```
 
 **Which IDs.** The column header names the key: `EID`/`ELEMENT`, `NID`/`GRID`/`NODE`, `PID`/`PROPERTY`,
-`MID`/`MATERIAL`, `FAMILY` or `GROUP` (case, spaces and `_` don't matter). The first such column
+`MID`/`MATERIAL`, `FAMILY` or `GROUP`, also as `Element ID`, `Grid ID`, `Node ID` or `Family Name` (case,
+spaces and `_` don't matter). The first such column
 wins. Otherwise a column named `ID`, `KEY` or `NAME` is used, else the first column, as element IDs.
 A file whose first line is already IDs has no header and lists element IDs. `--select-key` sets the
-key and `--select-column` the column. FAMILY and GROUP files list names: the family name, or its
+key (a column name such as `GRID` works too) and `--select-column` the column. A file that lists no
+IDs, a first line taken as a header with nothing below it, and numbers that are not whole (`1002.5`,
+skipped) are warnings. FAMILY and GROUP files list names: the family name, or its
 part before `:`, as for `--map`.
 
 **What is selected.**

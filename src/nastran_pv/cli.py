@@ -177,11 +177,21 @@ def add_model_arguments(p, results=True):
     add_common_arguments(p)
 
 
+def _select_key(text):
+    from .selection import normalize_key
+
+    try:
+        return normalize_key(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
+
+
 def add_select_arguments(g):
     g.add_argument("--select", metavar="FILE",
                    help="CSV/text/Excel file of IDs (ranges, THRU); the key is read from the header")
-    g.add_argument("--select-key", type=str.upper, choices=("EID", "NID", "PID", "MID", "FAMILY", "GROUP"),
-                   help="what the IDs are (default: from the column header, else EID)")
+    g.add_argument("--select-key", type=_select_key, metavar="KEY",
+                   help="what the IDs are: EID NID PID MID FAMILY GROUP, or a column name such as GRID "
+                        "(default: from the column header, else EID)")
     g.add_argument("--select-column", metavar="NAME", help="the column holding the IDs")
     g.add_argument("--select-mode", choices=("keep", "mark"), default="keep",
                    help="keep: write only the selection; mark: add a Selected cell array (default keep)")

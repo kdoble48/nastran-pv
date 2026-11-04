@@ -1144,6 +1144,10 @@ def _selection_kinds(sel):
     srcs = list(sel.Input) if _xml_name(sel) == "AppendSelections" else [sel]
     kinds = set()
     for s in srcs:
+        array = s.GetProperty("ArrayName")
+        if array is not None and str(s.GetPropertyValue("ArrayName")) in ("EID", "PID", "MID"):
+            kinds.add("CELL")  # a threshold on element IDs: masses and bushes keep them on points
+            continue
         for prop in ("FieldType", "ElementType"):
             if s.GetProperty(prop) is not None:
                 value = str(s.GetPropertyValue(prop)).upper()
@@ -1396,7 +1400,9 @@ def _file_reader(path, key, reader, what):
     if path is not None:
         reader.SelectionFile = os.path.abspath(str(path))
     if key is not None:
-        reader.SelectionKey = str(key).upper() if str(key).upper() != "AUTO" else "Auto"
+        from nastran_pv.selection import normalize_key
+
+        reader.SelectionKey = normalize_key(key) or "Auto"  # GRID -> NID, ELEMENT -> EID, ...
     if not reader.SelectionFile:
         raise RuntimeError(NO_SELECTION_FILE)
     return reader
@@ -1428,6 +1434,8 @@ def enum_text(proxy, prop):
 def _file_mode(path, key, reader, mode, what):
     reader = _file_reader(path, key, reader, what)
     reader.SelectionMode = mode
+    # the same file name and mode leave the proxy unmodified: bump the token so an edited file is read
+    reader.SelectionReload = int(reader.GetPropertyValue("SelectionReload")) + 1
     _refresh(reader)
     raise_load_error(reader)
     return reader, file_ids(reader)
@@ -1444,22 +1452,62 @@ def hide_file(path=None, key=None, reader=None):
     return _file_mode(path, key, reader, "Hide", "Hide File")[1]
 
 
+def _vertex_cell_ids(reader, array, runs):
+    """[flat index, process, cell, ...] of the vertex cells whose point ``array`` lies in ``runs``
+    (vertex i is cell i in masses and bushes)."""
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    from nastran_pv.vtkutil import is_vertex_only
+
+    out = []
+    data = fetch(reader)
+    it = data.NewIterator()
+    it.InitTraversal()
+    while not it.IsDoneWithTraversal():
+        ds = it.GetCurrentDataObject()
+        values = ds.GetPointData().GetArray(array) if ds is not None and is_vertex_only(ds) else None
+        if values is not None:
+            v = vtk_to_numpy(values)
+            hit = np.zeros(len(v), bool)
+            for lo, hi in runs:
+                hit |= (v >= lo) & (v <= hi)
+            out += [x for c in np.flatnonzero(hit) for x in (it.GetCurrentFlatIndex(), 0, int(c))]
+        it.GoToNextItem()
+    return out
+
+
 def highlight_file(path=None, key=None, reader=None, view=None):
     """Select what an ID file lists as a ParaView selection on the reader (grids for a NID file,
     elements otherwise), so Grow/Path from Selection and Show Only/Hide work on it."""
-    from nastran_pv.selection import threshold_ranges
+    from nastran_pv.selection import threshold_selections
 
     reader, ids = _file_mode(path, key, reader, "Off", "Highlight File")
     view = view or pv.GetActiveViewOrCreate("RenderView")
-    array, field, runs = threshold_ranges(Model(reader).data, ids)
-    if not runs:
-        raise RuntimeError(f"Nothing to highlight: {ids.describe()} matches no {array} in the model.")
+    parts = threshold_selections(Model(reader).data, ids)
+    if not parts:
+        raise RuntimeError(f"Nothing to highlight: {ids.describe()} match nothing in the model.")
     rep = pv.GetDisplayProperties(reader, view)
     if not rep.Visibility:
         pv.Show(reader, view)
     pv.SetActiveSource(reader)
-    pv.SelectThresholds(Thresholds=[float(v) for r in runs for v in r], ArrayName=array, FieldType=field,
-                        Source=reader)
+    if len(parts) == 1:
+        array, field, runs = parts[0]
+        pv.SelectThresholds(Thresholds=[float(v) for r in runs for v in r], ArrayName=array, FieldType=field,
+                            Source=reader)
+    else:  # also EIDs/PIDs that masses and bushes keep on their (vertex) points
+        from paraview import selection as pvsel
+
+        srcs = []
+        for array, field, runs in parts:
+            if field == "CELL":
+                srcs.append(pvsel._createSelection("ThresholdSelectionSource", ArrayName=array, FieldType="CELL",
+                                                   Thresholds=[float(v) for r in runs for v in r]))
+            else:  # their vertex cells by index: VTK cannot mix point and cell selection nodes
+                srcs.append(pvsel._createSelection("CompositeDataIDSelectionSource", FieldType="CELL",
+                                                   IDs=_vertex_cell_ids(reader, array, runs)))
+        names = [f"s{i}" for i in range(len(srcs))]
+        both = pvsel._createSelection("AppendSelections", Input=srcs, SelectionNames=names, Expression="|".join(names))
+        reader.SMProxy.SetSelectionInput(0, both.SMProxy, 0)
     pv.Render(view)
     return ids
 

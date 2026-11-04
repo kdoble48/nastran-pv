@@ -55,6 +55,7 @@ class IdList:
     ids: frozenset  # ints, or names for FAMILY/GROUP
     source: str = ""
     column: str | None = None
+    notes: tuple = ()  # problems found while reading (reported as warnings)
 
     def key_tuple(self):
         return self.key, tuple(sorted(self.ids, key=str))
@@ -71,16 +72,20 @@ class SelectionReport:
     missing: list = field(default_factory=list)
     selected: dict = field(default_factory=dict)  # block path -> selected item count
     info: str = ""
+    notes: list = field(default_factory=list)  # from reading the file
 
     @property
     def warnings(self) -> list[str]:
+        out = [f"selection: {n}" for n in self.notes]
+        if not self.listed:
+            out.insert(0, "selection: the file lists no IDs")
         if not self.missing:
-            return []
+            return out
         shown = (format_ids(self.missing) if self.key not in NAME_KEYS
                  else ", ".join(map(str, self.missing[:10])) + (" ..." if len(self.missing) > 10 else ""))
         if len(shown) > 200:
             shown = shown[:200].rsplit(" ", 1)[0] + " ..."
-        return [f"selection: {len(self.missing)} of {self.listed} {self.key}(s) not in the model: {shown}"]
+        return out + [f"selection: {len(self.missing)} of {self.listed} {self.key}(s) not in the model: {shown}"]
 
     @property
     def total(self) -> int:
@@ -89,18 +94,18 @@ class SelectionReport:
 
 # ------------------------------------------------------------------ reading
 def normalize_key(key) -> str | None:
+    """EID/NID/PID/MID/FAMILY/GROUP from a key or any column alias (GRID, NODE, ELEMENT, ...);
+    None for "Auto" or nothing."""
     if key is None or str(key).strip().upper() in ("", "AUTO"):
         return None
-    k = str(key).strip().upper()
-    if k == "GRID":
-        k = "NID"
-    if k not in KEYS:
+    k = key_of_column(key)
+    if k is None:
         raise ValueError(f"selection key must be one of {', '.join(KEYS)} (got {key!r})")
     return k
 
 
 def _norm(name) -> str:
-    return re.sub(r"[\s_\-]", "", str(name)).upper()
+    return re.sub(r"[\s_\-]", "", _unquote(str(name))).upper()
 
 
 def key_of_column(name) -> str | None:
@@ -130,72 +135,97 @@ def choose_column(columns, key=None, column=None) -> tuple[str, str]:
     return hit, "EID"
 
 
-def _cells(line: str) -> list[str]:
-    parts = re.split(r"[,;\t|]", line) if re.search(r"[,;\t|]", line) else line.split()
-    return [p.strip() for p in parts if p.strip()]
+DELIMITERS = re.compile(r"[,;\t|]")
+
+
+def _unquote(text: str) -> str:
+    return text.replace('"', "").replace("'", "")
 
 
 def _is_id_text(text: str) -> bool:
     try:
-        parse_ids(text)
+        parse_ids(_unquote(text))
     except ValueError:
         return False
     return True
 
 
+def _header_cells(line: str) -> list[str]:
+    """The header's column names. Without a , ; tab or | delimiter the line is one name
+    ("Element ID"), unless its words are column names themselves ("EID PID")."""
+    if DELIMITERS.search(line):
+        return [c for p in DELIMITERS.split(line) if (c := _unquote(p).strip())]
+    words = _unquote(line).split()
+    if len(words) > 1 and key_of_column(" ".join(words)) is None and all(
+            key_of_column(w) or _norm(w) in GENERIC for w in words):
+        return words
+    return [_unquote(line).strip()]
+
+
 def _names(lines) -> frozenset:
-    return frozenset(s for ln in lines for c in re.split(r"[,;\t|]", ln) if (s := c.strip()))
+    return frozenset(s for ln in lines for c in DELIMITERS.split(ln) if (s := _unquote(c).strip()))
 
 
-def _values(values, key) -> frozenset:
+def _ids(lines) -> frozenset:
+    return frozenset(parse_ids(_unquote("\n".join(lines))))
+
+
+def _values(values, key, notes) -> frozenset:
     """IDs (or names) of a table column: numbers, or text cells with ranges/THRU."""
-    out = set()
+    out, fractional = set(), []
     for v in values:
         if v is None or (isinstance(v, float) and np.isnan(v)):
             continue
         if key in NAME_KEYS:
-            s = str(v).strip()
+            s = _unquote(str(v)).strip()
             if s:
                 out.add(s)
         elif isinstance(v, (int, float, np.integer, np.floating)):
+            if float(v) != int(v):
+                fractional.append(float(v))
+                continue
             out.add(int(v))
         else:
-            out.update(parse_ids(str(v)))
+            out.update(parse_ids(_unquote(str(v))))
+    if fractional:
+        notes.append(f"{len(fractional)} value(s) are not whole numbers and were skipped, e.g. "
+                     f"{', '.join(f'{v:g}' for v in fractional[:5])}")
     return frozenset(out)
 
 
 def read_ids(source, key=None, column=None, sheet=None) -> IdList:
     """The IDs (or names) a file lists, and which key they are (detected unless given)."""
-    from .fields.tables import read_table
+    from .fields.tables import read_table, read_text
 
     key = normalize_key(key)
+    notes: list[str] = []
     path = Path(source)
     if path.suffix.lower() in TABLE_SUFFIXES or "://" in str(source):
         table = read_table(source, sheet=sheet)
         col, key = choose_column(table, key, column)
-        return IdList(key, _values(table[col], key), str(source), col)
+        return IdList(key, _values(table[col], key, notes), str(source), col, tuple(notes))
 
-    lines = [ln.strip() for ln in path.read_text(encoding="latin-1").splitlines()
+    lines = [ln.strip() for ln in read_text(path).splitlines()
              if ln.strip() and not ln.lstrip().startswith(("$", "#"))]
     if not lines:
         return IdList(key or "EID", frozenset(), str(source))
-    first = _cells(lines[0])
+    first = _header_cells(lines[0])
     named = any(key_of_column(c) or _norm(c) in GENERIC for c in first)
-    header = named or (not _is_id_text(lines[0]) and key not in NAME_KEYS and column is None)
-    if column is not None:
-        header = True
+    header = column is not None or named or (not _is_id_text(lines[0]) and key not in NAME_KEYS)
     if not header:
         key = key or "EID"
-        ids = _names(lines) if key in NAME_KEYS else frozenset(parse_ids("\n".join(lines)))
-        return IdList(key, ids, str(source))
+        return IdList(key, _names(lines) if key in NAME_KEYS else _ids(lines), str(source))
     if len(first) == 1 and column in (None, first[0]):  # one column: the body is free ID text
         col, key = choose_column(first, key, column)
         body = lines[1:]
-        ids = _names(body) if key in NAME_KEYS else frozenset(parse_ids("\n".join(body)))
-        return IdList(key, ids, str(source), col)
-    table = read_table(source)
-    col, key = choose_column(table, key, column)
-    return IdList(key, _values(table[col], key), str(source), col)
+        ids = _names(body) if key in NAME_KEYS else _ids(body)
+    else:
+        table = read_table(source)
+        col, key = choose_column(table, key, column)
+        ids = _values(table[col], key, notes)
+    if not ids and not named and column is None:
+        notes.append(f"its first line was read as a column header: {lines[0][:60]!r}")
+    return IdList(key, ids, str(source), col, tuple(notes))
 
 
 # ------------------------------------------------------------------ matching
@@ -330,7 +360,8 @@ def item_masks(mb, ids: IdList, grids: str = "all", attach: bool = True):
                 masks[path] |= np.isin(e, chosen_arr)
 
     missing = sorted(wanted - found, key=str) if key in NAME_KEYS else sorted(set(wanted) - found)
-    report = SelectionReport(key, len(wanted), missing, {p: int(m.sum()) for p, m in masks.items() if m.any()})
+    report = SelectionReport(key, len(wanted), missing, {p: int(m.sum()) for p, m in masks.items() if m.any()},
+                             notes=list(ids.notes))
     report.info = f"{ids.describe()}: {report.total} item(s) selected"
     return masks, report
 
@@ -397,14 +428,28 @@ def id_runs(values) -> list[tuple[int, int]]:
     return [(int(v[a]), int(v[b])) for a, b in zip(starts, ends)]
 
 
-def threshold_ranges(mb, ids: IdList) -> tuple[str, str, list]:
-    """(array, "CELL"/"POINT", [(lo, hi), ...]) for a ParaView threshold selection of ``ids``:
-    the key's own array, so a NID list selects grids and the others select elements."""
+def threshold_selections(mb, ids: IdList) -> list[tuple[str, str, list]]:
+    """``[(array, "CELL"/"POINT", [(lo, hi), ...]), ...]`` for a ParaView threshold selection of
+    ``ids`` on the key's own array: a NID list selects grids, the others elements. Masses and bushes
+    keep EID/PID on their points, so the IDs found there get a POINT threshold too. Empty when
+    nothing in ``mb`` matches (as :func:`item_masks` counts it)."""
+    _, report = item_masks(mb, ids, attach=False)
+    if not report.total:
+        return []
     if ids.key == "NID":
-        return "NID", "POINT", id_runs(ids.ids)
+        return [("NID", "POINT", id_runs(ids.ids))]
     if ids.key in NAME_KEYS:
         codes = set()
         for _, ds in iter_blocks(mb):
             codes |= _name_codes(ds, ids.key, ids.ids)[0]
-        return NAME_ARRAYS[ids.key][0], "CELL", id_runs(codes)
-    return ids.key, "CELL", id_runs(ids.ids)
+        return [(NAME_ARRAYS[ids.key][0], "CELL", id_runs(codes))]
+    listed = np.array(sorted(ids.ids), dtype=np.int64)
+    on_cells, on_points = set(), set()
+    for _, ds in iter_blocks(mb):
+        kind = _item_kind(ds)
+        values = get_array(_attr(ds, kind), ids.key)
+        if values is not None:
+            hit = np.unique(values[np.isin(values.astype(np.int64), listed)]).astype(np.int64).tolist()
+            (on_points if kind == "point" else on_cells).update(hit)
+    out = [(ids.key, "CELL", id_runs(on_cells))] if on_cells else []
+    return out + ([(ids.key, "POINT", id_runs(on_points))] if on_points else [])

@@ -152,6 +152,8 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         self._sel_grids = 0
         self._sel_ids = None
         self._sel_read = None  # (path, mtime, key) of _sel_ids
+        self._sel_reload = 0
+        self._sel_error = None  # the last SelectionFile problem reported
 
     # ------------------------------------------------------------ properties
     @smproperty.stringvector(name="FileName")
@@ -326,6 +328,11 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         """Grid (NID) lists: an element is selected when all, or any, of its grids are listed."""
         self._set("_sel_grids", int(v))
 
+    @smproperty.intvector(name="SelectionReload", default_values=0, panel_visibility="never")
+    def SetSelectionReload(self, v):
+        """Bumped by NPV Show Only/Hide/Highlight File: re-execute, so an edited file is read again."""
+        self._set("_sel_reload", int(v))
+
     @smproperty.stringvector(name="LoadError", information_only="1")
     def GetLoadError(self):
         """Why the last read failed ("" after a good read): scripts and views raise it instead of
@@ -491,8 +498,9 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         """The SelectionFile's IdList (re-read when the file or the key changes), None when off."""
         if not self._sel_file or self._sel_mode == 2:
             return None
+        key = (os.path.abspath(self._sel_file), self._sel_key)
         try:
-            key = (os.path.abspath(self._sel_file), os.path.getmtime(self._sel_file), self._sel_key)
+            key += (os.path.getmtime(self._sel_file),)
             if key != self._sel_read:
                 from nastran_pv.selection import read_ids
 
@@ -500,8 +508,12 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
                 self._sel_ids = read_ids(self._sel_file, key=_SELECTION_KEYS[self._sel_key % len(_SELECTION_KEYS)])
                 self._sel_read = key
         except Exception as exc:
-            _message(f"nastran-pv: SelectionFile {self._sel_file}: {exc}; ignored", error=True)
+            problem = (key, str(exc))
+            if problem != self._sel_error:  # once per change of file, key or error
+                self._sel_error = problem
+                _message(f"nastran-pv: SelectionFile {self._sel_file}: {exc}; ignored", error=True)
             return None
+        self._sel_error = None
         return self._sel_ids
 
     def RequestData(self, request, inInfo, outInfo):

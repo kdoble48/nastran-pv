@@ -82,10 +82,11 @@ too. Set these on the reader, in the *Selection File* properties:
   *Hide* it (masses, SPCs and loads stay unless the file names them); or *Off*.
 * **Selection Grids**: for grid lists, whether an element needs *All grids* or *Any grid* listed.
 
-It combines with the checklists and ID lists (AND), survives Apply and time steps, and the file is
-read again when it changes. IDs that match nothing are listed in Output Messages. The *NPV Show Only
+It combines with the checklists and ID lists (AND) and survives Apply and time steps. The file is
+read again when the reader next runs; after editing it, click the macro again (ParaView does not
+notice a file change by itself). IDs that match nothing are listed in Output Messages. The *NPV Show Only
 File*, *NPV Hide File* and *NPV Highlight File* macros below use the same file; Highlight makes a
-real ParaView selection, so *NPV Grow from Selection*, *NPV Show Only* and the other selection
+real ParaView selection (masses and bushes included), so *NPV Grow from Selection*, *NPV Show Only* and the other selection
 commands work on it. From Python: `nv.show_only_file("failing.csv")`, `nv.hide_file(...)`,
 `nv.highlight_file("grids.txt", key="NID")`.
 

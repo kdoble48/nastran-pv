@@ -483,6 +483,16 @@ def selection_file_checks(pv, nv, reader):
     check(ids.key == "EID" and _cells(reader, "Shells") == 2 and _cells(reader, "Solids") == 0
           and _cells(reader, "Masses") == 1 and _cells(reader, "Constraints") == 4,
           "NPV Show Only File: EIDs 1 2 with the mass and SPCs on their grids")
+    edited = os.path.join(tmp, "edited.csv")
+    with open(edited, "w") as f:
+        f.write("EID\n1\n")
+    nv.show_only_file(edited, reader=reader)
+    with open(edited, "w") as f:
+        f.write("EID\n1\n2\n3\n")
+    os.utime(edited, (os.path.getmtime(edited) + 5,) * 2)
+    nv.show_only_file(edited, reader=reader)  # same file and mode: the edited file is read again
+    check(_cells(reader, "Shells") == 3, "NPV Show Only File again reads the edited file")
+    nv.show_only_file(eids, reader=reader)
     op2_path = os.path.join(tmp, "sel.op2")
     make_op2().write_op2(op2_path)
     reader.OP2FileName = op2_path
@@ -514,8 +524,21 @@ def selection_file_checks(pv, nv, reader):
     pv.SetActiveSource(reader)
     nv.highlight_file(eids, reader=reader, view=view)
     check(nv.selected_ids() == ("EID", [1, 2]), "NPV Highlight File: an element selection from an EID file")
+    points_only = os.path.join(tmp, "bush.csv")
+    with open(points_only, "w") as f:
+        f.write("EID\n3\n502\n")  # a shell and the grounded CBUSH 502 (EID on its glyph point only)
+    nv.highlight_file(points_only, reader=reader, view=view)
+    check(nv.selected_ids() == ("EID", [3, 502]), f"NPV Highlight File: point-only EIDs too: {nv.selected_ids()}")
+    missing = os.path.join(tmp, "missing.csv")
+    with open(missing, "w") as f:
+        f.write("EID\n999\n")
+    try:
+        nv.highlight_file(missing, reader=reader, view=view)
+        check(False, "highlighting IDs the model lacks should be reported")
+    except RuntimeError as exc:
+        check("Nothing to highlight" in str(exc), "NPV Highlight File reports a file that matches nothing")
     nv.show_all(reader)
-    check(nv.enum_text(reader, "SelectionMode") == "Off" and reader.SelectionFile == eids and _cells(reader, "Shells") == 3,
+    check(nv.enum_text(reader, "SelectionMode") == "Off" and reader.SelectionFile == missing and _cells(reader, "Shells") == 3,
           "Show All turns the file selection off and keeps the file")
     pv.ClearSelection(reader)
     reader.SelectionFile = ""
