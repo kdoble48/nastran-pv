@@ -21,6 +21,7 @@ from vtkmodules.vtkCommonDataModel import vtkPolyData
 
 from .. import vtkutil
 from ..categories import BEAM_PARTS
+from ..fields.common import get_array
 from ..glyphs import frame_from_x, instance, unit_arrow
 from .props import cap_mesh
 
@@ -35,11 +36,6 @@ class Station(NamedTuple):
     centroid: tuple  # neutral axis (y, z)
 
 
-def _array(fd, name, default=None):
-    a = fd.GetArray(name)
-    return default if a is None else vtkutil.to_numpy(a)
-
-
 def section_tables(*objs) -> dict:
     """``{pid: [Station, ...]}`` from the first object carrying the tables (the root, or a mesh
     partition after a VTKHDF read-back)."""
@@ -47,10 +43,10 @@ def section_tables(*objs) -> dict:
         fd = obj.GetFieldData() if obj is not None else None
         if fd is None or fd.GetArray("SECTION_PID") is None or fd.GetArray("SECPT_Y") is None:
             continue
-        pid, t, r0, nr, cy, cz = (_array(fd, f"SECTION_{c}") for c in
+        pid, t, r0, nr, cy, cz = (get_array(fd, f"SECTION_{c}") for c in
                                   ("PID", "Station", "Ring0", "NRing", "CentroidY", "CentroidZ"))
-        start, count = _array(fd, "SECRING_Start"), _array(fd, "SECRING_Count")
-        yz = np.column_stack([_array(fd, "SECPT_Y"), _array(fd, "SECPT_Z")])
+        start, count = get_array(fd, "SECRING_Start"), get_array(fd, "SECRING_Count")
+        yz = np.column_stack([get_array(fd, "SECPT_Y"), get_array(fd, "SECPT_Z")])
         out = {}
         for i in range(len(pid)):
             rings = [yz[start[k]:start[k] + count[k]] for k in range(int(r0[i]), int(r0[i] + nr[i]))]
@@ -61,7 +57,7 @@ def section_tables(*objs) -> dict:
 
 def has_frame(lines) -> np.ndarray:
     """Cells of ``Lines`` with a beam frame (CBAR/CBEAM)."""
-    axis2 = _array(lines.GetCellData(), "Axis2")
+    axis2 = get_array(lines.GetCellData(), "Axis2")
     return np.zeros(lines.GetNumberOfCells(), dtype=bool) if axis2 is None else np.isfinite(axis2[:, 0])
 
 
@@ -79,12 +75,12 @@ class _Beams:
         nid = vtkutil.to_numpy(lines.GetPointData().GetArray("NID"))
         a, b = vtkutil.to_numpy(lines.GetCells().GetConnectivityArray()).reshape(-1, 2)[idx].T
         self.n = len(idx)
-        self.A = P[a] + np.nan_to_num(_array(cd, "OffsetA")[idx])
-        self.B = P[b] + np.nan_to_num(_array(cd, "OffsetB")[idx])
-        self.axes = [_array(cd, f"Axis{i}")[idx] for i in (1, 2, 3)]
+        self.A = P[a] + np.nan_to_num(get_array(cd, "OffsetA")[idx])
+        self.B = P[b] + np.nan_to_num(get_array(cd, "OffsetB")[idx])
+        self.axes = [get_array(cd, f"Axis{i}")[idx] for i in (1, 2, 3)]
         self.ga, self.gb = nid[a], nid[b]
         none = np.full(lines.GetNumberOfCells(), -1)
-        self.cells = {name: _array(cd, name, none)[idx] for name in ("EID", "PID", "MID", "ElementType")}
+        self.cells = {name: get_array(cd, name, none)[idx] for name in ("EID", "PID", "MID", "ElementType")}
 
     def at(self, t) -> np.ndarray:
         """Points on the beam line at fractions t: (n, len(t), 3)."""
@@ -212,7 +208,7 @@ def sweep(lines, tables: dict, *, surfaces: bool = True, axes: bool = False, tri
     parts = _Parts()
     if lines is None or not tables or lines.GetNumberOfCells() == 0:
         return parts.polydata()
-    pid = _array(lines.GetCellData(), "PID")
+    pid = get_array(lines.GetCellData(), "PID")
     ok = has_frame(lines) & np.isin(pid, list(tables))
     for p in np.unique(pid[ok]):
         beams = _Beams(lines, np.nonzero(ok & (pid == p))[0])
@@ -234,7 +230,7 @@ def attach_displacement(sections, lines, scale: float = 0.0) -> None:
     if lpd.GetArray("Displacement") is None or sections.GetNumberOfPoints() == 0:
         return
     D = vtkutil.to_numpy(lpd.GetArray("Displacement")).astype(float)
-    R = _array(lpd, "Rotation", np.zeros_like(D)).astype(float)
+    R = get_array(lpd, "Rotation", np.zeros_like(D)).astype(float)
     P = vtkutil.to_numpy(lines.GetPoints().GetData()).astype(float)
     nid = vtkutil.to_numpy(lpd.GetArray("NID"))
     order = np.argsort(nid, kind="stable")  # gathered (appended) tree pieces are not sorted

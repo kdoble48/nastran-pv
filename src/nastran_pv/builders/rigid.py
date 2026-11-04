@@ -6,13 +6,7 @@ import numpy as np
 from .. import vtkutil
 from ..categories import RIGID_TYPES, code_of
 from ..deck import Deck
-
-
-def _dof(value) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return 0
+from .common import as_int as _dof, grid_legs
 
 
 def rigid_pairs(elem) -> tuple[list[tuple[int, int]], int]:
@@ -53,15 +47,7 @@ def build_rigid(deck: Deck):
 
     if not pairs:
         return None
-    pairs = np.asarray(pairs, dtype=np.int64)
-    gidx = deck.lookup(pairs.ravel()).reshape(-1, 2)
-    ok = np.all(gidx >= 0, axis=1)
-    if not ok.all():
-        deck.warn(f"rigid elements: {int((~ok).sum())} leg(s) reference unknown grids, skipped")
-    gidx = gidx[ok]
-    used, local = np.unique(gidx.ravel(), return_inverse=True)
-    pd = vtkutil.polydata(deck.xyz[used], verts=False, lines=local.reshape(-1, 2))
-    vtkutil.add_array(pd.GetPointData(), "NID", deck.nids[used])
+    pd, ok = grid_legs(deck, pairs, "rigid elements")
     cd = pd.GetCellData()
     vtkutil.add_array(cd, "EID", np.asarray(eids, dtype=np.int64)[ok])
     vtkutil.add_array(cd, "RigidType", np.asarray(types, dtype=np.int32)[ok])

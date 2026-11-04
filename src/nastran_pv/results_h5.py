@@ -20,7 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .results import Step, attach_step
+from .results import Step, _mode_frequency, _Results, max_per_eid
 
 ROOT = "/NASTRAN/RESULT"
 
@@ -52,7 +52,7 @@ def von_mises_table(rows) -> np.ndarray | None:
     return None
 
 
-class H5Results:
+class H5Results(_Results):
     def __init__(self, path):
         import h5py
 
@@ -111,17 +111,13 @@ class H5Results:
                 value = float(get("TIME_FREQ_EIGR", np.nan))
                 if kind == "eigenvector":
                     mode = int(get("MODE", 0))
-                    freq = float(np.sqrt(abs(value)) / (2.0 * np.pi)) if np.isfinite(value) else np.nan
+                    freq = _mode_frequency([value], None, 0)
                     steps.append(Step(f"Subcase {sc} mode {mode} ({freq:.6g} Hz)", kind, int(did), 0, freq, value))
                 else:
                     stp = int(get("STEP", 0))
                     label = f"Subcase {sc}" + (f" step {stp}" if stp else "")
                     steps.append(Step(label, kind, int(did), 0, time=value))
         return steps
-
-    @property
-    def times(self) -> list[float]:
-        return [float(i) for i in range(len(self.steps))]
 
     # ------------------------------------------------------------------ data
     def step_data(self, step: Step):
@@ -141,14 +137,4 @@ class H5Results:
                     m = did == d
                     eids.append(eid[m])
                     vals.append(vm[m])
-        if not eids:
-            return np.zeros(0, dtype=np.int64), np.zeros(0)
-        e = np.concatenate(eids)
-        v = np.concatenate(vals)
-        uniq, inv = np.unique(e, return_inverse=True)
-        vmax = np.full(len(uniq), -np.inf)
-        np.maximum.at(vmax, inv, v)
-        return uniq, vmax
-
-    def attach(self, mb, step_index: int = 0, deck=None) -> None:
-        attach_step(self, mb, step_index, deck)
+        return max_per_eid(eids, vals)

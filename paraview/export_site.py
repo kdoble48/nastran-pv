@@ -17,7 +17,6 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-from paraview import servermanager as sm  # noqa: E402
 from paraview import simple as pv  # noqa: E402
 
 import nastran_views as nv  # noqa: E402
@@ -55,14 +54,7 @@ VIEW_INFO = {
 
 
 def new_view():
-    view = pv.CreateRenderView()
-    view.ViewSize = SIZE
-    view.Background = [1, 1, 1]
-    try:
-        view.UseColorPaletteForBackground = 0
-    except AttributeError:
-        pass
-    return view
+    return nv.white_view(SIZE)
 
 
 def has_content(view):
@@ -70,9 +62,8 @@ def has_content(view):
 
     Views that find nothing to draw show only a solid ghost mesh and an info text.
     """
-    for src in pv.GetSources().values():
-        rep = sm.GetRepresentation(src, view)  # lookup only: simple.GetRepresentation would Show()
-        if rep is None or not rep.Visibility or src.GetXMLName() == "TextSource":
+    for src, rep in se.representations(view):
+        if not rep.Visibility or src.GetXMLName() == "TextSource":
             continue
         arr = getattr(rep, "ColorArrayName", None)
         if arr and arr[1] and src.GetDataInformation().GetNumberOfPoints() > 0:

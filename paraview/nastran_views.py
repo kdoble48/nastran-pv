@@ -106,18 +106,36 @@ def _is_model_source(proxy):
     return _xml_name(proxy) == READER_XML or is_model_file(proxy)
 
 
+def upstream(src, limit=50):
+    """``src``, its first input, that one's first input, ... (at most ``limit`` steps)."""
+    while src is not None and limit > 0:
+        yield src
+        inp = getattr(src, "Input", None)
+        src = inp[0] if isinstance(inp, (list, tuple)) and inp else inp
+        limit -= 1
+
+
+def white_view(size, time=None):
+    """A new render view of ``size`` on a white background (not the palette's), for screenshots."""
+    view = pv.CreateRenderView()
+    view.ViewSize = list(size)
+    if time is not None:
+        view.ViewTime = time
+    view.Background = [1, 1, 1]
+    try:
+        view.UseColorPaletteForBackground = 0
+    except AttributeError:  # ParaView 5.10 and older
+        pass
+    return view
+
+
 def find_reader(source=None):
     """The model source: ``source``, the active source or anything upstream of it, else any open
     Nastran reader, else any open nastran-pv ``.vtm``/VTKHDF. A Nastran reader is the deck;
     a converted file works for every view but not for the visibility commands (:func:`deck_reader`)."""
-    src = source or pv.GetActiveSource()
-    seen = 0
-    while src is not None and seen < 50:
+    for src in upstream(source or pv.GetActiveSource()):
         if _is_model_source(src):
             return src
-        inp = getattr(src, "Input", None)
-        src = inp[0] if isinstance(inp, (list, tuple)) and inp else inp
-        seen += 1
     sources = list(pv.GetSources().values())
     for test in (lambda p: _xml_name(p) == READER_XML, is_model_file):
         for proxy in sources:
@@ -1441,15 +1459,7 @@ def capture_view(view, scratch):
 def _shows_deform(reader, view):
     """True when something visible in ``view`` is drawn through one of the reader's deform filters."""
     filters = deform_filters(_ReaderOnly(reader))
-    for src in shown_sources(view):
-        seen, node = 0, src
-        while node is not None and seen < 20:
-            if any(node == f for f in filters):
-                return True
-            inp = getattr(node, "Input", None)
-            node = inp[0] if isinstance(inp, (list, tuple)) and inp else inp
-            seen += 1
-    return False
+    return any(node == f for src in shown_sources(view) for node in upstream(src, 20) for f in filters)
 
 
 def animate_mode(cycles=2):

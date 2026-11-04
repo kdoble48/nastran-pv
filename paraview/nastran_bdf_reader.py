@@ -74,13 +74,36 @@ def _message(text, error=False):
     (out.DisplayErrorText if error else out.DisplayWarningText)(text + "\n")
 
 
+def _missing(exc):
+    """Report a dependency that cannot be imported; RequestData returns this (0: failed)."""
+    _message(_HELP.format(missing=getattr(exc, "name", "a dependency"), err=exc), error=True)
+    return 0
+
+
+class _Settable:
+    """Property setters that re-execute only on a change. Plain methods (no ``_pvsm`` tags), so
+    the proxies' XML is unchanged."""
+
+    def _set(self, attr, value):
+        if getattr(self, attr) != value:
+            setattr(self, attr, value)
+            self.Modified()
+
+    def _set_key(self, attr, key, value):
+        """``self.<attr>[key] = value`` (a dict of flags)."""
+        flags = getattr(self, attr)
+        if flags[key] != value:
+            flags[key] = value
+            self.Modified()
+
+
 @smproxy.reader(
     name="NastranPVReader",
     label="Nastran Bulk Data (nastran-pv)",
     extensions=EXTENSIONS,
     file_description="Nastran Bulk Data (nastran-pv)",
 )
-class NastranPVReader(VTKPythonAlgorithmBase):
+class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
     def __init__(self):
         VTKPythonAlgorithmBase.__init__(self, nInputPorts=0, nOutputPorts=1,
                                         outputType="vtkPartitionedDataSetCollection")
@@ -118,24 +141,16 @@ class NastranPVReader(VTKPythonAlgorithmBase):
     @smdomain.filelist()
     @smhint.filechooser(extensions=EXTENSIONS, file_description="Nastran Bulk Data")
     def SetFileName(self, name):
-        if name != self._filename:
-            self._filename = name
-            self.Modified()
+        self._set("_filename", name)
 
     @smproperty.stringvector(name="OP2FileName", default_values="")
     @smdomain.filelist()
     @smhint.filechooser(extensions="op2 OP2 h5 hdf5", file_description="Nastran results (OP2, MSC/NX HDF5)")
     def SetOP2FileName(self, name):
-        name = name or ""
-        if name != self._op2name:
-            self._op2name = name
-            self.Modified()
+        self._set("_op2name", name or "")
 
     def _set_flag(self, key, value):
-        value = bool(value)
-        if self._flags[key] != value:
-            self._flags[key] = value
-            self.Modified()
+        self._set_key("_flags", key, bool(value))
 
     @smproperty.intvector(name="Shells", default_values=1)
     @smdomain.xml('<BooleanDomain name="bool"/>')
@@ -185,24 +200,18 @@ class NastranPVReader(VTKPythonAlgorithmBase):
     @smproperty.intvector(name="NodalArrays", default_values=1)
     @smdomain.xml('<BooleanDomain name="bool"/>')
     def SetNodalArrays(self, v):
-        if bool(v) != self._nodal:
-            self._nodal = bool(v)
-            self.Modified()
+        self._set("_nodal", bool(v))
 
     @smproperty.doublevector(name="BushStiffnessReference", default_values=0.0)
     def SetBushStiffnessReference(self, v):
-        if float(v) != self._k_ref:
-            self._k_ref = float(v)
-            self.Modified()
+        self._set("_k_ref", float(v))
 
     @smproperty.intvector(name="NSMSet", default_values=-1)
     @smdomain.intrange(min=-1)
     def SetNSMSet(self, v):
         """Bulk NSM set to apply: -1 = automatic (Case Control NSM=, or the only set of a bulk-only
         file), 0 = none (property NSM always applies)."""
-        if int(v) != self._nsm_set:
-            self._nsm_set = int(v)
-            self.Modified()
+        self._set("_nsm_set", int(v))
 
     # --------------------------------------------- model tree visibility
     @smproperty.dataarrayselection(name="VisibleProperties")
@@ -230,16 +239,12 @@ class NastranPVReader(VTKPythonAlgorithmBase):
     @smproperty.stringvector(name="ShowOnlyElements", default_values="")
     def SetShowOnlyElements(self, v):
         """Element IDs to show, e.g. 1001 1002 2000-2010; empty shows all (NPV Show Only fills it)."""
-        if (v or "") != self._show_only:
-            self._show_only = v or ""
-            self.Modified()
+        self._set("_show_only", v or "")
 
     @smproperty.stringvector(name="HiddenElements", default_values="")
     def SetHiddenElements(self, v):
         """Element IDs to hide (NPV Hide adds the selected elements)."""
-        if (v or "") != self._hidden:
-            self._hidden = v or ""
-            self.Modified()
+        self._set("_hidden", v or "")
 
     @smproperty.doublevector(name="TimestepValues", information_only="1", si_class="vtkSITimeStepsProperty")
     def GetTimestepValues(self):
@@ -451,18 +456,13 @@ def _named_block(mb, name):
     return None
 
 
-class _GlyphFilter(VTKPythonAlgorithmBase):
+class _GlyphFilter(_Settable, VTKPythonAlgorithmBase):
     def __init__(self):
         VTKPythonAlgorithmBase.__init__(self, nInputPorts=1, nOutputPorts=1, outputType="vtkPolyData")
 
     def FillInputPortInformation(self, port, info):
         info.Set(self.INPUT_REQUIRED_DATA_TYPE(), "vtkDataObject")
         return 1
-
-    def _set(self, attr, value):
-        if getattr(self, attr) != value:
-            setattr(self, attr, value)
-            self.Modified()
 
     def RequestData(self, request, inInfo, outInfo):
         from vtkmodules.vtkCommonDataModel import vtkDataObject, vtkPolyData
@@ -471,8 +471,7 @@ class _GlyphFilter(VTKPythonAlgorithmBase):
             from nastran_pv.glyphs import model_diagonal
             from nastran_pv.tree import as_multiblock
         except ImportError as exc:
-            _message(_HELP.format(missing=getattr(exc, "name", "a dependency"), err=exc), error=True)
-            return 0
+            return _missing(exc)
         data = as_multiblock(vtkDataObject.GetData(inInfo[0], 0))
         block = _find_block(data, self.BLOCK, self.REQUIRED)
         out = vtkPolyData.GetData(outInfo, 0)
@@ -652,7 +651,7 @@ class NastranPVBeamSections(_GlyphFilter):
 @smhint.xml('<ShowInMenu category="Nastran" />')
 @smproperty.input(name="Input", port_index=0)
 @smdomain.datatype(dataTypes=["vtkDataObject"], composite_data_supported=True)
-class NastranPVDeform(VTKPythonAlgorithmBase):
+class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
     """The whole model moved by Scale Factor x Displacement (blocks without one follow their grids
     by NID). The NPV views draw from it, so every view can show, and animate, a mode shape.
     Scale Factor 0 passes the model through unchanged."""
@@ -678,16 +677,13 @@ class NastranPVDeform(VTKPythonAlgorithmBase):
 
     @smproperty.doublevector(name="ScaleFactor", default_values=0.0)
     def SetScaleFactor(self, value):
-        if value != self._scale:
-            self._scale = float(value)
-            self.Modified()
+        self._set("_scale", float(value))
 
     def RequestData(self, request, inInfo, outInfo):
         try:
             from nastran_pv.deform import Deformer
         except ImportError as exc:
-            _message(_HELP.format(missing=getattr(exc, "name", "a dependency"), err=exc), error=True)
-            return 0
+            return _missing(exc)
         inp = vtkDataObject.GetData(inInfo[0], 0)
         out = vtkDataObject.GetData(outInfo, 0)
         key = (inp, inp.GetMTime())
@@ -703,7 +699,7 @@ def _enum_xml(labels):
     return f'<EnumerationDomain name="enum">{entries}</EnumerationDomain>'
 
 
-class _FieldFilter(VTKPythonAlgorithmBase):
+class _FieldFilter(_Settable, VTKPythonAlgorithmBase):
     """Model in -> shallow copy with extra arrays out. A model tree (the reader's partitioned
     collection) is gathered into the plain multiblock for the work and scattered back after it,
     so the output keeps the tree; extra output ports are tables."""
@@ -736,11 +732,6 @@ class _FieldFilter(VTKPythonAlgorithmBase):
                 info.Set(vtkDataObject.DATA_OBJECT(), want())
         return 1
 
-    def _set(self, attr, value):
-        if getattr(self, attr) != value:
-            setattr(self, attr, value)
-            self.Modified()
-
     @staticmethod
     def _model(inInfo):
         """(multiblock to work on, the tree input or None, gather layout)."""
@@ -764,13 +755,15 @@ class _FieldFilter(VTKPythonAlgorithmBase):
         try:
             mb, tree_in, layout = self._model(inInfo)
         except ImportError as exc:
-            _message(_HELP.format(missing=getattr(exc, "name", "a dependency"), err=exc), error=True)
-            return 0
+            return _missing(exc)
+        out = mb
         try:
-            self._apply(mb, outInfo)
+            out = self._apply(mb, outInfo) or mb  # a multiblock of its own, or the arrays added to mb
+        except ImportError as exc:
+            return _missing(exc)
         except Exception as exc:  # report, pass the data through unchanged
-            _message(f"nastran-pv {type(self).__name__}: {exc}", error=True)
-        self._emit(outInfo, mb, tree_in, layout)
+            _message(f"nastran-pv {getattr(self, 'LABEL', type(self).__name__)}: {exc}", error=True)
+        self._emit(outInfo, out, tree_in, layout)
         return 1
 
 
@@ -787,9 +780,7 @@ class NastranPVDerivedFields(_FieldFilter):
         self._groups = {"material": 1, "quality": 1, "size": 1, "cg": 1, "pidmass": 1}
 
     def _flag(self, key, v):
-        if self._groups[key] != int(v):
-            self._groups[key] = int(v)
-            self.Modified()
+        self._set_key("_groups", key, int(v))
 
     @smproperty.intvector(name="MaterialConstants", default_values=1)
     @smdomain.xml('<BooleanDomain name="bool"/>')
@@ -1037,9 +1028,7 @@ class _TopologyFilter(_FieldFilter):
         self._graph_key = None
 
     def _group(self, key, v):
-        if self._groups[key] != int(v):
-            self._groups[key] = int(v)
-            self.Modified()
+        self._set_key("_groups", key, int(v))
 
     def _list_cards(self, data):
         try:
@@ -1076,25 +1065,14 @@ class _TopologyFilter(_FieldFilter):
         for w in warnings:
             _message(f"nastran-pv {self.LABEL}: {w}")
 
-    def RequestData(self, request, inInfo, outInfo):
-        try:
-            from nastran_pv.topology import Graph
+    def _apply(self, mb, outInfo):
+        from nastran_pv.topology import Graph
 
-            mb, tree_in, layout = self._model(inInfo)
-        except ImportError as exc:
-            _message(_HELP.format(missing=getattr(exc, "name", "a dependency"), err=exc), error=True)
-            return 0
-        src = vtkDataObject.GetData(inInfo[0], 0)
         self._list_cards(mb)
-        out = mb
-        try:
-            if self._graph_key != src.GetMTime():  # a gathered tree comes out the same every time
-                self._graph, self._graph_key = Graph.from_multiblock(mb), src.GetMTime()
-            out = self._run(mb, self._graph, outInfo) or mb
-        except Exception as exc:  # report, pass the data through unchanged
-            _message(f"nastran-pv {self.LABEL}: {exc}", error=True)
-        self._emit(outInfo, out, tree_in, layout)
-        return 1
+        mtime = self.GetInputDataObject(0, 0).GetMTime()
+        if self._graph_key != mtime:  # a gathered tree comes out the same every time
+            self._graph, self._graph_key = Graph.from_multiblock(mb), mtime
+        return self._run(mb, self._graph, outInfo)
 
 
 @smproxy.filter(name="NastranPVGrow", label="Nastran Grow")
@@ -1220,9 +1198,7 @@ class NastranPVModelCheck(_TopologyFilter):
         return False  # one block of findings per check
 
     def _check(self, name, v):
-        if self._checks[name] != int(v):
-            self._checks[name] = int(v)
-            self.Modified()
+        self._set_key("_checks", name, int(v))
 
     @smproperty.intvector(name="CheckFreeEdges", default_values=1)
     @smdomain.xml('<BooleanDomain name="bool"/>')

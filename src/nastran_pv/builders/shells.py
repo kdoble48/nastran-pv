@@ -12,7 +12,7 @@ from vtkmodules.vtkCommonDataModel import (
 from .. import vtkutil
 from ..deck import RECTANGULAR, Deck
 from ..families import Families
-from .common import CellTable, compact_mesh, material_density, property_info, shell_mass_per_area, unit
+from .common import CellTable, add_mid_density, compact_mesh, property_info, shell_mass_per_area, unit
 
 # etype -> (corner count, linear vtk type, full node count, quadratic vtk type)
 SHELLS = {
@@ -68,10 +68,8 @@ def build_shells(deck: Deck, families: Families):
 
     info = {pid: property_info(model, pid) for pid in np.unique(pids)}
     mids = np.array([info[p][0] for p in pids], dtype=np.int64)
-    vtkutil.add_array(cd, "MID", mids)
+    add_mid_density(cd, model, mids)
     vtkutil.add_array(cd, "Thickness", np.array([info[p][1] for p in pids], dtype=float), skip_all_nan=True)
-    rho = {mid: material_density(model, mid) for mid in np.unique(mids)}
-    vtkutil.add_array(cd, "Density", np.array([rho[m] for m in mids], dtype=float), skip_all_nan=True)
     mpa = {pid: shell_mass_per_area(model, pid) for pid in info}
     vtkutil.add_array(cd, "MassPerArea", np.array([mpa[p] for p in pids], dtype=float), skip_all_nan=True)
 

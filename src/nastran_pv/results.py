@@ -47,7 +47,32 @@ def _mode_frequency(eigns, cycles, i) -> float:
     return float(cycles[i]) if cycles is not None and len(cycles) > i else float("nan")
 
 
-class Op2Results:
+class _Results:
+    """What the OP2 and HDF5 readers share; each sets ``steps`` and has ``step_data``."""
+
+    steps: list
+
+    @property
+    def times(self) -> list[float]:
+        return [float(i) for i in range(len(self.steps))]
+
+    def attach(self, mb, step_index: int = 0, deck=None) -> None:
+        """Attach one step. With ``deck``, vectors are rotated from each grid's
+        CD system (how Nastran writes them) into the basic system."""
+        attach_step(self, mb, step_index, deck)
+
+
+def max_per_eid(eids: list, vals: list) -> tuple[np.ndarray, np.ndarray]:
+    """(sorted unique eids, the largest value of each) over lists of eid/value arrays."""
+    if not eids:
+        return np.zeros(0, dtype=np.int64), np.zeros(0)
+    uniq, inv = np.unique(np.concatenate(eids), return_inverse=True)
+    vmax = np.full(len(uniq), -np.inf)
+    np.maximum.at(vmax, inv, np.concatenate(vals))
+    return uniq, vmax
+
+
+class Op2Results(_Results):
     def __init__(self, op2, path=None):
         """Wrap an already-read pyNastran ``OP2`` object (see :meth:`read`)."""
         self.path = Path(path) if path else None
@@ -113,10 +138,6 @@ class Op2Results:
                     out.append((table, key, obj, headers.index("von_mises")))
         return out
 
-    @property
-    def times(self) -> list[float]:
-        return [float(i) for i in range(len(self.steps))]
-
     # ------------------------------------------------------------ attaching
     def element_von_mises(self, step: Step) -> tuple[np.ndarray, np.ndarray]:
         """(sorted eids, max von Mises) over all stress tables of the step."""
@@ -129,14 +150,7 @@ class Op2Results:
                 continue
             eids.append(np.asarray(_element_ids(obj), dtype=np.int64))
             vals.append(np.asarray(obj.data[itime, :, col], dtype=float))
-        if not eids:
-            return np.zeros(0, dtype=np.int64), np.zeros(0)
-        e = np.concatenate(eids)
-        v = np.concatenate(vals)
-        uniq, inv = np.unique(e, return_inverse=True)
-        vmax = np.full(len(uniq), -np.inf)
-        np.maximum.at(vmax, inv, v)
-        return uniq, vmax
+        return max_per_eid(eids, vals)
 
     def step_data(self, step: Step):
         """(sorted nids, (n, 6) T1-T3/R1-R3 in the output systems, vm eids, vm values)."""
@@ -145,11 +159,6 @@ class Op2Results:
         order = np.argsort(nids)
         data = np.array(res.data[step.itime], dtype=float)[order]
         return (nids[order], data, *self.element_von_mises(step))
-
-    def attach(self, mb, step_index: int = 0, deck=None) -> None:
-        """Attach one step. With ``deck``, vectors are rotated from each grid's
-        CD system (how Nastran writes them) into the basic system."""
-        attach_step(self, mb, step_index, deck)
 
 
 def attach_step(results, mb, step_index: int, deck=None) -> None:

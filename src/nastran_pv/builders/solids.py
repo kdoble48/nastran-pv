@@ -23,9 +23,8 @@ from vtkmodules.vtkCommonDataModel import (
     VTK_WEDGE,
 )
 
-from .. import vtkutil
 from ..deck import Deck
-from .common import CellTable, compact_mesh, material_density, property_info
+from .common import CellTable, add_mid_density, compact_mesh, property_info
 
 # Nastran -> VTK node permutation for the full (quadratic) element.
 _HEX20 = list(range(8)) + list(range(8, 12)) + list(range(16, 20)) + list(range(12, 16))
@@ -113,9 +112,7 @@ def build_solids(deck: Deck):
     if missing:
         deck.warn(f"solid property id(s) not defined (open the run deck?): {missing}")
     mids = np.array([info[p][0] for p in pids], dtype=np.int64)
-    vtkutil.add_array(cd, "MID", mids)
-    rho = {mid: material_density(model, mid) for mid in np.unique(mids)}
-    vtkutil.add_array(cd, "Density", np.array([rho[m] for m in mids], dtype=float), skip_all_nan=True)
+    add_mid_density(cd, model, mids)
     return ug
 
 

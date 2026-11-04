@@ -50,39 +50,6 @@ def cell_values(mb, graph, name) -> np.ndarray:
     return out
 
 
-def write_table(obj, prefix, rows) -> None:
-    """Rows of dicts -> field arrays ``<prefix><column>`` on ``obj``; old ``prefix`` columns go first."""
-    fd = obj.GetFieldData()
-    for name in [fd.GetArrayName(i) for i in range(fd.GetNumberOfArrays())]:
-        if name and name.startswith(prefix):
-            fd.RemoveArray(name)
-    if not rows:
-        return
-    for col in rows[0]:
-        values = [r[col] for r in rows]
-        if isinstance(values[0], str):
-            vtkutil.add_string_array(fd, prefix + col, values)
-        else:
-            vtkutil.add_array(fd, prefix + col, np.asarray(values), skip_all_nan=True)
-
-
-def read_table(obj, prefix) -> list[dict]:
-    """The rows :func:`write_table` wrote (columns in field order; missing all-NaN columns stay missing)."""
-    fd = obj.GetFieldData()
-    cols = {}
-    for i in range(fd.GetNumberOfArrays()):
-        name = fd.GetArrayName(i)
-        if not name or not name.startswith(prefix):
-            continue
-        a = fd.GetAbstractArray(i)
-        if a.IsA("vtkStringArray"):
-            cols[name[len(prefix):]] = [a.GetValue(k) for k in range(a.GetNumberOfValues())]
-        else:
-            cols[name[len(prefix):]] = vtkutil.to_numpy(a).tolist()
-    n = min((len(v) for v in cols.values()), default=0)
-    return [{c: v[k] for c, v in cols.items()} for k in range(n)]
-
-
 def _extract(ds, local_ids):
     ids = vtkIdList()
     for c in local_ids:
