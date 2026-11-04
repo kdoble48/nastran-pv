@@ -64,6 +64,8 @@ def to_pdc(mb: vtkMultiBlockDataSet, root_arrays=None) -> vtkPartitionedDataSetC
     return pdc
 
 
+CHUNK_ROWS = 25000  # chunk rows for datasets VTK wrote unchunked
+
 # per-step values and the small model summary; field data is rewritten every time step
 SERIES_ROOT_ARRAYS = ("ResultLabel", "Frequency", "ResultStep", "SOL", "ModelMass", "StructuralMass",
                       "ConcentratedMass", "ModelCG", "DeckPath")
@@ -210,7 +212,10 @@ def write_vtkhdf_series(mb, results, path, deck=None, steps=None, compression: i
     steps = list(range(len(results.steps))) if steps is None else list(steps)
     if not steps:
         raise ValueError("no result steps to write")
-    w, path = _writer(path, compression, chunk_size or _chunk_for(mb))
+    # vtkHDFWriter compresses every array at every step, static ones included (~5x the time of an
+    # uncompressed write). When compacting, write raw and compress each array once in that rewrite.
+    deferred = compact and len(steps) > 1
+    w, path = _writer(path, 0 if deferred else compression, chunk_size or _chunk_for(mb))
     source = _StepSource(mb, results, deck, steps)  # keep a reference: VTK calls back into it
     w.SetInputConnection(source.GetOutputPort())
     w.SetWriteAllTimeSteps(True)
@@ -218,8 +223,8 @@ def write_vtkhdf_series(mb, results, path, deck=None, steps=None, compression: i
     del source
     if not ok:
         raise RuntimeError(f"failed to write {path}")
-    if compact and len(steps) > 1:
-        compact_static_arrays(path)
+    if deferred:
+        compact_static_arrays(path, compression=compression)
     return path
 
 
@@ -334,7 +339,25 @@ def _static_arrays(h5) -> dict[str, list[str]]:
     return out
 
 
-def _copy(src_group, dst_group, path, shrink, offsets_reset):
+def _compressible(obj, level) -> bool:
+    return bool(level) and obj.dtype.kind in "iufb" and obj.size > 0
+
+
+def _create(dst_group, name, data, obj, level):
+    """New dataset like ``obj`` (chunked, extendable) with ``data``; gzip ``level`` (0 = keep obj's)."""
+    kwargs = {}
+    if obj.chunks or _compressible(obj, level):
+        rows = obj.chunks[0] if obj.chunks else CHUNK_ROWS
+        kwargs["chunks"] = (min(rows, max(len(data), 1)),) + tuple(data.shape[1:])
+        kwargs["maxshape"] = (None,) + data.shape[1:]
+    if _compressible(obj, level):
+        kwargs.update(compression="gzip", compression_opts=int(level), shuffle=True)
+    elif obj.compression:
+        kwargs.update(compression=obj.compression, compression_opts=obj.compression_opts)
+    dst_group.create_dataset(name, data=data, dtype=obj.dtype, **kwargs)
+
+
+def _copy(src_group, dst_group, path, shrink, offsets_reset, level=0):
     for k, v in src_group.attrs.items():
         dst_group.attrs[k] = v
     for name in src_group:
@@ -345,36 +368,33 @@ def _copy(src_group, dst_group, path, shrink, offsets_reset):
             continue
         obj = src_group[name]
         if isinstance(obj, h5py.Group):
-            _copy(obj, dst_group.create_group(name, track_order=True), full, shrink, offsets_reset)
+            _copy(obj, dst_group.create_group(name, track_order=True), full, shrink, offsets_reset, level)
         elif full in shrink:
             start, length = shrink[full]
-            data = obj[start:start + length]
-            kwargs = {}
-            if obj.chunks:
-                kwargs["chunks"] = (min(obj.chunks[0], max(len(data), 1)),) + tuple(obj.chunks[1:])
-                kwargs["maxshape"] = (None,) + obj.shape[1:]
-            if obj.compression:
-                kwargs.update(compression=obj.compression, compression_opts=obj.compression_opts)
-            dst_group.create_dataset(name, data=data, dtype=obj.dtype, **kwargs)
+            _create(dst_group, name, obj[start:start + length], obj, level)
         elif full in offsets_reset:
             dst_group.create_dataset(name, data=np.zeros_like(obj[()]), maxshape=obj.maxshape,
                                      chunks=obj.chunks)
+        elif _compressible(obj, level) and not obj.compression:
+            _create(dst_group, name, obj[()], obj, level)
         else:
             src_group.copy(obj, dst_group, name)
 
 
-def compact_static_arrays(path) -> dict[str, list[str]]:
+def compact_static_arrays(path, compression: int = 0) -> dict[str, list[str]]:
     """Store arrays that do not change between time steps only once.
 
     VTKHDF has per-array, per-step offsets, so an array whose every step equals
     step 0 can keep just that slice with all offsets 0. vtkHDFWriter writes all
     arrays at every step; this pass rewrites the file (to really free the space)
-    with the static ones shared. Returns ``{partition: [arrays]}`` compacted.
+    with the static ones shared. ``compression`` > 0 also gzips (with shuffle) every numeric
+    dataset that is not compressed yet, once (with chunks no longer than the data): the series writer
+    leaves compression to this pass. Returns ``{partition: [arrays]}`` compacted.
     """
     path = Path(path)
     with h5py.File(path, "r") as h5:
         static = _static_arrays(h5)
-        if not static:
+        if not static and not compression:
             return {}
         shrink, offsets_reset = {}, set()
         for pname, arrays in static.items():
@@ -396,6 +416,7 @@ def compact_static_arrays(path) -> dict[str, list[str]]:
         with h5py.File(tmp, "w", track_order=True) as out:
             for k, v in h5.attrs.items():
                 out.attrs[k] = v
-            _copy(h5["VTKHDF"], out.create_group("VTKHDF", track_order=True), "/VTKHDF", shrink, offsets_reset)
+            _copy(h5["VTKHDF"], out.create_group("VTKHDF", track_order=True), "/VTKHDF", shrink, offsets_reset,
+                  compression)
     tmp.replace(path)
     return static
