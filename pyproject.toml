@@ -24,7 +24,7 @@ tables = ["pandas", "openpyxl"]       # Excel tables for --map
 sql = ["pandas", "sqlalchemy"]        # non-SQLite databases for --map
 all = ["vtk>=9.3", "h5py", "pandas", "openpyxl", "sqlalchemy"]
 gallery = ["pillow"]                   # docs/build_gallery.py thumbnails
-test = ["pytest", "vtk>=9.3", "h5py", "pillow"]
+test = ["pytest", "pyflakes", "pyyaml", "vtk>=9.3", "h5py", "pillow"]   # pyyaml: test_docs_workflow
 
 [project.scripts]
 nastran-pv = "nastran_pv.cli:main"
