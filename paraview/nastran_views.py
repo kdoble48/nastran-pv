@@ -10,8 +10,9 @@ pile up duplicates. Available views::
     nsm  elementtype  results  parts  grow  path  check
 
 ``grow_from_selection`` and ``path_from_selection`` seed the grow and path
-views from the current selection. ``animate_mode`` vibrates the current mode and
-``animate_modes`` plays every mode in turn (both build the results view). ``show_only_selected``, ``hide_selected``, ``show_all``,
+views from the current selection. ``animate_mode`` vibrates the current mode,
+``animate_modes`` plays every mode in turn and ``save_mode_animations`` writes each mode as a GIF
+(all in the view as it is). ``show_only_selected``, ``hide_selected``, ``show_all``,
 ``show_only_property``, ``show_only_material``, ``show_only_reached`` and ``hide_reached`` are
 Femap-style visibility commands: they set the reader's visibility checklists and element ID lists,
 so they need the deck (:func:`deck_reader`).
@@ -1328,7 +1329,78 @@ def animate_mode(cycles=2):
     return animate_modes([step], cycles=cycles, reader=reader)
 
 
-ACTIONS = {"animate_mode": animate_mode, "animate_modes": animate_modes, "index_colors": index_colors, "grow_from_selection": grow_from_selection,
+def _model_path(reader):
+    """The file the model came from (deck, .vtkhdf, .pvd, .vtm), or None."""
+    for prop in ("FileName", "FileNames"):
+        try:
+            value = getattr(reader, prop)
+        except AttributeError:
+            continue
+        if not isinstance(value, str):  # a list, or a ParaView property holding one (file readers)
+            try:
+                value = list(value)
+            except TypeError:
+                value = [value]
+            value = value[0] if value else None
+        if value:
+            return str(value)
+    return None
+
+
+def save_mode_animations(modes=None, cycles=1, frames=24, folder=None, fps=ANIMATE_FPS, reader=None, view=None):
+    """Save each mode's vibration, in the view as it is, as a looping GIF
+    ``<model>_mode<NN>.gif`` in ``folder`` (default: next to the model file). ``modes`` are 1-based
+    steps (default all). The view returns to the step it showed. Returns the GIF paths."""
+    import shutil
+    import tempfile
+
+    from PIL import Image
+
+    reader = reader or find_reader()
+    view = view or pv.GetActiveViewOrCreate("RenderView")
+    model_file = _model_path(reader)
+    folder = folder or (os.path.dirname(model_file) if model_file else os.getcwd())
+    stem = os.path.splitext(os.path.basename(model_file))[0] if model_file else "model"
+    os.makedirs(folder, exist_ok=True)
+    frames_dir = tempfile.mkdtemp(prefix=".npv_frames_", dir=folder)  # beside the GIFs, not in %TEMP%
+    start_time = view.ViewTime
+    written = []
+    try:
+        played = animate_modes(modes, cycles=cycles, frames=frames, out=frames_dir, reader=reader, view=view)
+        for mode in played:
+            pngs = sorted(f for f in os.listdir(frames_dir) if f.startswith(f"mode{mode:02d}_"))
+            images = []
+            for name in pngs:
+                with Image.open(os.path.join(frames_dir, name)) as im:
+                    images.append(im.convert("RGB").convert("P", palette=Image.ADAPTIVE, colors=256))
+            if not images:
+                continue
+            path = os.path.join(folder, f"{stem}_mode{mode:02d}.gif")
+            images[0].save(path, save_all=True, append_images=images[1:], loop=0,
+                           duration=max(int(round(1000 / (fps or ANIMATE_FPS))), 20), disposal=1)
+            written.append(path)
+    finally:
+        shutil.rmtree(frames_dir, ignore_errors=True)
+        _set_time(view, start_time)
+        pv.Render(view)
+    return written
+
+
+def save_mode_animations_macro():
+    """Toolbar: every mode as a GIF next to the model file; Output Messages lists them."""
+    from vtkmodules.vtkCommonCore import vtkOutputWindow
+
+    paths = save_mode_animations()
+    if not paths:
+        raise RuntimeError("No mode had a displacement to animate.")
+    vtkOutputWindow.GetInstance().DisplayText(
+        f"nastran-pv: saved {len(paths)} mode animation(s) in {os.path.dirname(paths[0])}:\n"
+        + "\n".join(os.path.basename(p) for p in paths) + "\n")
+    return paths
+
+
+ACTIONS = {"animate_mode": animate_mode, "animate_modes": animate_modes,
+           "save_mode_animations": save_mode_animations_macro, "index_colors": index_colors, "grow_from_selection": grow_from_selection,
            "path_from_selection": path_from_selection, "show_only_selected": show_only_selected,
            "hide_selected": hide_selected, "show_all": show_all, "show_only_property": show_only_property,
            "show_only_material": show_only_material, "show_only_reached": show_only_reached,

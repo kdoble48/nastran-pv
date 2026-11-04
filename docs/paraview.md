@@ -97,6 +97,7 @@ summary. Running a view again reuses its pipeline objects, which are named `NPV 
 | NPV Results | Deformed shape colored by displacement over the undeformed outline, for the current time step; the largest displacement is drawn at 8 % of the model size (*NPV deform* > *Scale Factor*) |
 | NPV Animate Mode | Vibrates the mode the time controls are on, in the view as it is (masses, PID, loads, results, ...): two cycles at 24 frames/s, then back to rest. Step to another mode and click again |
 | NPV Animate All Modes | Plays every mode in turn, one cycle each, in the view as it is. A view with nothing from nastran-pv in it gets NPV Results first |
+| NPV Save Mode Animations | Saves every mode's vibration, in the view as it is, as a looping GIF `<model>_mode01.gif`, `<model>_mode02.gif`, ... next to the model file (24 frames each, at the view's size); Output Messages lists them. From Python: `nv.save_mode_animations([1, 2], folder=..., frames=36)` |
 | NPV Parts | Connected parts in indexed colors; uncheck card types on *NPV parts* to split at connectors |
 | NPV Grow | Elements reached from the seeds, colored by element hops |
 | NPV Grow from Selection | Seeds *NPV grow* with the selected cells (EIDs) or grids, then shows NPV Grow |
