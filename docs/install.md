@@ -54,6 +54,12 @@ ParaView 5.x:
   example `pyNastran==1.4.1` or a local checkout), `--upgrade` reinstalls the binary wheels, and
   `--dry-run` prints the pip commands. Close the ParaView GUI first, because it locks the vendored
   files.
+
+  It is safe to re-run. A vendored wheel built for another Python (for example a `_vendor`
+  filled for ParaView 6.0 and then used by 5.13) is reinstalled for this one. A new pyNastran
+  replaces the vendored copy only after pip succeeds, so a failed download keeps the old one.
+  At the end it imports pyNastran and scipy in `pvpython` the way the plugin does, and exits
+  with an error if a broken copy on ParaView's own path still wins.
 - `paraview/install_macros.py` adds the toolbar macros (see [ParaView](paraview.md#one-click-views-toolbar-macros)).
 
 ## Environment variables

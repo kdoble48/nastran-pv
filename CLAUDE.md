@@ -83,8 +83,9 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
 - `deck.py`: reads with pyNastran using `xref=False` followed by `safe_cross_reference()`, so
   geometry-only includes still load.
   - Encoding is latin-1.
-  - Bulk-only files are detected by `CEND`. A file with `BEGIN BULK` but no `CEND` is read through
-    a `StringIO` with `CEND` prepended (and a temporary chdir, so INCLUDEs resolve).
+  - Bulk-only files are detected by `CEND`. A file with `BEGIN BULK` but no `CEND` is read by path
+    with `punch=None` (pyNastran's own detection); never through a `StringIO`, which breaks
+    INCLUDEs on pyNastran main.
   - pyNastran log warnings are captured, truncated, into `Deck.warnings`.
   - The `Deck` object holds sorted `nids` and `xyz` in basic coordinates (SPOINTs dropped).
     `lookup`/`index` map grid ids to rows, and `basis(cid, at_xyz)` gives local axes, including
