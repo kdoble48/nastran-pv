@@ -1,7 +1,8 @@
 """Ready-made ParaView views for nastran-pv models (GUI macros and pvpython).
 
 Every view works on a Nastran reader (the active source, or the reader
-upstream of it), hides what else is shown in the active view, and builds or
+upstream of it) or on a ``.vtm``/VTKHDF file written by nastran-pv and opened with
+ParaView's own reader. It hides what else is shown in the active view, and builds or
 reuses named pipeline objects ("NPV ..."), so running a view twice does not
 pile up duplicates. Available views::
 
@@ -11,7 +12,8 @@ pile up duplicates. Available views::
 ``grow_from_selection`` and ``path_from_selection`` seed the grow and path
 views from the current selection. ``show_only_selected``, ``hide_selected``, ``show_all``,
 ``show_only_property``, ``show_only_material``, ``show_only_reached`` and ``hide_reached`` are
-Femap-style visibility commands: they set the reader's visibility checklists and element ID lists.
+Femap-style visibility commands: they set the reader's visibility checklists and element ID lists,
+so they need the deck (:func:`deck_reader`).
 Plus :func:`index_colors`, which turns whatever integer array the active representation is
 coloured by into an indexed lookup table with names.
 
@@ -30,6 +32,8 @@ from paraview import simple as pv
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 READER_XML = "NastranPVReader"
+MODEL_FILES = (".vtm", ".vtkhdf", ".hdf")  # nastran-pv output, opened with ParaView's own readers
+MODEL_MARK = "DeckPath"  # root field array every nastran-pv multiblock carries
 MESH = ("Shells", "Solids", "Lines")
 GHOST_RGB = [0.72, 0.75, 0.80]
 MAX_LOAD_ARROWS = 1500  # above this, glyph every Nth loaded grid (uniform over the mesh)
@@ -44,7 +48,23 @@ def ensure_plugin():
 
 
 def load_reader(deck, op2=None, nsm_set=None):
+    """The Nastran reader on ``deck``, or ParaView's own reader on a nastran-pv ``.vtm``/VTKHDF."""
     ensure_plugin()
+    if os.path.splitext(deck)[1].lower() in MODEL_FILES:
+        if op2 or nsm_set is not None:
+            raise RuntimeError(f"{os.path.basename(deck)} is a converted model: results and NSM sets "
+                               "need the deck (or convert with --results / --nsm-set)")
+        src = pv.OpenDataFile(deck)
+        if src is None:
+            raise RuntimeError(f"ParaView cannot open {deck}")
+        try:
+            pv.RenameSource(os.path.basename(deck), src)
+        except Exception:
+            pass
+        src.UpdatePipeline()
+        if not is_model_file(src):
+            raise RuntimeError(f"{os.path.basename(deck)} was not written by nastran-pv (no {MODEL_MARK})")
+        return src
     # paraview.simple names the constructor after the reader label
     reader = pv.NastranBulkDatanastranpv(FileName=deck)
     try:
@@ -66,20 +86,48 @@ def _xml_name(proxy):
         return None
 
 
+def is_model_file(proxy):
+    """True for a file reader whose output nastran-pv wrote (a converted ``.vtm``/VTKHDF)."""
+    if _xml_name(proxy) == READER_XML or getattr(proxy, "Input", None) is not None:
+        return False  # the deck reader itself, or a filter (which copies its input's field data)
+    try:
+        return MODEL_MARK in proxy.FieldData.keys()
+    except Exception:
+        return False
+
+
+def _is_model_source(proxy):
+    return _xml_name(proxy) == READER_XML or is_model_file(proxy)
+
+
 def find_reader(source=None):
-    """The Nastran reader: ``source``, the active source, anything upstream of it, or any open one."""
+    """The model source: ``source``, the active source or anything upstream of it, else any open
+    Nastran reader, else any open nastran-pv ``.vtm``/VTKHDF. A Nastran reader is the deck;
+    a converted file works for every view but not for the visibility commands (:func:`deck_reader`)."""
     src = source or pv.GetActiveSource()
     seen = 0
     while src is not None and seen < 50:
-        if _xml_name(src) == READER_XML:
+        if _is_model_source(src):
             return src
         inp = getattr(src, "Input", None)
         src = inp[0] if isinstance(inp, (list, tuple)) and inp else inp
         seen += 1
-    for proxy in pv.GetSources().values():
-        if _xml_name(proxy) == READER_XML:
-            return proxy
-    raise RuntimeError("No Nastran deck is open: File > Open a .bdf/.dat with 'Nastran Bulk Data (nastran-pv)'.")
+    sources = list(pv.GetSources().values())
+    for test in (lambda p: _xml_name(p) == READER_XML, is_model_file):
+        for proxy in sources:
+            if test(proxy):
+                return proxy
+    raise RuntimeError("No Nastran model is open: File > Open a .bdf/.dat with 'Nastran Bulk Data (nastran-pv)', "
+                       "or a .vtm/.vtkhdf written by nastran-pv.")
+
+
+def deck_reader(reader, what="This command"):
+    """``reader`` if it is the Nastran deck reader; a clear error for a converted file."""
+    if _xml_name(reader) != READER_XML:
+        raise RuntimeError(f"{what} changes the deck reader's visibility lists; this model is a converted "
+                           "file. Open the deck with 'Nastran Bulk Data (nastran-pv)', or use ParaView's "
+                           "Extract Selection / Threshold on the file.")
+    return reader
 
 
 def fetch(src, port=0):
@@ -136,15 +184,28 @@ class Model:
     def block(self, name):
         return self.data.GetBlock(self.names.index(name)) if self.has(name) else None
 
+    def _holder(self, block_name, name):
+        """Block whose field data holds ``name``: ``block_name``, else the root. VTKHDF keeps no
+        root field data, so ``convert`` copies the root summary onto the mesh blocks: look there too."""
+        if block_name:
+            return self.block(block_name)
+        if self.data.GetFieldData().GetAbstractArray(name) is not None:
+            return self.data
+        for b in MESH:
+            blk = self.block(b)
+            if blk is not None and blk.GetFieldData().GetAbstractArray(name) is not None:
+                return blk
+        return self.data
+
     def field_strings(self, block_name, array):
-        blk = self.block(block_name) if block_name else self.data
+        blk = self._holder(block_name, array)
         arr = blk.GetFieldData().GetAbstractArray(array) if blk is not None else None
         return [arr.GetValue(i) for i in range(arr.GetNumberOfValues())] if arr is not None else []
 
     def field(self, name, block_name=None):
         from vtkmodules.util.numpy_support import vtk_to_numpy
 
-        blk = self.block(block_name) if block_name else self.data
+        blk = self._holder(block_name, name)
         a = blk.GetFieldData().GetArray(name) if blk is not None else None
         return vtk_to_numpy(a) if a is not None else None
 
@@ -168,7 +229,7 @@ class Model:
 def _name(model, what):
     sources = pv.GetSources()
     label = next((k[0] for k, v in sources.items() if v == model.reader), "deck")
-    twins = [v for k, v in sources.items() if k[0] == label and _xml_name(v) == READER_XML]
+    twins = [v for k, v in sources.items() if k[0] == label and _is_model_source(v)]
     if len(twins) > 1 and model.reader != min(twins, key=lambda v: int(v.GetGlobalIDAsString())):
         label = f"{label} #{model.reader.GetGlobalIDAsString()}"  # same deck opened again
     return f"NPV {what} [{label}]"
@@ -185,9 +246,10 @@ def _named(model, what, factory):
 
 
 def selectors(blocks):
-    """ExtractBlock selectors for blocks of the reader's model tree (``/Root/Model/<b>``) or of a
-    filter's multiblock output (``/Root/<b>``)."""
-    return [f"/Root/{prefix}{b}" for b in blocks for prefix in ("Model/", "")]
+    """ExtractBlock selectors for blocks of the reader's model tree (``/Root/Model/<b>``), of a
+    multiblock (a filter's output or a ``.vtm``: ``/Root/<b>``) or of a VTKHDF file, whose
+    assembly root is named ``assembly`` (``/assembly/<b>``)."""
+    return [f"/{root}{b}" for b in blocks for root in ("Root/Model/", "Root/", "assembly/")]
 
 
 def extract_blocks(src, blocks):
@@ -925,7 +987,7 @@ def show_only_selected():
     from nastran_pv.tree import format_ids
 
     ids = _selected_elements()
-    reader = selected_reader()
+    reader = deck_reader(selected_reader(), "Show Only")
     reader.ShowOnlyElements = format_ids(ids)
     reader.HiddenElements = ""
     _refresh(reader)
@@ -936,14 +998,14 @@ def hide_selected():
     from nastran_pv.tree import format_ids, parse_ids
 
     ids = _selected_elements()
-    reader = selected_reader()
+    reader = deck_reader(selected_reader(), "Hide")
     reader.HiddenElements = format_ids(parse_ids(reader.HiddenElements) | set(ids))
     _refresh(reader)
 
 
 def show_all(reader=None):
     """Clear the element ID lists and check every property, material, type, family and group."""
-    reader = reader or find_reader()
+    reader = deck_reader(reader or find_reader(), "Show All")
     reader.ShowOnlyElements = ""
     reader.HiddenElements = ""
     reader.UpdatePipelineInformation()
@@ -957,7 +1019,7 @@ def _show_only_category(array, prop, what):
     ids = {int(v) for assoc in ("CELLS", "POINTS") for v in _gather(data, array, assoc) if v > 0}
     if not ids:
         raise RuntimeError(f"The selection carries no {array}: select elements that have a {what}.")
-    reader = selected_reader()
+    reader = deck_reader(selected_reader(), f"Show Only {what.capitalize()}")
     reader.UpdatePipelineInformation()
     keep = [n for n in _listed(reader, prop) if (m := re.search(r"_(\d+)$", n)) and int(m.group(1)) in ids]
     setattr(reader, prop, keep)
@@ -998,6 +1060,7 @@ def show_only_reached():
     from nastran_pv.tree import format_ids
 
     reader, eids = reached_eids()
+    deck_reader(reader, "Show Only Reached")
     if not eids:
         raise RuntimeError("NPV grow reached no elements.")
     reader.ShowOnlyElements = format_ids(eids)
@@ -1010,6 +1073,7 @@ def hide_reached():
     from nastran_pv.tree import format_ids, parse_ids
 
     reader, eids = reached_eids()
+    deck_reader(reader, "Hide Reached")
     if not eids:
         raise RuntimeError("NPV grow reached no elements.")
     reader.HiddenElements = format_ids(parse_ids(reader.HiddenElements) | eids)

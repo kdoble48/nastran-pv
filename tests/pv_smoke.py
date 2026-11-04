@@ -195,6 +195,39 @@ def beam_checks(pv, nv, view, tmp):
     beams.OP2FileName = ""
 
 
+def converted_checks(pv, nv, reader):
+    """Views on a .vtm/.vtkhdf written by `nastran-pv convert`, opened with ParaView's own readers."""
+    from nastran_pv.cli import main as cli_main
+
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        for suffix in (".vtm", ".vtkhdf"):
+            path = os.path.join(tmp, "tiny" + suffix)
+            cli_main(["convert", DECK, "-o", path, "-q"])
+            src = nv.load_reader(path)
+            check(nv.is_model_file(src) and not nv.is_model_file(reader), f"{suffix} is a nastran-pv model file")
+            pv.SetActiveSource(src)
+            check(nv.find_reader() is src, f"{suffix}: the active converted file is the model source")
+            view = pv.CreateRenderView()
+            for name in nv.VIEWS:
+                model = nv.apply(name, reader=src, view=view)
+            check(model.reader is src and "Shells" in model.names, f"{suffix}: every view builds")
+            try:
+                nv.show_all(src)
+                check(False, f"{suffix}: Show All should refuse a converted file")
+            except RuntimeError as exc:
+                check("converted file" in str(exc), f"{suffix}: Show All explains it needs the deck")
+            try:
+                nv.load_reader(path, nsm_set=0)
+                check(False, f"{suffix}: an NSM set on a converted file should be refused")
+            except RuntimeError as exc:
+                check("need the deck" in str(exc), f"{suffix}: NSM set on a converted file is refused")
+            for p in [s for s in pv.GetSources().values() if s is not reader]:
+                pv.Delete(p)
+            pv.Delete(view)
+    pv.SetActiveSource(None)
+    check(nv.find_reader() is reader, "with no active source the deck reader is found again")
+
+
 def tree_checks(pv, nv, reader):
     """Model tree output, Femap-style visibility checklists and the selection commands."""
     data = nv.fetch(reader)
@@ -537,6 +570,7 @@ def main():
           and nv._name(nv.Model(reader), "mesh").endswith("[tiny_run.bdf]"),
           f"same deck twice: {nv._name(nv.Model(twin), 'mesh')!r}; the first keeps its names")
     pv.Delete(twin)
+    converted_checks(pv, nv, reader)
     topology_checks(pv, nv)
     print("pv_smoke: all checks passed")
 

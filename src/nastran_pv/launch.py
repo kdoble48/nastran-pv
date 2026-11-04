@@ -45,11 +45,20 @@ def gui_script(deck: str, view: str, results: str | None, extra_lines: list[str]
                              view=view, extra="\n".join(extra_lines or []))
 
 
+MODEL_FILES = (".vtm", ".vtkhdf", ".hdf")  # converted models: opened with ParaView's own readers
+
+
 def _check_inputs(args) -> None:
     """Fail here, with a clear message, instead of inside ParaView."""
     for label, value in (("deck", args.deck), ("results file", getattr(args, "results", None))):
         if value and not Path(value).is_file():
             raise SystemExit(f"nastran-pv: {label} not found: {Path(value).resolve()}")
+    if Path(args.deck).suffix.lower() in MODEL_FILES:
+        flags = [f for f, v in (("--results", getattr(args, "results", None)),
+                                ("--nsm-set", getattr(args, "nsm_set", None))) if v is not None]
+        if flags:
+            raise SystemExit(f"nastran-pv: {' and '.join(flags)} need the deck; {Path(args.deck).name} is "
+                             f"already converted (convert it again with {' '.join(flags)})")
 
 
 def cmd_view(args) -> int:
@@ -103,7 +112,7 @@ def cmd_setup(args) -> int:
 
 def add_parsers(sub) -> None:
     v = sub.add_parser("view", help="open the ParaView GUI on a deck with a ready-made view")
-    v.add_argument("deck")
+    v.add_argument("deck", help="run deck, bulk-data file, or a .vtm/.vtkhdf written by nastran-pv convert")
     v.add_argument("--view", default="pid", choices=VIEW_NAMES)
     v.add_argument("--results", "--op2", dest="results", help="OP2 or MSC HDF5 (.h5) results file")
     v.add_argument("--nsm-set", type=nsm_set_id, default=None, metavar="ID", help="bulk NSM set (0 = none)")
@@ -112,7 +121,7 @@ def add_parsers(sub) -> None:
     v.set_defaults(func=cmd_view)
 
     r = sub.add_parser("render", help="batch screenshots via pvpython")
-    r.add_argument("deck")
+    r.add_argument("deck", help="run deck, bulk-data file, or a .vtm/.vtkhdf written by nastran-pv convert")
     r.add_argument("--preset", nargs="+", default=["family", "masses", "loads", "spc"],
                    choices=[n for n in VIEW_NAMES if n != "none"])
     r.add_argument("--views", nargs="+", default=["iso"], choices=["iso", "top", "front", "side", "showcase"])
