@@ -78,6 +78,27 @@ def test_series_shares_geometry_and_static_arrays(model, tmp_path):
         assert got.GetFieldData().GetAbstractArray("DeckPath").GetValue(0) == str(deck.path)
 
 
+def test_series_keeps_every_root_table(tmp_path):
+    # the beams view and the beam-section filter need the SECTION_/SECRING_/SECPT_ root tables
+    # at every step, like the material (MAT_) table; a static table is still stored once
+    deck = load_deck(DATA / "beams.bdf", echo=False)
+    mb = build_multiblock(deck)
+    path = write_vtkhdf_series(mb, Op2Results(make_op2()), tmp_path / "b.vtkhdf", deck=deck)
+    root = mb.GetFieldData()
+    tables = [root.GetArrayName(i) for i in range(root.GetNumberOfArrays())
+              if root.GetArrayName(i).startswith(("SECTION_", "SECRING_", "SECPT_", "MAT_"))]
+    assert "SECTION_PID" in tables and "SECPT_Y" in tables
+    for t in (0.0, 2.0):
+        fd = partition(read_vtkhdf(path, t), "Lines").GetFieldData()
+        for name in tables:
+            got = fd.GetAbstractArray(name)
+            assert got is not None, f"{name} missing at t={t}"
+            assert got.GetNumberOfValues() == root.GetAbstractArray(name).GetNumberOfValues()
+    with h5py.File(path) as h:
+        n = root.GetArray("SECPT_Y").GetNumberOfTuples()
+        assert h["VTKHDF/Lines/FieldData/SECPT_Y"].shape[0] == n  # once, not per step
+
+
 def test_series_without_compaction_is_equivalent(model, tmp_path):
     deck, mb = model
     res = Op2Results(make_op2())
