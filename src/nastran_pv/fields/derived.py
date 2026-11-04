@@ -66,14 +66,13 @@ def _material(mb, mesh) -> list[str]:
     if ids is None:
         return []
     out = []
+    order = np.argsort(ids)
     for ds in mesh.values():
         mid = get_array(ds.GetCellData(), "MID")
         if mid is None:
             continue
-        order = np.argsort(ids)
-        pos = np.searchsorted(ids[order], mid)
-        pos = np.minimum(pos, len(ids) - 1)
-        hit = ids[order][pos] == mid
+        pos = vtkutil.match_ids(ids[order], mid)
+        hit = pos >= 0
         for col in ("E", "E2", "G", "Nu"):
             vals = field_value(mb, f"MAT_{col}")[order][pos].astype(float)
             vals[(~hit) | (vals == -1.0)] = np.nan

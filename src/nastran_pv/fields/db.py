@@ -39,10 +39,3 @@ def read_sql(source: str, query: str | None) -> dict[str, np.ndarray]:
         con.close()
     return {n: _column(np.array([r[i] for r in rows], dtype=object)) for i, n in enumerate(names)}
 
-
-def table_names(source: str) -> list[str]:
-    con = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
-    try:
-        return [r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type IN ('table','view')")]
-    finally:
-        con.close()

@@ -23,6 +23,7 @@ from .massprops import element_mass, totals
 from .progress import NULL, Progress
 from .materials import COLUMNS, material_table
 from .sections import beams, sweep
+from .vtkutil import add_block
 
 MESH_BLOCKS = ("Shells", "Lines", "Solids")
 
@@ -59,15 +60,6 @@ def case_control_ids(model, key: str) -> list[int]:
             except (TypeError, ValueError):
                 pass
     return sorted(set(out))
-
-
-def add_block(mb: vtkMultiBlockDataSet, name: str, block) -> None:
-    """Append a named block (None is skipped)."""
-    if block is None:
-        return
-    i = mb.GetNumberOfBlocks()
-    mb.SetBlock(i, block)
-    mb.GetMetaData(i).Set(vtkMultiBlockDataSet.NAME(), name)
 
 
 def add_beam_sections(mb: vtkMultiBlockDataSet) -> None:

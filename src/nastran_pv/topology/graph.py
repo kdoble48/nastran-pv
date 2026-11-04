@@ -131,11 +131,7 @@ class Graph:
 
     def grid_index(self, ids) -> np.ndarray:
         """Row of each grid id in :attr:`nids`, -1 where unknown."""
-        ids = np.atleast_1d(np.asarray(ids, dtype=np.int64))
-        if not len(self.nids):
-            return np.full(ids.shape, -1, np.int64)
-        idx = np.minimum(np.searchsorted(self.nids, ids), len(self.nids) - 1)
-        return np.where(self.nids[idx] == ids, idx, -1)
+        return vtkutil.match_ids(self.nids, np.atleast_1d(np.asarray(ids, dtype=np.int64)))
 
     def card_index(self, name: str) -> int:
         return self.card_names.index(name) if name in self.card_names else -1

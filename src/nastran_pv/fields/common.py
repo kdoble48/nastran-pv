@@ -31,12 +31,7 @@ def shallow_clone(mb: vtkMultiBlockDataSet) -> vtkMultiBlockDataSet:
     for i in range(mb.GetNumberOfBlocks()):
         blk = mb.GetBlock(i)
         if blk is not None:
-            if blk.IsA("vtkMultiBlockDataSet"):
-                copy = shallow_clone(blk)
-            else:
-                copy = blk.NewInstance()
-                copy.ShallowCopy(blk)
-            out.SetBlock(i, copy)
+            out.SetBlock(i, shallow_clone(blk) if blk.IsA("vtkMultiBlockDataSet") else vtkutil.shallow_copy(blk))
         if mb.HasMetaData(i):
             out.GetMetaData(i).Copy(mb.GetMetaData(i))
     out.GetFieldData().ShallowCopy(mb.GetFieldData())

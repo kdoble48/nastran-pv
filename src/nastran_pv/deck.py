@@ -20,6 +20,7 @@ from cpylog import SimpleLogger
 from pyNastran.bdf.bdf import BDF
 
 from .progress import NULL, Progress
+from .vtkutil import match_ids
 
 RECTANGULAR = {"CORD1R", "CORD2R"}
 CYLINDRICAL = {"CORD1C", "CORD2C"}
@@ -40,12 +41,7 @@ class Deck:
     # ------------------------------------------------------------------ nodes
     def lookup(self, node_ids) -> np.ndarray:
         """Point indices of ``node_ids`` in :attr:`nids`, -1 where the id is unknown."""
-        node_ids = np.asarray(node_ids, dtype=np.int64)
-        if node_ids.size == 0 or len(self.nids) == 0:
-            return np.full(node_ids.shape, -1, dtype=np.int64)
-        idx = np.searchsorted(self.nids, node_ids)
-        idx_c = np.minimum(idx, len(self.nids) - 1)
-        return np.where(self.nids[idx_c] == node_ids, idx_c, -1)
+        return match_ids(self.nids, np.asarray(node_ids, dtype=np.int64))
 
     def index(self, node_ids) -> np.ndarray:
         """Like :meth:`lookup` but raises KeyError on unknown ids."""
@@ -95,10 +91,6 @@ class Deck:
         """Rotate a vector given in ``cid`` (evaluated at ``at_xyz``) into basic."""
         return np.asarray(vec, dtype=float) @ self.basis(cid, at_xyz)
 
-    def point_to_basic(self, cid: int | None, xyz) -> np.ndarray:
-        if cid is None or cid == 0:
-            return np.asarray(xyz, dtype=float)
-        return np.asarray(self.model.coords[cid].transform_node_to_global(np.asarray(xyz, dtype=float)))
 
     # ---------------------------------------------------------------- summary
     @property
