@@ -65,7 +65,7 @@ class Tolerances:
     ``grid_absolute``. Values differ when ``|b - a| > max(tol x max(|a|, |b|), floor)``, where tol is
     ``rel`` or the kind's own ``load`` (force/moment), ``stiffness`` (bush K) or ``mass`` (element,
     concentrated and model mass). ``ignore_moves``: moved grids count as same, and nothing is
-    changed only because a grid moved. ``kinds`` not listed are skipped with a note."""
+    changed only because a grid (or a coordinate system origin) moved. ``kinds`` not listed are skipped with a note."""
 
     grid: float = 1e-6
     rel: float = 1e-6

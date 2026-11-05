@@ -81,6 +81,9 @@ def test_several_sets_share_one_scale(run_mb):
 def test_every_nth_point(run_mb, monkeypatch):
     out = load_glyphs(_sets(run_mb, "LOAD_1001"), diag=10.0, stride=2)
     assert set(arr(out, "NID")) == {3} and arr(out, "Stride", "field")[0] == 2
+    # the scale is the whole set's: grid 6's 200.25 is not drawn but still the largest force
+    fmax = np.linalg.norm([0, 200, 10])
+    assert np.isclose(np.linalg.norm(_arrows(out, 3) - GRID3, axis=1).max(), 0.8 * 100 / fmax)
     monkeypatch.setattr(glyphs, "MAX_LOAD_ARROWS", 1)
     out = load_glyphs(_sets(run_mb, "LOAD_1001"), diag=10.0)  # 0: automatic, at most MAX_LOAD_ARROWS a set
     assert arr(out, "Stride", "field")[0] == 2 and arr(out, "ArrowCount", "field")[0] == 1

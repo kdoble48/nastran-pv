@@ -213,12 +213,12 @@ def compare_coords(A, B, row, tol, res: Result) -> None:
         if a[0] != b[0]:
             reason |= TYPE
             row("coord", cid, "changed", "Type", a[0], b[0], name=b[0])
-        if np.linalg.norm(b[1] - a[1]) > tol.distance(A.diagonal()):
+        if not tol.ignore_moves and np.linalg.norm(b[1] - a[1]) > tol.distance(A.diagonal()):
             reason |= MOVED
             for c, axis in enumerate("XYZ"):
                 if b[1][c] != a[1][c]:
                     row("coord", cid, "changed", f"Origin{axis}", float(a[1][c]), float(b[1][c]), name=b[0])
-        moved_axes = np.abs(b[2] - a[2]) > tol.rel
+        moved_axes = np.abs(b[2] - a[2]) > max(tol.rel, tol.floor)  # unit vectors: absolute
         if moved_axes.any():
             reason |= ORIENTATION
             for k in np.flatnonzero(moved_axes):
@@ -325,7 +325,7 @@ def compare_bushes(A, B, moved, row, tol, res: Result) -> None:
         if grids_moved:
             r |= MOVED
             row("bush", eid, "changed", REASON_NAMES[MOVED], name="CBUSH")
-        axes = np.abs(b["axes"] - a["axes"]) > tol.rel
+        axes = np.abs(b["axes"] - a["axes"]) > max(tol.rel, tol.floor)  # unit vectors: absolute
         if axes.any():
             r |= ORIENTATION
             for k in np.flatnonzero(axes):

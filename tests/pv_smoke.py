@@ -779,6 +779,7 @@ def diff_property_checks(pv, nv, d, b, view, want):
     counts, delta = _diff_counts(nv, d)
     check(counts["elements"] == (2, 2, 3) and abs(delta + 3.5) < 1e-9 and _by_eid(d, "Shells", "DiffStatus")[3] == 1,
           f"Swap A/B: B -> A, E3 added, mass delta {delta}")
+    check(nv._diff_text(d, model).startswith("diff_a.bdf vs diff_b.bdf"), "Swap A/B: the summary names B first")
     d.SwapInputs = 0
     d.UpdatePipeline()
     check(_diff_counts(nv, d)[0] == want, "settings back: the original diff")
@@ -1281,6 +1282,12 @@ def main():
         x0 = shells.GetDataInformation().GetBounds()[0]
         check(abs(x0 - peak1) < 1e-6, f"Auto Scale follows the step: mode 1 at x{peak1:.4g} "
                                       f"(start step x{deform.ScaleFactor:.4g}), x min {x0:.4g}")
+        deform.AutoScalePeak = 0.16
+        shells.UpdatePipeline(full[1])
+        check(abs(nv.peak_deformation(nv.Model(reader, full[1])) - 2 * peak1) < 1e-9
+              and abs(shells.GetDataInformation().GetBounds()[0] - 2 * peak1) < 1e-6,
+              "Auto Scale Peak 0.16: the view and the animations' scale double")
+        deform.AutoScalePeak = 0.08
         deform.AutoScale = 0
         deform.ScaleFactor = 0.5
         nv.apply("results", reader=reader, view=anim)

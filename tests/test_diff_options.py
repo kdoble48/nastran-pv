@@ -179,3 +179,10 @@ def test_cli_flags(tmp_path, capsys):
     vtm = tmp_path / "b.vtm"
     assert main(["convert", b, "--diff-against", a, "--skip", "masses", "-o", str(vtm), "-q"]) == 0
     assert "concentrated masses not compared (unchecked)" in capsys.readouterr().out
+
+
+def test_absolute_floor_on_axes(v2):
+    # bush 201 and CORD2R 10 are rotated 90 deg: direction cosines change by 1.0
+    s = summary(diff_models(*v2, Tolerances(floor=2.0)))
+    assert s["bushes"]["Changed"] == 1  # only 202's K1 (+1000 > 2) is left
+    assert s["coords"]["Changed"] == 0

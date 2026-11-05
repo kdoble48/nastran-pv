@@ -559,7 +559,7 @@ def load_glyphs(sets, diag: float, show: str = "force", size: float = 0.08, scal
     if scale not in LOAD_SCALES:
         raise ValueError(f"scale must be one of {LOAD_SCALES}")
     kinds = [(k, name) for k, name in enumerate(("Force", "Moment")) if show in ("both", name.lower())]
-    rows, n_points, used_stride = [], 0, 1  # (kind, xyz, vectors, nid, sid)
+    rows, n_points, used_stride, peak = [], 0, 1, {}  # rows: (kind, xyz, vectors, nid, sid)
     for name, ds in sets:
         n = ds.GetNumberOfPoints()
         if not n:
@@ -574,9 +574,10 @@ def load_glyphs(sets, diag: float, show: str = "force", size: float = 0.08, scal
         for k, array in kinds:
             vec = get_array(pd, array)
             if vec is not None:
-                rows.append((k, xyz, np.nan_to_num(vec.reshape(-1, 3).astype(float)[idx]), nid, _set_id(ds, name)))
-    peak = {k: max((np.linalg.norm(v, axis=1).max() for kk, _, v, _, _ in rows if kk == k and len(v)), default=0.0)
-            for k, _ in kinds}
+                vec = np.nan_to_num(vec.reshape(-1, 3).astype(float))
+                peak[k] = max(peak.get(k, 0.0), float(np.linalg.norm(vec, axis=1).max()))  # over every point
+                rows.append((k, xyz, vec[idx], nid, _set_id(ds, name)))
+    peak = {k: peak.get(k, 0.0) for k, _ in kinds}
     pieces = []
     for k, xyz, vec, nid, sid in rows:
         mag = np.linalg.norm(vec, axis=1)

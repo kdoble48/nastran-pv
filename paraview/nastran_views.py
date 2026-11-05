@@ -960,10 +960,14 @@ def view_nsm(model, view, top=8):
 
 
 def peak_deformation(model):
-    """Scale at which the step's largest displacement is 8 % of the model size (0: no results)."""
+    """Scale at which the step's largest displacement is the model's 'NPV deform' Auto Scale Peak
+    (8 % of the model size by default) (0: no results). The animations use it too, so they swing
+    as far as the results view draws."""
     from nastran_pv.deform import peak_scale
 
-    return peak_scale(model.data, 0.08)
+    main = pv.FindSource(_name(model, "deform"))
+    fraction = float(main.AutoScalePeak) if main is not None else 0.08
+    return peak_scale(model.data, fraction)
 
 
 def view_results(model, view, scale=None):
@@ -1649,6 +1653,12 @@ def diff_filters(model_src):
     return [p for p in pv.GetSources().values() if _xml_name(p) == DIFF_XML and _input_of(p) == model_src]
 
 
+def diff_sides(diff):
+    """``(B, A)`` a Nastran Diff compares: (Input, Reference), the other way round with Swap Inputs."""
+    b, a = _input_of(diff), _input_of(diff, "Reference")
+    return (a, b) if getattr(diff, "SwapInputs", 0) else (b, a)
+
+
 def diff_of(model, reference=None):
     """The diff of ``model`` (B): an existing Nastran Diff on it, else a new ``NPV diff`` against
     ``reference`` (default: :func:`reference_model`). None when there is nothing to compare with."""
@@ -1674,7 +1684,8 @@ def diff_summary(diff):
 
 def _diff_text(diff, model):
     rows, masses = diff_summary(diff)
-    lines = [f"{_label(model.reader)} vs {_label(_input_of(diff, 'Reference'))}"]
+    b_src, a_src = diff_sides(diff)
+    lines = [f"{_label(b_src)} vs {_label(a_src)}"]
     for r in rows:
         if r["Item"] not in ("grids", "elements") and r["A"] == r["B"] == 0:
             continue  # a kind neither model has
@@ -1806,12 +1817,15 @@ def side_by_side(array=None, reference=None, view=None):
     ensure_plugin()
     left = view or pv.GetActiveViewOrCreate("RenderView")
     shown = _shown_array(left)
-    b_src = find_reader()
+    found = find_reader()
     time = getattr(left, "ViewTime", 0.0)
-    model_b = Model(b_src, time)
-    diffs = diff_filters(b_src)
+    diffs = diff_filters(found)
     diff = diffs[-1] if diffs else None
-    a_src = reference or (_input_of(diff, "Reference") if diff is not None else reference_model(b_src))
+    if diff is not None and reference is None:
+        b_src, a_src = diff_sides(diff)  # Swap Inputs: the diff's B is its Reference
+    else:
+        b_src, a_src = found, reference or reference_model(found)
+    model_b = Model(b_src, time)
     if a_src is None:
         raise RuntimeError("Side by side needs two models: open the reference model (A) too, then select "
                            "the modified model (B) and run it again.")
@@ -1860,7 +1874,7 @@ def side_by_side(array=None, reference=None, view=None):
     except Exception:
         pass
     pv.AddCameraLink(left, right, SIDE_LINK)
-    _finish(b_src)  # two views, no one filter: B, the model a rerun finds
+    _finish(found)  # two views, no one filter: the model a rerun finds
     pv.SetActiveView(left)
     pv.Render(left)
     pv.Render(right)

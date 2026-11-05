@@ -52,7 +52,7 @@ These change what is compared, in `diff`, `convert --diff-against` and on the Na
 | Flag | Nastran Diff | Effect |
 |---|---|---|
 | `--skip KIND[,KIND]` | *Kinds* (Compare) | Kinds not compared: `elements`, `masses` (concentrated), `properties`, `materials`, `rigid`, `connectors`, `bushes`, `loads`, `spcs`, `coords` (with the grids' CP/CD). Each gets a note and no summary row; grids are always compared. Skipping `properties` or `materials` also leaves the elements alone that changed only through them |
-| `--ignore-grid-moves` | *Ignore Grid Moves* (Compare) | Moved grids count as same, and nothing is changed only because a grid moved (elements, connections, loads, SPCs, mass and bush positions) |
+| `--ignore-grid-moves` | *Ignore Grid Moves* (Compare) | Moved grids count as same, and nothing is changed only because a grid moved (elements, connections, loads, SPCs, mass and bush positions, coordinate system origins) |
 | `--grid-tol R` | *Grid Tolerance* | A grid moved when it moved more than R × A's bounding-box diagonal (default 1e-6) |
 | `--grid-tol-absolute` | *Grid Tolerance Mode* *Model units* | `--grid-tol` is a distance in model units |
 | `--rel-tol R` | *Relative Tolerance* | Values differ when `|b - a| > R × max(|a|, |b|)` (default 1e-6) |
