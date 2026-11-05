@@ -2,8 +2,12 @@
 
 Every view works on a Nastran reader (the active source, or the reader
 upstream of it) or on a ``.vtm``/VTKHDF file written by nastran-pv and opened with
-ParaView's own reader. It hides what else is shown in the active view, and builds or
-reuses named pipeline objects ("NPV ..."), so running a view twice does not
+ParaView's own reader. Views edit the active view's scene (:func:`scene_of`): a coloring
+(``pid``, ``thickness``, ``results``, ...) replaces the coloring and keeps the overlays, an overlay
+(``masses``, ``bushes``, ``bushrotations``, ``beams``, ``loads``, ``spc``, ``rigid``) adds itself
+(over a ghost mesh on an empty view), and a second toolbar click on an overlay removes it
+(``apply(name, toggle=True)``; ``apply`` itself refreshes). A view for another model starts a new
+scene. Views build or reuse named pipeline objects ("NPV ..."), so running a view twice does not
 pile up duplicates. A view or command ends with the filter it is about selected (the mass
 glyphs, NPV grow, the Nastran Diff, NPV deform for results and mode animation), or the reader when
 it only recolours the model or changes the reader's visibility; the model is found upstream of it
@@ -22,9 +26,8 @@ Femap-style visibility commands: they set the reader's visibility checklists and
 so they need the deck (:func:`deck_reader`). ``show_only_file``, ``hide_file`` and
 ``highlight_file`` do the same from a CSV/text file of IDs (the reader's ``SelectionFile``);
 highlight makes a real ParaView selection.
-Views edit the active view's scene (:func:`scene_of`: one coloring plus overlays) instead of
-starting over; ``clear`` (NPV Clear) empties the view of every layer, sets the deformation back to 0
-and deletes nothing.
+``clear`` (NPV Clear) is the only reset: it empties the view of every layer, sets the deformation
+back to 0 and deletes nothing.
 ``diff`` compares the active model (B) with a second open model (A) through the Nastran Diff filter,
 and :func:`side_by_side` shows A and B in two linked views with one color range.
 Plus :func:`index_colors`, which turns whatever integer array the active representation is
@@ -437,14 +440,6 @@ def shown_sources(view):
     return out
 
 
-def _reset_view(view):
-    if view is None:
-        return
-    for src in shown_sources(view):
-        pv.Hide(src, view)
-    view.OrientationAxesVisibility = 1
-
-
 # ------------------------------------------------------------ scene layers
 _SCENES = {}  # view.GetGlobalIDAsString() -> nastran_pv.scene.Scene
 _RECORDING = None  # the list _show appends to inside _recorded, else None
@@ -539,7 +534,7 @@ def ghost_mesh(model, view, opacity=0.2):
     mesh = _extract(model, *[b for b in MESH if model.has(b)], what="mesh")
     if mesh is None:
         return None, None
-    d = pv.Show(mesh, view)
+    d = _show(mesh, view)
     d.Representation = "Surface"
     d.Opacity = opacity
     solid(d, GHOST_RGB)
@@ -698,7 +693,6 @@ def view_masses(model, view, mode=None, relative=None, law=None, minimum=None, m
     (cbrt, linear, sqrt, log, uniform) with a floor of ``minimum`` x that radius; masses below
     ``minimum_mass`` are left out; ``color_by`` Mass, EID or NID. Arguments left None keep the
     filter's settings (its defaults on a first run)."""
-    ghost_mesh(model, view)
     if not model.has("Masses"):
         info_text(model, view, "No concentrated masses (CONM1/CONM2/CMASS) in this deck.")
         return
@@ -706,10 +700,10 @@ def view_masses(model, view, mode=None, relative=None, law=None, minimum=None, m
     _set_given(glyphs, SizeMode=mode, Size=relative, RadiusLaw=LAW_NAMES[law] if law else None,
                MinimumRelativeSize=minimum, MinimumMass=minimum_mass, ColorBy=color_by)
     glyphs.UpdatePipeline()
-    d = pv.Show(glyphs, view)
+    d = _show(glyphs, view)
     _color_points(model, d, glyphs, enum_text(glyphs, "ColorBy"), view)
     if model.has("MassOffsets"):
-        od = pv.Show(_extract(model, "MassOffsets"), view)
+        od = _show(_extract(model, "MassOffsets"), view)
         solid(od, [0.15, 0.15, 0.15])
         od.LineWidth = 2.0
     cg = model.field("ModelCG")
@@ -728,7 +722,7 @@ def view_masses(model, view, mode=None, relative=None, law=None, minimum=None, m
         marker.Center = list(map(float, cg))
         marker.Radius = 0.02 * model.diag
         marker.ThetaResolution = marker.PhiResolution = 24
-        md = pv.Show(marker, view)
+        md = _show(marker, view)
         solid(md, [0.05, 0.05, 0.05])
         text += f"\nCG (black sphere): ({cg[0]:.4g}, {cg[1]:.4g}, {cg[2]:.4g})"
     glyph_fd = fetch(glyphs).GetFieldData()
@@ -754,7 +748,6 @@ def _glyph_field(src, name, default=0.0):
 def _bush_view(model, view, kind, size=None, ellipsoids=None):
     """Shared body of the bushes (translation) and bush rotations views."""
     rotation = kind == "rotation"
-    ghost_mesh(model, view)
     if not model.has("Bushes"):
         info_text(model, view, "No CBUSH elements in this deck.")
         return
@@ -766,7 +759,7 @@ def _bush_view(model, view, kind, size=None, ellipsoids=None):
         glyphs.ShowTriads = 1  # nothing would be drawn
     glyphs.UpdatePipeline()
     if model.has("BushLines"):
-        ld = pv.Show(_extract(model, "BushLines"), view)
+        ld = _show(_extract(model, "BushLines"), view)
         solid(ld, list(BUSH_LINE_RGB))
         ld.LineWidth = 1.5
     n = model.block("Bushes").GetNumberOfPoints()
@@ -781,7 +774,7 @@ def _bush_view(model, view, kind, size=None, ellipsoids=None):
                                                  f"No {'rotational' if rotation else 'translational'} stiffness "
                                                  f"({span}) on any CBUSH."))
         return glyphs
-    d = pv.Show(glyphs, view)
+    d = _show(glyphs, view)
     released = int(_glyph_field(glyphs, "ReleasedCount"))
     missing = int(_glyph_field(glyphs, "NoStiffnessCount"))
     ellipsoid = bool(glyphs.ShowEllipsoids and not rotation)
@@ -834,7 +827,6 @@ def view_beams(model, view, triads=None, max_triads=None, scale=None):
     triads when there are at most Max Triads (500) beams ('NPV beam axes'). Undeformed, like the
     ghost mesh, unless ``scale`` (the filters' DeformationScale) is given. ``triads`` True draws them
     whatever the count; arguments left None keep the filters' settings."""
-    ghost_mesh(model, view)
     axis2 = model.array("Lines", "Axis2", "cell")
     pids = model.field("SECTION_PID")
     n = int(np.isfinite(axis2[:, 0]).sum()) if axis2 is not None else 0
@@ -843,14 +835,14 @@ def view_beams(model, view, triads=None, max_triads=None, scale=None):
         return
     sections = _named(model, "beam sections", lambda: pv.NastranBeamSections(Input=deformed(model)))
     _set_given(sections, DeformationScale=scale)
-    d = pv.Show(sections, view)
+    d = _show(sections, view)
     values = sorted({int(p) for p in pids})
     categorical(d, "PID", values, labels_for(model, "PID", values), view=view)
     axes = _beam_axes(model)
     _set_given(axes, DeformationScale=scale, ShowTriads=None if triads is None else int(triads),
                MaxTriads=max_triads if max_triads is not None else (0 if triads else None))
     axes.UpdatePipeline()
-    ad = pv.Show(axes, view)
+    ad = _show(axes, view)
     parts = [1, 2] + ([3, 4, 5] if _glyph_field(axes, "TriadsDrawn") else [])
     categorical(ad, "BeamPart", parts, labels_for(model, "BeamPart", parts),
                 [BEAM_PART_RGB[p] for p in parts], view=view)
@@ -883,7 +875,6 @@ def view_loads(model, view, sets=None, show=None, size=None, stride=None):
     (first: the Case Control LOAD, else the first set with loads). ``sets`` (block names such as
     LOAD_1001), ``show`` (Forces, Moments, Forces and moments), ``size`` and ``stride`` (Every Nth
     Point) set the filter; left None they keep its settings."""
-    ghost_mesh(model, view, opacity=0.5)
     loads = model.block("Loads")
     if loads is None:
         info_text(model, view, "No nodal loads (FORCE/MOMENT) in this deck.")
@@ -912,7 +903,7 @@ def view_loads(model, view, sets=None, show=None, size=None, stride=None):
                     "picks forces, moments or both; GRAV is not drawn.")
         info_text(model, view, text)
         return g
-    d = pv.Show(g, view)
+    d = _show(g, view)
     continuous(d, "POINTS", "Magnitude", preset="Inferno (matplotlib)", view=view)
     lines = []
     for name in drawn[:6]:
@@ -933,7 +924,6 @@ def view_loads(model, view, sets=None, show=None, size=None, stride=None):
 def view_spc(model, view, sets=None, dofs=None, size=None):
     """A marker per constrained grid (Nastran SPC Glyphs), coloured by DOF code. ``sets`` (SPC set
     ids), ``dofs`` (e.g. "123") and ``size`` set 'NPV spc glyphs'; left None they keep its settings."""
-    ghost_mesh(model, view, opacity=0.35)
     if not model.has("Constraints"):
         info_text(model, view, "No SPCs in this deck (free-free model).")
         return
@@ -949,7 +939,7 @@ def view_spc(model, view, sets=None, dofs=None, size=None):
         info_text(model, view, f"{total} constrained grids, none in the checked SPC sets with DOFs "
                                f"{g.DOFs or '(none)'} ('NPV spc glyphs').")
         return g
-    d = pv.Show(g, view)
+    d = _show(g, view)
     codes = sorted({int(v) for v in _gather(fetch(g), "DOFCode", "POINTS")})
     categorical(d, "DOFCode", codes, labels_for(model, "DOFCode", codes), association="POINTS", view=view)
     text = f"{shown} constrained grids, coloured by DOF code"
@@ -960,11 +950,10 @@ def view_spc(model, view, sets=None, dofs=None, size=None):
 
 
 def view_rigid(model, view):
-    ghost_mesh(model, view, opacity=0.3)
     if not model.has("Rigid"):
         info_text(model, view, "No rigid elements in this deck.")
         return
-    d = pv.Show(_extract(model, "Rigid"), view)
+    d = _show(_extract(model, "Rigid"), view)
     types = model.unique("RigidType", "cell", ("Rigid",))
     categorical(d, "RigidType", types, labels_for(model, "RigidType", types), view=view)
     d.LineWidth = 2.5
@@ -976,7 +965,7 @@ def _mesh_categorical(model, view, array, blocks=MESH):
     if mesh is None:
         info_text(model, view, f"No elements carry {array}.")
         return None
-    d = pv.Show(mesh, view)
+    d = _show(mesh, view)
     d.Representation = "Surface"
     d.Opacity = 1.0
     values = model.unique(array, "cell", blocks)
@@ -1013,7 +1002,7 @@ def view_elementtype(model, view):
 def view_thickness(model, view):
     if not model.has("Shells"):
         return view_pid(model, view)
-    d = pv.Show(_extract(model, "Shells"), view)
+    d = _show(_extract(model, "Shells"), view)
     continuous(d, "CELLS", "Thickness", view=view)
 
 
@@ -1040,7 +1029,7 @@ def view_nsm(model, view, top=8):
         info_text(model, view, text)
         return
     for b in blocks:
-        d = pv.Show(_extract(model, b), view)
+        d = _show(_extract(model, b), view)
         continuous(d, "CELLS", NSM_DENSITY[b], preset="Inferno (matplotlib)", view=view)
         if b == "Lines":
             d.LineWidth = 4.0
@@ -1100,11 +1089,11 @@ def view_results(model, view, scale=None):
         set_deformation(model, peak, auto=True)
     else:
         set_deformation(model, scale)
-    d = pv.Show(mesh, view)
+    d = _show(mesh, view)
     d.Representation = "Surface"
     d.Opacity = 1.0
     continuous(d, "POINTS", "DisplacementMagnitude", preset="Turbo", view=view)
-    ghost = pv.Show(_extract(model, *mesh_blocks, what="mesh", undeformed=True), view)
+    ghost = _show(_extract(model, *mesh_blocks, what="mesh", undeformed=True), view)
     ghost.Representation = "Wireframe"
     ghost.Opacity = 0.15
     solid(ghost, [0.3, 0.3, 0.3])
@@ -1135,7 +1124,7 @@ def _random_mesh(model, view, array, rng):
     blocks = [b for b in MESH if model.has(b)]
     mesh = _extract(model, *blocks, what="mesh")
     set_deformation(model, 0.0)
-    d = pv.Show(mesh, view)
+    d = _show(mesh, view)
     d.Representation = "Surface"
     d.Opacity = 1.0
     lut = continuous(d, "POINTS", array, preset="Turbo", view=view)
@@ -1208,7 +1197,7 @@ def view_randomsweep(model, view):
     labels = [f"Random {drive} {float(f):.4g} Hz" for f in freqs] if freqs is not None else []
     # (min/max are numpy reductions in the annotation namespace: index directly)
     label.Expression = f"{labels!r}[int(time_index) % {len(labels)}]" if labels else "''"
-    ld = pv.Show(label, view)
+    ld = _show(label, view)
     ld.WindowLocation = "Upper Right Corner"
     ld.FontSize = 14
     info_text(model, view, f"{_random_header(model)}\n{RANDOM_SETTINGS}\nResponse ASD (sum of X, Y, Z): play the time steps "
@@ -1256,7 +1245,7 @@ def _exclude(src, names):
 def view_parts(model, view, exclude=()):
     p = _named(model, "parts", lambda: pv.NastranParts(Input=model.reader))
     _exclude(p, exclude)
-    d = pv.Show(_topology_blocks(model, p, "parts"), view)
+    d = _show(_topology_blocks(model, p, "parts"), view)
     d.Representation = "Surface"
     d.LineWidth = 2.5
     values = sorted({int(v) for v in _gather(fetch(p), "PartId", "CELLS")})
@@ -1280,7 +1269,7 @@ def view_grow(model, view, seeds=None, exclude=()):
                                "(or type Seed IDs on 'NPV grow').")
         return g
     ghost_mesh(model, view, opacity=0.15)
-    d = pv.Show(_at_least(model, g, "Hops", 0, "grow reached"), view)
+    d = _show(_at_least(model, g, "Hops", 0, "grow reached"), view)
     d.Representation = "Surface"
     d.LineWidth = 2.5
     continuous(d, "CELLS", "Hops", preset="Turbo", view=view)
@@ -1298,7 +1287,7 @@ def view_path(model, view):
         info_text(model, view, "Select two grids (Select Points On), then click 'NPV Path from Selection'.")
         return p
     ghost_mesh(model, view, opacity=0.15)
-    d = pv.Show(_at_least(model, p, "OnPath", 1, "path cells"), view)
+    d = _show(_at_least(model, p, "OnPath", 1, "path cells"), view)
     d.Representation = "Surface"
     d.LineWidth = 4
     solid(d, list(SET1[0]))
@@ -1319,7 +1308,7 @@ def _check_layer(model, c, view, what, blocks, codes):
     from nastran_pv.topology import CHECKS
 
     ex = _named(model, what, lambda: extract_blocks(c, blocks))
-    d = pv.Show(ex, view)
+    d = _show(ex, view)
     # both layers share the "Check" lookup table, so there is one legend naming the checks found
     lut = categorical(d, "Check", codes, [CHECKS[k] for k in codes],
                       colors=[CHECK_RGB[CHECKS[k]] for k in codes], view=view)
@@ -1817,7 +1806,7 @@ def _diff_layers(model, diff, view):
     from nastran_pv.diff import STATUS_NAMES
 
     mesh = _named(model, "diff mesh", lambda: extract_blocks(diff, list(MESH) + list(DIFF_ITEM_BLOCKS)))
-    d = pv.Show(mesh, view)
+    d = _show(mesh, view)
     d.Representation = "Surface"
     d.Opacity = 1.0
     d.LineWidth = 3
@@ -1825,7 +1814,7 @@ def _diff_layers(model, diff, view):
     d.RenderPointsAsSpheres = 1
     categorical(d, "DiffStatus", list(range(len(STATUS_NAMES))), list(STATUS_NAMES), colors=DIFF_RGB, view=view)
     removed = _named(model, "diff removed", lambda: extract_blocks(diff, ["Removed"]))
-    r = pv.Show(removed, view)
+    r = _show(removed, view)
     r.Representation = "Surface"
     r.Opacity = 0.4
     r.LineWidth = 3
@@ -1849,14 +1838,21 @@ def view_diff(model, view, reference=None):
 
 
 def _shown_array(view):
-    """``(association, array)`` the view's first coloured representation shows, or None."""
+    """``(association, array)`` the view's coloring layer shows, else its first coloured
+    representation, or None."""
+    reps = []
     for rep in list(getattr(view, "Representations", None) or []):
         try:
             if rep.Visibility and rep.ColorArrayName[1]:
-                return tuple(rep.ColorArrayName)
+                reps.append(rep)
         except AttributeError:
             continue
-    return None
+    coloring = scene_of(view).coloring
+    for obj in coloring.objects if coloring is not None else []:
+        for rep in reps:
+            if rep.Input == obj:
+                return tuple(rep.ColorArrayName)
+    return tuple(reps[0].ColorArrayName) if reps else None
 
 
 def _partner_view(left):
@@ -1946,7 +1942,7 @@ def side_by_side(array=None, reference=None, view=None):
         assoc, array = "CELLS", "DiffStatus" if diff is not None else "PID"
     right = _partner_view(left)
     for v in (left, right):
-        _reset_view(v)
+        _clear_view(v)
     if array == "DiffStatus":
         if diff is None:
             raise RuntimeError("DiffStatus needs a diff: run 'NPV Diff' first (or pass another array).")
@@ -1998,20 +1994,48 @@ VIEWS = {
 }
 
 
-def apply(name, reader=None, view=None, model=None, reset_camera=True, **kwargs):
-    """Build view ``name`` in ``view`` (default: active) for ``reader`` (default: found). Ends with
-    the filter the view is about selected (what its view function returns), else the reader."""
+def apply(name, reader=None, view=None, model=None, reset_camera=None, toggle=False, **kwargs):
+    """Add view ``name`` to the scene of ``view`` (default: active) for ``reader`` (default: found).
+    A coloring (PID, Thickness, Results, ...) replaces the scene's coloring; an overlay (Masses,
+    Loads, ...) adds itself, over a ghost mesh when the scene has no coloring, and with ``toggle``
+    (the toolbar macros) an overlay already shown is removed instead. A command for another model
+    starts a new scene; a fresh scene starts undeformed. The camera resets when ``reset_camera`` is
+    true, or (None) when the scene was empty. Ends with the filter the view is about selected (what
+    its view function returns), else the reader."""
+    from nastran_pv.scene import GHOST, GHOST_OPACITY, Layer, kind
+
     ensure_plugin()
     view = view or pv.GetActiveViewOrCreate("RenderView")
     reader = reader or find_reader()
     stop_mode_animation(reader, view)  # back on the mode's time step, time controls step modes again
     model = model or Model(reader, getattr(view, "ViewTime", 0.0))
-    _reset_view(view)
+    scene = scene_of(view)
+    if scene.model is not None and scene.model != reader:  # one subject per single-model scene
+        _hide(scene.clear(), view)
     pv.SetActiveView(view)
-    if name != "results":  # views show the undeformed model; results keeps or sets its own scale
+    fresh = scene.empty
+    if fresh and name != "results":  # a new scene is undeformed; later only results changes the scale
         set_deformation(model, 0.0)
-    selected = VIEWS[name](model, view, **kwargs)
-    if reset_camera:
+    scene.model = reader
+    if kind(name) == "overlay":
+        if toggle and name in scene.overlays:
+            layer = scene.overlays[name]
+            _hide(scene.remove_overlay(name), view)
+            info = pv.FindSource(_name(model, "info"))
+            if info is not None:
+                pv.Hide(info, view)
+            pv.Render(view)
+            _finish(layer.selected or reader)
+            return model
+        if scene.coloring is None:
+            objects, _ = _recorded(lambda: ghost_mesh(model, view, GHOST_OPACITY.get(name, 0.2)))
+            _hide(scene.set_coloring(Layer(GHOST, objects)), view)
+        objects, selected = _recorded(lambda: VIEWS[name](model, view, **kwargs))
+        _hide(scene.add_overlay(Layer(name, objects, selected)), view)
+    else:
+        objects, selected = _recorded(lambda: VIEWS[name](model, view, **kwargs))
+        _hide(scene.set_coloring(Layer(name, objects, selected)), view)
+    if reset_camera or (reset_camera is None and fresh):
         view.ResetCamera(False)
     pv.Render(view)
     _finish(selected or model.reader)
@@ -2453,7 +2477,7 @@ def run_macro(name):
         if name in ACTIONS:
             ACTIONS[name]()
         else:
-            apply(name)
+            apply(name, toggle=True)  # a second click removes an overlay; nv.apply refreshes it
     except (RuntimeError, ValueError) as exc:  # what the user should do next, not a traceback dump
         vtkOutputWindow.GetInstance().DisplayErrorText(f"nastran-pv: {exc}\n")
     except Exception:  # a bug: the traceback is what a report needs

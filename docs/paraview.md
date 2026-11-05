@@ -127,9 +127,11 @@ python paraview/install_macros.py --remove
 ```
 
 Restart ParaView, open a deck, select the reader (or anything downstream of it) and click a button.
-Each view hides what is currently shown and builds a ready-to-read state: the mesh drawn as a
-translucent ghost, the relevant glyphs, an indexed or continuous lookup table, a legend and a short
-summary. Running a view again reuses its pipeline objects, which are named `NPV ...`, and keeps
+A button edits what the view shows instead of starting over
+([How views combine](#how-views-combine)): a coloring (PID, Thickness, Results, ...) replaces the
+coloring, and an overlay (Masses, Loads, SPC, ...) adds itself to it, with its glyphs, lookup table,
+legend and a short summary; clicking an overlay's button again removes it. Nothing else resets the
+view: *NPV Clear* is the only reset. Running a view again reuses its pipeline objects, which are named `NPV ...`, and keeps
 what you changed on them. A macro ends with the filter it is about selected (*NPV mass glyphs*,
 *NPV load glyphs*, *NPV beam sections*, *NPV grow*, the Nastran Diff, *NPV deform* for Results and
 the animation macros), so its Properties panel is open with the settings that tune that view
@@ -150,7 +152,7 @@ an `NPV ...` filter selected finds the model upstream of it.
 | NPV Family / Group / PID / MID / Element Type | Mesh with an indexed color per value, with names in the legend |
 | NPV Thickness | Shell thickness |
 | NPV NSM | Nonstructural mass: shells by NSM per area, lines by NSM per length (two legends); totals by source and per NSM set, or the defined sets when none is selected. The reader's *NSMSet* picks the bulk set (-1 = Case Control `NSM=`, or the only set of a bulk-only file; 0 = none; see [Nonstructural mass](model.md#nonstructural-mass)) |
-| NPV Results | Deformed shape colored by displacement over the undeformed outline, for the current time step; each step's largest displacement is drawn at 8 % of the model size (*NPV deform* > *Auto Scale*; uncheck it to type a *Scale Factor*, which rerunning NPV Results keeps; any other view in between resets it to 0, and NPV Results then turns Auto Scale back on) |
+| NPV Results | Deformed shape colored by displacement over the undeformed outline, for the current time step; each step's largest displacement is drawn at 8 % of the model size (*NPV deform* > *Auto Scale*; uncheck it to type a *Scale Factor*, which rerunning NPV Results keeps; the overlays and colorings clicked afterwards keep the deformation, NPV Clear sets it back to 0, and NPV Results then turns Auto Scale back on) |
 | NPV Random RMS | Random response (reader *Random ASD* set, see [Random vibration](random-vibration.md)): the mesh colored by acceleration RMS on a log scale, with the drive, input RMS and captured mass. Drive, damping and g are the reader's *Random* properties, since the reader computes the response |
 | NPV Random Sweep | The response ASD at the current frequency frame on one fixed log range, with the frame's frequency: press play to sweep |
 | NPV Animate Mode | Vibrates the mode the time controls are on, in the view as it is (masses, PID, loads, results, a show-only subset, anything you switched on): two cycles at 24 frames/s. It then leaves the **play button** looping that mode: the time steps become the 24 phases of one cycle (the time widget reads *Phase*), and the mode and its frequency stay in the upper right corner. A converted single-step file (`convert --results` without `--all-steps`) has one mode. From Python: `nv.play_mode(3, frames=36)` |
@@ -177,6 +179,35 @@ an `NPV ...` filter selected finds the model upstream of it.
 
 The same views can be called from the Python shell (`import nastran_views as nv; nv.apply("masses")`),
 from `render_model.py`, and as `nastran-pv render` presets (see [CLI](cli.md#batch-screenshots)).
+
+## How views combine
+
+What a render view shows is a *scene* made of layers, and each macro edits one layer:
+
+| Layer | What it is | Changed by |
+|---|---|---|
+| Coloring | How the mesh itself is drawn; exactly one | NPV Family, Group, PID, MID, Element Type, Thickness, NSM, Results, Random RMS, Random Sweep, Parts, Grow, Model Check, Path from Selection, Diff |
+| Overlays | Glyphs and lines drawn on the mesh; any number | NPV Masses, Bushes, Bush Rotations, Beams, Loads, SPC, Rigid |
+| Scope | What part of the model is in play: the reader's checklists, its Show Only / Hide element lists and its *Selection File* | the visibility macros ([Model tree and visibility](#model-tree-and-visibility)) |
+| Time | The time step, the deformation scale and mode animation | NPV Results, the animation macros, the time controls |
+
+- A **coloring** replaces the coloring and keeps the overlays: NPV Masses then NPV Group shows the
+  masses on the groups, and NPV Thickness afterwards swaps the groups (and their legend) for the
+  thickness while the masses stay.
+- An **overlay** adds itself and keeps everything else. Clicking its button again removes it; its
+  `NPV ...` filters are only hidden, so a third click brings it back with the settings you left on
+  them. Two overlays that share an object (NPV Bushes and NPV Bush Rotations both draw the GA–GB
+  lines) keep it while either is on.
+- The toggle is the toolbar's. From Python, `nv.apply("masses")` always draws (or refreshes) the
+  overlay; `nv.apply("masses", toggle=True)` behaves like the button.
+- An overlay on an **empty view** draws the mesh as a translucent ghost and uses it as the coloring,
+  until a coloring replaces it.
+- A **new view starts undeformed**. After that only NPV Results changes the deformation: an overlay
+  or a coloring clicked on a deformed view keeps it.
+- A macro for **another model** (a second reader selected) starts a new scene in that view: the first
+  model's layers are hidden.
+- **NPV Clear** is the only reset: it hides every layer and puts the deformation back to 0, and
+  deletes nothing.
 
 ## Filter properties
 

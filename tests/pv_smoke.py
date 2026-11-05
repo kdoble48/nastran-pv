@@ -472,6 +472,66 @@ def file_group_checks(pv, nv):
     pv.Delete(reader)
 
 
+def scene_checks(pv, nv, reader):
+    """R1: a coloring replaces the coloring, an overlay adds itself, a second toolbar click
+    (toggle) removes it, an overlay on an empty view draws the ghost as its coloring, and another
+    model's command starts a new scene."""
+    view = pv.CreateRenderView()
+
+    def vis(src):
+        return pv.GetDisplayProperties(src, view).Visibility
+
+    m = nv.apply("pid", reader=reader, view=view)
+    nv.apply("masses", reader=reader, view=view)
+    mesh, g = (pv.FindSource(nv._name(m, w)) for w in ("mesh", "mass glyphs"))
+    check(vis(mesh) and pv.GetDisplayProperties(mesh, view).ColorArrayName[1] == "PID" and vis(g)
+          and nv._shown_array(view) == ("CELLS", "PID"), "Masses on PID keeps the PID coloring")
+    nv.apply("thickness", reader=reader, view=view)
+    check(not vis(mesh) and vis(g) and not pv.GetScalarBar(pv.GetColorTransferFunction("PID"), view).Visibility,
+          "Thickness replaces PID (its legend goes), the masses stay")
+    g.MinimumMass = 2.0
+    nv.apply("masses", reader=reader, view=view, toggle=True)
+    check(not vis(g) and "masses" not in nv.scene_of(view).overlays and pv.GetActiveSource() is g,
+          "second click hides the masses and selects their filter")
+    nv.apply("masses", reader=reader, view=view, toggle=True)
+    check(vis(g) and g.MinimumMass == 2.0, "third click shows them again with their settings")
+    g.MinimumMass = 0.0
+    nv.apply("bushes", reader=reader, view=view)
+    nv.apply("bushrotations", reader=reader, view=view)
+    nv.apply("bushes", reader=reader, view=view, toggle=True)
+    check(vis(pv.FindSource(nv._name(m, "BushLines"))), "Bushes off keeps the Bush Rotations lines")
+    view2 = pv.CreateRenderView()
+    nv.apply("spc", reader=reader, view=view2)
+    s2 = nv.scene_of(view2)
+    check(s2.coloring.name == "ghost" and pv.GetDisplayProperties(mesh, view2).Opacity == 0.35,
+          "SPC on an empty view draws the ghost as its coloring")
+    nv.apply("pid", reader=reader, view=view2)
+    check(pv.GetDisplayProperties(mesh, view2).Opacity == 1.0 and "spc" in s2.overlays,
+          "PID replaces the ghost, SPC stays")
+    twin = rm.load_reader(DECK)
+    nv.apply("pid", reader=twin, view=view2)
+    check(not pv.GetDisplayProperties(pv.FindSource(nv._name(m, "spc glyphs")), view2).Visibility
+          and nv.scene_of(view2).model is twin, "another model's command starts a new scene")
+    for v in (view, view2):
+        nv.clear(v)
+        pv.Delete(v)
+    tag = nv._name(nv.Model(twin), "")[len("NPV "):].strip()
+    for src in sorted((v for k, v in pv.GetSources().items() if k[0].endswith(tag)),
+                      key=lambda v: -int(v.GetGlobalIDAsString())):
+        pv.Delete(src)
+    pv.Delete(twin)
+    pv.SetActiveSource(reader)
+
+
+def preset_checks(pv, nv):
+    """CLI render presets: each preset in a fresh view, deleted afterwards."""
+    before = len(pv.GetViews())
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        shots = rm.render(DECK, ["pid", "masses"], ["iso"], tmp, (320, 200))
+        check(len(shots) == 2 and all(os.path.exists(s) for s in shots) and len(pv.GetViews()) == before,
+              "render presets: one fresh view per preset")
+
+
 def tree_checks(pv, nv, reader):
     """Model tree output, Femap-style visibility checklists and the selection commands."""
     data = nv.fetch(reader)
@@ -1260,6 +1320,7 @@ ENDDATA
 def filter_property_checks(pv, nv, reader, view):
     """Each macro's filter property (tiny_run.bdf): set it, update, the output changes; rerunning the
     macro keeps it; an explicit macro argument wins. Settings are put back afterwards."""
+    nv.clear(view)
     model = nv.apply("masses", reader=reader, view=view)
     g = pv.FindSource(nv._name(model, "mass glyphs"))
     check(_point_values(g, "EID") == {201, 202}, "mass glyphs: both CONM2")
@@ -1428,6 +1489,7 @@ def main():
     import nastran_views as nv
 
     tree_checks(pv, nv, reader)
+    scene_checks(pv, nv, reader)
     selection_file_checks(pv, nv, reader)
 
     from op2_fixture import make_op2  # synthesized results, written with pyNastran
@@ -1486,10 +1548,14 @@ def main():
         check(deform.ScaleFactor == 2.0 and not deform.AutoScale, "results view scale= wins")
         scope_filter_checks(pv, nv, reader, anim, deform, full)
         nv._set_time(anim, full[0])
-        model = nv.apply("masses", reader=reader, view=anim)  # other views: undeformed
-        check(deform.ScaleFactor == 0.0 and not deform.AutoScale, "the masses view resets the deformation")
+        nv.clear(anim)  # scale=2.0 above turned Auto Scale off: a Clear sets it back to 0
         nv.apply("results", reader=reader, view=anim)
         check(deform.AutoScale == 1, "results view after another view: Auto Scale again")
+        model = nv.apply("masses", reader=reader, view=anim)
+        check(deform.AutoScale == 1, "Masses on Results keeps the deformation")
+        nv.apply("pid", reader=reader, view=anim)
+        check(deform.AutoScale == 1, "PID after Results keeps the deformation")
+        nv.clear(anim)  # the mode checks below need an undeformed start
         model = nv.apply("masses", reader=reader, view=anim)
         glyphs = pv.FindSource(nv._name(model, "mass glyphs"))
         mesh = nv._extract(model, "Shells")  # grids 1-7: the ones the fixture displaces
@@ -1797,6 +1863,7 @@ def main():
     topology_checks(pv, nv)
     diff_checks(pv, nv)
     clear_checks(pv, nv, reader)
+    preset_checks(pv, nv)
     active_source_checks(pv, nv)
     print("pv_smoke: all checks passed")
 
