@@ -973,8 +973,8 @@ def calc_nan_checks(pv, nv):
 
     keep = set(pv.GetSources().values())
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
-        for expr in ("Z = sqrt(0 * EID - 1)", "Z = where(PID == 1, EID, nan)"):
-            path = os.path.join(tmp, "calc.vtkhdf")
+        for k, expr in enumerate(("Z = sqrt(0 * EID - 1)", "Z = where(PID == 1, EID, nan)")):
+            path = os.path.join(tmp, f"calc{k}.vtkhdf")  # one name per file: ParaView caches readers by name
             convert(["convert", DECK, "--calc", expr, "-o", path, "-q"])
             f = nv.load_reader(path)
             want = nv.Model(rm.load_reader(DECK)).block("Shells").GetNumberOfCells()
