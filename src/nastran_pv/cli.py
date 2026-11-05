@@ -87,7 +87,7 @@ def load_model(args, verbose=False):
         with progress.stage(f"reading {src.name}"):
             try:
                 mb = read_model(src, getattr(args, "step", 0))
-            except ValueError as exc:
+            except (ValueError, FileNotFoundError) as exc:  # a bad --step, a .pvd missing a step file
                 raise SystemExit(f"nastran-pv: {exc}") from None
         if getattr(args, "beam_sections", False):
             add_beam_sections(mb)
@@ -308,9 +308,18 @@ def cmd_convert(args) -> int:
 
 
 def _load_other(path, args):
-    """The other model of a diff (deck, .vtm or VTKHDF), built with the same block/NSM options."""
-    other = argparse.Namespace(**{k: v for k, v in vars(args).items() if k not in ("results", "random")})
+    """The other model of a diff (deck, .vtm or VTKHDF), built with the same block/NSM options.
+    Options that do not change what a diff compares (results, display scaling, nodal arrays) are
+    not passed on, so a deck can be compared with a converted reference."""
+    unused = ("results", "random", "step", "all_steps", "k_ref", "no_nodal_arrays")
+    other = argparse.Namespace(**{k: v for k, v in vars(args).items() if k not in unused})
     other.input = path
+    if Path(path).suffix.lower() in MODEL_SUFFIXES:
+        flags = deck_only_flags(other)
+        if flags:
+            raise SystemExit(f"nastran-pv: {' '.join(flags)} cannot apply to {Path(path).name}: it is a converted "
+                             "model, built with the NSM set and blocks it was converted with. Convert it again "
+                             f"with {' '.join(flags)}, or compare with its deck.")
     mb, deck, _ = load_model(other, getattr(args, "verbose", False))
     return mb, deck
 
@@ -466,7 +475,7 @@ def cmd_store(args) -> int:
                 from .fields.common import field_strings
 
                 deck_path = Path((field_strings(mb, "DeckPath") or [deck_path])[0])
-            rid = st.add_run(mb, deck_path, name=args.name,
+            rid = st.add_run(mb, deck_path, name=args.name or Path(args.input).stem,
                              results=Path(args.results).resolve() if args.results else None,
                              save_vtm=not args.no_vtm, only=args.only, fmt=args.format)
             print(f"run {rid} added to {args.db}")

@@ -966,6 +966,29 @@ def active_source_checks(pv, nv):
     pv.Delete(view)
 
 
+def calc_nan_checks(pv, nv):
+    """An all-NaN --calc array (on every block, or on some) in a converted .vtkhdf is data: the
+    views' model and a Nastran filter's output (gather + scatter) keep it."""
+    from nastran_pv.tree import as_multiblock
+
+    keep = set(pv.GetSources().values())
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        for expr in ("Z = sqrt(0 * EID - 1)", "Z = where(PID == 1, EID, nan)"):
+            path = os.path.join(tmp, "calc.vtkhdf")
+            convert(["convert", DECK, "--calc", expr, "-o", path, "-q"])
+            f = nv.load_reader(path)
+            want = nv.Model(rm.load_reader(DECK)).block("Shells").GetNumberOfCells()
+            z = nv.Model(f).array("Shells", "Z", "cell")
+            check(z is not None and len(z) == want, f"{expr!r}: the converted model keeps Z")
+            d = pv.NastranDerivedFields(Input=f)
+            d.UpdatePipeline()
+            out = as_multiblock(nv.fetch(d))
+            shells = out.GetBlock(nv.block_names(out).index("Shells"))
+            check(shells.GetCellData().GetArray("Z") is not None, f"{expr!r}: Nastran Derived Fields keeps Z")
+            for p in [s for s in pv.GetSources().values() if s not in keep]:
+                pv.Delete(p)
+
+
 def main():
     reader = rm.load_reader(DECK)
     model = rm.Model(reader)
@@ -1314,6 +1337,7 @@ def main():
     pv.Delete(twin)
     converted_checks(pv, nv, reader)
     parity_checks(pv, nv)
+    calc_nan_checks(pv, nv)
     random_checks(pv, nv)
     topology_checks(pv, nv)
     diff_checks(pv, nv)

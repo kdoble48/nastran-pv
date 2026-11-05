@@ -264,7 +264,8 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   - **Keep a Python reference to any `VTKPythonAlgorithmBase` source** passed to a writer;
     `w.SetInputConnection(Src().GetOutputPort())` crashes with heap corruption because Python
     frees the object.
-  - Every array must exist at every time step; `_fill_missing` adds NaN arrays.
+  - Every array must exist at every time step; `_fill_missing` adds NaN arrays and lists them in
+    the root `FillArrays` (read back, only those are dropped: `vtkutil.drop_fill_arrays`).
   - Empty `vtkStringArray`s break the reader, so `add_string_array` skips them.
   - A collection's own field data is not written, so the root summary is copied onto the mesh
     partitions and listed in `RootFieldNames`; `vtkutil.promote_root_fields` (in `tree.gather`, so

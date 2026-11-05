@@ -62,5 +62,7 @@ Two format details:
 * A `.vtm` stores no file for an empty block. A load set with only GRAV keeps its name in the
   tree but loses its field data (`GravityAcceleration`); VTKHDF keeps it.
 * A temporal `.vtkhdf` holds every array at every step, so a step without stresses carries an
-  all-NaN `VonMisesMax`. nastran-pv drops that fill when it reads a step; ParaView's array lists
-  still show it.
+  all-NaN `VonMisesMax`. The writer lists that fill in `FillArrays`, and nastran-pv drops exactly
+  those arrays when it reads a step (an all-NaN `--calc` result is kept); ParaView's array lists
+  still show them. Series written before nastran-pv recorded `FillArrays` keep the NaN
+  `VonMisesMax` on the steps without stresses.

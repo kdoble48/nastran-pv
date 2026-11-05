@@ -67,6 +67,7 @@ def add_string_array(field_data, name: str, values: Iterable[str]) -> None:
 
 
 ROOT_FIELDS = "RootFieldNames"  # on a VTKHDF partition: which of its field arrays are root copies
+FILL_ARRAYS = "FillArrays"  # root of a VTKHDF series step: the arrays the writer NaN-filled
 ROOT_MARKS = ("ModelMass", "DeckPath")  # root fields every nastran-pv model has
 
 
@@ -134,18 +135,40 @@ def _one_step_label(root) -> None:
         add_string_array(root, "ResultLabel", [value])
 
 
+def attributes(ds, assoc: str):
+    """``ds``'s point, cell or (any other ``assoc``) field data."""
+    if assoc == "point":
+        return ds.GetPointData()
+    if assoc == "cell":
+        return ds.GetCellData()
+    return ds.GetFieldData()
+
+
 def drop_fill_arrays(mb) -> None:
-    """Remove the all-NaN point/cell arrays of a VTKHDF series step, in place. A temporal file
-    holds every array at every step (``vtkhdf._fill_missing``), so a step without stresses carries a
-    NaN ``VonMisesMax``; the model of that step has none (and VTK's XML reader cannot read an
-    all-NaN array back). nastran-pv never writes an all-NaN array otherwise."""
-    for blk in _leaves(mb):
-        for attr in (blk.GetPointData(), blk.GetCellData()):
-            for i in reversed(range(attr.GetNumberOfArrays())):
-                a = attr.GetArray(i)
-                if a is not None and a.GetNumberOfTuples() and a.GetDataType() in (10, 11):  # float, double
-                    if np.all(np.isnan(vtk_to_numpy(a))):
-                        attr.RemoveArray(i)
+    """Remove, in place, the arrays a VTKHDF series writer NaN-filled for this step. A temporal
+    file holds every array at every step (``vtkhdf._fill_missing``), so a step without stresses
+    carries a NaN ``VonMisesMax``; the model of that step has none. The writer lists them in the
+    root ``FillArrays``; an array is dropped only when listed *and* all NaN (VTK 9.3's reader gives
+    that list with every step's entries). Other all-NaN arrays (a ``--calc`` result) stay. Series
+    written before ``FillArrays`` existed keep their fill."""
+    from .fields.common import iter_blocks
+
+    root = mb.GetFieldData()
+    listed = root.GetAbstractArray(FILL_ARRAYS)
+    if listed is None:
+        return
+    entries = {listed.GetValue(k) for k in range(listed.GetNumberOfValues())} - {""}
+    root.RemoveArray(FILL_ARRAYS)
+    blocks = dict(iter_blocks(mb))
+    for entry in entries:
+        path, assoc, name = entry.split("|", 2) if entry.count("|") >= 2 else ("", "", entry)
+        ds = mb if assoc == "field" else blocks.get(path)
+        if ds is None:
+            continue
+        attr = attributes(ds, assoc)
+        a = attr.GetArray(name)
+        if a is not None and a.GetDataType() in (10, 11) and np.all(np.isnan(vtk_to_numpy(a))):
+            attr.RemoveArray(name)
 
 
 def match_ids(sorted_ids: np.ndarray, query: np.ndarray) -> np.ndarray:

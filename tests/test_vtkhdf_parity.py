@@ -330,3 +330,67 @@ def test_promote_keeps_this_steps_label():
     assert root.GetAbstractArray("ResultLabel").GetNumberOfValues() == 1
     assert root.GetAbstractArray("ResultLabel").GetValue(0) == "Mode 1"
     assert blk.GetFieldData().GetNumberOfArrays() == 0  # the root copies leave the block
+
+
+@pytest.mark.filterwarnings("ignore::RuntimeWarning")  # sqrt(-1) on purpose
+@pytest.mark.parametrize("expr", ["Z = sqrt(0 * EID - 1)", "Z = where(PID == 1, EID, nan)"])
+def test_all_nan_calc_array_survives(files, tmp_path, expr):
+    """A --calc result that is all NaN (on every block, or on some) is data: a converted file keeps
+    it, as the deck does. Only the arrays a series writer NaN-filled are dropped (FillArrays)."""
+    deck = files["tiny_run"]["deck"]
+    ref = run(["stats", deck, "--calc", expr, "--by", "PID", "--field", "Z"])
+    for out in (tmp_path / "c.vtkhdf", tmp_path / "c.vtm"):
+        assert run(["convert", deck, "--calc", expr, "-o", out])[0] == 0
+        mb = build_multiblock(load_deck(deck, echo=False))
+        from nastran_pv.fields.calc import calculate
+
+        calculate(mb, expr)
+        assert_same_model(mb, read_model(out), "vtm" if out.suffix == ".vtm" else "vtkhdf",
+                          ignore=("Warnings",))
+        got = run(["stats", out, "--by", "PID", "--field", "Z"])
+        assert got == ref, (got, ref)
+    series = tmp_path / "s.vtkhdf"  # in a series, Z is at every step: not a fill, so it stays
+    assert run(["convert", deck, "--results", files["op2"], "--all-steps", "--calc", expr, "-o", series])[0] == 0
+    for step in range(3):
+        cell = snapshot(read_model(series, step))["Shells"]["cell"]
+        assert "Z" in cell and ("VonMisesMax" in cell) == (step == 0)
+
+
+def test_diff_against_a_converted_reference_takes_the_deck_options(files, tmp_path):
+    """Options for the deck being converted (display scaling, nodal arrays, results steps) are not
+    refused because the --diff-against reference is a converted file; an NSM set or a dropped
+    block, which would change the comparison, is refused in diff terms."""
+    deck, ref = files["tiny_run"]["deck"], files["tiny_run"]["vtkhdf"]
+    for opts in (["--k-ref", 1e5], ["--no-nodal-arrays"], ["--results", files["op2"], "--all-steps"],
+                 ["--results", files["op2"], "--step", 2]):
+        code, text = run(["convert", deck, *opts, "--diff-against", ref, "-o", tmp_path / "d.vtkhdf"])
+        assert code == 0, (opts, code)
+    code, _ = run(["diff", deck, ref])
+    assert code == 0
+    for argv in (["convert", deck, "--nsm-set", 0, "--diff-against", ref, "-o", tmp_path / "d.vtkhdf"],
+                 ["convert", deck, "--no-loads", "--diff-against", ref, "-o", tmp_path / "d.vtkhdf"],
+                 ["diff", deck, ref, "--nsm-set", 0]):
+        code, _ = run(argv)
+        assert isinstance(code, str) and "tiny_run.vtkhdf: it is a converted model" in code, (argv, code)
+
+
+def test_store_name_and_pvd_errors(files, tmp_path):
+    """store add on a converted file: the run is named after the file, its deck column is the
+    deck. A .pvd whose step file is missing is a clean error."""
+    from nastran_pv.store import Store
+
+    db = tmp_path / "r.db"
+    assert run(["store", "add", files["tiny_run"]["vtkhdf"], "--db", db, "--no-vtm"])[0] == 0
+    with Store(db) as st:
+        row = st.runs()[0]
+    assert row["name"] == "tiny_run" and row["deck"] == str(files["tiny_run"]["deck"].resolve())
+    renamed = tmp_path / "other.vtkhdf"
+    renamed.write_bytes(files["tiny_run"]["vtkhdf"].read_bytes())
+    assert run(["store", "add", renamed, "--db", db, "--no-vtm"])[0] == 0
+    with Store(db) as st:
+        assert st.runs()[1]["name"] == "other"
+    pvd = tmp_path / "p.pvd"
+    pvd.write_text('<?xml version="1.0"?><VTKFile type="Collection"><Collection>'
+                   '<DataSet timestep="0" file="gone_0000.vtm"/></Collection></VTKFile>')
+    code, _ = run(["stats", pvd])
+    assert isinstance(code, str) and "not found" in code and "gone_0000.vtm" in code

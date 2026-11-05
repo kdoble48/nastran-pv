@@ -175,14 +175,36 @@ def _array_signature(mb) -> dict:
     return sig
 
 
-def _fill_missing(mb, union) -> None:
+def _fill_missing(mb, union) -> list[str]:
+    """Add the arrays of ``union`` this step lacks, as NaN, and list them on the root as
+    ``FillArrays`` (``"<block path>|point|<name>"``, ``"|field|<name>"`` for the root) so that
+    a reader drops exactly those (``vtkutil.drop_fill_arrays``). Returns that list."""
     from . import vtkutil
 
+    filled = []
     for key, attr, n in _attributes(mb):
         for name, ncomp in union.get(key, {}).items():
             if attr.GetAbstractArray(name) is None:
                 shape = (n,) if ncomp == 1 else (n, ncomp)
                 vtkutil.add_array(attr, name, np.full(shape, np.nan))
+                filled.append(f"{key[0]}|{key[1]}|{name}")
+    root = mb.GetFieldData()
+    root.RemoveArray(vtkutil.FILL_ARRAYS)
+    vtkutil.add_string_array(root, vtkutil.FILL_ARRAYS, filled or [""])  # at every step, as VTKHDF needs
+    return filled
+
+
+def _unfill(mb, filled) -> None:
+    """Remove the arrays :func:`_fill_missing` added, so the next step starts from its own results."""
+    from . import vtkutil
+    from .fields.common import iter_blocks
+
+    blocks = dict(iter_blocks(mb))
+    for entry in filled:
+        path, assoc, name = entry.split("|", 2)
+        ds = mb if assoc == "field" else blocks.get(path)
+        if ds is not None:
+            vtkutil.attributes(ds, assoc).RemoveArray(name)
 
 
 class _StepSource(VTKPythonAlgorithmBase):
@@ -193,6 +215,7 @@ class _StepSource(VTKPythonAlgorithmBase):
                                         outputType="vtkPartitionedDataSetCollection")
         self.mb, self.results, self.deck = mb, results, deck
         self.steps = list(steps)
+        self._filled = []  # the NaN arrays added for the last step written
         # a temporal VTKHDF file needs the same arrays at every step (e.g. VonMisesMax only
         # exists for stress steps, Frequency only for modes): collect the union first
         self.union: dict = {}
@@ -212,8 +235,9 @@ class _StepSource(VTKPythonAlgorithmBase):
         info = outInfo.GetInformationObject(0)
         t = info.Get(SDDP.UPDATE_TIME_STEP()) if info.Has(SDDP.UPDATE_TIME_STEP()) else float(self.steps[0])
         step = min(self.steps, key=lambda s: abs(s - t))
+        _unfill(self.mb, self._filled)
         self.results.attach(self.mb, int(step), self.deck)
-        _fill_missing(self.mb, self.union)
+        self._filled = _fill_missing(self.mb, self.union)
         out = vtkPartitionedDataSetCollection.GetData(outInfo, 0)
         # every root table (sections, materials, NSM, ...), as in a static file: the views and
         # filters need them at every step, and compact_static_arrays stores the static ones once
@@ -241,6 +265,8 @@ def write_vtkhdf_series(mb, results, path, deck=None, steps=None, compression: i
     w.SetInputConnection(source.GetOutputPort())
     w.SetWriteAllTimeSteps(True)
     ok = w.Write()
+    _unfill(mb, source._filled)  # the caller's model gets no NaN fill or FillArrays
+    mb.GetFieldData().RemoveArray("FillArrays")
     del source
     if not ok:
         raise RuntimeError(f"failed to write {path}")
