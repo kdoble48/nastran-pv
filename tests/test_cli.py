@@ -103,7 +103,8 @@ def test_convert_and_store_vtkhdf(tmp_path, capsys):
     assert main(["store", "add", DECK, "--db", db, "--format", "vtkhdf"]) == 0
     with Store(db) as st:
         assert st.runs()[0]["vtm"].endswith(".vtkhdf")
-        assert st.load(1).IsA("vtkPartitionedDataSetCollection")
+        mb = st.load(1)  # the same multiblock as a .vtm run, root summary included
+        assert mb.IsA("vtkMultiBlockDataSet") and mb.GetFieldData().GetArray("ModelMass") is not None
 
 
 TOPO = str(DATA / "topology.bdf")

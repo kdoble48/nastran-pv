@@ -296,6 +296,53 @@ def test_check_counts(topo_mb):
     assert strings(f, "CHECK_Name") == list(CHECKS)
 
 
+@pytest.mark.parametrize("deck", ["topology.bdf", "tiny_run.bdf"])
+def test_check_on_a_gathered_model_tree(deck):
+    """The plugin checks the reader's model tree gathered back into blocks, whose pieces (one per
+    property, material, ...) repeat their shared grids: piece seams are not free edges or faces."""
+    from nastran_pv.tree import build_tree, gather
+
+    mb = build_multiblock(load_deck(DATA / deck, echo=False))
+    gathered, _ = gather(build_tree(mb).output(mb))
+    if deck == "tiny_run.bdf":  # two shell properties: two pieces sharing grids
+        assert get_block(gathered, "Shells").GetNumberOfPoints() > get_block(mb, "Shells").GetNumberOfPoints()
+    counts = lambda m: {r["Name"]: r["Count"] for r in check(m).summary}  # noqa: E731
+    assert counts(gathered) == counts(mb)
+    from model_compare import model_digest, model_digest_differences
+
+    assert model_digest_differences(model_digest(check(gathered).findings), model_digest(check(mb).findings)) == []
+
+
+def test_parts_numbering_ignores_cell_order():
+    """beams.bdf: 13 one-element parts; the model tree regroups the Lines cells by property, and
+    the part numbers (ties by smallest EID) come out the same."""
+    from nastran_pv.tree import build_tree, gather
+    from nastran_pv.vtkutil import read_field_table
+
+    mb = build_multiblock(load_deck(DATA / "beams.bdf", echo=False))
+    gathered, _ = gather(build_tree(mb).output(mb))
+    ref, got = parts(mb), parts(gathered)
+    assert ref.count == got.count == 13
+    assert read_field_table(gathered, "PART_") == read_field_table(mb, "PART_")
+
+
+def test_path_ignores_cell_order():
+    """nsm.bdf: grid 1 -> 10 has many shortest paths through the quad strip; the one taken
+    (smallest EID, then smallest NID) is the same on the model tree, which regroups the cells."""
+    from nastran_pv.tree import build_tree, gather
+
+    def on_path(m):
+        path(m, 1, 10)
+        sh = get_block(m, "Shells")
+        cells = sorted(arr(sh, "EID", "cell")[arr(sh, "OnPath", "cell") == 1].tolist())
+        grids = sorted(set(arr(sh, "NID")[arr(sh, "OnPath") == 1].tolist()))
+        return cells, grids
+
+    mb = build_multiblock(load_deck(DATA / "nsm.bdf", echo=False))
+    gathered, _ = gather(build_tree(mb).output(mb))
+    assert on_path(mb) == on_path(gathered) == ([1, 2, 3, 4], [1, 2, 3, 4, 10])
+
+
 def test_check_subset_and_unknown(topo_mb):
     assert [r["Name"] for r in check(topo_mb, checks=("FreeEdges",)).summary] == ["FreeEdges"]
     with pytest.raises(ValueError, match="unknown check"):

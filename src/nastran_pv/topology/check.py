@@ -40,12 +40,42 @@ def _poly(algorithm):
     return out
 
 
+def _merged_by_nid(ds):
+    """``ds`` with one point per grid. A model tree gathered in the plugin repeats the grids its
+    pieces share, which would make every piece boundary a free edge or face. Points are merged by
+    NID, not by distance: unmerged coincident grids stay apart (their seams are real free edges)."""
+    nid = get_array(ds.GetPointData(), "NID")
+    if nid is None or not ds.IsA("vtkUnstructuredGrid") or len(np.unique(nid)) == len(nid):
+        return ds
+    from vtkmodules.util.numpy_support import numpy_to_vtkIdTypeArray
+    from vtkmodules.vtkCommonDataModel import vtkCellArray, vtkUnstructuredGrid
+
+    _, first, inverse = np.unique(nid, return_index=True, return_inverse=True)
+    cells = ds.GetCells()
+    conn = vtkutil.to_numpy(cells.GetConnectivityArray())
+    offsets = vtkutil.to_numpy(cells.GetOffsetsArray())
+    ca = vtkCellArray()
+    ca.SetData(numpy_to_vtkIdTypeArray(np.ascontiguousarray(offsets, dtype=np.int64), deep=True),
+               numpy_to_vtkIdTypeArray(np.ascontiguousarray(inverse[conn], dtype=np.int64), deep=True))
+    out = vtkUnstructuredGrid()
+    out.SetPoints(vtkutil.make_points(vtkutil.to_numpy(ds.GetPoints().GetData())[first]))
+    out.SetCells(vtkutil.cell_types(ds), ca)
+    out.GetCellData().ShallowCopy(ds.GetCellData())
+    out.GetFieldData().ShallowCopy(ds.GetFieldData())
+    pd = ds.GetPointData()
+    for i in range(pd.GetNumberOfArrays()):
+        a = pd.GetArray(i)
+        if a is not None and a.GetName():
+            vtkutil.add_array(out.GetPointData(), a.GetName(), vtkutil.to_numpy(a)[first])
+    return out
+
+
 def _free_edges(blocks, graph, rules, tol):
     shells = blocks.get("Shells")
     if shells is None:
         return 0, None
     geo = vtkGeometryFilter()
-    geo.SetInputData(shells)
+    geo.SetInputData(_merged_by_nid(shells))
     fe = vtkFeatureEdges()
     fe.SetInputConnection(geo.GetOutputPort())
     fe.BoundaryEdgesOn()
@@ -63,7 +93,7 @@ def _free_faces(blocks, graph, rules, tol):
         return 0, None
     surf = vtkDataSetSurfaceFilter()
     surf.SetNonlinearSubdivisionLevel(0)
-    surf.SetInputData(solids)
+    surf.SetInputData(_merged_by_nid(solids))
     out = _poly(surf)
     return out.GetNumberOfCells(), out
 

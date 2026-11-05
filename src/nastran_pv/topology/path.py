@@ -33,18 +33,16 @@ def path(mb, grid_a: int, grid_b: int, rules: Rules | None = None, graph: Graph 
     warnings = [msg] if (msg := rules.empty_within(values)) else []
     # like grow from grid_a: grid_b is in reach when its hop is <= max_hops (max_hops + 1 elements)
     limit = np.inf if rules.max_hops is None else 2 * rules.max_hops + 2
-    dist, pred = csgraph.dijkstra(graph.adjacency(allowed), directed=False, indices=C + ends[0],
-                                  unweighted=True, return_predecessors=True, limit=limit)
+    adjacency = graph.adjacency(allowed)
+    dist = csgraph.dijkstra(adjacency, directed=False, indices=C + ends[0], unweighted=True, limit=limit)
     on_cell = np.zeros(C, np.uint8)
     on_grid = np.zeros(graph.n_grids, np.uint8)
     if np.isfinite(dist[C + ends[1]]):
-        v = C + ends[1]
-        while v >= 0:
+        for v in _walk_back(adjacency, dist, C + ends[1], graph):
             if v < C:
                 on_cell[v] = 1
             else:
                 on_grid[v - C] = 1
-            v = pred[v]
         length = int(dist[C + ends[1]]) // 2
     else:
         length = -1
@@ -53,3 +51,19 @@ def path(mb, grid_a: int, grid_b: int, rules: Rules | None = None, graph: Graph 
     write_points(mb, graph, "OnPath", on_grid, fill=0)
     replace_array(mb.GetFieldData(), "PathLength", np.array([length]))
     return PathResult(length, warnings)
+
+
+def _walk_back(adjacency, dist, end, graph):
+    """The nodes of one shortest path, from ``end`` back to the start. Among equally short paths
+    the step back goes to the cell with the smallest EID and the grid with the smallest NID, so the
+    path does not depend on the order of the cells (the plugin's model tree regroups them)."""
+    C = graph.n_cells
+    v = end
+    while True:
+        yield v
+        if dist[v] == 0:
+            return
+        nbrs = adjacency.indices[adjacency.indptr[v]:adjacency.indptr[v + 1]]
+        nbrs = nbrs[dist[nbrs] == dist[v] - 1]
+        keys = np.where(nbrs < C, graph.eid[np.minimum(nbrs, C - 1)], graph.nids[np.maximum(nbrs - C, 0)])
+        v = int(nbrs[np.lexsort((nbrs, keys))[0]])

@@ -22,7 +22,9 @@ class PartsResult:
 
 def label_parts(graph: Graph, allowed: np.ndarray):
     """Part id per cell (-1 = excluded) and per grid (-1 = no allowed cell), numbered by cell
-    count (largest first), ties by the first cell in block order."""
+    count (largest first), ties by the smallest EID, then the first cell in block order: the
+    numbering does not depend on how a block's cells are ordered (the plugin's model tree
+    regroups them by property)."""
     C = graph.n_cells
     n, labels = csgraph.connected_components(graph.adjacency(allowed), directed=False)
     cell_lab, grid_lab = labels[:C], labels[C:]
@@ -30,7 +32,9 @@ def label_parts(graph: Graph, allowed: np.ndarray):
     size = np.bincount(cell_lab[idx], minlength=n)
     first = np.full(n, C)
     np.minimum.at(first, cell_lab[idx], idx)
-    order = np.lexsort((first, -size))
+    low = np.full(n, np.iinfo(np.int64).max)
+    np.minimum.at(low, cell_lab[idx], np.asarray(graph.eid, dtype=np.int64)[idx])
+    order = np.lexsort((first, low, -size))
     order = order[size[order] > 0]
     remap = np.full(n, -1)
     remap[order] = np.arange(len(order))

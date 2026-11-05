@@ -51,7 +51,7 @@ Seeds of an excluded card type are dropped with a warning. MPC legs carry the MP
 ## Parts
 
 Parts writes `PartId` cell and point arrays: the connected parts under the rules, largest first
-(−1 on excluded elements). Two root tables come with it:
+(ties by the smallest EID; −1 on excluded elements). Two root tables come with it:
 
 | Table | Columns |
 |---|---|
