@@ -236,6 +236,10 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   commands (grow/path from selection, Femap-style show only/hide/show all, show only/hide/highlight
   from an ID file), the diff view and `side_by_side`, and the macro entry point `run_macro`
   (`ACTIONS` for the macros that are not views).
+  - Overlays follow the scope (R2): every overlay's glyph filters and extracts (`NPV scoped <block>`)
+    draw from `scoped(model)`, the `NPV scope` filter (*Nastran Scope*) after `NPV deform`; its counts
+    and "nothing to draw" checks use `Model.scoped(name)`, and `scope_active(reader)` picks the "in
+    the reader's scope" text. `_feed` re-feeds objects made before (fed by `NPV deform`).
   - Mode animation: `mode_times` (the reader's steps, or one step for a converted single-step
     file with a `Displacement`), `animate_modes`/`animate_mode` and `save_mode_animations`. They
     run inside `_kept_view`, which puts back the view's time and every NPV deform scale, and
@@ -263,6 +267,7 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
     `NastranMassGlyphs`, `NastranMapTable`, etc.
   - `reader.TimestepValues` is a bare float when there is one step; use `nastran_views.timesteps`.
   - `ColorBy(rep, None)` fails in ParaView 6; use `nastran_views.solid`.
+  - `pv.ColorBy` without `separate=True` resets `UseSeparateColorMap`; `categorical(..., separate=True)` passes it.
   - A Python proxy's properties come from its class's own `__dict__` only (shared ones are copied
     in by the `_with_*` decorators), ordered by their setters' line numbers, and a `PropertyGroup`
     must come after its properties in the XML or ParaView drops them from it.

@@ -275,12 +275,14 @@ class Model:
         if time is None:
             view = pv.GetActiveView()
             time = getattr(view, "ViewTime", 0.0) if view is not None else 0.0
+        self.time = time
         reader.UpdatePipeline(time)
         raise_load_error(reader)
         from nastran_pv.tree import as_multiblock
 
         self.data = as_multiblock(fetch(reader))  # the reader outputs the model tree
         self.names = block_names(self.data)
+        self._scoped = None  # (multiblock, block names) of NPV scope, fetched on first use
         b = reader.GetDataInformation().GetBounds()
         self.bounds = b
         self.diag = float(np.linalg.norm(np.array(b[1::2]) - np.array(b[0::2]))) or 1.0
@@ -290,6 +292,19 @@ class Model:
 
     def block(self, name):
         return self.data.GetBlock(self.names.index(name)) if self.has(name) else None
+
+    def scoped(self, name):
+        """Block ``name`` of what the overlays draw (*NPV scope*: the whole model cut by the R2 join),
+        or None when the scope keeps none of it."""
+        if self._scoped is None:
+            from nastran_pv.tree import as_multiblock
+
+            src = scoped(self)
+            src.UpdatePipeline(self.time)
+            data = as_multiblock(fetch(src))
+            self._scoped = (data, block_names(data))
+        data, names = self._scoped
+        return data.GetBlock(names.index(name)) if name in names else None
 
     def _holder(self, block_name, name):
         """Block whose field data holds ``name``: ``block_name``, else the root. VTKHDF keeps no
@@ -415,14 +430,61 @@ def set_deformation(model, scale, auto=False):
             f.AutoScale = int(on)
 
 
-def _extract(model, *blocks, what=None, undeformed=False):
-    blocks = [b for b in blocks if model.has(b) or "/" in b]
+SCOPE_XML = "NastranPVScope"
+
+
+def scoped(model):
+    """The ``NPV scope`` filter on the model's NPV deform: what the overlays draw (rule R2). Mesh
+    blocks keep what the reader keeps; masses, connectors, SPCs and loads stay when they hang off a
+    kept element. With no scope (or a converted file) it passes its input through."""
+    return _named(model, "scope", lambda: pv.NastranScope(Input=deformed(model)), SCOPE_XML)
+
+
+_scope_filter = scoped  # _extract's ``scoped`` argument hides the function
+
+
+def _feed(proxy, src):
+    """Set ``proxy.Input`` to ``src`` unless it is fed by it already (objects made before the
+    overlays followed the scope were fed by NPV deform)."""
+    if _input_of(proxy) != src:
+        proxy.Input = src
+    return proxy
+
+
+def scope_active(reader):
+    """True when the deck reader hides anything: an EID list, an unchecked checklist entry, or a
+    Selection File in use. A converted file has no scope."""
+    if _xml_name(reader) != READER_XML:
+        return False
+    if (reader.ShowOnlyElements or "").strip() or (reader.HiddenElements or "").strip():
+        return True
+    if reader.SelectionFile and enum_text(reader, "SelectionMode") != "Off":
+        return True
+    reader.UpdatePipelineInformation()
+    return any(set(_listed(reader, prop)) - set(getattr(reader, prop)) for prop in VISIBILITY_PROPS)
+
+
+def _missing_text(model, what):
+    """The info text of an overlay with nothing to draw: in the scope, or in the deck."""
+    if scope_active(model.reader):
+        return f"No {what} in the reader's scope (NPV Show All shows the whole model)."
+    return f"No {what} in this deck."
+
+
+def _extract(model, *blocks, what=None, undeformed=False, scoped=False):
+    """``NPV <blocks>`` (an ExtractBlock of the model's NPV deform); ``scoped``: ``NPV scoped <blocks>``
+    from NPV scope (the overlays' cut); ``undeformed``: from a deform held at scale 0."""
+    has = (lambda b: model.scoped(b) is not None) if scoped else model.has
+    blocks = [b for b in blocks if has(b) or "/" in b]
     if not blocks:
         return None
     name = what or "+".join(blocks)
     if undeformed:  # through a deform filter at scale 0, which holds the mode while it vibrates
         rest = _named(model, "undeformed model", lambda: pv.NastranDeform(Input=model.reader))
         return _named(model, f"undeformed {name}", lambda: extract_blocks(rest, blocks))
+    if scoped:
+        src = _scope_filter(model)
+        return _named(model, f"scoped {name}", lambda: extract_blocks(src, blocks))
     return _named(model, name, lambda: extract_blocks(deformed(model), blocks))
 
 
@@ -478,8 +540,9 @@ def _recorded(fn):
 
 
 def _hide(objects, view):
-    """Hide ``objects`` in ``view``, and the scalar bar of any array they were colored by once nothing
-    shown uses it."""
+    """Hide ``objects`` in ``view``, and the scalar bar of any lookup table they were colored with
+    once nothing shown uses it: the representation's own (a separate color map has its own table
+    and legend), else the array's shared one."""
     reps = {}
     for rep in list(getattr(view, "Representations", None) or []):
         try:
@@ -487,16 +550,19 @@ def _hide(objects, view):
         except AttributeError:  # scalar bars and other non-data representations
             continue
         reps.setdefault(inp.GetGlobalIDAsString() if inp is not None else None, rep)
-    arrays = []
+    luts = []
     for obj in objects:
         rep = reps.get(obj.GetGlobalIDAsString())
         color = getattr(rep, "ColorArrayName", None)  # text and other reps have none
         array = color[1] if color else ""
+        lut = getattr(rep, "LookupTable", None) if array else None
         pv.Hide(obj, view)
-        if array and array not in arrays:
-            arrays.append(array)
-    for array in arrays:
-        pv.HideScalarBarIfNotNeeded(pv.GetColorTransferFunction(array), view)
+        if array and lut is None:
+            lut = pv.GetColorTransferFunction(array)
+        if lut is not None and lut not in luts:
+            luts.append(lut)
+    for lut in luts:
+        pv.HideScalarBarIfNotNeeded(lut, view)
 
 
 def _clear_view(view):
@@ -568,10 +634,17 @@ def palette(n):
     return out
 
 
-def categorical(disp, array, values, labels=None, colors=None, legend_max=40, association="CELLS", view=None):
-    """Indexed lookup table: one colour and one annotation per integer value."""
-    pv.ColorBy(disp, (association, array))
-    lut = pv.GetColorTransferFunction(array)
+def categorical(disp, array, values, labels=None, colors=None, legend_max=40, association="CELLS", view=None,
+                separate=False):
+    """Indexed lookup table: one colour and one annotation per integer value. ``separate``: a color
+    map of this representation's own, so the shared one (the mesh's PID legend) is left alone."""
+    if separate:
+        disp.UseSeparateColorMap = 1
+        pv.ColorBy(disp, (association, array), separate=True)  # ColorBy's default resets UseSeparateColorMap
+        lut = pv.GetColorTransferFunction(array, disp, separate=True)
+    else:
+        pv.ColorBy(disp, (association, array))
+        lut = pv.GetColorTransferFunction(array)
     lut.InterpretValuesAsCategories = 1
     lut.Annotations = [x for i, v in enumerate(values) for x in (str(v), labels[i] if labels else str(v))]
     lut.IndexedColors = [c for rgb in (colors or palette(len(values))) for c in rgb]
@@ -693,24 +766,28 @@ def view_masses(model, view, mode=None, relative=None, law=None, minimum=None, m
     (cbrt, linear, sqrt, log, uniform) with a floor of ``minimum`` x that radius; masses below
     ``minimum_mass`` are left out; ``color_by`` Mass, EID or NID. Arguments left None keep the
     filter's settings (its defaults on a first run)."""
-    if not model.has("Masses"):
-        info_text(model, view, "No concentrated masses (CONM1/CONM2/CMASS) in this deck.")
+    masses = model.scoped("Masses")
+    if masses is None:
+        info_text(model, view, _missing_text(model, "concentrated masses (CONM1/CONM2/CMASS)"))
         return
-    glyphs = _named(model, "mass glyphs", lambda: pv.NastranMassGlyphs(Input=deformed(model)))
+    glyphs = _feed(_named(model, "mass glyphs", lambda: pv.NastranMassGlyphs(Input=scoped(model))), scoped(model))
     _set_given(glyphs, SizeMode=mode, Size=relative, RadiusLaw=LAW_NAMES[law] if law else None,
                MinimumRelativeSize=minimum, MinimumMass=minimum_mass, ColorBy=color_by)
     glyphs.UpdatePipeline()
     d = _show(glyphs, view)
     _color_points(model, d, glyphs, enum_text(glyphs, "ColorBy"), view)
-    if model.has("MassOffsets"):
-        od = _show(_extract(model, "MassOffsets"), view)
+    offsets = _extract(model, "MassOffsets", scoped=True)
+    if offsets is not None:
+        od = _show(offsets, view)
         solid(od, [0.15, 0.15, 0.15])
         od.LineWidth = 2.0
     cg = model.field("ModelCG")
     conc = model.field("ConcentratedMass")
     total = model.field("ModelMass")
-    n = model.block("Masses").GetNumberOfPoints()
+    n = masses.GetNumberOfPoints()
     text = f"Concentrated mass: {conc[0]:.6g}  ({n} items)"
+    if scope_active(model.reader):
+        text = f"Concentrated mass (whole model): {conc[0]:.6g}\n{n} items in the reader's scope"
     hidden = int(_glyph_field(glyphs, "HiddenMassCount"))
     if hidden:
         text += f"\n{hidden} lighter than Minimum Mass {glyphs.MinimumMass:g} not drawn"
@@ -748,21 +825,23 @@ def _glyph_field(src, name, default=0.0):
 def _bush_view(model, view, kind, size=None, ellipsoids=None):
     """Shared body of the bushes (translation) and bush rotations views."""
     rotation = kind == "rotation"
-    if not model.has("Bushes"):
-        info_text(model, view, "No CBUSH elements in this deck.")
+    bushes = model.scoped("Bushes")
+    if bushes is None:
+        info_text(model, view, _missing_text(model, "CBUSH elements"))
         return
     what = "bush rotation glyphs" if rotation else "bush glyphs"
-    glyphs = _named(model, what, lambda: pv.NastranBushGlyphs(Input=deformed(model)))
+    glyphs = _feed(_named(model, what, lambda: pv.NastranBushGlyphs(Input=scoped(model))), scoped(model))
     _set_given(glyphs, Stiffness=int(rotation), Size=size,
                ShowEllipsoids=None if ellipsoids is None else int(ellipsoids and not rotation))
     if not glyphs.ShowTriads and not (glyphs.ShowEllipsoids and not rotation):
         glyphs.ShowTriads = 1  # nothing would be drawn
     glyphs.UpdatePipeline()
-    if model.has("BushLines"):
-        ld = _show(_extract(model, "BushLines"), view)
+    links = _extract(model, "BushLines", scoped=True)
+    if links is not None:
+        ld = _show(links, view)
         solid(ld, list(BUSH_LINE_RGB))
         ld.LineWidth = 1.5
-    n = model.block("Bushes").GetNumberOfPoints()
+    n = bushes.GetNumberOfPoints()
     first = 4 if rotation else 1
     names = [f"K{first + i}" for i in range(3)]
     span = f"{names[0]}-{names[2]}"
@@ -815,11 +894,11 @@ BEAM_PART_RGB = {1: (0.05, 0.05, 0.05), 2: (0.95, 0.55, 0.05), 3: (0.85, 0.12, 0
 
 def _beam_axes(model):
     def make():
-        axes = pv.NastranBeamSections(Input=deformed(model))
+        axes = pv.NastranBeamSections(Input=scoped(model))
         axes.ShowSections, axes.ShowAxes, axes.ShowTriads = 0, 1, 1
         return axes
 
-    return _named(model, "beam axes", make)
+    return _feed(_named(model, "beam axes", make), scoped(model))
 
 
 def view_beams(model, view, triads=None, max_triads=None, scale=None):
@@ -827,17 +906,26 @@ def view_beams(model, view, triads=None, max_triads=None, scale=None):
     triads when there are at most Max Triads (500) beams ('NPV beam axes'). Undeformed, like the
     ghost mesh, unless ``scale`` (the filters' DeformationScale) is given. ``triads`` True draws them
     whatever the count; arguments left None keep the filters' settings."""
-    axis2 = model.array("Lines", "Axis2", "cell")
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    lines = model.scoped("Lines")
+    axis2 = lines.GetCellData().GetArray("Axis2") if lines is not None else None
+    beam = np.isfinite(vtk_to_numpy(axis2)[:, 0]) if axis2 is not None else np.zeros(0, bool)
     pids = model.field("SECTION_PID")
-    n = int(np.isfinite(axis2[:, 0]).sum()) if axis2 is not None else 0
+    n = int(beam.sum())
     if not n or pids is None:
-        info_text(model, view, "No CBAR/CBEAM with a section (PBARL, PBEAML, PBAR, PBEAM) in this deck.")
+        info_text(model, view, _missing_text(model, "CBAR/CBEAM with a section (PBARL, PBEAML, PBAR, PBEAM)"))
         return
-    sections = _named(model, "beam sections", lambda: pv.NastranBeamSections(Input=deformed(model)))
+    sections = _feed(_named(model, "beam sections", lambda: pv.NastranBeamSections(Input=scoped(model))),
+                     scoped(model))
     _set_given(sections, DeformationScale=scale)
     d = _show(sections, view)
-    values = sorted({int(p) for p in pids})
-    categorical(d, "PID", values, labels_for(model, "PID", values), view=view)
+    values = {int(p) for p in pids}
+    line_pid = lines.GetCellData().GetArray("PID")
+    if line_pid is not None:  # the section PIDs of the beams in the scope
+        values &= {int(p) for p in vtk_to_numpy(line_pid)[beam]}
+    values = sorted(values)
+    categorical(d, "PID", values, labels_for(model, "PID", values), view=view, separate=True)
     axes = _beam_axes(model)
     _set_given(axes, DeformationScale=scale, ShowTriads=None if triads is None else int(triads),
                MaxTriads=max_triads if max_triads is not None else (0 if triads else None))
@@ -875,11 +963,12 @@ def view_loads(model, view, sets=None, show=None, size=None, stride=None):
     (first: the Case Control LOAD, else the first set with loads). ``sets`` (block names such as
     LOAD_1001), ``show`` (Forces, Moments, Forces and moments), ``size`` and ``stride`` (Every Nth
     Point) set the filter; left None they keep its settings."""
-    loads = model.block("Loads")
+    loads = model.scoped("Loads")
     if loads is None:
-        info_text(model, view, "No nodal loads (FORCE/MOMENT) in this deck.")
+        info_text(model, view, _missing_text(model, "nodal loads (FORCE/MOMENT)"))
         return
-    g = _named(model, "load glyphs", lambda: pv.NastranLoadGlyphs(Input=deformed(model)), "NastranPVLoadGlyphs")
+    g = _feed(_named(model, "load glyphs", lambda: pv.NastranLoadGlyphs(Input=scoped(model)), "NastranPVLoadGlyphs"),
+              scoped(model))
     g.UpdatePipelineInformation()
     if sets is not None:
         g.LoadSets = list(sets)
@@ -924,16 +1013,19 @@ def view_loads(model, view, sets=None, show=None, size=None, stride=None):
 def view_spc(model, view, sets=None, dofs=None, size=None):
     """A marker per constrained grid (Nastran SPC Glyphs), coloured by DOF code. ``sets`` (SPC set
     ids), ``dofs`` (e.g. "123") and ``size`` set 'NPV spc glyphs'; left None they keep its settings."""
-    if not model.has("Constraints"):
-        info_text(model, view, "No SPCs in this deck (free-free model).")
+    constraints = model.scoped("Constraints")
+    if constraints is None:
+        info_text(model, view, "No SPCs in the reader's scope (NPV Show All shows the whole model)."
+                  if scope_active(model.reader) else "No SPCs in this deck (free-free model).")
         return
-    g = _named(model, "spc glyphs", lambda: pv.NastranSPCGlyphs(Input=deformed(model)), "NastranPVSPCGlyphs")
+    g = _feed(_named(model, "spc glyphs", lambda: pv.NastranSPCGlyphs(Input=scoped(model)), "NastranPVSPCGlyphs"),
+              scoped(model))
     g.UpdatePipelineInformation()
     if sets is not None:
         g.SPCSets = [f"SPC {int(s)}" for s in sets]
     _set_given(g, DOFs=None if dofs is None else str(dofs), Size=size)
     g.UpdatePipeline()
-    total = model.block("Constraints").GetNumberOfPoints()
+    total = constraints.GetNumberOfPoints()
     shown = int(_glyph_field(g, "SPCPoints"))
     if not shown:
         info_text(model, view, f"{total} constrained grids, none in the checked SPC sets with DOFs "
@@ -950,14 +1042,15 @@ def view_spc(model, view, sets=None, dofs=None, size=None):
 
 
 def view_rigid(model, view):
-    if not model.has("Rigid"):
-        info_text(model, view, "No rigid elements in this deck.")
+    rigid = model.scoped("Rigid")
+    if rigid is None:
+        info_text(model, view, _missing_text(model, "rigid elements"))
         return
-    d = _show(_extract(model, "Rigid"), view)
-    types = model.unique("RigidType", "cell", ("Rigid",))
+    d = _show(_extract(model, "Rigid", scoped=True), view)
+    types = sorted({int(t) for t in _gather(rigid, "RigidType", "CELLS")})
     categorical(d, "RigidType", types, labels_for(model, "RigidType", types), view=view)
     d.LineWidth = 2.5
-    info_text(model, view, f"{model.block('Rigid').GetNumberOfCells()} rigid-element legs")
+    info_text(model, view, f"{rigid.GetNumberOfCells()} rigid-element legs")
 
 
 def _mesh_categorical(model, view, array, blocks=MESH):

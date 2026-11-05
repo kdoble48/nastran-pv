@@ -832,7 +832,7 @@ class _GlyphFilter(_Settable, VTKPythonAlgorithmBase):
         from vtkmodules.vtkCommonDataModel import vtkDataObject, vtkPolyData
 
         try:
-            from nastran_pv.glyphs import model_diagonal
+            from nastran_pv.glyphs import glyph_diagonal
             from nastran_pv.tree import as_multiblock
         except ImportError as exc:
             return _missing(exc)
@@ -843,7 +843,7 @@ class _GlyphFilter(_Settable, VTKPythonAlgorithmBase):
         out = vtkPolyData.GetData(outInfo, 0)
         if block is None or block.GetNumberOfPoints() == 0:
             return 1
-        out.ShallowCopy(self._glyphs(block, model_diagonal(data), data))
+        out.ShallowCopy(self._glyphs(block, glyph_diagonal(data), data))
         return 1
 
 
@@ -1303,6 +1303,7 @@ class NastranPVScope(_Settable, VTKPythonAlgorithmBase):
         VTKPythonAlgorithmBase.__init__(self, nInputPorts=1, nOutputPorts=1, outputType="vtkDataObject")
         self._tree = None  # (whole multiblock, Visibility key, Tree)
         self._deformer = None  # (whole multiblock, Visibility key, generation, Deformer)
+        self._diagonal = None  # (whole multiblock, its diagonal)
 
     def FillInputPortInformation(self, port, info):
         info.Set(self.INPUT_REQUIRED_DATA_TYPE(), "vtkDataObject")
@@ -1339,15 +1340,33 @@ class NastranPVScope(_Settable, VTKPythonAlgorithmBase):
         if found is None or self._tree is None:  # not the reader's model, or nothing hidden
             self._tree = self._deformer = None
             out.ShallowCopy(inp)
+            if found is not None:
+                self._mark_diagonal(out, mb)
             return 1
         if self._deformer is None or self._deformer[:3] != (mb, key, generation):
             self._deformer = (mb, key, generation, Deformer(self._tree[2].output(mb)))
         scale = inp.GetFieldData().GetArray(DEFORM_SCALE)
         out.ShallowCopy(self._deformer[3].apply(scale.GetValue(0) if scale is not None else 0.0))
+        self._mark_diagonal(out, mb)
         info = inp.GetInformation()
         if info.Has(vtkDataObject.DATA_TIME_STEP()):
             out.GetInformation().Set(vtkDataObject.DATA_TIME_STEP(), info.Get(vtkDataObject.DATA_TIME_STEP()))
         return 1
+
+
+    def _mark_diagonal(self, out, mb):
+        """The whole model's diagonal on ``out``'s root, so glyph sizes do not follow the scope."""
+        from vtkmodules.vtkCommonDataModel import vtkFieldData
+
+        from nastran_pv.glyphs import MODEL_DIAGONAL, model_diagonal
+
+        if self._diagonal is None or self._diagonal[0] is not mb:
+            self._diagonal = (mb, model_diagonal(mb))
+        fd = vtkFieldData()  # a copy: the input's (or the cached tree's) field data stays as it is
+        fd.ShallowCopy(out.GetFieldData())
+        fd.RemoveArray(MODEL_DIAGONAL)
+        fd.AddArray(_double_array(MODEL_DIAGONAL, self._diagonal[1]))
+        out.SetFieldData(fd)
 
 
 @smproxy.filter(name="NastranPVFiles", label="Nastran Files")

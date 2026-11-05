@@ -687,3 +687,15 @@ def model_diagonal(mb) -> float:
 
     visit(mb)
     return bb.GetDiagonalLength() if bb.IsValid() else 1.0
+
+
+MODEL_DIAGONAL = "ModelDiagonal"  # root field double: the whole model's diagonal (Nastran Scope writes it)
+
+
+def glyph_diagonal(mb) -> float:
+    """The diagonal glyph sizes are fractions of: the whole model's (``MODEL_DIAGONAL`` on the root,
+    written for a part of the model, so sizes stay put when the scope changes), else ``mb``'s own."""
+    a = mb.GetFieldData().GetArray(MODEL_DIAGONAL)
+    if a is not None and a.GetNumberOfTuples() and a.GetValue(0) > 0:
+        return float(a.GetValue(0))
+    return model_diagonal(mb)

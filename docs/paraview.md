@@ -73,6 +73,34 @@ For Femap's AND visibility, use these lists in the reader's Properties panel:
 The selection macros below fill these in. The model totals (`ModelMass`, CG, material table) always
 describe the whole deck, whatever is hidden.
 
+### Overlays follow the scope
+
+The overlay macros (NPV Masses, Bushes, Bush Rotations, Loads, SPC, Rigid, Beams) draw only what
+hangs off the elements you kept. With Visible Groups set to one group, NPV Masses shows the masses
+of that group. The rules, in Nastran terms:
+
+* The *kept elements* are the shells, solids and line elements (CBAR, CBEAM, CROD, ...) that the
+  checklists, the Show Only / Hidden Elements lists and the Selection File keep.
+* An RBE2, RBE3, RBAR or CBUSH is kept when **any** of its grids is on a kept element. Its other
+  grids then count as kept too. So the CONM2 on the independent grid of an RBE3 spider, such as an
+  engine mass, stays with the wing elements it hangs from. The chain continues only through grids
+  that no shell, solid or line element uses.
+* A CONM2/CONM1/CMASS, an SPC grid or a FORCE/MOMENT grid is kept when its grid is kept.
+* CBAR/CBEAM sections are elements: their own EID, PID and group decide.
+* **An item's own EID wins** when the lists name it. Show Only `1 201` keeps shell 1 and only
+  CONM2 201 of the masses on it. Hidden Elements `201` hides CONM2 201 wherever its grid is.
+* With nothing hidden, every overlay shows everything.
+
+The overlays draw through the *Nastran Scope* filter (`NPV scope`, after `NPV deform`). It reads
+the reader's whole model and its visibility settings, so it updates when you change a checklist
+or an ID list, without clicking the macro again. It also gives the glyph filters the whole model's
+diagonal (`ModelDiagonal`), so glyph sizes stay the same when the scope changes. When a scope leaves an overlay with nothing to
+draw, its text says *No ... in the reader's scope (NPV Show All shows the whole model).*
+
+The reader's own output and the MultiBlock Inspector keep the Femap cut described above: a hidden
+element's masses, rigid elements and connectors are cut from the reader's output, and only the
+overlays follow these rules.
+
 ### Selection from an ID file
 
 A CSV/text/Excel file of IDs (from a stress report, a supplier, a test) can drive the visibility

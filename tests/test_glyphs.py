@@ -235,3 +235,24 @@ def test_empty_inputs():
 
     assert mass_glyphs(vtkPolyData(), 1.0).GetNumberOfPoints() == 0
     assert bush_glyphs(vtkPolyData(), 1.0).GetNumberOfPoints() == 0
+
+
+def test_glyph_diagonal_prefers_the_whole_model_field():
+    from vtkmodules.vtkCommonDataModel import vtkMultiBlockDataSet, vtkPolyData
+    from vtkmodules.vtkCommonCore import vtkDoubleArray, vtkPoints
+
+    from nastran_pv.glyphs import MODEL_DIAGONAL, glyph_diagonal
+
+    pts = vtkPoints()
+    for p in ((0, 0, 0), (3, 4, 0)):
+        pts.InsertNextPoint(p)
+    pd = vtkPolyData()
+    pd.SetPoints(pts)
+    mb = vtkMultiBlockDataSet()
+    mb.SetBlock(0, pd)
+    assert glyph_diagonal(mb) == pytest.approx(5.0)  # no field: the input's own diagonal
+    a = vtkDoubleArray()
+    a.SetName(MODEL_DIAGONAL)
+    a.InsertNextValue(20.0)
+    mb.GetFieldData().AddArray(a)
+    assert glyph_diagonal(mb) == pytest.approx(20.0)  # a scoped part: the whole model's
