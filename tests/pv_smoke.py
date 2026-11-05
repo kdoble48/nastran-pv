@@ -619,7 +619,8 @@ def diff_checks(pv, nv):
     """Nastran Diff, the diff view and side_by_side on tests/data/diff_a.bdf (A) and diff_b.bdf (B);
     the expected counts are the hand-computed ones of tests/test_diff.py."""
     want = {"grids": (1, 1, 1), "elements": (2, 2, 3), "masses": (1, 0, 1), "properties": (0, 0, 2),
-            "materials": (0, 0, 1)}
+            "materials": (0, 0, 1), "rigid": (0, 0, 0), "connectors": (0, 0, 0), "bushes": (0, 0, 0),
+            "loads": (0, 0, 0), "spcs": (0, 0, 0), "coords": (0, 0, 0)}
     a = rm.load_reader(os.path.join(HERE, "data", "diff_a.bdf"))
     b = rm.load_reader(os.path.join(HERE, "data", "diff_b.bdf"))
     d = pv.NastranDiff(Input=b, Reference=a)
@@ -702,6 +703,59 @@ def diff_checks(pv, nv):
         fd.UpdatePipeline()
         counts, delta = _diff_counts(nv, fd)
         check(counts == want and abs(delta - 3.5) < 1e-9, f"diff of a .vtm and a .vtkhdf: {counts}")
+        for s in (fd, fa, fb):
+            pv.Delete(s)
+    diff2_checks(pv, nv)
+
+
+def diff2_checks(pv, nv):
+    """Model diff v2 (rigid, connectors, bushes, loads, SPCs, coordinate systems) on diff2_a/b.bdf:
+    the hand-computed counts of tests/test_diff2.py, from the readers and from converted files."""
+    want = {"grids": (0, 0, 2), "elements": (0, 0, 0), "masses": (0, 0, 0), "properties": (0, 0, 0),
+            "materials": (0, 0, 0), "rigid": (1, 1, 2), "connectors": (0, 0, 2), "bushes": (0, 0, 2),
+            "loads": (2, 3, 2), "spcs": (1, 1, 3), "coords": (1, 0, 1)}
+    a = rm.load_reader(os.path.join(HERE, "data", "diff2_a.bdf"))
+    b = rm.load_reader(os.path.join(HERE, "data", "diff2_b.bdf"))
+    d = pv.NastranDiff(Input=b, Reference=a)
+    d.UpdatePipeline()
+    counts, _ = _diff_counts(nv, d)
+    check(counts == want, f"diff v2 summary {counts}")
+    check(_by_eid(d, "Rigid", "DiffStatus") == {101: 2, 102: 2, 104: 1}, "diff v2: Rigid DiffStatus")
+    check(_by_eid(d, "Connectors", "DiffReason") == {401: 2, 301: 256, 302: 0}, "diff v2: Connectors DiffReason")
+    removed = _by_eid(d, "Removed", "ItemType")
+    check(removed.get(103) == 2 and removed.get(-1) in (5, 6), f"diff v2: Removed items {removed}")  # 5 load, 6 spc
+    from nastran_pv.vtkutil import read_field_table
+
+    loads = {r["Name"]: r for r in read_field_table(nv.fetch(d), "DIFFLOAD_")}
+    check(sorted(loads) == ["LOAD_10", "SID_1", "SID_2", "SID_3"] and loads["SID_1"]["DeltaM"] == [-3.0, 3.0, -10.0],
+          f"diff v2: DIFFLOAD table {loads.get('SID_1')}")
+    table = nv.fetch(d, 1)
+    items = {table.GetColumnByName("Item").GetValue(i) for i in range(table.GetNumberOfRows())}
+    check(items >= {"rigid", "connector", "bush", "load", "load_set", "spc", "coord"}, f"diff v2 table items {items}")
+
+    pv.SetActiveSource(b)
+    view = pv.CreateRenderView()
+    nv.apply("diff", reader=b, view=view)
+    text = pv.FindSource(nv._name(nv.Model(b), "info")).Text
+    check("loads: 2 added, 3 removed, 2 changed" in text and "coords: 1 added" in text
+          and "masses:" not in text, f"diff v2 view text {text!r}")
+    mesh = pv.FindSource(nv._name(nv.Model(b), "diff mesh"))
+    shown = nv.block_names(nv.fetch(mesh))
+    check({"Rigid", "Connectors", "Bushes", "Constraints"} <= set(shown), f"diff v2 view blocks {shown}")
+    pv.Delete(view)
+    for s in (d, a, b):
+        pv.Delete(s)
+
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:  # converted files: same answer
+        paths = []
+        for name, suffix in (("diff2_a", ".vtm"), ("diff2_b", ".vtkhdf")):
+            paths.append(os.path.join(tmp, name + suffix))
+            convert(["convert", os.path.join(HERE, "data", name + ".bdf"), "-o", paths[-1], "-q"])
+        fa, fb = nv.load_reader(paths[0]), nv.load_reader(paths[1])
+        fd = pv.NastranDiff(Input=fb, Reference=fa)
+        fd.UpdatePipeline()
+        counts, _ = _diff_counts(nv, fd)
+        check(counts == want, f"diff v2 of a .vtm and a .vtkhdf: {counts}")
         for s in (fd, fa, fb):
             pv.Delete(s)
 

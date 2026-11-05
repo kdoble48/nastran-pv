@@ -142,7 +142,7 @@ an `NPV ...` filter selected finds the model upstream of it.
 | NPV Show All | Clears both element lists, checks every property, material, type, family and group, and sets *Selection Mode* to Off |
 | NPV Only Property | Unchecks every property except those of the selected elements |
 | NPV Only Material | Unchecks every material except those of the selected elements |
-| NPV Diff | What changed from a second open model (A) to the active one (B): B's elements by `DiffStatus` (same, added, changed, property), A's removed elements red and translucent, the counts and the mass change ([Model diff](diff.md#paraview)) |
+| NPV Diff | What changed from a second open model (A) to the active one (B): B's elements, rigid elements, connectors, bushes, SPCs and loads by `DiffStatus` (same, added, changed, property), A's removed items red and translucent, the counts and the mass change ([Model diff](diff.md#paraview)) |
 | NPV Side by Side | A and B (or B's diff) in two views with linked cameras, colored by the active view's array over one shared range ([Side by side](diff.md#side-by-side)) |
 | NPV Show Only Reached / NPV Hide Reached | Shows only, or hides, what *NPV grow* reached; with *Stay Within* that is "everything connected to this point inside its group" ([Model tools](tools.md#paraview)) |
 | NPV Show Only File / NPV Hide File | Shows only, or hides, what the reader's *Selection File* lists ([above](#selection-from-an-id-file)); set the file on the reader first, since macros cannot open a file dialog |

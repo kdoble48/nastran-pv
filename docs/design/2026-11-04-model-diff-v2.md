@@ -34,6 +34,9 @@ New model data, written by `assemble` for every deck (so deck, `.vtm` and VTKHDF
 - Root `CoordSystemCount` (int, always written, 0 when there is none). It marks a model built by
   v2: a file without it is older, and the diff then skips coordinate systems, grid systems and SPC
   enforced values with a note instead of reporting everything as added.
+- Root `GRAV_Set GRAV_Name GRAV_Acceleration`: the gravity of each load set that has GRAV. A
+  `.vtm` writes no file for an empty block, so a GRAV-only `Loads/SID_n` loses its field data
+  there; the root table keeps the diff identical across formats (found by the parity test).
 - `Constraints` point `SPCEnforced` (6 floats per point: the enforced value per DOF from SPC
   cards, SPCADD resolved), written only when some value is not 0 (absent = all 0).
 

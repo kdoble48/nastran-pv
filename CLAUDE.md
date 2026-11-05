@@ -146,8 +146,12 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
 - `diff.py`: model diff of two built multiblocks (decks, `.vtm` via `vtkio.read_model`, VTKHDF, or
   the gathered tree): grids by NID, elements by EID per mesh block, Masses by EID, properties per
   PID through their elements' arrays, materials from `MAT_*`, mass/CG and mass per PID/family
-  (`group_stats` + `store.keyed_diff`). `annotate` writes `DiffStatus`/`DiffReason`/deltas, a
-  `Removed` block (in none of the mesh-block lists) and `DIFF_*`/`DIFFMASS_*` tables onto B. Used
+  (`group_stats` + `store.keyed_diff`). `diff_items.py` (v2) adds rigid/connectors (EID; MPC by
+  set id), bushes, loads per (set block, grid) with per-set resultants, SPCs per (set, grid) and
+  coordinate systems from the root `CORD_*`/`GRIDCS_*` tables (`coords.py`, written by `assemble`;
+  `CoordSystemCount` marks files that have them, older ones skip with `ModelDiff.notes`).
+  `annotate` writes `DiffStatus`/`DiffReason`/deltas, a `Removed` block (in none of the mesh-block
+  lists; `ItemType` per cell) and `DIFF_*`/`DIFFMASS_*`/`DIFFLOAD_*` tables onto B. Used
   by `diff`, `convert --diff-against`, the *Nastran Diff* proxy (two inputs) and the `diff` view;
   `nastran_views.side_by_side` adds a second, camera-linked view. The reader tags its output with
   `NPVWholeModel` (field string + array signature) so a Nastran Diff fed directly by it diffs the

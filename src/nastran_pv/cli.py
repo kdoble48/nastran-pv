@@ -328,7 +328,9 @@ def cmd_diff(args) -> int:
     shown = [r for r in d.masses if r["Kind"] == "model" or (r["Delta"] or 0) != 0]
     _print_rows(shown, None)
     for item, title in (("property", "properties"), ("material", "materials"), ("element", "elements"),
-                        ("mass", "concentrated masses"), ("grid", "grids")):
+                        ("mass", "concentrated masses"), ("grid", "grids"), ("rigid", "rigid elements"),
+                        ("connector", "connectors"), ("bush", "bushes"), ("load_set", "load sets"),
+                        ("load", "loads"), ("spc", "SPCs"), ("coord", "coordinate systems")):
         part = [r for r in d.rows if r["Item"] == item]
         if part:
             print()

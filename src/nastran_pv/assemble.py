@@ -9,7 +9,7 @@ from vtkmodules.vtkCommonDataModel import vtkMultiBlockDataSet
 from . import vtkutil
 from .builders.bushes import build_bushes
 from .builders.connectors import build_connectors
-from .builders.constraints import build_constraints, nodal_spc_mask, spc_sets
+from .builders.constraints import build_constraints, nodal_spc_mask, spc_enforced, spc_sets
 from .builders.lines import build_lines
 from .builders.loads import build_load_block, load_sets, nodal_load_arrays
 from .builders.masses import build_masses
@@ -18,7 +18,7 @@ from .builders.shells import build_shells
 from .builders.solids import build_solids
 from .deck import Deck
 from .families import element_families
-from . import nsm
+from . import coords, nsm
 from .massprops import element_mass, totals
 from .progress import NULL, Progress
 from .materials import COLUMNS, material_table
@@ -165,7 +165,7 @@ def build_multiblock(deck: Deck, opts: Options | None = None, progress: Progress
         blocks.add("BushLines", lines)
     if opts.constraints and spc:
         with step("Constraints"):
-            blocks.add("Constraints", build_constraints(deck, spc))
+            blocks.add("Constraints", build_constraints(deck, spc, spc_enforced(deck)))
     if opts.loads and lsets:
         loads = _Blocks()
         with step("Loads"):
@@ -174,8 +174,12 @@ def build_multiblock(deck: Deck, opts: Options | None = None, progress: Progress
                 loads.add(f"{'LOAD' if ls.combined else 'SID'}_{sid}", build_load_block(deck, ls))
         if loads.mb.GetNumberOfBlocks():
             blocks.add("Loads", loads.mb)
+    # gravity per load set at the root too: a .vtm keeps no file (so no field data) for a GRAV-only set
+    grav = [{"Set": sid, "Name": f"{'LOAD' if ls.combined else 'SID'}_{sid}", "Acceleration": np.sum(ls.grav, axis=0)}
+            for sid, ls in sorted(lsets.items()) if ls.grav] if opts.loads else []
 
     mb = blocks.mb
+    vtkutil.write_field_table(mb, "GRAV_", grav)
     fd = mb.GetFieldData()
     vtkutil.add_string_array(fd, "DeckPath", [str(deck.path)])
     vtkutil.add_array(fd, "SOL", np.array([deck.sol if isinstance(deck.sol, int) else -1]))
@@ -209,6 +213,7 @@ def build_multiblock(deck: Deck, opts: Options | None = None, progress: Progress
         for col in COLUMNS:
             vtkutil.add_array(fd, f"MAT_{col}", np.nan_to_num(mats[col], nan=-1.0))  # -1 = unknown
         vtkutil.add_string_array(fd, "MAT_Type", mats["Type"])
+    coords.write_tables(mb, deck)
     lines = mesh.get("Lines")
     if lines is not None:
         with step("beam sections"):

@@ -1,8 +1,9 @@
 # Model diff
 
 `nastran-pv diff` compares two versions of a model: A, the reference, and B, the modified copy. It
-reports the grids, elements, concentrated masses, properties and materials that were added, removed
-or changed, and what that did to the mass and the CG. The same diff can be written onto B's mesh,
+reports the grids, elements, concentrated masses, properties, materials, rigid elements, connectors,
+bushes, loads, SPCs and coordinate systems that were added, removed or changed, and what that did
+to the mass and the CG. The same diff can be written onto B's mesh,
 shown in ParaView with the *NPV Diff* view, and shown next to A with *NPV Side by Side*.
 
 A and B can each be a deck, or a `.vtm` or VTKHDF file written by `nastran-pv convert`. The diff
@@ -19,7 +20,7 @@ nastran-pv diff out/baseline.vtm modified.bdf --csv out/diff.csv
 ```text
 elements in B: 1 same, 2 added, 1 changed (type/PID/grids), 2 via property/material; 2 removed
 model mass 10.9 -> 14.4: +3.5 (+32.110%); CG moved 0.963391
-not compared: rigid elements, connectors, bushes, loads, SPCs, coordinate systems
+not compared: pressure and thermal loads (PLOAD*, TEMP), spring/damper values, MPC coefficients
 
 Item        A   B   Same  Added  Removed  Changed
 grids       11  11  9     1      1        1
@@ -27,11 +28,18 @@ elements    6   6   1     2      2        3
 masses      1   2   0     1      0        1
 properties  4   4   2     0      0        2
 materials   3   3   2     0      0        1
+rigid       0   0   0     0      0        0
+connectors  0   0   0     0      0        0
+bushes      0   0   0     0      0        0
+loads       0   0   0     0      0        0
+spcs        0   0   0     0      0        0
+coords      0   0   0     0      0        0
 ```
 
 Next come the mass table and one list per item: model totals and CG; the mass per PID and per
 family that changed; the property and material values that changed; and the elements, concentrated
-masses and grids that were added, removed or changed, with the old and new values. `--limit N`
+masses, grids, rigid elements, connectors, bushes, load sets, loads, SPCs and coordinate systems
+that were added, removed or changed, with the old and new values. `--limit N`
 caps each list in the terminal (default 30). `--csv FILE` writes every row of every list to one
 long table with the columns `Item Id Name Status Field A B Delta Rel`. `--nsm-set ID` picks the
 bulk NSM set for both decks, as in `convert`.
@@ -40,11 +48,21 @@ bulk NSM set for both decks, as in `convert`.
 
 | Item | Matched by | Changed when |
 |---|---|---|
-| Grid | NID (grids used by an element, connector, CBUSH, SPC or load) | it moved more than `--grid-tol` × A's bounding-box diagonal (default 1e-6) |
+| Grid | NID (grids used by an element, rigid element, connector, CBUSH, SPC or load) | it moved more than `--grid-tol` × A's bounding-box diagonal (default 1e-6); its CP or CD changed (*system*, below) |
 | Element | EID, within Shells, Solids or Lines | its element type, PID or grid list differs, or one of its grids moved (*changed*); its MID, property or material values differ (*property*) |
 | Concentrated mass | EID in `Masses` | its mass or CG position (grid plus offset) differs; a moved mass gets X/Y/Z rows like a grid |
 | Property | PID | its elements' `MID`, and `Thickness`/`NSMPerArea` (shells) or `Area`/`NSMPerLength` (lines) differ |
 | Material | MID | `Type`, `E`, `E2`, `G`, `Nu` or `Rho` (the `MAT_*` table) differ |
+| Rigid element | EID in `Rigid` | its type, its legs (the grid pairs drawn: first independent grid to each dependent one, RBE3 weighted grids to the reference grid), the DOF of a leg, or one of its grids moved |
+| Connector | EID in `Connectors`; an MPC set by its set id (all its equations together) | its type, legs, DOF or PID, or one of its grids moved |
+| Bush | EID in `Bushes` | GA/GB, PID, the element axes `Axis1-3` or the spring location, or `K` (the PBUSH stiffness); a `K` change alone is *property*, like an element |
+| Load | (load set, grid) in `Loads/SID_n` and `Loads/LOAD_n` | the `Force` or `Moment` at the grid (FORCE/MOMENT summed per grid, LOAD combinations resolved), or the grid moved |
+| Load set | `SID_n`, `LOAD_n` | rows only: the resultant force, the resultant moment about the basic origin (sum of r × F + M) and the GRAV acceleration |
+| SPC | (SPC set, grid) in `Constraints` | the constrained DOFs, the enforced values (`SPCEnforced`), the grid's CD or its CD system, or the grid moved |
+| Coordinate system | CID in the `CORD_*` table | its type, origin (moved more than `--grid-tol`) or axes (a component differs by more than `--rel-tol`) |
+
+A grid whose CP or CD id changed, or whose CP/CD coordinate system changed, is reported too
+(status *system*), even when it did not move.
 
 Values differ when `|b - a| > --rel-tol × max(|a|, |b|)` (default 1e-6). Properties and materials
 are compared through the elements that use them, so a card that no element references is not
@@ -52,8 +70,15 @@ reported. A density change is a material change (`Rho`), not also a property cha
 fields such as the shell `Area` from `--derive size` are not property values, so a converted file
 with derived fields compares cleanly with a plain one. An element that moved from one block to
 another (a CQUAD4 that became a CBAR, or a shell id reused by a solid: Shells to Solids) counts as
-removed from the one block and added to the other. Rigid elements, connectors, bushes, loads, SPCs and coordinate systems are not
-compared.
+removed from the one block and added to the other. Force and moment vectors differ when
+`|b - a| > --rel-tol × max(|a|, |b|)`.
+
+Not compared, because the model does not hold them: pressure, distributed and thermal loads
+(PLOAD*, PLOAD4, TEMP), spring and damper values (CELAS/PELAS K, CDAMP B) and MPC coefficients.
+A model written before these comparisons existed (a `.vtm` or VTKHDF without the `CORD_` table)
+has its coordinate systems, grid CP/CD and SPC enforced values skipped, and a block without the
+arrays a kind needs has that kind skipped; the report says which in a line above the table, and
+the kind has no summary row.
 
 The mass is the sum of `ElementMass` (structural plus NSM) and the concentrated masses, with the
 CG from the element centers, so it matches `ModelMass` and `ModelCG`. The per-PID and per-family
@@ -78,32 +103,41 @@ nastran-pv convert modified.bdf --diff-against baseline.bdf -o out/diff.vtm
 | Array | Where | Meaning |
 |---|---|---|
 | `DiffStatus` | cell, mesh blocks and `Masses` (also point on `Masses`) | 0 same, 1 added, 2 changed, 3 property, 4 removed; the names are in the `DiffStatusNames` field array |
-| `DiffReason` | cell, mesh blocks; point, `Masses` | bit mask: 1 type, 2 connectivity, 4 PID, 8 MID, 16 grid moved, 32 property values, 64 material values, 128 mass |
+| `DiffReason` | cell, mesh blocks; point, `Masses` | bit mask: 1 type, 2 connectivity, 4 PID, 8 MID, 16 grid moved, 32 property values, 64 material values, 128 mass, 256 DOF, 512 stiffness, 1024 orientation, 2048 value (load or enforced value), 4096 system (CD or its coordinate system) |
 | `DeltaElementMass` | cell, mesh blocks and `Removed` | B − A; the whole mass of an added element, minus it for a removed one |
 | `DeltaThickness`, `DeltaArea` | cell, Shells / Lines | B − A (NaN for added elements) |
 | `PIDChanged` | cell, mesh blocks | 1 when the element's PID changed |
-| `GridStatus`, `DeltaXYZ` | point, mesh blocks | 0 same, 1 added, 2 moved; the move B − A |
+| `GridStatus`, `DeltaXYZ` | point, mesh blocks | 0 same, 1 added, 2 moved, 3 system (CP/CD id or system changed); the move B − A |
 | `DeltaMass` | point, `Masses` | B − A of each concentrated mass |
+| `DiffStatus`, `DiffReason` | cell, `Rigid`, `Connectors`, `BushLines`; point and cell, `Bushes`, `Constraints`, `Loads/*` | as above, one value per item (every leg of a rigid element has its element's status) |
+| `DeltaK` | point, `Bushes` | B − A of the six stiffnesses (NaN for added bushes) |
+| `DeltaForce`, `DeltaMoment` | point, `Loads/*` | B − A at each loaded grid (the whole load for an added one) |
 
 *Changed* means the element itself changed (type, PID, grids). *Property* means the element is the
 same, but the values of its property or material changed, so its stiffness or mass did.
 
-The `Removed` block holds A's removed elements, and a point for each removed concentrated mass, in
-A's coordinates, with `EID PID ElementType ElementMass DiffStatus DeltaElementMass`. Show it
-translucent over B to see what went away. The `DeltaElementMass` of B's elements and of `Removed`
-add up to the change in element mass.
+The `Removed` block holds A's removed items in A's coordinates: elements, rigid-element and
+connector legs, and a point for each removed concentrated mass, bush, load point and SPC point. It
+has `EID PID ElementType ElementMass DiffStatus DeltaElementMass`, `ItemType` (0 element, 1 mass,
+2 rigid, 3 connector, 4 bush, 5 load, 6 spc; names in `ItemTypeNames`) and `SID` (the load or SPC
+set, -1 otherwise), and point `NID`. Show it translucent over B to see what went away. The
+`DeltaElementMass` of B's elements and of `Removed` add up to the change in element mass (it is 0
+for the items that have no mass). A removed coordinate system is a report row only.
 
 Root field data: `DiffAgainst` (A's path), the summary table `DIFF_Item DIFF_A DIFF_B DIFF_Same
 DIFF_Added DIFF_Removed DIFF_Changed`, the mass table `DIFFMASS_Kind DIFFMASS_Key DIFFMASS_A
-DIFFMASS_B DIFFMASS_Delta DIFFMASS_Rel` (model totals and CG, then per PID, then per family) and
-`DiffCG` (B − A).
+DIFFMASS_B DIFFMASS_Delta DIFFMASS_Rel` (model totals and CG, then per PID, then per family),
+`DiffCG` (B − A) and the load set table `DIFFLOAD_Set DIFFLOAD_Name DIFFLOAD_Same DIFFLOAD_Added
+DIFFLOAD_Removed DIFFLOAD_Changed DIFFLOAD_DeltaF DIFFLOAD_DeltaM DIFFLOAD_DeltaG` (per load set:
+the point counts and the change of the resultant force, moment about the origin, and gravity).
 
 ## ParaView
 
 Open both models (decks with the nastran-pv reader, or converted files), select B in the Pipeline
 Browser and click **NPV Diff**. It colors B by `DiffStatus` (gray same, green added, orange
-changed, blue property, red removed), draws the removed elements red and translucent, and lists
-the counts and the mass change. The reference is the other open model, or the most recently opened
+changed, blue property, red removed): the elements, and the rigid-element, connector and bush
+lines, bushes, SPC points and loaded grids drawn over them. It draws the removed items red and
+translucent, and lists the counts of each kind either model has and the mass change. The reference is the other open model, or the most recently opened
 one when more than two are open. To pick A yourself, apply the filter (below) first; the view then
 uses it.
 
@@ -118,7 +152,8 @@ nastran-pv render modified.bdf --preset diff --against baseline.bdf --views top
 both in the Pipeline Browser and apply it; in the input dialog, set *Input* to B and *Reference*
 to A. Output 0 is B with the arrays above and the
 `Removed` block. Output 1 is the long table, which you can open in a SpreadSheet view; text values
-such as element types and grid lists are in its `Text` column. *GridTolerance* and
+such as element types and grid lists are in its `Text` column. Kinds the diff had to skip are
+listed in Output Messages. *GridTolerance* and
 *RelativeTolerance* are `--grid-tol` and `--rel-tol`. From Python:
 `pv.NastranDiff(Input=b, Reference=a)`.
 

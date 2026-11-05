@@ -18,9 +18,9 @@ deck has nothing for it.
 | `Connectors` | MPC, CELAS1/2, CDAMP1/2, CGAP, CFAST (GA/GB form) legs | cell: `EID ConnectorType DOF PID` (MPC legs: `EID` = MPC set id); point: `NID` |
 | `Bushes` | CBUSH spring locations | point: `EID PID GA GB K Axis1-3 K1dir…K6dir KTransTensor KRotTensor KTransLogTensor KRotLogTensor`; field: `KRef KLogMax KRotRef KRotLogMax` |
 | `BushLines` | CBUSH GA–GB lines | cell: `EID PID`; point: `NID` |
-| `Constraints` | SPC/SPC1/SPCADD/GRID PS points per set | point: `NID SPCSet SPC_DOF DOFCode CD` |
+| `Constraints` | SPC/SPC1/SPCADD/GRID PS points per set | point: `NID SPCSet SPC_DOF DOFCode CD`, plus `SPCEnforced` (6: the SPC enforced value per DOF) when a value is not 0 |
 | `Loads/SID_n`, `Loads/LOAD_n` | FORCE/MOMENT(1,2) per set, LOAD combinations resolved | point: `NID Force Moment ForceMagnitude MomentMagnitude`; field: `LoadSet ResultantForce GravityAcceleration` (GRAV only) |
-| `Removed` | the reference model's removed elements (only with `convert --diff-against` or the Nastran Diff filter) | cell: `EID PID ElementType ElementMass DiffStatus DiffReason DeltaElementMass`; point: `NID`; see [Model diff](diff.md#diff-on-the-mesh) |
+| `Removed` | the reference model's removed items (only with `convert --diff-against` or the Nastran Diff filter) | cell: `EID PID ElementType ElementMass DiffStatus DiffReason DeltaElementMass ItemType SID`; point: `NID`; see [Model diff](diff.md#diff-on-the-mesh) |
 | `BeamSections` | CBAR/CBEAM cross sections swept in 3D (only with `--beam-sections`) | cell: `EID PID MID ElementType BeamPart Face`; point: `GA GB StationT`, with results `Displacement DisplacementMagnitude` |
 
 Categorical arrays keep their names in block field data: `ElementTypeNames`, `RigidTypeNames`,
@@ -28,7 +28,10 @@ Categorical arrays keep their names in block field data: `ElementTypeNames`, `Ri
 
 Root field data: `DeckPath SOL WTMASS ActiveLoadSets ActiveSPCSets StructuralMass ConcentratedMass ModelMass ModelCG`,
 `Warnings` (when there are any), the material table `MAT_ID MAT_Type MAT_E MAT_E2 MAT_G MAT_Nu MAT_Rho`
-(one row per material card), plus `ActiveNSMSet PropertyNSMMass BulkNSMMass NonstructuralMass`, `DefinedNSMSets` (the top-level
+(one row per material card), the coordinate systems `CORD_ID CORD_Type CORD_RID CORD_Origin CORD_Axes`
+and `CoordSystemCount` (see [Coordinate systems](#coordinate-systems)), the grid systems
+`GRIDCS_NID GRIDCS_CP GRIDCS_CD`, the gravity per load set `GRAV_Set GRAV_Name GRAV_Acceleration`
+(decks with GRAV), plus `ActiveNSMSet PropertyNSMMass BulkNSMMass NonstructuralMass`, `DefinedNSMSets` (the top-level
 bulk sets, when the deck has any) and, when there is NSM, the
 `NSM_SET NSM_SetType NSM_SetMass NSM_SetCount` (per NSM set) and `NSM_PID NSM_PIDMass` tables
 (see [Nonstructural mass](#nonstructural-mass)). Decks with CBAR/CBEAM also get the
@@ -37,8 +40,9 @@ A [random response](random-vibration.md) (`--random`) replaces the result arrays
 `AccelRMS AccelN0 DispRMS DominantMode DominantModeShare AccelASD` and adds the `RANDOM_*` and
 `RANDOMIN_*` tables and `RandomDrive RandomInputRMS RandomAccelASDRange RandomFrameFrequencies`.
 A [model diff](diff.md#diff-on-the-mesh) (`--diff-against`) adds `DiffStatus DiffReason
-DeltaElementMass PIDChanged DeltaThickness DeltaArea GridStatus DeltaXYZ DeltaMass`, the `Removed`
-block, `DiffAgainst DiffCG` and the `DIFF_*` and `DIFFMASS_*` tables.
+DeltaElementMass PIDChanged DeltaThickness DeltaArea GridStatus DeltaXYZ DeltaMass DeltaK DeltaForce
+DeltaMoment`, the `Removed` block, `DiffAgainst DiffCG` and the `DIFF_*`, `DIFFMASS_*` and
+`DIFFLOAD_*` tables.
 The [model tools](tools.md) add `Hops`, `PartId` and `OnPath` (cell and point) and the `PART_*`,
 `LINK_*` and `PathLength` root arrays; `nastran-pv check -o` writes the findings with a `CHECK_*` table.
 A [selection file](cli.md#selection-from-an-id-file) (`--select`) adds the root string
@@ -89,6 +93,17 @@ The [field options](fields.md) add further arrays on top of these.
   `X1 Y1 XY1`/`X2 Y2 XY2` on both fibres, and solids use `X Y Z TXY TYZ TZX`, taking the maximum
   over corner and centre points. It is tested against files written in that layout; please report
   any real files it misreads.
+
+## Coordinate systems
+
+The root table `CORD_*` has one row per coordinate system other than 0: `CORD_ID`, `CORD_Type`
+(the card, such as `CORD2R`), `CORD_RID` (the reference system; -1 for CORD1R/C/S, which are
+defined by grids), `CORD_Origin` (3, basic) and `CORD_Axes` (9: the local x, y and z axes in basic,
+row after row, as for `Axis1-3` on the bushes). For cylindrical and spherical systems the axes are
+those of the underlying rectangular frame; the local directions at a point follow from it.
+`GRIDCS_NID GRIDCS_CP GRIDCS_CD` lists the grids whose CP or CD is not 0. `CoordSystemCount` is
+always written (0 for a deck without coordinate systems), so a file without it predates these
+tables. The [model diff](diff.md) compares them, so converted files diff like decks.
 
 ## Nonstructural mass
 

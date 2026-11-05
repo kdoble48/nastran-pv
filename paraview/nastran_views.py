@@ -1544,6 +1544,8 @@ DIFF_XML = "NastranPVDiff"
 DIFF_RGB = [(0.78, 0.80, 0.83), (0.20, 0.65, 0.25), (1.0, 0.55, 0.0), (0.22, 0.49, 0.85), (0.85, 0.12, 0.12)]
 NO_REFERENCE = ("The diff compares two models: open the reference model (A) too,\n"
                 "select the modified model (B) and click 'NPV Diff' again.")
+# blocks drawn with the mesh in the diff view, colored by the same DiffStatus (lines and points)
+DIFF_ITEM_BLOCKS = ("Masses", "Rigid", "Connectors", "BushLines", "Bushes", "Constraints", "Loads")
 SIDE_LINK = "NPV side-by-side"
 CATEGORICAL = ("PID", "MID", "ElementType", "FamilyId", "GroupId", "DiffStatus", "PartId", "NSMSource")
 _SIDE_VIEWS = {}  # left view id -> its right view
@@ -1598,6 +1600,8 @@ def _diff_text(diff, model):
     rows, masses = diff_summary(diff)
     lines = [f"{_label(model.reader)} vs {_label(_input_of(diff, 'Reference'))}"]
     for r in rows:
+        if r["Item"] not in ("grids", "elements") and r["A"] == r["B"] == 0:
+            continue  # a kind neither model has
         lines.append(f"{r['Item']}: {int(r['Added'])} added, {int(r['Removed'])} removed, "
                      f"{int(r['Changed'])} changed")
     total = next((m for m in masses if m["Key"] == "ModelMass"), None)
@@ -1610,7 +1614,7 @@ def _diff_layers(model, diff, view):
     """B's mesh and masses by DiffStatus, and A's removed elements red and translucent."""
     from nastran_pv.diff import STATUS_NAMES
 
-    mesh = _named(model, "diff mesh", lambda: extract_blocks(diff, list(MESH) + ["Masses"]))
+    mesh = _named(model, "diff mesh", lambda: extract_blocks(diff, list(MESH) + list(DIFF_ITEM_BLOCKS)))
     d = pv.Show(mesh, view)
     d.Representation = "Surface"
     d.Opacity = 1.0

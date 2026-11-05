@@ -141,7 +141,9 @@ def test_annotate_arrays(models):
     fd = b.GetFieldData()
     assert fd.GetAbstractArray("DiffAgainst").GetValue(0) == str(A_DECK)
     rows = vtkutil.read_field_table(b, "DIFF_")
-    assert [r["Item"] for r in rows] == ["grids", "elements", "masses", "properties", "materials"]
+    assert [r["Item"] for r in rows] == ["grids", "elements", "masses", "properties", "materials",  # v1
+                                         "rigid", "connectors", "bushes", "loads", "spcs", "coords"]  # v2: all 0
+    assert all(r["Added"] == r["Removed"] == r["Changed"] == 0 for r in rows[5:])
     assert rows[1]["Removed"] == 2
     mass = {r["Key"]: r for r in vtkutil.read_field_table(b, "DIFFMASS_")}
     assert mass["ModelMass"]["Delta"] == pytest.approx(3.5)

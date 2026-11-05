@@ -1,0 +1,47 @@
+$ Modified model (B) for the model-diff v2 tests; diff2_a.bdf is the reference.
+$ vs A: RBE2 101 gains grid 3; RBE3 102 REFC 123->123456; RBE2 103 removed, RBE2 104 added;
+$ CELAS2 301 C1/C2 1->2; MPC 401 term grid 8->6; PBUSH 22 K1 1000->2000; CORD2R 10 rotated
+$ 90 deg about z (CBUSH 201 axes, grid 9's CD system); CORD2R 20 added; grid 8 CD 0->30;
+$ FORCE at 2 10->12, FORCE at 3 removed, FORCE at 5 added (set 1, so LOAD 10 too); set 2
+$ removed; GRAV 9.81->9.80665; PLOAD4 1.0->2.0 (not compared); SPC1 at 2 123->1236, SPC1 at
+$ 3 removed, SPC at 5 enforced 0.1->0.2, SPC1 at 6 added.
+GRID,1,,0.,0.,0.
+GRID,2,,1.,0.,0.
+GRID,3,,2.,0.,0.
+GRID,4,,0.,1.,0.
+GRID,5,,1.,1.,0.
+GRID,6,,2.,1.,0.
+GRID,7,,0.,2.,0.
+GRID,8,,1.,2.,0.,30
+GRID,9,,2.,2.,0.,10
+CORD2R,10,0,0.,0.,0.,0.,0.,1.,
+,0.,1.,0.
+CORD2R,20,0,0.,0.,1.,0.,0.,2.,
+,1.,0.,1.
+CORD2R,30,0,5.,0.,0.,5.,0.,1.,
+,6.,0.,0.
+CQUAD4,1,1,1,2,5,4
+PSHELL,1,1,0.1
+MAT1,1,70000.,,0.3,1.0
+RBE2,101,1,123456,2,3
+RBE3,102,,4,123456,1.0,123,5,6
+RBE2,104,7,123456,8
+CELAS2,301,1000.,5,2,6,2
+CELAS1,302,31,1,1,2,1
+PELAS,31,500.
+MPC,401,7,3,1.0,6,3,-1.0
+CBUSH,201,21,1,5,,,,10
+CBUSH,202,22,2,6,0.,0.,1.
+PBUSH,21,K,100.,100.,100.
+PBUSH,22,K,2000.,1000.,1000.,10.,10.,10.
+FORCE,1,2,,12.,1.,0.,0.
+FORCE,1,5,,3.,0.,0.,-1.
+MOMENT,1,4,,2.,0.,0.,1.
+PLOAD4,1,1,2.0
+LOAD,10,1.,2.,1
+GRAV,3,,9.80665,0.,0.,-1.
+SPC,1,1,123456
+SPC1,1,1236,2
+SPC,1,5,3,0.2
+SPC1,1,123,9
+SPC1,1,123,6
