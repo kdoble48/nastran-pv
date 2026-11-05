@@ -9,22 +9,26 @@ deck has nothing for it.
 
 | Block | Data | Main arrays |
 |---|---|---|
-| `Shells` | CTRIA3/6, CTRIAR, CQUAD4/8, CQUADR, CSHEAR | cell: `EID PID MID ElementType Thickness Density MassPerArea ElementMass FamilyId GroupId Normal ElementXAxis MaterialAxis`, with NSM also `NSMPerArea NSMMass NSMSource`; point: `NID SPC_DOF F_<sid> M_<sid>` |
+| `Shells` | CTRIA3/6, CTRIAR, CQUAD4/8, CQUAD, CQUADR, CSHEAR | cell: `EID PID MID ElementType Thickness Density MassPerArea ElementMass FamilyId GroupId Normal ElementXAxis MaterialAxis`, with NSM also `NSMPerArea NSMMass NSMSource`; point: `NID SPC_DOF F_<sid> M_<sid>` |
 | `Solids` | CHEXA/CPENTA/CTETRA/CPYRAM, linear and quadratic | cell: `EID PID MID ElementType Density ElementMass`; point: as for shells |
-| `Lines` | CBAR, CBEAM, CROD, CONROD, CTUBE, ... | cell: `EID PID MID ElementType Density Area ElementMass Axis1-3 OffsetA OffsetB` (frame and offsets of CBAR/CBEAM, NaN for the others), with NSM also `NSMPerLength NSMMass NSMSource` |
-| `Masses` | CONM2, CONM1, CMASS1/2 (one point at the CG) | `Mass MassScale Inertia InertiaEllipsoid EquivalentRadius Offset` |
+| `Lines` | CBAR, CBEAM, CROD, CONROD, CTUBE, CVISC, CBEND | cell: `EID PID MID ElementType Density Area ElementMass Axis1-3 OffsetA OffsetB` (frame and offsets of CBAR/CBEAM, NaN for the others), with NSM also `NSMPerLength NSMMass NSMSource` |
+| `Masses` | CONM2, CONM1, CMASS1/2 (one point at the CG) | point: `EID NID CID Mass MassScale Inertia InertiaEllipsoid EquivalentRadius Offset HasInertia`; field: `TotalMass` |
 | `MassOffsets` | grid-to-CG lines for offset CONM2s | `EID` |
-| `Rigid` | RBE2/RBE3/RBAR/... spider legs | cell: `EID RigidType DOF` |
+| `Rigid` | RBE2/RBE3/RBAR/... spider legs | cell: `EID RigidType DOF`; point: `NID` |
 | `Connectors` | MPC, CELAS1/2, CDAMP1/2, CGAP, CFAST (GA/GB form) legs | cell: `EID ConnectorType DOF PID` (MPC legs: `EID` = MPC set id); point: `NID` |
-| `Bushes` | CBUSH spring locations | `K Axis1-3 K1dir…K6dir KTransTensor KRotTensor KTransLogTensor KRotLogTensor`; field: `KRef KLogMax KRotRef KRotLogMax` |
+| `Bushes` | CBUSH spring locations | point: `EID PID GA GB K Axis1-3 K1dir…K6dir KTransTensor KRotTensor KTransLogTensor KRotLogTensor`; field: `KRef KLogMax KRotRef KRotLogMax` |
 | `BushLines` | CBUSH GA–GB lines | cell: `EID PID`; point: `NID` |
-| `Constraints` | SPC/SPC1/SPCADD/GRID PS points per set | `SPCSet SPC_DOF DOFCode CD` |
-| `Loads/SID_n`, `Loads/LOAD_n` | FORCE/MOMENT(1,2) per set, LOAD combinations resolved | `Force Moment ForceMagnitude`; field `ResultantForce GravityAcceleration` |
-| `Removed` | the reference model's removed elements (only with `convert --diff-against` or the Nastran Diff filter) | cell: `EID PID ElementType ElementMass DiffStatus DeltaElementMass`; see [Model diff](diff.md#diff-on-the-mesh) |
+| `Constraints` | SPC/SPC1/SPCADD/GRID PS points per set | point: `NID SPCSet SPC_DOF DOFCode CD` |
+| `Loads/SID_n`, `Loads/LOAD_n` | FORCE/MOMENT(1,2) per set, LOAD combinations resolved | point: `NID Force Moment ForceMagnitude MomentMagnitude`; field: `LoadSet ResultantForce GravityAcceleration` (GRAV only) |
+| `Removed` | the reference model's removed elements (only with `convert --diff-against` or the Nastran Diff filter) | cell: `EID PID ElementType ElementMass DiffStatus DiffReason DeltaElementMass`; point: `NID`; see [Model diff](diff.md#diff-on-the-mesh) |
 | `BeamSections` | CBAR/CBEAM cross sections swept in 3D (only with `--beam-sections`) | cell: `EID PID MID ElementType BeamPart Face`; point: `GA GB StationT`, with results `Displacement DisplacementMagnitude` |
 
-Root field data: `DeckPath SOL WTMASS ActiveLoadSets ActiveSPCSets StructuralMass ConcentratedMass ModelMass ModelCG Warnings`,
-plus `ActiveNSMSet PropertyNSMMass BulkNSMMass NonstructuralMass`, `DefinedNSMSets` (the top-level
+Categorical arrays keep their names in block field data: `ElementTypeNames`, `RigidTypeNames`,
+`ConnectorTypeNames`, `FamilyNames` and `GroupNames` (Shells, for decks with family comments).
+
+Root field data: `DeckPath SOL WTMASS ActiveLoadSets ActiveSPCSets StructuralMass ConcentratedMass ModelMass ModelCG`,
+`Warnings` (when there are any), the material table `MAT_ID MAT_Type MAT_E MAT_E2 MAT_G MAT_Nu MAT_Rho`
+(one row per material card), plus `ActiveNSMSet PropertyNSMMass BulkNSMMass NonstructuralMass`, `DefinedNSMSets` (the top-level
 bulk sets, when the deck has any) and, when there is NSM, the
 `NSM_SET NSM_SetType NSM_SetMass NSM_SetCount` (per NSM set) and `NSM_PID NSM_PIDMass` tables
 (see [Nonstructural mass](#nonstructural-mass)). Decks with CBAR/CBEAM also get the
@@ -36,10 +40,13 @@ A [model diff](diff.md#diff-on-the-mesh) (`--diff-against`) adds `DiffStatus Dif
 DeltaElementMass PIDChanged DeltaThickness DeltaArea GridStatus DeltaXYZ DeltaMass`, the `Removed`
 block, `DiffAgainst DiffCG` and the `DIFF_*` and `DIFFMASS_*` tables.
 The [model tools](tools.md) add `Hops`, `PartId` and `OnPath` (cell and point) and the `PART_*`,
-`LINK_*` and `PathLength` root arrays; `nastran-pv check` writes `CHECK_*`.
-With an OP2 file loaded, the mesh blocks also get `Displacement Rotation DisplacementMagnitude`
-and `VonMisesMax`, `BeamSections` gets the rigid-section `Displacement` of its points, and the root
-gets `ResultLabel Frequency`.
+`LINK_*` and `PathLength` root arrays; `nastran-pv check -o` writes the findings with a `CHECK_*` table.
+A [selection file](cli.md#selection-from-an-id-file) (`--select`) adds the root string
+`SelectionInfo`, and with `--select-mode mark` an int8 `Selected` cell array on every block.
+With an OP2 or HDF5 file loaded, the mesh blocks, `Masses`, `Rigid` and `Constraints` get point
+`Displacement Rotation DisplacementMagnitude`, the mesh blocks cell `VonMisesMax` (when the results
+have stresses), `BeamSections` gets the rigid-section `Displacement` of its points, and the root
+gets `ResultLabel ResultStep` and `Frequency` (modes only).
 
 The [field options](fields.md) add further arrays on top of these.
 

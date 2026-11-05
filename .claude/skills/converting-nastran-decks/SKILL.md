@@ -25,8 +25,8 @@ python -m nastran_pv convert DECK --derive --map sizing.csv PID --calc "Specific
 python -m nastran_pv convert DECK --results run.op2 --all-steps -o out/modes.vtkhdf   # every mode in one temporal file
 ```
 
-`stats` and `convert` accept a deck or a `.vtm` written by nastran-pv. Re-reading the `.vtm` skips
-deck parsing, which is much faster on large models.
+`stats`, `convert` and `diff` accept a deck or a `.vtm`/`.vtkhdf` written by nastran-pv. Re-reading
+the file skips deck parsing, which is much faster on large models. `summary.py` reads `.vtm` only.
 
 ## Choices
 
@@ -42,13 +42,14 @@ deck parsing, which is much faster on large models.
 | Everything connected to an element | `--grow "EID 1001" [--rules ...]` → `Hops` |
 | Model sanity (free edges, coincident grids, duplicates, dangling RBEs, floating parts) | `nastran-pv check DECK [--strict]` |
 | Beam section properties per PID (A, I1, I2, J, shear center vs card), swept CBAR/CBEAM sections | `nastran-pv sections DECK [--csv F]`; `convert DECK --beam-sections` (docs/beam-sections.md) |
+| What changed between two versions of a model (same ids) | `nastran-pv diff A B [--csv F]`; `convert B --diff-against A` → `DiffStatus`, `Removed` block (docs/diff.md, `comparing-nastran-runs`) |
 | External data per element/property | `--map FILE KEY` (CSV/TSV/JSON/xlsx/SQLite/SQLAlchemy URL; KEY = EID PID MID NID FAMILY GROUP) |
 | Only (or flag) the IDs a file lists: failing elements, a PID list, test grids | `--select ids.csv [--select-key KEY] [--select-mode mark] [--select-grids any]` (also `stats`, `store add`; header names the key, ranges/THRU ok; missing IDs are `warning:` lines; root mass stays whole-deck; docs/cli.md#selection-from-an-id-file) |
 
 ## Reading the result
 
-- **Mass:** `ModelMass = StructuralMass + NonstructuralMass + ConcentratedMass`, computed from VTK
-  cell sizes, with WTMASS **not** applied. NSM (property fields + the bulk NSM/NSML set picked by
+- **Mass:** `ModelMass = StructuralMass + NonstructuralMass + ConcentratedMass`, computed from cell
+  sizes (numpy volumes for linear solids, VTK's cell size filter otherwise), with WTMASS **not** applied. NSM (property fields + the bulk NSM/NSML set picked by
   `NSM=` or `--nsm-set`) is in `ElementMass` and split out as `NSMMass`, `PropertyNSMMass`,
   `BulkNSMMass` and the `NSM_SET`/`NSM_PID` tables (`docs/model.md#nonstructural-mass`). Units are the deck's own: say so, and infer them from MAT values
   (rho 2780 and E 7e10 mean SI).

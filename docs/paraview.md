@@ -13,7 +13,9 @@ one-click views on the Macros toolbar. For step-by-step walkthroughs, see
 3. In the Properties panel, switch blocks on or off and optionally set *OP2 File Name*, which
    takes an `.op2` or MSC/NX `.h5` file. Each result step (subcase, load step or mode) becomes a
    time step. *NSMSet* picks the bulk nonstructural mass set
-   ([Nonstructural mass](model.md#nonstructural-mass)).
+   ([Nonstructural mass](model.md#nonstructural-mass)), *BushStiffnessReference* is `convert --k-ref`
+   (0 = the softest stiffness), and *Random ASD* turns the modes into a random response
+   ([Random vibration](random-vibration.md)).
 
 `nastran-pv view DECK --view masses` does all of this in one command.
 
@@ -90,8 +92,9 @@ real ParaView selection (masses and bushes included), so *NPV Grow from Selectio
 commands work on it. From Python: `nv.show_only_file("failing.csv")`, `nv.hide_file(...)`,
 `nv.highlight_file("grids.txt", key="NID")`.
 
-On a large model the tree is capped at 1,000 pieces. Above that, Families, Groups, Element types and
-then Materials leave the tree, with a message in Output Messages; the checklists still work.
+On a large model the tree is capped at 1,000 pieces. Above that, Families, Groups, Element types,
+Materials and finally Properties leave the tree, in that order, with a message in Output Messages;
+the checklists still work.
 
 ## One-click views (toolbar macros)
 
@@ -103,7 +106,11 @@ python paraview/install_macros.py --remove
 Restart ParaView, open a deck, select the reader (or anything downstream of it) and click a button.
 Each view hides what is currently shown and builds a ready-to-read state: the mesh drawn as a
 translucent ghost, the relevant glyphs, an indexed or continuous lookup table, a legend and a short
-summary. Running a view again reuses its pipeline objects, which are named `NPV ...`.
+summary. Running a view again reuses its pipeline objects, which are named `NPV ...`. A macro
+ends with the filter it is about selected (*NPV mass glyphs*, *NPV beam sections*, *NPV grow*, the
+Nastran Diff, *NPV deform* for Results and the animation macros), so its Properties panel is open.
+Views that only color the model, and the visibility macros, end on the reader. Any macro run with
+an `NPV ...` filter selected finds the model upstream of it.
 
 | Macro | Shows |
 |---|---|
@@ -184,7 +191,8 @@ from `render_model.py`, and as `nastran-pv render` presets (see [CLI](cli.md#bat
     *Size* × the model diagonal, so dense models don't overlap.
   - An axis more than 1.5× stiffer than the next one is drawn thicker; a released direction
     (K = 0) is a small grey glyph; a bush without PBUSH stiffness gets none.
-  - *ShowEllipsoids* adds log-stiffness ellipsoids (translation only).
+  - *ShowTriads* (on) draws the per-axis bars or rings; *ShowEllipsoids* adds log-stiffness
+    ellipsoids (translation only).
   - Cell arrays `Axis` (0 = released or ellipsoid), `Stiffness`, `Log10Stiffness`, `EID`,
     `Released` and `Dominant` are available for coloring.
 * **Nastran Beam Sections** sweeps each CBAR/CBEAM's cross section along it (see

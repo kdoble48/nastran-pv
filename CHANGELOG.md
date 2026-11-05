@@ -32,6 +32,7 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Changed
 
+- NPV macros and `nastran_views.apply` end with the filter they are about selected (mass glyphs, NPV grow, the Nastran Diff, NPV deform, ...), or the reader for coloring and visibility macros.
 - Simplified the plugin: shared setters and `RequestData`, one upstream walk, one screenshot view (#38).
 - Simplified the core: a shared results base, builder helpers and field tables in `vtkutil` (#37).
 - One id lookup, shared VTK helpers, plugin constants taken from `src`, and dead code removed (#36).

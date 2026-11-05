@@ -294,6 +294,7 @@ def beam_checks(pv, nv, view, tmp):
     pv.Delete(demo)
     pv.SetActiveSource(beams)
     model = nv.apply("beams", reader=beams, view=view)
+    check(pv.GetActiveSource() is pv.FindSource(nv._name(model, "beam sections")), "beams view selects NPV beam sections")
     text = pv.FindSource(nv._name(model, "info")).Text
     check("12 CBAR/CBEAM, 6 section PID(s)" in text and "4 PBAR/PBEAM station(s)" in text
           and "Deformation" not in text, f"beams view text: {text!r}")
@@ -641,12 +642,16 @@ def diff_checks(pv, nv):
     text = pv.FindSource(nv._name(nv.Model(b), "info")).Text
     check("elements: 2 added, 2 removed, 3 changed" in text and "10.9 -> 14.4" in text, f"diff view text {text!r}")
     check(nv.diff_of(nv.Model(b)) == d, "the diff view reuses the Nastran Diff on B")
+    check(pv.GetActiveSource() is d, "the diff view selects the Nastran Diff")
+    before = set(pv.GetSources())
+    nv.apply("diff", view=view)  # rerun with the diff selected: B is found upstream of it
+    check(pv.GetActiveSource() is d and set(pv.GetSources()) == before, "diff rerun from the diff: no new objects")
     lut = pv.GetColorTransferFunction("DiffStatus")
     check(lut.InterpretValuesAsCategories == 1 and "removed" in list(lut.Annotations), "DiffStatus legend")
 
     pv.SetActiveView(view)
-    left, right = nv.side_by_side(array="Thickness", view=view)
-    check(right in pv.GetViews() and right != left, "side by side: a second view")
+    left, right = nv.side_by_side(array="Thickness", view=view)  # run with the diff selected
+    check(right in pv.GetViews() and right != left and pv.GetActiveSource() is b, "side by side: a second view, B selected")
     names = {v: k[0] for k, v in pv.GetSources().items()}
     sides = [sorted(names.get(s, "?") for s in nv.shown_sources(v)) for v in (left, right)]
     check(sides == [["NPV info [diff_a.bdf]", "NPV mesh [diff_a.bdf]"],
@@ -863,6 +868,98 @@ def parity_checks(pv, nv):
                 check(not diffs, f"{tag}: view {view_name} shows the same" + _listed(diffs))
             for p in [s for s in pv.GetSources().values() if s not in keep]:
                 pv.Delete(p)
+
+
+# what each view selects on tiny_run.bdf ("NPV <what> [<deck>]"; None: the reader). The deck has no
+# CBAR/CBEAM (beams: beam_checks), no NSM and no random response; diff: diff_checks
+VIEW_SELECTS = {"masses": "mass glyphs", "bushes": "bush glyphs", "bushrotations": "bush rotation glyphs",
+                "beams": None, "loads": "load arrows", "spc": "spc glyphs", "rigid": None, "family": None,
+                "group": None, "pid": None, "mid": None, "elementtype": None, "thickness": None, "nsm": None,
+                "results": "deform", "random": None, "randomsweep": None, "parts": "parts", "grow": "grow",
+                "path": "path", "check": "check"}
+
+
+def active_source_checks(pv, nv):
+    """Every view and command ends with the object it is about selected, and running it again (or
+    another one) with that object selected finds the same model and reuses its NPV objects."""
+    from op2_fixture import make_op2
+
+    for src in nv._sources_with_selection().values():  # left by earlier checks: one selection at a time
+        pv.ClearSelection(src)
+    tmp = tempfile.mkdtemp()  # not removed: ParaView keeps the OP2 open
+    op2 = os.path.join(tmp, "active.op2")
+    make_op2().write_op2(op2)
+    reader = rm.load_reader(DECK, op2)  # a second copy of the deck: its objects are "NPV ... [tiny_run.bdf #id]"
+    model = nv.Model(reader)
+    keys = {v: k[0] for k, v in pv.GetSources().items()}
+
+    def active_name():
+        return {v: k[0] for k, v in pv.GetSources().items()}.get(pv.GetActiveSource(), "?")
+
+    def expected(what):
+        return keys[reader] if what is None else nv._name(model, what)
+
+    check(set(VIEW_SELECTS) | {"diff"} == set(nv.VIEWS), "VIEW_SELECTS covers every view")
+    view = pv.CreateRenderView()
+    pv.SetActiveView(view)
+    pv.SetActiveSource(reader)
+    for name, what in VIEW_SELECTS.items():  # without reader=: each runs with the last one's object selected
+        nv.apply(name, view=view)
+        first, sources = active_name(), set(pv.GetSources())
+        want = expected(what)
+        tag = nv._name(model, "")[len("NPV "):]  # "[tiny_run.bdf #id]"
+        ok = (first.startswith("NPV load arrows") and first.endswith(tag)) if name == "loads" else first == want
+        check(ok, f"{name}: {first!r} selected")
+        nv.apply(name, view=view)
+        check(active_name() == first and set(pv.GetSources()) == sources, f"{name} again from {first!r}: same objects")
+    nv.run_macro("masses")
+    check(active_name() == expected("mass glyphs"), "the NPV Masses macro selects the mass glyphs")
+
+    steps = rm.timesteps(reader)
+    nv._set_time(view, steps[1])
+    deform = expected("deform")
+    check(nv.animate_mode(cycles=1) == [2] and active_name() == deform, "Animate Mode selects NPV deform")
+    check(nv.stop_mode_animation() and active_name() == deform, "Stop Mode Animation (from NPV deform)")
+    sources = set(pv.GetSources())
+    nv.animate_modes([2], frames=2, out=os.path.join(tmp, "frames"))
+    check(active_name() == deform and set(pv.GetSources()) == sources, "Animate All Modes from NPV deform: same objects")
+    nv.save_mode_animations([2], frames=4, folder=os.path.join(tmp, "gifs"))
+    check(active_name() == deform and set(pv.GetSources()) == sources, "Save Mode Animations selects NPV deform")
+
+    pv.Show(reader, view)
+    _select(pv, reader, "(EID == 1)")
+    nv.grow_from_selection()
+    check(active_name() == expected("grow"), "Grow from Selection selects NPV grow")
+    sources = set(pv.GetSources())
+    _select(pv, reader, "(EID == 1)")
+    pv.SetActiveSource(pv.FindSource(expected("grow")))
+    nv.grow_from_selection()
+    check(active_name() == expected("grow") and set(pv.GetSources()) == sources, "Grow from Selection again: same objects")
+    pv.SetActiveSource(reader)
+    pv.QuerySelect(QueryString="(NID == 1) | (NID == 6)", FieldType="POINT", InsideOut=False)
+    nv.path_from_selection()
+    check(active_name() == expected("path"), "Path from Selection selects NPV path")
+    for command, query in ((nv.show_only_selected, "(EID == 1)"), (nv.hide_selected, "(EID == 2)"),
+                           (nv.show_only_property, "(EID == 11)"), (nv.show_only_material, "(EID == 13)"),
+                           (nv.show_only_reached, None), (nv.hide_reached, None), (nv.show_all, None)):
+        if query:
+            _select(pv, reader, query)
+        pv.SetActiveSource(pv.FindSource(expected("grow")))  # a filter selected: the model is upstream
+        command()
+        check(active_name() == keys[reader], f"{command.__name__} selects the reader")
+        nv.show_all()
+    eids = os.path.join(tmp, "eids.csv")
+    with open(eids, "w") as f:
+        f.write("EID\n1\n2\n")
+    for command in (nv.show_only_file, nv.hide_file, nv.highlight_file):
+        pv.SetActiveSource(pv.FindSource(expected("path")))
+        command(eids)
+        check(active_name() == keys[reader] and os.path.normcase(reader.SelectionFile) == os.path.normcase(eids),
+              f"{command.__name__} (from NPV path) selects the reader")
+    nv.show_all()
+    pv.ClearSelection(reader)
+    reader.SelectionFile = ""
+    pv.Delete(view)
 
 
 def main():
@@ -1216,6 +1313,7 @@ def main():
     random_checks(pv, nv)
     topology_checks(pv, nv)
     diff_checks(pv, nv)
+    active_source_checks(pv, nv)
     print("pv_smoke: all checks passed")
 
 

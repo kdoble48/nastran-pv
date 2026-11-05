@@ -1,14 +1,14 @@
 # CLI
 
 ```bash
-nastran-pv view   DECK [--view masses] [--results run.op2|run.h5]   # opens the ParaView GUI, view applied
+nastran-pv view   DECK [--view pid] [--results run.op2|run.h5]       # opens the ParaView GUI, view applied
 nastran-pv render DECK --preset masses loads --views iso top        # batch screenshots
 nastran-pv convert DECK|VTM -o out.vtm [field options] [--results F [--all-steps]] [--select ids.csv]
 nastran-pv convert DECK --results modes.op2 --random asd.csv [--drive Z --damping 0.05 --g 9806.65]
 nastran-pv stats  DECK|VTM --by PID|MID|FAMILY|GROUP|ELEMENTTYPE --field ElementMass [--csv t.csv]
-nastran-pv check  DECK|VTM [--strict] [--rules TEXT] [-o findings.vtm]
+nastran-pv check  DECK|VTM [--strict] [--rules TEXT] [--only CHECK ...] [--tol R] [-o findings.vtm]
 nastran-pv sections DECK|VTM [--pid ID ...] [--csv t.csv]          # CBAR/CBEAM section table
-nastran-pv diff   A B [--csv diff.csv]                                # what changed from model A to B
+nastran-pv diff   A B [--csv diff.csv] [--grid-tol R] [--rel-tol R]  # what changed from model A to B
 nastran-pv convert B --diff-against A -o diff.vtm                   # B with the diff on its mesh
 nastran-pv store  add|list|fields|query|compare|open --db runs.sqlite ...
 nastran-pv setup  [--pvpython PATH] [--no-macros] [--dry-run]
@@ -30,6 +30,11 @@ nastran-pv convert run_deck.bdf -o out/model.vtm
 nastran-pv convert run.dat --results run.op2 --all-steps -o out/modes.vtm   # .pvd time series
 nastran-pv convert run.bdf --no-loads --k-ref 1e5 -o out/model.vtm
 ```
+
+Without `-o`, the output is `<input>.vtm` in the current folder. `--results` attaches one result
+step, `--step N` (0-based, default 0); `--all-steps` writes them all. `--no-nodal-arrays` leaves
+the `SPC_DOF`/`F_<sid>` point arrays off the mesh blocks, and `--ascii` writes ASCII XML for
+debugging.
 
 `--no-<block>` skips a block, and `--k-ref` sets the reference translational stiffness for the bush bars (see
 [Model blocks and arrays](model.md#derived-quantities)). `--nsm-set ID` picks the bulk NSM set
@@ -141,7 +146,12 @@ In ParaView, the reader's *Selection File* does the same (see
 
 ```bash
 nastran-pv stats out/ucrm.vtm --by GROUP --field ElementMass
+nastran-pv stats run.bdf --by PID --field ElementMass --sort sum --limit 10 --csv out/pid_mass.csv
 ```
+
+`--by` takes `PID`, `MID`, `FAMILY`, `GROUP`, `ELEMENTTYPE` or any integer cell array (such as
+`PartId`). The table has count, sum, mean, min and max per group; `--sort` orders it (descending)
+and `--limit` keeps the first rows.
 
 ## Model checks
 
@@ -156,9 +166,10 @@ and floating parts. See [Model tools](tools.md#model-check) for what each check 
 ## Opening ParaView
 
 `view` opens the ParaView GUI on a deck with a [view](paraview.md#one-click-views-toolbar-macros)
-already applied. `--dry-run` prints the command and the generated script instead of launching.
+already applied (`--view`, default `pid`; `none` opens the deck without one). `--dry-run` prints
+the command and the generated script instead of launching.
 `view` and `render` also take a `.vtm`, `.vtkhdf` or `.pvd` written by `convert`, which skips the
-deck read. `--results` and `--nsm-set` need the deck, so convert with them instead
+deck read. `--results`, `--nsm-set` and `--random` need the deck, so convert with them instead
 ([Converted files](paraview.md#converted-files)). `--against A` opens a reference model A first,
 for `--view diff` and [side by side](diff.md#side-by-side).
 
@@ -171,7 +182,8 @@ nastran-pv render out/modes.vtkhdf --step 3 --preset results   # a converted ser
 # same as: pvpython paraview/render_model.py run_deck.bdf --preset ...
 ```
 
-The presets are the views from the toolbar macros: `masses`, `bushes`, `bushrotations`, `beams`, `loads`, `spc`, `rigid`,
+`--preset` defaults to `family masses loads spc`, `--out` to `shots/` and `--size` to `1600 1000`.
+`--step` is 0-based. The presets are the views from the toolbar macros: `masses`, `bushes`, `bushrotations`, `beams`, `loads`, `spc`, `rigid`,
 `family`, `group`, `pid`, `mid`, `elementtype`, `thickness`, `nsm`, `results`, `random`, `randomsweep`,
 `parts`, `check` and `diff`. The two random views need `--random` (or a converted random series),
 and `diff` needs `--against A`.
