@@ -220,6 +220,13 @@ the selection commands make no filter of their own.
   makes its own time steps one cycle of *Frames Per Cycle* phases, drawing *Amplitude* ×
   sin(2π phase) × `Displacement`, so the play button vibrates the mode.
 
+* **Nastran Scope** is the overlays' copy of the model. Its mesh blocks keep what the reader
+  keeps (checklists, Show Only/Hide, the selection file). Masses, rigid elements, bushes, SPCs
+  and loads stay when they hang off a kept element, also when the reader's own output drops them;
+  EIDs named in Show Only win, and hidden EIDs always go. With nothing hidden, or on a converted
+  file, it passes its input through. It goes after *Nastran Deform* on the reader and moves by the
+  scale that filter applied, so the NPV overlays draw through it (*NPV scope*) and follow the mode.
+
 * **Nastran Mass Glyphs** builds one ellipsoid per concentrated mass. Its sizing controls:
   - *SizeMode*:
     - **Physical** gives true semi-axes: the uniform ellipsoid with each mass's mass and inertia

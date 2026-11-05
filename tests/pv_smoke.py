@@ -341,6 +341,10 @@ def converted_checks(pv, nv, reader):
             for name in nv.VIEWS:
                 model = nv.apply(name, reader=src, view=view)
             check(model.reader is src and "Shells" in model.names, f"{suffix}: every view builds")
+            from nastran_pv.tree import as_multiblock
+
+            check(nv.block_names(as_multiblock(nv.fetch(pv.NastranScope(Input=src))))
+                  == nv.block_names(as_multiblock(nv.fetch(src))), "Nastran Scope passes a converted model through")
             try:
                 nv.show_all(src)
                 check(False, f"{suffix}: Show All should refuse a converted file")
@@ -1337,6 +1341,58 @@ def _cell_values(src, name):
     return set(vtk_to_numpy(a).tolist()) if a is not None else set()
 
 
+def _ids(src, block, where="point", name="EID"):
+    """Set of ``name`` values of block ``block`` in the (gathered) output of ``src``; set() if absent."""
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    from nastran_pv.assemble import get_block
+    from nastran_pv.tree import as_multiblock
+
+    blk = get_block(as_multiblock(rm.nv.fetch(src)), block)
+    if blk is None:
+        return set()
+    data = blk.GetPointData() if where == "point" else blk.GetCellData()
+    arr = data.GetArray(name)
+    return set() if arr is None else set(vtk_to_numpy(arr).astype(int).tolist())
+
+
+def _mass_xmin(src, t):
+    """x min of the Masses block's points of ``src`` at time ``t`` (the whole output's bounds stay at
+    0: CBUSH 503's point carries no NID or Displacement, so it never moves)."""
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    from nastran_pv.assemble import get_block
+    from nastran_pv.tree import as_multiblock
+
+    src.UpdatePipeline(t)
+    return float(vtk_to_numpy(get_block(as_multiblock(rm.nv.fetch(src)), "Masses").GetPoints().GetData())[:, 0].min())
+
+
+def scope_filter_checks(pv, nv, reader, view, deform, full):
+    """Nastran Scope after the model's NPV deform: overlays' copy of the model cut by the R2 join."""
+    s = pv.NastranScope(Input=deform)
+    check(_ids(s, "Masses") == {201, 202}, "no scope: Nastran Scope passes every mass")
+    reader.ShowOnlyElements = "1"
+    check(_ids(s, "Masses") == {201, 202} and _ids(s, "Bushes") == {503}
+          and _ids(s, "Constraints", name="NID") == {1, 2, 3, 4}, "Show Only 1: scope keeps what hangs off shell 1")
+    check(not nv.Model(reader).has("Masses"), "the reader's own output keeps the Femap cut (no masses)")
+    reader.HiddenElements = "202"
+    check(_ids(s, "Masses") == {201}, "a later Hide reaches the scope without touching it")
+    reader.HiddenElements = ""
+    auto, scale = deform.AutoScale, deform.ScaleFactor
+    nv._set_time(view, full[1])                  # mode 1: T1 = 1.0 on every grid
+    deform.AutoScale, deform.ScaleFactor = 0, 0.0
+    x0 = _mass_xmin(s, full[1])
+    deform.ScaleFactor = 0.5
+    for t in (full[1], full[0], full[1]):
+        s.UpdatePipeline(t)
+    check(abs(_mass_xmin(s, full[1]) - x0 - 0.5) < 1e-6,
+          "scoped masses move with NPV deform, step after step")
+    reader.ShowOnlyElements = ""
+    deform.AutoScale, deform.ScaleFactor = auto, scale
+    pv.Delete(s)
+
+
 def main():
     reader = rm.load_reader(DECK)
     model = rm.Model(reader)
@@ -1408,6 +1464,7 @@ def main():
               f"results view rerun keeps a typed Scale Factor: {rtext!r}")
         nv.apply("results", reader=reader, view=anim, scale=2.0)
         check(deform.ScaleFactor == 2.0 and not deform.AutoScale, "results view scale= wins")
+        scope_filter_checks(pv, nv, reader, anim, deform, full)
         nv._set_time(anim, full[0])
         model = nv.apply("masses", reader=reader, view=anim)  # other views: undeformed
         check(deform.ScaleFactor == 0.0 and not deform.AutoScale, "the masses view resets the deformation")

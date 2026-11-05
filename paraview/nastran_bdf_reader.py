@@ -12,12 +12,14 @@ The plugin finds its dependencies in this order:
 4. folders listed in the ``NASTRAN_PV_SITE_PACKAGES`` environment variable.
 """
 import importlib
+import itertools
 import os
 import sys
 
 from paraview.util.vtkAlgorithm import VTKPythonAlgorithmBase, smdomain, smhint, smproperty, smproxy
 from vtkmodules.vtkCommonCore import vtkDataArraySelection, vtkOutputWindow
-from vtkmodules.vtkCommonDataModel import vtkDataObject, vtkMultiBlockDataSet, vtkPartitionedDataSetCollection
+from vtkmodules.vtkCommonDataModel import (vtkDataObject, vtkFieldData, vtkMultiBlockDataSet,
+                                           vtkPartitionedDataSetCollection)
 from vtkmodules.vtkCommonExecutionModel import vtkStreamingDemandDrivenPipeline
 
 EXTENSIONS = "bdf dat nas bulk blk"
@@ -85,12 +87,14 @@ def _missing(exc):
 
 
 # Each reader output carries a WHOLE_MODEL_TAG field string naming its entry here: the whole multiblock
-# before the visibility cut and the output's array signature. A filter fed directly by the reader
-# (Nastran Diff) finds it, so hidden elements still count. Downstream pipeline objects get copies
+# before the visibility cut, the output's array signature, the reader's Visibility and category names,
+# and a generation that grows on every reader execution. A filter fed directly by the reader (Nastran
+# Diff, or Nastran Scope after Nastran Deform) finds it, so hidden elements still count. Downstream pipeline objects get copies
 # of the output, so the tag is matched with the signature: a filter in between that adds arrays
 # (or cuts pieces) changes it, and its own output is used instead.
 WHOLE_MODEL_TAG = "NPVWholeModel"
 _WHOLE_MODEL = {}
+_GENERATION = itertools.count()
 
 
 def _signature(pdc):
@@ -107,18 +111,34 @@ def _signature(pdc):
     return tuple(out)
 
 
-def _tag_whole_model(reader, output, mb):
+def _tag_whole_model(reader, output, mb, vis=None, names=None):
     from vtkmodules.vtkCommonDataModel import vtkFieldData
 
     from nastran_pv import vtkutil
 
     tag = f"{id(reader)}"
-    _WHOLE_MODEL[tag] = (mb, _signature(output))
+    _WHOLE_MODEL[tag] = (mb, _signature(output), vis, names, next(_GENERATION))
     fd = vtkFieldData()  # a copy: the tree's field data is the cached model's root
     fd.ShallowCopy(output.GetFieldData())
     fd.RemoveArray(WHOLE_MODEL_TAG)
     vtkutil.add_string_array(fd, WHOLE_MODEL_TAG, [tag])
     output.SetFieldData(fd)
+
+
+def _registry_entry(data):
+    """The registry tuple of the reader whose output ``data`` is (or passes through unchanged), else None."""
+    if not data.IsA("vtkPartitionedDataSetCollection"):
+        return None
+    tag = data.GetFieldData().GetAbstractArray(WHOLE_MODEL_TAG)
+    found = _WHOLE_MODEL.get(tag.GetValue(0)) if tag is not None and tag.GetNumberOfValues() else None
+    return found if found is not None and found[1] == _signature(data) else None
+
+
+def _reader_scope(data):
+    """``(multiblock, Visibility, names, generation)`` of the reader whose output ``data`` is (moved
+    points allowed: Nastran Deform keeps the signature), else None."""
+    found = _registry_entry(data)
+    return None if found is None or found[2] is None else (found[0], found[2], found[3], found[4])
 
 
 def _whole_model(data):
@@ -127,9 +147,8 @@ def _whole_model(data):
     another filter, whose reader may hide elements (its pieces carry a BlockPath)."""
     from nastran_pv.tree import BLOCK_PATH, as_multiblock
 
-    tag = data.GetFieldData().GetAbstractArray(WHOLE_MODEL_TAG)
-    found = _WHOLE_MODEL.get(tag.GetValue(0)) if tag is not None and tag.GetNumberOfValues() else None
-    if found is not None and data.IsA("vtkPartitionedDataSetCollection") and found[1] == _signature(data):
+    found = _registry_entry(data)
+    if found is not None:
         return found[0], False
     first = None
     if data.IsA("vtkPartitionedDataSetCollection") and data.GetNumberOfPartitionedDataSets():
@@ -720,7 +739,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         output.ShallowCopy(pdc)
         if time_value is not None:
             output.GetInformation().Set(vtkDataObject.DATA_TIME_STEP(), time_value)
-        _tag_whole_model(self, output, mb)  # for Nastran Diff: hidden elements still count
+        _tag_whole_model(self, output, mb, vis, self._names)  # Nastran Diff/Scope: hidden elements still count
         return 1
 
 
@@ -1233,7 +1252,7 @@ class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
         import math
 
         try:
-            from nastran_pv.deform import Deformer, peak_scale
+            from nastran_pv.deform import DEFORM_SCALE, Deformer, peak_scale
         except ImportError as exc:
             return _missing(exc)
         inp = vtkDataObject.GetData(inInfo[0], 0)
@@ -1252,8 +1271,82 @@ class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
             phase = info.Get(key_t) if info.Has(key_t) else 0.0
             scale = self._amplitude * round(math.sin(2 * math.pi * phase), 9)
         out.ShallowCopy(self._deformer[2].apply(scale))
+        fd = vtkFieldData()  # a copy: the input's field data is the reader's (or the cached model's)
+        fd.ShallowCopy(inp.GetFieldData())
+        fd.RemoveArray(DEFORM_SCALE)
+        fd.AddArray(_double_array(DEFORM_SCALE, scale))
+        out.SetFieldData(fd)
         if phase is not None:
             out.GetInformation().Set(vtkDataObject.DATA_TIME_STEP(), phase)
+        return 1
+
+
+def _double_array(name, value):
+    from vtkmodules.vtkCommonCore import vtkDoubleArray
+
+    arr = vtkDoubleArray()
+    arr.SetName(name)
+    arr.InsertNextValue(float(value))
+    return arr
+
+
+@smproxy.filter(name="NastranPVScope", label="Nastran Scope")
+@smhint.xml('<ShowInMenu category="Nastran" />')
+@smproperty.input(name="Input", port_index=0)
+@smdomain.datatype(dataTypes=["vtkDataObject"], composite_data_supported=True)
+class NastranPVScope(_Settable, VTKPythonAlgorithmBase):
+    """The overlays' copy of the reader's model: mesh blocks keep what the reader keeps, and masses,
+    connectors, SPCs and loads stay when they hang off a kept element (named EIDs win, hidden EIDs go).
+    It goes after Nastran Deform on the reader and moves by its scale; any other input passes through."""
+
+    def __init__(self):
+        VTKPythonAlgorithmBase.__init__(self, nInputPorts=1, nOutputPorts=1, outputType="vtkDataObject")
+        self._tree = None  # (whole multiblock, Visibility key, Tree)
+        self._deformer = None  # (whole multiblock, Visibility key, generation, Deformer)
+
+    def FillInputPortInformation(self, port, info):
+        info.Set(self.INPUT_REQUIRED_DATA_TYPE(), "vtkDataObject")
+        return 1
+
+    def RequestDataObject(self, request, inInfo, outInfo):
+        inp = vtkDataObject.GetData(inInfo[0], 0)
+        if inp is None:
+            return 1
+        info = outInfo.GetInformationObject(0)
+        out = info.Get(vtkDataObject.DATA_OBJECT())
+        if out is None or out.GetClassName() != inp.GetClassName():
+            info.Set(vtkDataObject.DATA_OBJECT(), inp.NewInstance())
+        return 1
+
+    def RequestData(self, request, inInfo, outInfo):
+        try:
+            from nastran_pv.deform import DEFORM_SCALE, Deformer
+            from nastran_pv.selection import scope_masks
+            from nastran_pv.tree import build_tree
+        except ImportError as exc:
+            return _missing(exc)
+        inp = vtkDataObject.GetData(inInfo[0], 0)
+        out = vtkDataObject.GetData(outInfo, 0)
+        if inp is None:
+            return 1
+        found = _reader_scope(inp)
+        if found is not None:
+            mb, vis, names, generation = found
+            key = vis.key()
+            if self._tree is None or self._tree[:2] != (mb, key):
+                masks = scope_masks(mb, vis, names)
+                self._tree = None if masks is None else (mb, key, build_tree(mb, names=names, masks=masks))
+        if found is None or self._tree is None:  # not the reader's model, or nothing hidden
+            self._tree = self._deformer = None
+            out.ShallowCopy(inp)
+            return 1
+        if self._deformer is None or self._deformer[:3] != (mb, key, generation):
+            self._deformer = (mb, key, generation, Deformer(self._tree[2].output(mb)))
+        scale = inp.GetFieldData().GetArray(DEFORM_SCALE)
+        out.ShallowCopy(self._deformer[3].apply(scale.GetValue(0) if scale is not None else 0.0))
+        info = inp.GetInformation()
+        if info.Has(vtkDataObject.DATA_TIME_STEP()):
+            out.GetInformation().Set(vtkDataObject.DATA_TIME_STEP(), info.Get(vtkDataObject.DATA_TIME_STEP()))
         return 1
 
 

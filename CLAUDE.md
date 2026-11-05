@@ -209,7 +209,9 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   double-headed) and SPC markers (`spc_glyphs`) as real `vtkPolyData`, plus the subsets the filters
   offer (`minimum_mass`, `bush_selection`, `default_load_set`).
 - `paraview/nastran_bdf_reader.py`: one plugin file containing the reader, five glyph filters
-  (masses, bushes, loads, SPCs, beam sections), the deform filter, *Nastran Files* (the `Files` checklist and
+  (masses, bushes, loads, SPCs, beam sections), the deform filter (it writes the scale it applied as
+  root `DeformScale`), *Nastran Scope* (after the model's deform: the overlays' copy of the model
+  cut by `selection.scope_masks`, moved by `DeformScale`), *Nastran Files* (the `Files` checklist and
   tree on any model, converted files included), three field filters, four topology
   filters (grow, parts, path, model check) and the two-input *Nastran Diff*.
   - Shared settings are class decorators, one PropertyGroup each: `_with(label, setters)` copies
@@ -225,6 +227,9 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
     built multiblock by its options, so changing the time step only re-attaches results. The cut
     model tree is cached by the visibility settings too; its checklists are filled in
     `RequestInformation`, before the first Apply.
+  - Each reader output is tagged (`NPVWholeModel`) with a registry entry `(whole multiblock,
+    signature, Visibility, names, generation)`; `_whole_model` (Nastran Diff) and `_reader_scope`
+    (Nastran Scope) find it while the array signature still matches (a deform keeps it).
 - `paraview/nastran_views.py`: view functions (`apply(name)`) on the deck reader or a converted
   `.vtm`/VTKHDF (`find_reader`, `is_model_file`: root field `DeckPath` or `ModelMass`; `deck_reader` guards the
   commands that need the deck), `index_colors`, the selection
