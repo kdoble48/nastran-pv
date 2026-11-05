@@ -37,7 +37,7 @@ from conftest import DATA
 from model_compare import differences, snapshot
 from op2_fixture import make_op2
 
-DECKS = ("tiny_run", "tiny_bulk", "beams", "nsm", "topology", "diff_a", "diff_b")
+DECKS = ("tiny_run", "tiny_bulk", "beams", "nsm", "topology", "diff_a", "diff_b", "diff2_a", "diff2_b")
 FORMATS = ("vtkhdf", "vtm")
 
 
@@ -265,7 +265,7 @@ def test_table_commands(files, name, command, fmt):
     assert normalized(text_a, files[name]["deck"]) == normalized(text_b, files[name][fmt])
 
 
-DIFF_PAIRS = (("diff_a", "diff_b"),)  # (A, B) deck names, both in DECKS
+DIFF_PAIRS = (("diff_a", "diff_b"), ("diff2_a", "diff2_b"))  # (A, B) deck names, both in DECKS
 
 
 @pytest.mark.parametrize("kinds", [("deck", "vtkhdf"), ("vtkhdf", "deck"), ("vtkhdf", "vtkhdf"), ("vtm", "vtkhdf")])
