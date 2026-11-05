@@ -108,6 +108,27 @@ to compare meshes whose ids do not correspond (coarse and fine), use the
 [run store](store.md): `store compare --by FAMILY` aggregates any field per key across runs. Both
 pair their keys with the same code.
 
+### Example: the uCRM-9 wingbox
+
+`docs/build_diff_example.py` writes a realistic pair from the coarse uCRM-9 modal run (the
+dataset is not in git, so neither is the pair): `A/` is the original and `B/` has five edits.
+
+```bash
+python docs/build_diff_example.py --ucrm9 gpk4zn73xn-1/uCRM9/uCRM9/Mesh/Coarse/FEM -o gpk4zn73xn-1/diff_example
+nastran-pv diff gpk4zn73xn-1/diff_example/A/run_uCRM-9_modal_coarse.bdf gpk4zn73xn-1/diff_example/B/run_uCRM-9_modal_coarse.bdf
+nastran-pv view gpk4zn73xn-1/diff_example/B/run_uCRM-9_modal_coarse.bdf --view diff --against gpk4zn73xn-1/diff_example/A/run_uCRM-9_modal_coarse.bdf
+```
+
+| Edit in B | Shows up as |
+|---|---|
+| An inboard upper-skin panel (`U_SKIN.039`) 25 % thicker | *property* on its elements; the PID and family mass rows |
+| The lower-skin panel next to the engine (`L_SKIN.035`) split 2x2, with a ring of CTRIAR transition elements (so the mesh stays conforming) | its quads and the ring's neighbours *removed*, the new quads, triangles and grids *added*; mass per PID unchanged |
+| The 13 engine CONM2s 577 -> 650 kg; one control-surface mass moved 0.25 m aft | 14 *changed* masses, the model mass and CG change, one moved grid (and its RBE3 *changed*: grid moved) |
+| One control-surface RBE3 (500001) replaced by an RBE2 | a rigid element *changed*: type and legs |
+| A spanwise T stringer of CBARs (PBARL, MAT1) on the upper skin, in its own INCLUDE | 157 *added* line elements, an added property and material; the [beams](beam-sections.md) view draws its section |
+
+The script writes `README.md` next to the pair with every changed id.
+
 ## Diff on the mesh
 
 ```bash
