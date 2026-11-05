@@ -5,8 +5,9 @@ pip install -e ".[vtk]"          # core + the vtk wheel, for the CLI and the tes
 nastran-pv setup                 # ParaView-side dependencies + toolbar macros (finds pvpython)
 ```
 
-Optional extras: `h5` (MSC/NX HDF5 results), `tables` (Excel tables for `--map`), `sql`
-(non-SQLite databases for `--map`), `all`, and `test`.
+Optional extras: `h5` (MSC/NX HDF5 results), `tables` (Excel files for `--map` and `--select`),
+`sql` (non-SQLite databases for `--map`), `all` (the four above), `gallery` (thumbnails for
+`docs/build_gallery.py`) and `test`.
 
 ## pyNastran and Python versions
 
@@ -51,8 +52,8 @@ ParaView 5.x:
   `PYTHONPATH`, `NASTRAN_PV_SITE_PACKAGES` or its own site-packages), or a `main` build already in
   `_vendor`, is not overwritten, and only the missing dependencies are added. Flags:
   `--upgrade-pynastran` re-fetches `main`, `--pynastran SPEC` vendors another requirement (for
-  example `pyNastran==1.4.1` or a local checkout), `--upgrade` reinstalls the binary wheels, and
-  `--dry-run` prints the pip commands. Close the ParaView GUI first, because it locks the vendored
+  example `pyNastran==1.4.1` or a local checkout), `--upgrade` reinstalls the binary wheels, `--site` also vendors trame-vtk for the gallery
+  export, `--target DIR` vendors somewhere else, and `--dry-run` prints the pip commands. Close the ParaView GUI first, because it locks the vendored
   files.
 
   It is safe to re-run. A vendored wheel built for another Python (for example a `_vendor`

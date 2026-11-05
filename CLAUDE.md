@@ -108,8 +108,8 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   `NSMPerArea|NSMPerLength NSMMass NSMSource` and the `NSM_*` root tables. It runs in
   `build_multiblock` before the masses; its warnings use `deck.warn(..., mass=True)`, which lists
   them first.
-- `results.py` / `results_h5.py`: `Op2Results` and `H5Results` share an interface (`steps`,
-  `times`, `skipped`, `step_data`, `attach`). The shared `attach_step` writes `Displacement` and
+- `results.py` / `results_h5.py`: `Op2Results` and `H5Results` share a base (`results._Results`)
+  and its interface (`steps`, `times`, `skipped`, `step_data`, `attach`). The shared `attach_step` writes `Displacement` and
   `VonMisesMax`, rotating vectors from CD into basic when a deck is passed. `open_results`
   dispatches on the file suffix.
 - `fields/`: `derived.py` (material, quality, size, cg, pidmass), `tables.py` (`read_table` and
@@ -153,6 +153,12 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   `NPVWholeModel` (field string + array signature) so a Nastran Diff fed directly by it diffs the
   whole cached multiblock, hidden elements included; downstream pipeline objects get copies, so
   object identity cannot be used.
+- `selection.py`: selection from a file of IDs. `read_ids` reads CSV/TSV/text/Excel/JSON (ranges,
+  `THRU`/`BY`; the key comes from the column header) into an `IdList`; `item_masks` matches it per
+  block (EID/PID/MID/FAMILY/GROUP, NID with `grids="all"|"any"`; masses, SPCs and loads on the grids
+  of a selected cell join); `apply_selection` keeps the selection or marks it (`Selected`,
+  root `SelectionInfo`). Used by `--select` (applied after the field options) and, through
+  `tree.Visibility`, by the reader's *Selection File* and the NPV Show Only/Hide/Highlight File macros.
 - `store.py`: SQLite in long format (`runs`, `elements`, `nodes`, `element_values`,
   `node_values`), plus `<db>_vtm/run_<id>.vtm`.
 - `cli.py`: the `convert`, `stats`, `check`, `sections`, `diff` and `store` commands, with shared field options.
@@ -183,8 +189,8 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   has no root field data, and `min`/`max` are numpy reductions in PythonAnnotation).
 - `glyphs.py`: mass ellipsoids and bush triads as real `vtkPolyData`.
 - `paraview/nastran_bdf_reader.py`: one plugin file containing the reader, three glyph filters
-  (masses, bushes, beam sections), the deform filter, three field filters and four topology
-  filters (grow, parts, path, model check).
+  (masses, bushes, beam sections), the deform filter, three field filters, four topology
+  filters (grow, parts, path, model check) and the two-input *Nastran Diff*.
   - At import it bootstraps `sys.path` with `../src`, then `_vendor`, then
     `NASTRAN_PV_SITE_PACKAGES`, and imports nastran_pv lazily.
   - The reader caches the deck by the mtimes of the main file and every INCLUDE, and caches the
@@ -194,8 +200,9 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
 - `paraview/nastran_views.py`: view functions (`apply(name)`) on the deck reader or a converted
   `.vtm`/VTKHDF (`find_reader`, `is_model_file`: root field `DeckPath` or `ModelMass`; `deck_reader` guards the
   commands that need the deck), `index_colors`, the selection
-  commands (grow/path from selection, Femap-style show only/hide/show all), and the macro entry
-  point `run_macro`.
+  commands (grow/path from selection, Femap-style show only/hide/show all, show only/hide/highlight
+  from an ID file), the diff view and `side_by_side`, and the macro entry point `run_macro`
+  (`ACTIONS` for the macros that are not views).
   - Mode animation: `mode_times` (the reader's steps, or one step for a converted single-step
     file with a `Displacement`), `animate_modes`/`animate_mode` and `save_mode_animations`. They
     run inside `_kept_view`, which puts back the view's time and every NPV deform scale, and

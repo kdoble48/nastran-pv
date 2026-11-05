@@ -32,8 +32,8 @@ else for cross-slice overlaps:
 | Slice | Files |
 |---|---|
 | A | `deck`, `families`, `categories`, `builders/*`, `assemble`, `massprops`, `materials`, `nsm`, `glyphs`, `vtkutil`, `vtkio` |
-| B | `fields/*`, `topology/*`, `tree`, `deform`, `sections/*` |
-| C | `results`, `results_h5`, `vtkhdf`, `store`, `cli`, `launch`, `locate`, `progress` |
+| B | `fields/*`, `topology/*`, `tree`, `selection`, `diff`, `deform`, `sections/*` |
+| C | `results`, `results_h5`, `randvib`, `vtkhdf`, `store`, `cli`, `launch`, `locate`, `progress` |
 | D | `paraview/*.py` (not `_vendor`), checked against `src` for logic that belongs there |
 
 Each brief contains:

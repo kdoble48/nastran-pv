@@ -23,15 +23,17 @@ Gotchas section before you touch the builders, VTKHDF or pvpython code.
 | Derived field / `--map` key / `--calc` | `fields/derived.py`, `fields/tables.py` or `fields/calc.py`, plus the CLI options in `cli.py`. The matching ParaView filter lives in `nastran_bdf_reader.py`. |
 | New view / toolbar macro | `nastran_views.VIEWS` (and its module docstring) + `launch.VIEW_NAMES` + `install_macros.MACROS` + `export_site.VIEW_INFO` + `docs/build_gallery.py` `VIEW_ORDER`, plus the preset list in `docs/cli.md` and the macro table in `docs/paraview.md`. A gallery scene appears only if a model in `build_gallery.build_models` lists the view **and** its deck has the cards (uCRM-9, or the demo from `docs/models/make_demo.py`). Then regenerate: `regenerating-nastran-gallery`. |
 | Beam section shape or property card | `sections/shapes.py` (`SHAPES`: rings, symmetry, dimension rule) and `sections/beams.py` `property_stations`; add the shape to `CANONICAL` in `tests/test_sections.py` and rerun `docs/build_section_figure.py` |
-| Results | `results.py` **and** `results_h5.py` (they share an interface). `attach_step` writes the arrays. |
+| Results | `results.py` **and** `results_h5.py` (they share the `_Results` base). `attach_step` writes the arrays; `randvib.RandomResponse` has the same interface, so check it too. |
+| Selection key or diff field | `selection.py` (`KEYS`, `ALIASES`, `item_masks`) or `diff.py` (`BLOCK_PROPERTY_FIELDS`, `REASON_NAMES`); docs/cli.md#selection-from-an-id-file or docs/diff.md. |
 | Output format | `vtkio.py` / `vtkhdf.py` / `store.py`. Every array must exist at every step (`_fill_missing`). |
 
 **Mesh-block lists** (copies; keep them consistent): `assemble.MESH_BLOCKS` (mass totals, nodal
-SPC/load arrays), `fields/common.MESH` (derived fields, `--map`, `--calc`), `vtkhdf.MESH`,
-`nastran_views.MESH` (ghost mesh, ElementType legend), and `results.attach_step`
+SPC/load arrays), `fields/common.MESH` (derived fields, `--map`, `--calc`; also imported by
+`vtkhdf` for the root-summary copy and by `diff` for elements and grids), `nastran_views.MESH`
+(ghost mesh, ElementType legend), and `results.attach_step` plus `randvib.RESULT_BLOCKS`
 (`MESH_BLOCKS + ("Masses", "Rigid", "Constraints")` get `Displacement`). Structural elements with
 mass belong in all of them. Connectors (springs, rigid elements) usually belong in none except
-`attach_step`. Display geometry derived from a mesh block (`BeamSections`) belongs in none of them;
+`attach_step`. Display geometry derived from a mesh block (`BeamSections`, the diff's `Removed`) belongs in none of them;
 `attach_step` gives it its own displacement (`sections.sweep.attach_displacement`).
 
 Then update the doc that the sync table in `docs/development.md#keeping-docs-in-sync` maps to
