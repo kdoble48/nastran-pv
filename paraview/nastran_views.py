@@ -4,7 +4,10 @@ Every view works on a Nastran reader (the active source, or the reader
 upstream of it) or on a ``.vtm``/VTKHDF file written by nastran-pv and opened with
 ParaView's own reader. It hides what else is shown in the active view, and builds or
 reuses named pipeline objects ("NPV ..."), so running a view twice does not
-pile up duplicates. Available views::
+pile up duplicates. A view or command ends with the filter it is about selected (the mass
+glyphs, NPV grow, the Nastran Diff, NPV deform for results and mode animation), or the reader when
+it only recolours the model or changes the reader's visibility; the model is found upstream of it
+again. Available views::
 
     masses  bushes  bushrotations  beams  loads  spc  rigid  family  group  pid  mid  thickness
     nsm  elementtype  results  random  randomsweep  parts  grow  path  check  diff
@@ -334,6 +337,15 @@ def _name(model, what):
     return f"NPV {what} [{label}]"
 
 
+def _finish(obj):
+    """End a view or command with ``obj`` (the filter it is about, else the model source) as the
+    active source, so the Properties panel shows what to adjust next. :func:`find_reader` walks
+    upstream from it, so a rerun, or another view, still finds the same model."""
+    if obj is not None:
+        pv.SetActiveSource(obj)
+    return obj
+
+
 def _named(model, what, factory):
     """Find or create a pipeline object fed by this reader."""
     name = _name(model, what)
@@ -602,6 +614,7 @@ def view_masses(model, view, mode="Auto", relative=0.025, law="cbrt", minimum=0.
         text += f"\nSphere size: {sizing.GetValue(0)}"
     info_text(model, view, text + "\nMass units as in the deck (WTMASS not applied)"
                                   "\nResize: select 'NPV mass glyphs', change RelativeSize / RadiusLaw, Apply")
+    return glyphs
 
 
 BUSH_RGB = {0: (0.55, 0.55, 0.6), 1: (0.85, 0.12, 0.12), 2: (0.15, 0.65, 0.2), 3: (0.15, 0.3, 0.9)}
@@ -640,7 +653,7 @@ def _bush_view(model, view, kind, size, ellipsoids=False):
         pv.Hide(glyphs, view)
         info_text(model, view, f"{n} CBUSH. No {'rotational' if rotation else 'translational'} stiffness "
                                f"({span}) on any CBUSH.")
-        return
+        return glyphs
     d = pv.Show(glyphs, view)
     released = int(_glyph_field(glyphs, "ReleasedCount"))
     missing = int(_glyph_field(glyphs, "NoStiffnessCount"))
@@ -661,16 +674,17 @@ def _bush_view(model, view, kind, size, ellipsoids=False):
     if missing:
         lines.append(f"{missing} without PBUSH stiffness (not drawn)")
     info_text(model, view, "\n".join(lines))
+    return glyphs
 
 
 def view_bushes(model, view, size=0.04, ellipsoids=False):
     """Translational CBUSH stiffness K1-K3 as bars along the element axes."""
-    _bush_view(model, view, "translation", size, ellipsoids)
+    return _bush_view(model, view, "translation", size, ellipsoids)
 
 
 def view_bushrotations(model, view, size=0.04):
     """Rotational CBUSH stiffness K4-K6 as rings around the element axes."""
-    _bush_view(model, view, "rotation", size)
+    return _bush_view(model, view, "rotation", size)
 
 
 BEAM_PART_RGB = {1: (0.05, 0.05, 0.05), 2: (0.95, 0.55, 0.05), 3: (0.85, 0.12, 0.12),
@@ -712,6 +726,7 @@ def view_beams(model, view, triads=None, max_triads=500, scale=0.0):
     if scale:
         lines.append(f"Deformation x{scale:.3g}")
     info_text(model, view, "\n".join(lines))
+    return sections
 
 
 def view_loads(model, view):
@@ -756,6 +771,7 @@ def view_loads(model, view):
     sampled = f" (showing {shown} of {n} arrows)" if shown < n else ""
     info_text(model, view, f"{pick}: {n} loaded grids{sampled}\n"
                            f"Resultant force ({res[0]:.4g}, {res[1]:.4g}, {res[2]:.4g})")
+    return g
 
 
 def view_spc(model, view):
@@ -771,6 +787,7 @@ def view_spc(model, view):
     codes = model.unique("DOFCode", "point", ("Constraints",))
     categorical(d, "DOFCode", codes, labels_for(model, "DOFCode", codes), association="POINTS", view=view)
     info_text(model, view, f"{model.block('Constraints').GetNumberOfPoints()} constrained grids, coloured by DOF code")
+    return g
 
 
 def view_rigid(model, view):
@@ -911,6 +928,7 @@ def view_results(model, view):
     solid(ghost, [0.3, 0.3, 0.3])
     label = model.field_strings(None, "ResultLabel")
     info_text(model, view, f"{label[0] if label else ''}\nDeformation x{scale:.3g}", "Upper Center")
+    return deformed(model)
 
 
 # ----------------------------------------------------------------- random vibration
@@ -1062,6 +1080,7 @@ def view_parts(model, view, exclude=()):
     categorical(d, "PartId", values, labels, colors=colors, view=view)
     n = sum(v >= 0 for v in values)
     info_text(model, view, f"{n} part(s)\nUncheck card types on 'NPV parts'\nto split the model there")
+    return p
 
 
 def view_grow(model, view, seeds=None, exclude=()):
@@ -1073,7 +1092,7 @@ def view_grow(model, view, seeds=None, exclude=()):
         ghost_mesh(model, view, opacity=0.35)
         info_text(model, view, "Select cells or grids, then click 'NPV Grow from Selection'\n"
                                "(or type Seed IDs on 'NPV grow').")
-        return
+        return g
     ghost_mesh(model, view, opacity=0.15)
     d = pv.Show(_at_least(model, g, "Hops", 0, "grow reached"), view)
     d.Representation = "Surface"
@@ -1083,6 +1102,7 @@ def view_grow(model, view, seeds=None, exclude=()):
     top = int(hops.max()) if hops.size else -1
     seeds = g.SeedIDs if len(g.SeedIDs) <= 40 else g.SeedIDs[:37] + "..."
     info_text(model, view, f"Grow from {seeds}\nup to {top} element hops")
+    return g
 
 
 def view_path(model, view):
@@ -1090,7 +1110,7 @@ def view_path(model, view):
     if not (p.FromGrid and p.ToGrid):
         ghost_mesh(model, view, opacity=0.35)
         info_text(model, view, "Select two grids (Select Points On), then click 'NPV Path from Selection'.")
-        return
+        return p
     ghost_mesh(model, view, opacity=0.15)
     d = pv.Show(_at_least(model, p, "OnPath", 1, "path cells"), view)
     d.Representation = "Surface"
@@ -1099,6 +1119,7 @@ def view_path(model, view):
     length = _root_value(p, "PathLength", -1)
     info_text(model, view, f"Path grid {p.FromGrid} -> grid {p.ToGrid}: {length} element(s)" if length >= 0
               else f"No path from grid {p.FromGrid} to grid {p.ToGrid} through the checked card types.")
+    return p
 
 
 CHECK_RGB = {"FreeEdges": (1.0, 0.5, 0.0), "FreeFaces": (0.95, 0.75, 0.35), "CoincidentGrids": (0.89, 0.10, 0.11),
@@ -1140,6 +1161,7 @@ def view_check(model, view):
     lines = [f"{names.GetValue(i)}: {int(counts.GetValue(i))} ({sev.GetValue(i)})"
              for i in range(names.GetNumberOfValues())] if names is not None else ["No checks run."]
     info_text(model, view, "\n".join(lines))
+    return c
 
 
 def _selection_kinds(sel):
@@ -1273,13 +1295,15 @@ def _listed(reader, prop):
 
 
 def _refresh(reader):
-    """The reader output changed: drop its selections (they would point at other cells) and redraw."""
+    """The reader output changed: drop its selections (they would point at other cells), redraw,
+    and select the reader (its visibility properties are what changed)."""
     for src in _sources_with_selection().values():
         if find_reader(src) == reader:
             pv.ClearSelection(src)
     reader.UpdatePipeline()
     if pv.GetActiveView() is not None:
         pv.Render()
+    _finish(reader)
 
 
 def show_only_selected():
@@ -1615,7 +1639,7 @@ def view_diff(model, view, reference=None):
         return
     _diff_layers(model, diff, view)
     info_text(model, view, _diff_text(diff, model))
-    pv.SetActiveSource(model.reader)  # B stays active, so side_by_side (and a rerun) find it
+    return diff  # side_by_side and a rerun find B upstream of it
 
 
 def _shown_array(view):
@@ -1749,7 +1773,7 @@ def side_by_side(array=None, reference=None, view=None):
     except Exception:
         pass
     pv.AddCameraLink(left, right, SIDE_LINK)
-    pv.SetActiveSource(b_src)  # creating filters made them active: B stays the model a rerun finds
+    _finish(b_src)  # two views, no one filter: B, the model a rerun finds
     pv.SetActiveView(left)
     pv.Render(left)
     pv.Render(right)
@@ -1766,7 +1790,8 @@ VIEWS = {
 
 
 def apply(name, reader=None, view=None, model=None, reset_camera=True, **kwargs):
-    """Build view ``name`` in ``view`` (default: active) for ``reader`` (default: found)."""
+    """Build view ``name`` in ``view`` (default: active) for ``reader`` (default: found). Ends with
+    the filter the view is about selected (what its view function returns), else the reader."""
     ensure_plugin()
     view = view or pv.GetActiveViewOrCreate("RenderView")
     reader = reader or find_reader()
@@ -1775,10 +1800,11 @@ def apply(name, reader=None, view=None, model=None, reset_camera=True, **kwargs)
     _reset_view(view)
     pv.SetActiveView(view)
     set_deformation(model, 0.0)  # views show the undeformed model; results sets its own scale
-    VIEWS[name](model, view, **kwargs)
+    selected = VIEWS[name](model, view, **kwargs)
     if reset_camera:
         view.ResetCamera(False)
     pv.Render(view)
+    _finish(selected or model.reader)
     return model
 
 
@@ -1823,6 +1849,11 @@ class _ReaderOnly:
 
     def __init__(self, reader):
         self.reader = reader
+
+
+def _finish_deform(reader):
+    """Mode animation commands end on the model's ``NPV deform`` (scale, vibration), else the reader."""
+    return _finish(pv.FindSource(_name(_ReaderOnly(reader), "deform")) or reader)
 
 
 NO_STEPS = ("No result steps: set 'OP2 File Name' on the reader, or open a converted file "
@@ -1940,6 +1971,7 @@ def play_mode(mode=None, frames=ANIMATE_FPS, reader=None, view=None):
     _set_time(view, round(frames / 4) / frames)  # sin = 1: the peak
     _show_mode_label(model, view, mode_label(model, mode))
     pv.Render(view)
+    _finish_deform(reader)
     return mode
 
 
@@ -1962,6 +1994,7 @@ def stop_mode_animation(reader=None, view=None):
     _set_time(view, held)
     _hide_mode_label(reader, view)
     pv.Render(view)
+    _finish_deform(reader)
     return True
 
 
@@ -2062,6 +2095,7 @@ def animate_modes(modes=None, cycles=1, frames=24, out=None, reader=None, view=N
                 elif fps:
                     time.sleep(max(0.0, 1.0 / fps - (time.perf_counter() - start)))
             played.append(mode)
+    _finish_deform(reader)
     if skipped:
         raise _no_displacement(skipped, played, "played")
     return played
@@ -2164,6 +2198,7 @@ def save_mode_animations(modes=None, cycles=1, frames=24, folder=None, fps=ANIMA
             images[0].save(path, save_all=True, append_images=images[1:], loop=0,
                            duration=max(int(round(1000 / (fps or ANIMATE_FPS))), 20), disposal=1)
             written.append(path)
+    _finish_deform(reader)
     if skipped:
         raise _no_displacement(skipped, written, f"saved in {folder}")
     if still:
