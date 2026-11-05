@@ -782,6 +782,23 @@ def diff_property_checks(pv, nv, d, b, view, want):
     d.SwapInputs = 0
     d.UpdatePipeline()
     check(_diff_counts(nv, d)[0] == want, "settings back: the original diff")
+    import nastran_pv.diff as nd  # the builtin session runs the plugin in this interpreter
+
+    real, calls = nd.annotate, []
+    nd.annotate = lambda *a, **k: calls.append(1) or real(*a, **k)
+    try:
+        for prop, value in (("ShowSame", 0), ("ShowSame", 1), ("ShowRemoved", 0), ("ShowRemoved", 1),
+                            ("Reasons", ["MID"]), ("Reasons", [])):
+            setattr(d, prop, value)
+            d.UpdatePipeline()
+        shown_only = len(calls)
+        d.RelativeTolerance = 1e-5
+        d.UpdatePipeline()
+        check(shown_only == 0 and len(calls) == 1, f"Show settings re-filter the cached diff ({shown_only} "
+                                                     f"comparisons), a tolerance re-runs it ({len(calls) - shown_only})")
+    finally:
+        nd.annotate = real
+        d.RelativeTolerance = 1e-6
 
 
 def diff2_checks(pv, nv):
