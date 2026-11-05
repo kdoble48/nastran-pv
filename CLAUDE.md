@@ -19,6 +19,7 @@ PYTHONPATH=src python -m nastran_pv convert <deck> --results <op2|h5> --all-step
 PYTHONPATH=src python -m nastran_pv sections <deck>                                # CBAR/CBEAM section table
 PYTHONPATH=src python -m nastran_pv diff <A> <B> [--csv out/d.csv]                 # model diff (decks/.vtm/.vtkhdf)
 PYTHONPATH=src python docs/build_section_figure.py      # docs/images/beam-section-shapes.svg
+python docs/build_diff_example.py --ucrm9 gpk4zn73xn-1/uCRM9/uCRM9/Mesh/Coarse/FEM   # uCRM-9 A/B diff pair -> gpk4zn73xn-1/diff_example
 python docs/build_gallery.py --ucrm9 <coarse run deck> --mystran tools/mystran-19.0.0-windows-x86_64.exe [--upload]   # gallery assets (slow: background)
 .venv/Scripts/python -m sphinx -W -b html docs docs/_build/html   # docs site (pip install -r docs/requirements.txt into .venv)
 ```
