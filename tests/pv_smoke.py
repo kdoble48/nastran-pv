@@ -572,6 +572,57 @@ def overlay_scope_checks(pv, nv, reader):
     pv.SetActiveSource(reader)
 
 
+GROUP_DECK = """$ two groups (ICEM/TACS family comments), a CONM2 on each, and an engine-like CONM2 103 on grid 9,
+$ which hangs off group WING_SKIN through RBE2 10 (independent grid 3)
+GRID,1,,0.,0.,0.
+GRID,2,,1.,0.,0.
+GRID,3,,1.,1.,0.
+GRID,4,,0.,1.,0.
+GRID,5,,3.,0.,0.
+GRID,6,,4.,0.,0.
+GRID,7,,4.,1.,0.
+GRID,8,,3.,1.,0.
+GRID,9,,1.,1.,1.
+$       Shell element data for family    WING_SKIN/UPPER/SEG.00
+CQUAD4,1,1,1,2,3,4
+$       Shell element data for family    WING_SPARS/LE_SPAR/SEG.00
+CQUAD4,2,1,5,6,7,8
+PSHELL,1,1,0.01
+MAT1,1,7.0e10,,0.3,2700.
+CONM2,101,1,,1.0
+CONM2,102,6,,2.0
+CONM2,103,9,,3.0
+RBE2,10,3,123456,9
+"""
+
+
+def group_scope_checks(pv, nv):
+    """The user's case: untick a group in Visible Groups, then NPV Masses shows only the masses of the
+    groups left (CONM2 101 on WING_SKIN's grid 1 and CONM2 103 on its RBE2), not CONM2 102 on WING_SPARS."""
+    keep = set(pv.GetSources().values())
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        path = os.path.join(tmp, "groups.bdf")
+        with open(path, "w") as f:
+            f.write(GROUP_DECK)
+        r = rm.load_reader(path)
+        view = pv.CreateRenderView()
+        m = nv.apply("masses", reader=r, view=view)
+        g = pv.FindSource(nv._name(m, "mass glyphs"))
+        groups = nv._listed(r, "VisibleGroups")
+        check(_point_values(g, "EID") == {101, 102, 103} and not nv.scope_active(r) and len(groups) == 2,
+              f"groups deck: every mass with every group checked ({groups})")
+        r.VisibleGroups = [n for n in groups if "SPARS" not in n]
+        check(nv.scope_active(r), "an unticked Visible Groups entry is a scope")
+        m = nv.apply("masses", reader=r, view=view)
+        check(_point_values(g, "EID") == {101, 103} and "2 items in the reader's scope" in _info(nv, m),
+              "Visible Groups without WING_SPARS: only the masses of WING_SKIN (103 through its RBE2)")
+        nv.clear(view)
+        pv.Delete(view)
+        for src in sorted((s for s in pv.GetSources().values() if s not in keep),
+                          key=lambda v: -int(v.GetGlobalIDAsString())):
+            pv.Delete(src)
+
+
 def preset_checks(pv, nv):
     """CLI render presets: each preset in a fresh view, deleted afterwards."""
     before = len(pv.GetViews())
@@ -1540,6 +1591,8 @@ def main():
     tree_checks(pv, nv, reader)
     scene_checks(pv, nv, reader)
     overlay_scope_checks(pv, nv, reader)
+    group_scope_checks(pv, nv)
+    pv.SetActiveSource(reader)
     selection_file_checks(pv, nv, reader)
 
     from op2_fixture import make_op2  # synthesized results, written with pyNastran

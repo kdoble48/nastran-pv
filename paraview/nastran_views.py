@@ -283,6 +283,7 @@ class Model:
         self.data = as_multiblock(fetch(reader))  # the reader outputs the model tree
         self.names = block_names(self.data)
         self._scoped = None  # (multiblock, block names) of NPV scope, fetched on first use
+        self._scope_active = None  # scope_active(reader), asked once
         b = reader.GetDataInformation().GetBounds()
         self.bounds = b
         self.diag = float(np.linalg.norm(np.array(b[1::2]) - np.array(b[0::2]))) or 1.0
@@ -295,7 +296,10 @@ class Model:
 
     def scoped(self, name):
         """Block ``name`` of what the overlays draw (*NPV scope*: the whole model cut by the R2 join),
-        or None when the scope keeps none of it."""
+        or None when the scope keeps none of it. With nothing hidden that is the reader's own block
+        (NPV scope passes it through), so nothing is fetched again."""
+        if not self.scope_active():
+            return self.block(name)
         if self._scoped is None:
             from nastran_pv.tree import as_multiblock
 
@@ -305,6 +309,12 @@ class Model:
             self._scoped = (data, block_names(data))
         data, names = self._scoped
         return data.GetBlock(names.index(name)) if name in names else None
+
+    def scope_active(self):
+        """:func:`scope_active` of the reader, asked once per Model."""
+        if self._scope_active is None:
+            self._scope_active = scope_active(self.reader)
+        return self._scope_active
 
     def _holder(self, block_name, name):
         """Block whose field data holds ``name``: ``block_name``, else the root. VTKHDF keeps no
@@ -464,11 +474,20 @@ def scope_active(reader):
     return any(set(_listed(reader, prop)) - set(getattr(reader, prop)) for prop in VISIBILITY_PROPS)
 
 
-def _missing_text(model, what):
-    """The info text of an overlay with nothing to draw: in the scope, or in the deck."""
-    if scope_active(model.reader):
+def _missing_text(model, what, note=""):
+    """The info text of an overlay with nothing to draw: in the scope, or in the deck (+ ``note``)."""
+    if model.scope_active():
         return f"No {what} in the reader's scope (NPV Show All shows the whole model)."
-    return f"No {what} in this deck."
+    return f"No {what} in this deck{note}."
+
+
+def _overlay(model, what, make, xml=None):
+    """``NPV <what>``, an overlay filter made by ``make(src)`` on NPV scope, and fed from it (an older
+    one was fed by NPV deform). NPV scope is updated first: filters such as the load glyphs fill their
+    checklists from their input's data, which a scope made just now has not produced yet."""
+    src = scoped(model)
+    src.UpdatePipeline(model.time)  # a pass-through, or the cached cut, once the scope has run
+    return _feed(_named(model, what, lambda: make(src), xml), src)
 
 
 def _extract(model, *blocks, what=None, undeformed=False, scoped=False):
@@ -770,7 +789,7 @@ def view_masses(model, view, mode=None, relative=None, law=None, minimum=None, m
     if masses is None:
         info_text(model, view, _missing_text(model, "concentrated masses (CONM1/CONM2/CMASS)"))
         return
-    glyphs = _feed(_named(model, "mass glyphs", lambda: pv.NastranMassGlyphs(Input=scoped(model))), scoped(model))
+    glyphs = _overlay(model, "mass glyphs", lambda src: pv.NastranMassGlyphs(Input=src))
     _set_given(glyphs, SizeMode=mode, Size=relative, RadiusLaw=LAW_NAMES[law] if law else None,
                MinimumRelativeSize=minimum, MinimumMass=minimum_mass, ColorBy=color_by)
     glyphs.UpdatePipeline()
@@ -786,7 +805,7 @@ def view_masses(model, view, mode=None, relative=None, law=None, minimum=None, m
     total = model.field("ModelMass")
     n = masses.GetNumberOfPoints()
     text = f"Concentrated mass: {conc[0]:.6g}  ({n} items)"
-    if scope_active(model.reader):
+    if model.scope_active():
         text = f"Concentrated mass (whole model): {conc[0]:.6g}\n{n} items in the reader's scope"
     hidden = int(_glyph_field(glyphs, "HiddenMassCount"))
     if hidden:
@@ -830,7 +849,7 @@ def _bush_view(model, view, kind, size=None, ellipsoids=None):
         info_text(model, view, _missing_text(model, "CBUSH elements"))
         return
     what = "bush rotation glyphs" if rotation else "bush glyphs"
-    glyphs = _feed(_named(model, what, lambda: pv.NastranBushGlyphs(Input=scoped(model))), scoped(model))
+    glyphs = _overlay(model, what, lambda src: pv.NastranBushGlyphs(Input=src))
     _set_given(glyphs, Stiffness=int(rotation), Size=size,
                ShowEllipsoids=None if ellipsoids is None else int(ellipsoids and not rotation))
     if not glyphs.ShowTriads and not (glyphs.ShowEllipsoids and not rotation):
@@ -893,12 +912,12 @@ BEAM_PART_RGB = {1: (0.05, 0.05, 0.05), 2: (0.95, 0.55, 0.05), 3: (0.85, 0.12, 0
 
 
 def _beam_axes(model):
-    def make():
-        axes = pv.NastranBeamSections(Input=scoped(model))
+    def make(src):
+        axes = pv.NastranBeamSections(Input=src)
         axes.ShowSections, axes.ShowAxes, axes.ShowTriads = 0, 1, 1
         return axes
 
-    return _feed(_named(model, "beam axes", make), scoped(model))
+    return _overlay(model, "beam axes", make)
 
 
 def view_beams(model, view, triads=None, max_triads=None, scale=None):
@@ -913,18 +932,17 @@ def view_beams(model, view, triads=None, max_triads=None, scale=None):
     beam = np.isfinite(vtk_to_numpy(axis2)[:, 0]) if axis2 is not None else np.zeros(0, bool)
     pids = model.field("SECTION_PID")
     n = int(beam.sum())
-    if not n or pids is None:
-        info_text(model, view, _missing_text(model, "CBAR/CBEAM with a section (PBARL, PBEAML, PBAR, PBEAM)"))
-        return
-    sections = _feed(_named(model, "beam sections", lambda: pv.NastranBeamSections(Input=scoped(model))),
-                     scoped(model))
-    _set_given(sections, DeformationScale=scale)
-    d = _show(sections, view)
-    values = {int(p) for p in pids}
-    line_pid = lines.GetCellData().GetArray("PID")
+    values = set() if pids is None else {int(p) for p in pids}
+    line_pid = lines.GetCellData().GetArray("PID") if n else None
     if line_pid is not None:  # the section PIDs of the beams in the scope
         values &= {int(p) for p in vtk_to_numpy(line_pid)[beam]}
     values = sorted(values)
+    if not n or not values:
+        info_text(model, view, _missing_text(model, "CBAR/CBEAM with a section (PBARL, PBEAML, PBAR, PBEAM)"))
+        return
+    sections = _overlay(model, "beam sections", lambda src: pv.NastranBeamSections(Input=src))
+    _set_given(sections, DeformationScale=scale)
+    d = _show(sections, view)
     categorical(d, "PID", values, labels_for(model, "PID", values), view=view, separate=True)
     axes = _beam_axes(model)
     _set_given(axes, DeformationScale=scale, ShowTriads=None if triads is None else int(triads),
@@ -967,8 +985,7 @@ def view_loads(model, view, sets=None, show=None, size=None, stride=None):
     if loads is None:
         info_text(model, view, _missing_text(model, "nodal loads (FORCE/MOMENT)"))
         return
-    g = _feed(_named(model, "load glyphs", lambda: pv.NastranLoadGlyphs(Input=scoped(model)), "NastranPVLoadGlyphs"),
-              scoped(model))
+    g = _overlay(model, "load glyphs", lambda src: pv.NastranLoadGlyphs(Input=src), "NastranPVLoadGlyphs")
     g.UpdatePipelineInformation()
     if sets is not None:
         g.LoadSets = list(sets)
@@ -1015,11 +1032,9 @@ def view_spc(model, view, sets=None, dofs=None, size=None):
     ids), ``dofs`` (e.g. "123") and ``size`` set 'NPV spc glyphs'; left None they keep its settings."""
     constraints = model.scoped("Constraints")
     if constraints is None:
-        info_text(model, view, "No SPCs in the reader's scope (NPV Show All shows the whole model)."
-                  if scope_active(model.reader) else "No SPCs in this deck (free-free model).")
+        info_text(model, view, _missing_text(model, "SPCs", " (free-free model)"))
         return
-    g = _feed(_named(model, "spc glyphs", lambda: pv.NastranSPCGlyphs(Input=scoped(model)), "NastranPVSPCGlyphs"),
-              scoped(model))
+    g = _overlay(model, "spc glyphs", lambda src: pv.NastranSPCGlyphs(Input=src), "NastranPVSPCGlyphs")
     g.UpdatePipelineInformation()
     if sets is not None:
         g.SPCSets = [f"SPC {int(s)}" for s in sets]
