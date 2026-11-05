@@ -106,12 +106,19 @@ Check*. They share these properties, and with *Auto Apply* on they update as you
 
 The graph is built once per model, so moving the slider or a checkbox only reruns the traversal.
 
-- **Nastran Grow** has *Seed IDs* (`EID 1001 1002; GRID 55; PID 7`) and *Extract Reached*.
+- **Nastran Grow** has *Seed IDs* (`EID 1001 1002; GRID 55; PID 7`) and *Extract Reached* (only
+  the reached elements in the output).
 - **Nastran Parts** outputs the model with `PartId`, the part summary table and the part links
   table (open them in a SpreadSheet view).
-- **Nastran Path** has *From Grid* and *To Grid*.
+- **Nastran Path** has *From Grid* and *To Grid*; *Show Only* **Path only** outputs just the path's
+  elements, and the masses, bushes and SPCs on its grids.
 - **Nastran Model Check** has a switch per check and *Tolerance*; its second output is the summary
-  table.
+  table. *Show Only* **Errors only** keeps the findings of the error checks (coincident grids,
+  duplicates, dangling connectors) and leaves out free edges and faces and floating parts; the
+  table still lists every check run.
+
+The *Traversal* and *Show Only* groups sit below each filter's own settings. Running NPV Grow,
+Path or Model Check again keeps what you set on *NPV grow*, *NPV path* or *NPV check*.
 
 The toolbar macros (see [ParaView](paraview.md#one-click-views-toolbar-macros)) drive them:
 

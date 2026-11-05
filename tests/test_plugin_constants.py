@@ -31,3 +31,17 @@ def test_views_model_files_and_view_names_match_launch():
     views = {k.value for k in found["VIEWS"].keys}
     # every launcher choice is a view; grow and path need a selection, so `view` leaves them out
     assert set(launch.VIEW_NAMES) - {"none"} == views - {"grow", "path"}
+
+
+def test_reader_glyph_and_diff_choices_match_nastran_pv():
+    from nastran_pv import diff, glyphs
+
+    found = _assignments("nastran_bdf_reader.py")
+    assert ast.literal_eval(found["_MASS_COLORS"]) == glyphs.MASS_COLOR_ARRAYS
+    assert ast.literal_eval(found["_BUSH_SHOW"]) == glyphs.BUSH_SHOW
+    assert ast.literal_eval(found["_LOAD_SHOW"]) == glyphs.LOAD_SHOW
+    assert ast.literal_eval(found["_LOAD_SCALES"]) == glyphs.LOAD_SCALES
+    assert ast.literal_eval(found["_DIFF_KINDS"]) == diff.KINDS
+    assert len(ast.literal_eval(found["_DIFF_KIND_LABELS"])) == len(diff.KINDS)
+    assert ast.literal_eval(found["_DIFF_STATUSES"]) == diff.STATUS_NAMES
+    assert ast.literal_eval(found["_DIFF_REASONS"]) == tuple(diff.REASON_NAMES[1 << i] for i in range(len(diff.REASON_NAMES)))

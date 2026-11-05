@@ -108,11 +108,13 @@ Femap's "select connected" from a point, without crossing into the next group:
 2. To read the numbers, split the view (the split button at the top right of the render view),
    choose *SpreadSheet View*, show the reader, and set *Attribute* to `Field Data`.
    `StructuralMass`, `NonstructuralMass`, `ConcentratedMass`, `ModelMass` and `ModelCG` are in the first row.
-3. To size the spheres, select *NPV mass glyphs* and change *RelativeSize* or *RadiusLaw*
-   ([Glyph filters](paraview.md#glyph-filters)).
+3. To size the spheres, select *NPV mass glyphs* and change *Size* or *RadiusLaw*; *Minimum
+   Mass* hides the light ones ([Glyph filters](paraview.md#glyph-filters)).
 4. **NPV Loads** draws the case control's `LOAD` set as arrows, with its resultant in the overlay.
-   **NPV SPC** colors the constrained grids by DOF. Every load set is also in the tree under
-   `Model > Loads`, for example `LOAD_1001`.
+   To see another set, or moments, check it under *Load Sets* on *NPV load glyphs* and set *Show*.
+   **NPV SPC** colors the constrained grids by DOF; *DOFs* `123` on *NPV spc glyphs* keeps the
+   grids that fix a translation. Every load set is also in the tree under `Model > Loads`, for
+   example `LOAD_1001`.
 
 ## 6. Look at mode shapes
 
@@ -121,8 +123,9 @@ Femap's "select connected" from a point, without crossing into the next group:
    becomes a time step.
 2. Click **NPV Results**: the deformed shape colored by displacement over a gray outline of the
    undeformed mesh. The overlay names the mode and its frequency.
-3. Step through the modes with the *VCR* toolbar (or the time field next to it). To change the
-   amplification, select *NPV deform* and change *Scale Factor*.
+3. Step through the modes with the *VCR* toolbar (or the time field next to it); *Auto Scale* on
+   *NPV deform* draws each one's largest displacement at 8 % of the model. To pick the
+   amplification yourself, uncheck *Auto Scale* and change *Scale Factor*.
 4. Click **NPV Animate Mode** to see the mode vibrate (two cycles), or **NPV Animate All Modes**
    to play every mode in turn; the mode and its frequency show in the upper right corner. The
    animation works in whatever is shown: click *NPV Group* (or *NPV PID*, ...), switch on

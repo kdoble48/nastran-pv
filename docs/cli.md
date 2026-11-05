@@ -8,7 +8,7 @@ nastran-pv convert DECK --results modes.op2 --random asd.csv [--drive Z --dampin
 nastran-pv stats  DECK|VTM --by PID|MID|FAMILY|GROUP|ELEMENTTYPE --field ElementMass [--csv t.csv]
 nastran-pv check  DECK|VTM [--strict] [--rules TEXT] [--only CHECK ...] [--tol R] [-o findings.vtm]
 nastran-pv sections DECK|VTM [--pid ID ...] [--csv t.csv]          # CBAR/CBEAM section table
-nastran-pv diff   A B [--csv diff.csv] [--grid-tol R] [--rel-tol R]  # what changed from model A to B
+nastran-pv diff   A B [--csv diff.csv] [--grid-tol R] [--rel-tol R] [--skip KIND]  # what changed from A to B
 nastran-pv convert B --diff-against A -o diff.vtm                   # B with the diff on its mesh
 nastran-pv store  add|list|fields|query|compare|open --db runs.sqlite ...
 nastran-pv setup  [--pvpython PATH] [--no-macros] [--dry-run]

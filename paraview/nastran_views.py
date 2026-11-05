@@ -49,7 +49,6 @@ MODEL_MARKS = ("DeckPath", "ModelMass")  # root fields of every nastran-pv model
 # written before DeckPath joined its per-step arrays has only ModelMass)
 MESH = ("Shells", "Solids", "Lines")
 GHOST_RGB = [0.72, 0.75, 0.80]
-MAX_LOAD_ARROWS = 1500  # above this, glyph every Nth loaded grid (uniform over the mesh)
 SHOWCASE_DIR = (-1.0, -0.35, 0.6)  # "showcase" camera: Z up, looking from ahead and above
 
 # --------------------------------------------------------------- plugin/data
@@ -391,10 +390,14 @@ def deform_filters(model):
             if _xml_name(v) == DEFORM_XML and k[0].startswith("NPV deform") and k[0].endswith(tag)]
 
 
-def set_deformation(model, scale):
+def set_deformation(model, scale, auto=False):
+    """Every NPV deform filter of the model at ``scale`` (Auto Scale off), or with ``auto`` on Auto
+    Scale (``scale`` is then only what Scale Factor shows)."""
     for f in deform_filters(model):
         if f.ScaleFactor != scale:
             f.ScaleFactor = scale
+        if bool(f.AutoScale) != bool(auto):
+            f.AutoScale = int(auto)
 
 
 def _extract(model, *blocks, what=None, undeformed=False):
@@ -573,21 +576,38 @@ LAW_NAMES = {"cbrt": "Cube root (equal density)", "linear": "Linear", "sqrt": "S
              "log": "Logarithmic", "uniform": "Uniform"}
 
 
-def view_masses(model, view, mode="Auto", relative=0.025, law="cbrt", minimum=0.0):
+def _set_given(proxy, **values):
+    """Set the properties whose value is not None: a view's explicit arguments win, everything
+    else stays as the user left it on the reused filter."""
+    for prop, value in values.items():
+        if value is not None and getattr(proxy, prop) != value:
+            setattr(proxy, prop, value)
+
+
+def _color_points(model, d, src, array, view, preset="Viridis (matplotlib)"):
+    """Colour a glyph output by ``array``: Mass and other measures continuous, ids categorical."""
+    if array in ("EID", "NID"):
+        values = sorted({int(v) for v in _gather(fetch(src), array, "POINTS")})
+        return categorical(d, array, values, [f"{array} {v}" for v in values], association="POINTS", view=view)
+    return continuous(d, "POINTS", array, preset=preset, view=view)
+
+
+def view_masses(model, view, mode=None, relative=None, law=None, minimum=None, minimum_mass=None, color_by=None):
     """Mass glyphs. Sizing: ``mode`` Auto/Physical/Relative; in relative sizing the heaviest
-    mass gets radius ``relative`` x model diagonal and the others follow ``law``
-    (cbrt, linear, sqrt, log, uniform) with a floor of ``minimum`` x that radius."""
+    mass gets radius ``relative`` (the filter's Size) x model diagonal and the others follow ``law``
+    (cbrt, linear, sqrt, log, uniform) with a floor of ``minimum`` x that radius; masses below
+    ``minimum_mass`` are left out; ``color_by`` Mass, EID or NID. Arguments left None keep the
+    filter's settings (its defaults on a first run)."""
     ghost_mesh(model, view)
     if not model.has("Masses"):
         info_text(model, view, "No concentrated masses (CONM1/CONM2/CMASS) in this deck.")
         return
     glyphs = _named(model, "mass glyphs", lambda: pv.NastranMassGlyphs(Input=deformed(model)))
-    glyphs.SizeMode = mode
-    glyphs.RelativeSize = relative
-    glyphs.RadiusLaw = LAW_NAMES[law]
-    glyphs.MinimumRelativeSize = minimum
+    _set_given(glyphs, SizeMode=mode, Size=relative, RadiusLaw=LAW_NAMES[law] if law else None,
+               MinimumRelativeSize=minimum, MinimumMass=minimum_mass, ColorBy=color_by)
+    glyphs.UpdatePipeline()
     d = pv.Show(glyphs, view)
-    continuous(d, "POINTS", "Mass", view=view)
+    _color_points(model, d, glyphs, enum_text(glyphs, "ColorBy"), view)
     if model.has("MassOffsets"):
         od = pv.Show(_extract(model, "MassOffsets"), view)
         solid(od, [0.15, 0.15, 0.15])
@@ -597,6 +617,9 @@ def view_masses(model, view, mode="Auto", relative=0.025, law="cbrt", minimum=0.
     total = model.field("ModelMass")
     n = model.block("Masses").GetNumberOfPoints()
     text = f"Concentrated mass: {conc[0]:.6g}  ({n} items)"
+    hidden = int(_glyph_field(glyphs, "HiddenMassCount"))
+    if hidden:
+        text += f"\n{hidden} lighter than Minimum Mass {glyphs.MinimumMass:g} not drawn"
     if total is not None:
         text += f"\nModel mass (structure + concentrated): {total[0]:.6g}"
     if cg is not None:
@@ -613,12 +636,13 @@ def view_masses(model, view, mode="Auto", relative=0.025, law="cbrt", minimum=0.
     if sizing is not None:
         text += f"\nSphere size: {sizing.GetValue(0)}"
     info_text(model, view, text + "\nMass units as in the deck (WTMASS not applied)"
-                                  "\nResize: select 'NPV mass glyphs', change RelativeSize / RadiusLaw, Apply")
+                                  "\nResize: select 'NPV mass glyphs', change Size / RadiusLaw, Apply")
     return glyphs
 
 
 BUSH_RGB = {0: (0.55, 0.55, 0.6), 1: (0.85, 0.12, 0.12), 2: (0.15, 0.65, 0.2), 3: (0.15, 0.3, 0.9)}
 BUSH_LINE_RGB = (0.55, 0.55, 0.58)
+BUSH_SHOW_TEXT = {"Grounded (no GB)": "grounded", "Zero length (GA at GB)": "zero-length"}
 
 
 def _glyph_field(src, name, default=0.0):
@@ -627,7 +651,7 @@ def _glyph_field(src, name, default=0.0):
     return a.GetComponentRange(0)[0] if a is not None else default
 
 
-def _bush_view(model, view, kind, size, ellipsoids=False):
+def _bush_view(model, view, kind, size=None, ellipsoids=None):
     """Shared body of the bushes (translation) and bush rotations views."""
     rotation = kind == "rotation"
     ghost_mesh(model, view)
@@ -636,10 +660,10 @@ def _bush_view(model, view, kind, size, ellipsoids=False):
         return
     what = "bush rotation glyphs" if rotation else "bush glyphs"
     glyphs = _named(model, what, lambda: pv.NastranBushGlyphs(Input=deformed(model)))
-    glyphs.Stiffness = int(rotation)
-    glyphs.ShowTriads = 1
-    glyphs.Size = size
-    glyphs.ShowEllipsoids = int(ellipsoids and not rotation)
+    _set_given(glyphs, Stiffness=int(rotation), Size=size,
+               ShowEllipsoids=None if ellipsoids is None else int(ellipsoids and not rotation))
+    if not glyphs.ShowTriads and not (glyphs.ShowEllipsoids and not rotation):
+        glyphs.ShowTriads = 1  # nothing would be drawn
     glyphs.UpdatePipeline()
     if model.has("BushLines"):
         ld = pv.Show(_extract(model, "BushLines"), view)
@@ -649,15 +673,18 @@ def _bush_view(model, view, kind, size, ellipsoids=False):
     first = 4 if rotation else 1
     names = [f"K{first + i}" for i in range(3)]
     span = f"{names[0]}-{names[2]}"
+    only = BUSH_SHOW_TEXT.get(enum_text(glyphs, "ShowOnly"))
     if glyphs.GetDataInformation().GetNumberOfCells() == 0:
         pv.Hide(glyphs, view)
-        info_text(model, view, f"{n} CBUSH. No {'rotational' if rotation else 'translational'} stiffness "
-                               f"({span}) on any CBUSH.")
+        info_text(model, view, f"{n} CBUSH. " + (f"No {only} CBUSH with {'rotational' if rotation else 'translational'}"
+                                                 f" stiffness ({span}): Show Only on 'NPV {what}'." if only else
+                                                 f"No {'rotational' if rotation else 'translational'} stiffness "
+                                                 f"({span}) on any CBUSH."))
         return glyphs
     d = pv.Show(glyphs, view)
     released = int(_glyph_field(glyphs, "ReleasedCount"))
     missing = int(_glyph_field(glyphs, "NoStiffnessCount"))
-    ellipsoid = bool(ellipsoids and not rotation)
+    ellipsoid = bool(glyphs.ShowEllipsoids and not rotation)
     grey = "ellipsoid / released" if ellipsoid and released else "ellipsoid" if ellipsoid else "released"
     axes = ([0] if released or ellipsoid else []) + [1, 2, 3]
     labels = [grey if a == 0 else names[a - 1] for a in axes]
@@ -669,6 +696,8 @@ def _bush_view(model, view, kind, size, ellipsoids=False):
     lines = [f"{n} CBUSH, {'rotational' if rotation else 'translational'} stiffness {span}: {shape} "
              f"~ log10(1 + K/K_ref), {ref_text}",
              "thick = clearly the stiffest axis; colour by Log10Stiffness to compare values"]
+    if only:
+        lines.append(f"showing only the {only} CBUSH (Show Only on 'NPV {what}')")
     if released:
         lines.append(f"{released} with a released axis (grey)")
     if missing:
@@ -677,12 +706,12 @@ def _bush_view(model, view, kind, size, ellipsoids=False):
     return glyphs
 
 
-def view_bushes(model, view, size=0.04, ellipsoids=False):
+def view_bushes(model, view, size=None, ellipsoids=None):
     """Translational CBUSH stiffness K1-K3 as bars along the element axes."""
     return _bush_view(model, view, "translation", size, ellipsoids)
 
 
-def view_bushrotations(model, view, size=0.04):
+def view_bushrotations(model, view, size=None):
     """Rotational CBUSH stiffness K4-K6 as rings around the element axes."""
     return _bush_view(model, view, "rotation", size)
 
@@ -691,10 +720,20 @@ BEAM_PART_RGB = {1: (0.05, 0.05, 0.05), 2: (0.95, 0.55, 0.05), 3: (0.85, 0.12, 0
                  4: (0.15, 0.65, 0.2), 5: (0.15, 0.3, 0.9)}
 
 
-def view_beams(model, view, triads=None, max_triads=500, scale=0.0):
+def _beam_axes(model):
+    def make():
+        axes = pv.NastranBeamSections(Input=deformed(model))
+        axes.ShowSections, axes.ShowAxes, axes.ShowTriads = 0, 1, 1
+        return axes
+
+    return _named(model, "beam axes", make)
+
+
+def view_beams(model, view, triads=None, max_triads=None, scale=None):
     """CBAR/CBEAM sections coloured by PID, with the shear-center (black) and neutral (orange) axes;
-    triads when there are at most ``max_triads`` beams. Undeformed, like the ghost mesh, unless
-    ``scale`` (the filter's DeformationScale) is given."""
+    triads when there are at most Max Triads (500) beams ('NPV beam axes'). Undeformed, like the
+    ghost mesh, unless ``scale`` (the filters' DeformationScale) is given. ``triads`` True draws them
+    whatever the count; arguments left None keep the filters' settings."""
     ghost_mesh(model, view)
     axis2 = model.array("Lines", "Axis2", "cell")
     pids = model.field("SECTION_PID")
@@ -703,17 +742,16 @@ def view_beams(model, view, triads=None, max_triads=500, scale=0.0):
         info_text(model, view, "No CBAR/CBEAM with a section (PBARL, PBEAML, PBAR, PBEAM) in this deck.")
         return
     sections = _named(model, "beam sections", lambda: pv.NastranBeamSections(Input=deformed(model)))
-    sections.ShowSections, sections.ShowAxes, sections.ShowTriads = 1, 0, 0
-    sections.DeformationScale = scale
+    _set_given(sections, DeformationScale=scale)
     d = pv.Show(sections, view)
     values = sorted({int(p) for p in pids})
     categorical(d, "PID", values, labels_for(model, "PID", values), view=view)
-    triads = n <= max_triads if triads is None else triads
-    axes = _named(model, "beam axes", lambda: pv.NastranBeamSections(Input=deformed(model)))
-    axes.ShowSections, axes.ShowAxes, axes.ShowTriads = 0, 1, int(triads)
-    axes.DeformationScale = scale
+    axes = _beam_axes(model)
+    _set_given(axes, DeformationScale=scale, ShowTriads=None if triads is None else int(triads),
+               MaxTriads=max_triads if max_triads is not None else (0 if triads else None))
+    axes.UpdatePipeline()
     ad = pv.Show(axes, view)
-    parts = [1, 2] + ([3, 4, 5] if triads else [])
+    parts = [1, 2] + ([3, 4, 5] if _glyph_field(axes, "TriadsDrawn") else [])
     categorical(ad, "BeamPart", parts, labels_for(model, "BeamPart", parts),
                 [BEAM_PART_RGB[p] for p in parts], view=view)
     ad.LineWidth = 2.0
@@ -723,70 +761,93 @@ def view_beams(model, view, triads=None, max_triads=500, scale=0.0):
     lines = [f"{n} CBAR/CBEAM, {len(values)} section PID(s)"
              + (f"; {eq} PBAR/PBEAM station(s) drawn as equivalent rectangles" if eq else ""),
              "black: shear-center axis (beam line)   orange: neutral axis"]
-    if scale:
-        lines.append(f"Deformation x{scale:.3g}")
+    if axes.ShowTriads and len(parts) == 2:
+        lines.append(f"triads off above {axes.MaxTriads} beams (Max Triads on 'NPV beam axes')")
+    if sections.DeformationScale:
+        lines.append(f"Deformation x{sections.DeformationScale:.3g}")
     info_text(model, view, "\n".join(lines))
     return sections
 
 
-def view_loads(model, view):
+def _block_field(blk, name):
+    a = blk.GetFieldData().GetArray(name) if blk is not None else None
+    if a is None:
+        return None
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    return vtk_to_numpy(a).reshape(-1)
+
+
+def view_loads(model, view, sets=None, show=None, size=None, stride=None):
+    """FORCE/MOMENT arrows (Nastran Load Glyphs) of the load sets checked on 'NPV load glyphs'
+    (first: the Case Control LOAD, else the first set with loads). ``sets`` (block names such as
+    LOAD_1001), ``show`` (Forces, Moments, Forces and moments), ``size`` and ``stride`` (Every Nth
+    Point) set the filter; left None they keep its settings."""
     ghost_mesh(model, view, opacity=0.5)
     loads = model.block("Loads")
     if loads is None:
         info_text(model, view, "No nodal loads (FORCE/MOMENT) in this deck.")
         return
+    g = _named(model, "load glyphs", lambda: pv.NastranLoadGlyphs(Input=deformed(model)))
+    g.UpdatePipelineInformation()
+    if sets is not None:
+        g.LoadSets = list(sets)
+    _set_given(g, Show=show, Size=size, EveryNthPoint=stride)
+    g.UpdatePipeline()
+    g.UpdatePipelineInformation()
     names = block_names(loads)
-    active = model.field("ActiveLoadSets")
-    active = [int(v) for v in active] if active is not None else []
-
-    def has_points(n):
-        blk = loads.GetBlock(names.index(n))
-        return blk is not None and blk.GetNumberOfPoints() > 0
-
-    pick = next((n for s in active for n in (f"LOAD_{s}", f"SID_{s}") if n in names and has_points(n)), None) \
-        or next((n for n in names if has_points(n)), None)
-    if pick is None:
-        info_text(model, view, "Load sets contain no nodal forces (GRAV only?).")
-        return
-    from vtkmodules.util.numpy_support import vtk_to_numpy
-
-    blk = loads.GetBlock(names.index(pick))
-    fmag = vtk_to_numpy(blk.GetPointData().GetArray("ForceMagnitude"))
-    fmax = float(fmag.max()) if fmag.size and fmag.max() > 0 else 1.0
-    src = _extract(model, f"Loads/{pick}", what=f"loads {pick}")
-    g = _named(model, f"load arrows {pick}", lambda: pv.Glyph(Input=src, GlyphType="Arrow"))
-    g.OrientationArray = ["POINTS", "Force"]
-    g.ScaleArray = ["POINTS", "ForceMagnitude"]
-    g.ScaleFactor = 0.08 * model.diag / fmax
-    n = blk.GetNumberOfPoints()
-    g.GlyphMode = "All Points"
-    shown = n
-    if n > MAX_LOAD_ARROWS:
-        g.GlyphMode = "Every Nth Point"
-        g.Stride = -(-n // MAX_LOAD_ARROWS)
-        shown = -(-n // g.Stride)
+    listed = fetch(g).GetFieldData().GetAbstractArray("LoadSetNames")
+    drawn = [listed.GetValue(i) for i in range(listed.GetNumberOfValues())] if listed is not None else []
+    drawn = [n for n in drawn if n in names]
+    count = int(_glyph_field(g, "ArrowCount"))
+    if not count:
+        info_text(model, view, "Load sets contain no nodal forces (GRAV only?)." if drawn or not list(g.LoadSets)
+                  else "No load set checked: check one on 'NPV load glyphs' (Load Sets).")
+        return g
     d = pv.Show(g, view)
-    continuous(d, "POINTS", "ForceMagnitude", preset="Inferno (matplotlib)", view=view)
-    res = vtk_to_numpy(blk.GetFieldData().GetArray("ResultantForce")).reshape(-1)
-    sampled = f" (showing {shown} of {n} arrows)" if shown < n else ""
-    info_text(model, view, f"{pick}: {n} loaded grids{sampled}\n"
-                           f"Resultant force ({res[0]:.4g}, {res[1]:.4g}, {res[2]:.4g})")
+    continuous(d, "POINTS", "Magnitude", preset="Inferno (matplotlib)", view=view)
+    lines = []
+    for name in drawn[:6]:
+        blk = loads.GetBlock(names.index(name))
+        res = _block_field(blk, "ResultantForce")
+        lines.append(f"{name}: {blk.GetNumberOfPoints()} loaded grids")
+        if res is not None:
+            lines.append(f"Resultant force ({res[0]:.4g}, {res[1]:.4g}, {res[2]:.4g})")
+    if len(drawn) > 6:
+        lines.append(f"... {len(drawn) - 6} more set(s)")
+    step = int(_glyph_field(g, "Stride", 1))
+    if step > 1:
+        lines.append(f"arrows on 1 of every {step} loaded grids ({count} arrows; Every Nth Point)")
+    info_text(model, view, "\n".join(lines))
     return g
 
 
-def view_spc(model, view):
+def view_spc(model, view, sets=None, dofs=None, size=None):
+    """A marker per constrained grid (Nastran SPC Glyphs), coloured by DOF code. ``sets`` (SPC set
+    ids), ``dofs`` (e.g. "123") and ``size`` set 'NPV spc glyphs'; left None they keep its settings."""
     ghost_mesh(model, view, opacity=0.35)
     if not model.has("Constraints"):
         info_text(model, view, "No SPCs in this deck (free-free model).")
         return
-    g = _named(model, "spc glyphs", lambda: pv.Glyph(Input=_extract(model, "Constraints"), GlyphType="Sphere"))
-    g.ScaleArray = ["POINTS", "No scale array"]
-    g.ScaleFactor = 0.006 * model.diag
-    g.GlyphMode = "All Points"
+    g = _named(model, "spc glyphs", lambda: pv.NastranSPCGlyphs(Input=deformed(model)))
+    g.UpdatePipelineInformation()
+    if sets is not None:
+        g.SPCSets = [f"SPC {int(s)}" for s in sets]
+    _set_given(g, DOFs=None if dofs is None else str(dofs), Size=size)
+    g.UpdatePipeline()
+    total = model.block("Constraints").GetNumberOfPoints()
+    shown = int(_glyph_field(g, "SPCPoints"))
+    if not shown:
+        info_text(model, view, f"{total} constrained grids, none in the checked SPC sets with DOFs "
+                               f"{g.DOFs or '(none)'} ('NPV spc glyphs').")
+        return g
     d = pv.Show(g, view)
-    codes = model.unique("DOFCode", "point", ("Constraints",))
+    codes = sorted({int(v) for v in _gather(fetch(g), "DOFCode", "POINTS")})
     categorical(d, "DOFCode", codes, labels_for(model, "DOFCode", codes), association="POINTS", view=view)
-    info_text(model, view, f"{model.block('Constraints').GetNumberOfPoints()} constrained grids, coloured by DOF code")
+    text = f"{shown} constrained grids, coloured by DOF code"
+    if shown < total:
+        text += f"\n(of {total}: SPC Sets / DOFs {g.DOFs} on 'NPV spc glyphs')"
+    info_text(model, view, text)
     return g
 
 
@@ -905,10 +966,13 @@ def peak_deformation(model):
     return peak_scale(model.data, 0.08)
 
 
-def view_results(model, view):
+def view_results(model, view, scale=None):
+    """The mesh deformed and coloured by displacement over an undeformed wireframe. 'NPV deform'
+    scales each step to 8 % of the model (Auto Scale), unless ``scale`` is given or Auto Scale was
+    turned off there and a Scale Factor typed, which a rerun keeps."""
     mesh_blocks = [b for b in MESH if model.has(b)]
-    scale = peak_deformation(model)
-    if not mesh_blocks or scale <= 0:
+    peak = peak_deformation(model)
+    if not mesh_blocks or peak <= 0:
         if timesteps(model.reader) or model.field_strings(None, "ResultLabel"):
             info_text(model, view, "No displacement at this step: the results have none for it "
                                    "(stresses or forces only?). Step to another one.")
@@ -917,7 +981,13 @@ def view_results(model, view):
                                    "convert with --results.")
         return
     mesh = _extract(model, *mesh_blocks, what="mesh")  # creates the deform filter on a fresh view
-    set_deformation(model, scale)
+    main = deformed(model)
+    if scale is None and not main.AutoScale and main.ScaleFactor:
+        scale = main.ScaleFactor  # typed on NPV deform with Auto Scale off: keep it
+    if scale is None:
+        set_deformation(model, peak, auto=True)
+    else:
+        set_deformation(model, scale)
     d = pv.Show(mesh, view)
     d.Representation = "Surface"
     d.Opacity = 1.0
@@ -927,11 +997,14 @@ def view_results(model, view):
     ghost.Opacity = 0.15
     solid(ghost, [0.3, 0.3, 0.3])
     label = model.field_strings(None, "ResultLabel")
-    info_text(model, view, f"{label[0] if label else ''}\nDeformation x{scale:.3g}", "Upper Center")
-    return deformed(model)
+    shown = peak if scale is None else scale
+    info_text(model, view, f"{label[0] if label else ''}\nDeformation x{shown:.3g}"
+              + ("" if scale is None else " (Auto Scale off on 'NPV deform')"), "Upper Center")
+    return main
 
 
 # ----------------------------------------------------------------- random vibration
+RANDOM_SETTINGS = "Drive, damping, g: the reader's Random properties"
 NO_RANDOM = ("No random response: set 'Random ASD' on the reader (with an OP2 of normal modes), "
              "or convert with --results MODES --random ASD.")
 
@@ -997,7 +1070,8 @@ def view_random(model, view):
         info_text(model, view, "The random response is zero on the mesh (no eigenvector output there?).")
         return
     _random_mesh(model, view, "AccelRMS", rng)
-    info_text(model, view, f"{_random_header(model)}\nAcceleration RMS: peak {rng[1]:.4g}", "Upper Center")
+    info_text(model, view, f"{_random_header(model)}\nAcceleration RMS: peak {rng[1]:.4g}\n{RANDOM_SETTINGS}",
+              "Upper Center")
 
 
 def view_randomsweep(model, view):
@@ -1025,7 +1099,7 @@ def view_randomsweep(model, view):
     ld = pv.Show(label, view)
     ld.WindowLocation = "Upper Right Corner"
     ld.FontSize = 14
-    info_text(model, view, f"{_random_header(model)}\nResponse ASD (sum of X, Y, Z): play the time steps "
+    info_text(model, view, f"{_random_header(model)}\n{RANDOM_SETTINGS}\nResponse ASD (sum of X, Y, Z): play the time steps "
                            "to sweep frequency", "Upper Left Corner")
 
 
@@ -1160,6 +1234,8 @@ def view_check(model, view):
     sev = fd.GetAbstractArray("CHECK_Severity")
     lines = [f"{names.GetValue(i)}: {int(counts.GetValue(i))} ({sev.GetValue(i)})"
              for i in range(names.GetNumberOfValues())] if names is not None else ["No checks run."]
+    if enum_text(c, "ShowOnly") == "Errors only":
+        lines.append("drawn: the errors only (Show Only on 'NPV check')")
     info_text(model, view, "\n".join(lines))
     return c
 
@@ -1607,6 +1683,13 @@ def _diff_text(diff, model):
     total = next((m for m in masses if m["Key"] == "ModelMass"), None)
     if total is not None:
         lines.append(f"model mass {total['A']:.6g} -> {total['B']:.6g} ({total['Delta']:+.4g})")
+    from nastran_pv.diff import STATUS_NAMES
+
+    shown = [s for s in STATUS_NAMES if getattr(diff, "Show" + s.capitalize(), 1)]
+    reasons = list(getattr(diff, "Reasons", None) or [])
+    if len(shown) < len(STATUS_NAMES) or reasons:
+        lines.append("shown: " + (", ".join(shown) or "nothing") + (f"; reasons {', '.join(reasons)}" if reasons else "")
+                     + " (Show on the Nastran Diff)")
     return "\n".join(lines)
 
 
@@ -1803,7 +1886,8 @@ def apply(name, reader=None, view=None, model=None, reset_camera=True, **kwargs)
     model = model or Model(reader, getattr(view, "ViewTime", 0.0))
     _reset_view(view)
     pv.SetActiveView(view)
-    set_deformation(model, 0.0)  # views show the undeformed model; results sets its own scale
+    if name != "results":  # views show the undeformed model; results keeps or sets its own scale
+        set_deformation(model, 0.0)
     selected = VIEWS[name](model, view, **kwargs)
     if reset_camera:
         view.ResetCamera(False)
@@ -2022,16 +2106,22 @@ def _prepare_modes(reader, view, modes, camera):
 @contextlib.contextmanager
 def _kept_view(reader, view):
     """Put the view back as it was afterwards, even after an error: its time step and every NPV
-    deform filter's scale (0 in most views, the start step's full deflection in the results view)."""
+    deform filter's scale (0 in most views, Auto Scale in the results view). Auto Scale is off
+    meanwhile, so the sweeps' Scale Factors act."""
     start = view.ViewTime
-    saved = [(f, f.ScaleFactor) for f in deform_filters(_ReaderOnly(reader))]
+    saved = [(f, f.ScaleFactor, f.AutoScale) for f in deform_filters(_ReaderOnly(reader))]
+    for f, _, auto in saved:
+        if auto:
+            f.AutoScale = 0
     try:
         yield
     finally:
         _set_time(view, start)
-        for f, scale in saved:
+        for f, scale, auto in saved:
             if f.ScaleFactor != scale:
                 f.ScaleFactor = scale
+            if f.AutoScale != auto:
+                f.AutoScale = auto
         pv.Render(view)
 
 

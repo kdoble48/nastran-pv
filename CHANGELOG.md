@@ -8,6 +8,16 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Added
 
+- Filter properties: every NPV macro's filter holds the settings of its view, in shared *Glyph
+  Size*, *Show Only* and *Traversal* groups, and a rerun keeps them. New *Nastran Load Glyphs*
+  (load sets, forces/moments, arrow length, every Nth point) and *Nastran SPC Glyphs* (SPC sets,
+  DOFs) replace ParaView's Glyph in the Loads and SPC views; Mass Glyphs gain *Minimum Mass* and
+  *Color By*, Bush Glyphs *Show Only* grounded or zero-length bushes, Beam Sections *Max Triads*,
+  Nastran Deform *Auto Scale*, Path and Model Check *Show Only*. Nastran Diff gains *Kinds*,
+  *Ignore Grid Moves*, *Swap Inputs*, the *Show* filters (statuses, reasons, Removed block) and
+  per-kind tolerances, with the matching `diff`/`convert --diff-against` flags `--skip`,
+  `--ignore-grid-moves`, `--grid-tol-absolute`, `--load-tol`, `--stiffness-tol`, `--mass-tol` and
+  `--abs-floor` (#49).
 - Test CI: pytest and pyflakes on Linux, Windows and macOS with Python 3.10 to 3.12 (#42).
 - This changelog and a written [version policy](docs/versioning.md) (#42).
 - Selection from a CSV/ID file: `convert --select`, the reader's Selection File, and NPV Show Only/Hide/Highlight File (#43).
@@ -35,6 +45,10 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Changed
 
+- NPV Loads and NPV SPC draw through *NPV load glyphs* and *NPV spc glyphs* (Nastran filters)
+  instead of ParaView Glyph objects; NPV Results scales each time step to 8 % of the model (Nastran
+  Deform *Auto Scale*); Mass Glyphs' *RelativeSize* is now *Size* (the old name still works);
+  rerunning a macro keeps the settings changed on its filter (#49).
 - NPV macros and `nastran_views.apply` end with the filter they are about selected (mass glyphs, NPV grow, the Nastran Diff, NPV deform, ...), or the reader for coloring and visibility macros.
 - Simplified the plugin: shared setters and `RequestData`, one upstream walk, one screenshot view (#38).
 - Simplified the core: a shared results base, builder helpers and field tables in `vtkutil` (#37).
