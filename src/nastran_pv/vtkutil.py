@@ -91,7 +91,7 @@ def promote_root_fields(mb) -> None:
     before the marker existed: the summary of the first block that has one is copied to the root."""
     root = mb.GetFieldData()
     marked = False
-    for blk in _leaves(mb):
+    for blk in list(_leaves(mb)):
         fd = blk.GetFieldData()
         names = fd.GetAbstractArray(ROOT_FIELDS)
         if names is None:
@@ -104,7 +104,10 @@ def promote_root_fields(mb) -> None:
                 root.AddArray(arr)
             fd.RemoveArray(name)
         fd.RemoveArray(ROOT_FIELDS)
-    if marked or any(root.GetAbstractArray(m) is not None for m in ROOT_MARKS):
+    if marked:
+        drop_fill_arrays(mb)
+        return
+    if any(root.GetAbstractArray(m) is not None for m in ROOT_MARKS):
         return
     for blk in _leaves(mb):
         fd = blk.GetFieldData()
@@ -114,6 +117,20 @@ def promote_root_fields(mb) -> None:
                 if arr is not None and root.GetAbstractArray(arr.GetName()) is None:
                     root.AddArray(arr)
             return
+
+
+def drop_fill_arrays(mb) -> None:
+    """Remove the all-NaN point/cell arrays of a VTKHDF series step, in place. A temporal file
+    holds every array at every step (``vtkhdf._fill_missing``), so a step without stresses carries a
+    NaN ``VonMisesMax``; the model of that step has none (and VTK's XML reader cannot read an
+    all-NaN array back). nastran-pv never writes an all-NaN array otherwise."""
+    for blk in _leaves(mb):
+        for attr in (blk.GetPointData(), blk.GetCellData()):
+            for i in reversed(range(attr.GetNumberOfArrays())):
+                a = attr.GetArray(i)
+                if a is not None and a.GetNumberOfTuples() and a.GetDataType() in (10, 11):  # float, double
+                    if np.all(np.isnan(vtk_to_numpy(a))):
+                        attr.RemoveArray(i)
 
 
 def match_ids(sorted_ids: np.ndarray, query: np.ndarray) -> np.ndarray:

@@ -62,7 +62,8 @@ DECK_ONLY = (("results", "--results"), ("random", "--random"), ("nsm_set", "--ns
 
 def deck_only_flags(args) -> list[str]:
     """The given options that rebuild the model from the deck (a converted file cannot honour them)."""
-    flags = [flag for attr, flag in DECK_ONLY if getattr(args, attr, None) not in (None, False)]
+    given = lambda v: v is not None and v is not False  # noqa: E731  (--nsm-set 0 is given)
+    flags = [flag for attr, flag in DECK_ONLY if given(getattr(args, attr, None))]
     return flags + [f"--no-{b}" for b in BLOCK_FLAGS if getattr(args, f"no_{b}", False)]
 
 
@@ -77,10 +78,17 @@ def load_model(args, verbose=False):
     if src.suffix.lower() in MODEL_SUFFIXES:
         flags = deck_only_flags(args)
         if flags:
-            raise SystemExit(f"nastran-pv: {' '.join(flags)} need the deck; {src.name} is already converted "
+            verb = "needs" if len(flags) == 1 else "need"
+            raise SystemExit(f"nastran-pv: {' '.join(flags)} {verb} the deck; {src.name} is already converted "
                              "(convert the deck with them)")
+        if getattr(args, "all_steps", False):
+            raise SystemExit(f"nastran-pv: --all-steps needs the deck and --results; {src.name} is read one "
+                             "step at a time (--step)")
         with progress.stage(f"reading {src.name}"):
-            mb = read_model(src)
+            try:
+                mb = read_model(src, getattr(args, "step", 0))
+            except ValueError as exc:
+                raise SystemExit(f"nastran-pv: {exc}") from None
         if getattr(args, "beam_sections", False):
             add_beam_sections(mb)
         progress.done()
@@ -539,7 +547,7 @@ def main(argv=None) -> int:
 
     k = sub.add_parser("check", help="model checks: free edges/faces, coincident grids, duplicates, "
                                      "dangling connectors, floating parts")
-    k.add_argument("input", help="run deck, bulk-data file, or a .vtm written by nastran-pv")
+    k.add_argument("input", help="run deck, bulk-data file, or a .vtm/.vtkhdf written by nastran-pv")
     k.add_argument("--rules", metavar="TEXT", help="traversal rules that define a part (FloatingParts)")
     k.add_argument("--tol", type=float, default=1e-6, help="coincident-grid distance / model diagonal (default 1e-6)")
     k.add_argument("--only", nargs="+", metavar="CHECK", help="FreeEdges FreeFaces CoincidentGrids "
@@ -550,7 +558,7 @@ def main(argv=None) -> int:
     k.set_defaults(func=cmd_check)
 
     b = sub.add_parser("sections", help="CBAR/CBEAM section properties per PID station (computed vs card)")
-    b.add_argument("input", help="run deck, bulk-data file, or a .vtm written by nastran-pv")
+    b.add_argument("input", help="run deck, bulk-data file, or a .vtm/.vtkhdf written by nastran-pv")
     b.add_argument("--pid", type=int, nargs="+", help="only these PIDs")
     b.add_argument("--limit", type=int, default=None)
     b.add_argument("--csv", help="also write the table to CSV")

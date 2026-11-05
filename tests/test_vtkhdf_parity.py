@@ -11,7 +11,6 @@ import io
 import re
 import sqlite3
 
-import numpy as np
 import pytest
 
 from nastran_pv import vtkutil
@@ -21,6 +20,7 @@ from nastran_pv.deck import load_deck
 from nastran_pv.fields.common import iter_blocks
 from nastran_pv.vtkio import read_model
 from conftest import DATA
+from model_compare import differences, snapshot
 from op2_fixture import make_op2
 
 DECKS = ("tiny_run", "tiny_bulk", "beams", "nsm", "topology", "diff_a", "diff_b")
@@ -28,68 +28,6 @@ FORMATS = ("vtkhdf", "vtm")
 
 
 # ------------------------------------------------------------------ comparison
-def _attrs(container):
-    out = {}
-    for i in range(container.GetNumberOfArrays()):
-        a = container.GetAbstractArray(i)
-        if a is None or not a.GetName():
-            continue
-        if a.IsA("vtkStringArray"):
-            out[a.GetName()] = ("str", [a.GetValue(k) for k in range(a.GetNumberOfValues())])
-        else:
-            values = vtkutil.to_numpy(a)
-            out[a.GetName()] = (values.dtype.str, values)
-    return out
-
-
-def snapshot(mb, drop_empty=False):
-    """{path: {...}} of a model multiblock. ``drop_empty``: leave out datasets with no points
-    and no cells (the .vtm writer stores no file for them, see test_vtm_drops_empty_blocks)."""
-    snap = {"<root>": {"field": _attrs(mb.GetFieldData())}}
-    for path, ds in iter_blocks(mb):
-        if drop_empty and ds.GetNumberOfPoints() == 0 and ds.GetNumberOfCells() == 0:
-            continue
-        snap[path] = {"type": ds.GetClassName(), "n": (ds.GetNumberOfPoints(), ds.GetNumberOfCells()),
-                      "point": _attrs(ds.GetPointData()), "cell": _attrs(ds.GetCellData()),
-                      "field": _attrs(ds.GetFieldData())}
-        if ds.GetNumberOfPoints():
-            snap[path]["xyz"] = ("f", vtkutil.to_numpy(ds.GetPoints().GetData()))
-    return snap
-
-
-def _same(a, b):
-    if a[0] == "str" or b[0] == "str":
-        return a == b
-    x, y = np.asarray(a[1]), np.asarray(b[1])
-    return x.shape == y.shape and np.allclose(x.astype(float), y.astype(float), equal_nan=True)
-
-
-def differences(ref, got, ignore=()):
-    out = []
-    if list(ref) != list(got):
-        out.append(f"blocks {list(ref)} != {list(got)}")
-    for path in ref.keys() & got.keys():
-        r, g = ref[path], got[path]
-        for key in ("type", "n"):
-            if r.get(key) != g.get(key):
-                out.append(f"{path} {key}: {r.get(key)} != {g.get(key)}")
-        if "xyz" in r and not _same(r["xyz"], g.get("xyz", ("f", []))):
-            out.append(f"{path}: points differ")
-        for where in ("point", "cell", "field"):
-            ra, ga = r.get(where, {}), g.get(where, {})
-            for name in sorted(ra.keys() ^ ga.keys()):
-                if name not in ignore:
-                    out.append(f"{path} {where} {name}: only in {'deck' if name in ra else 'file'}")
-            for name in sorted(ra.keys() & ga.keys()):
-                if name in ignore:
-                    continue
-                if ra[name][0] != ga[name][0]:
-                    out.append(f"{path} {where} {name}: dtype {ra[name][0]} != {ga[name][0]}")
-                elif not _same(ra[name], ga[name]):
-                    out.append(f"{path} {where} {name}: values differ")
-    return out
-
-
 def assert_same_model(ref_mb, got_mb, fmt="vtkhdf", ignore=()):
     diffs = differences(snapshot(ref_mb, drop_empty=fmt == "vtm"), snapshot(got_mb, drop_empty=fmt == "vtm"),
                         ignore)
@@ -241,10 +179,11 @@ def test_results_snapshot_round_trip(files, tmp_path):
 
 
 def test_results_series_steps(files, tmp_path):
-    """Each step of an --all-steps series reads back as the deck model with that step attached."""
+    """Each step of an --all-steps series reads back as the deck model with that step attached: the
+    NaN fill of arrays a step lacks (a series holds every array at every step) is dropped, and
+    ``--step`` picks the step of a converted series as it picks the --results step of a deck."""
     from nastran_pv.results import attach_op2
-    from nastran_pv.tree import as_multiblock
-    from nastran_pv.vtkhdf import read_vtkhdf, time_values
+    from nastran_pv.vtkhdf import time_values
 
     path = tmp_path / "s.vtkhdf"
     assert run(["convert", files["tiny_run"]["deck"], "--results", files["op2"], "--all-steps", "-o", path])[0] == 0
@@ -254,10 +193,18 @@ def test_results_series_steps(files, tmp_path):
     assert time_values(path) == [0.0, 1.0, 2.0]
     for step in range(3):
         res.attach(mb, step, deck)
-        got = as_multiblock(read_vtkhdf(path, float(step)))
-        # a series stores every array at every step: arrays a step lacks are NaN-filled
-        diffs = [d for d in differences(snapshot(mb), snapshot(got)) if not d.endswith("only in file")]
-        assert not diffs, f"step {step}:\n" + "\n".join(diffs)
+        diffs = differences(snapshot(mb), snapshot(read_model(path, step)))
+        assert not diffs, f"step {step}: {diffs}"
+        a, b = tmp_path / f"a{step}.vtm", tmp_path / f"b{step}.vtm"  # .vtm: no all-NaN array may reach it
+        assert run(["convert", files["tiny_run"]["deck"], "--results", files["op2"], "--step", step, "-o", a])[0] == 0
+        assert run(["convert", path, "--step", step, "-o", b])[0] == 0
+        assert_same_model(read_model(a), read_model(b), "vtm")
+    assert "VonMisesMax" in snapshot(read_model(path, 0))["Shells"]["cell"]
+    assert "VonMisesMax" not in snapshot(read_model(path, 1))["Shells"]["cell"]  # modes: no stress
+    code, _ = run(["convert", path, "--step", 3, "-o", tmp_path / "x.vtm"])
+    assert "out of range" in code
+    code, _ = run(["convert", path, "--all-steps", "-o", tmp_path / "x.vtkhdf"])
+    assert "--all-steps needs the deck" in code
 
 
 def test_deck_only_options_refused(files):
@@ -265,7 +212,9 @@ def test_deck_only_options_refused(files):
     for opts in (["--results", files["op2"]], ["--random", "20:0.01,2000:0.01"], ["--nsm-set", 5],
                  ["--k-ref", 10], ["--no-nodal-arrays"], ["--no-shells"]):
         code, _ = run(["convert", files["tiny_run"]["vtkhdf"], *opts, "-o", "unused.vtkhdf"])
-        assert isinstance(code, str) and "need the deck" in code, (opts, code)
+        assert isinstance(code, str) and f"{opts[0]} needs the deck" in code, (opts, code)
+    code, _ = run(["stats", files["tiny_run"]["vtkhdf"], "--nsm-set", 0, "--no-loads"])
+    assert "--nsm-set --no-loads need the deck" in code
 
 
 def test_missing_model_file_errors(tmp_path):

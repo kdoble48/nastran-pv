@@ -49,22 +49,37 @@ def write_series(mb, results, out, binary: bool = True, deck=None) -> Path:
 MODEL_SUFFIXES = (".vtm", ".vtkhdf", ".hdf")
 
 
-def read_model(path):
+def read_model(path, step: int | None = None):
     """A ``.vtm`` or VTKHDF file written by nastran-pv as a plain multiblock with its root field
     data. VTKHDF holds a partitioned collection, gathered back into named blocks here; its root
     summary lives on the mesh partitions (vtkHDFWriter drops a collection's own field data) and
-    goes back to the root (``vtkutil.promote_root_fields``)."""
+    goes back to the root (``vtkutil.promote_root_fields``). ``step``: the 0-based time step of a
+    temporal VTKHDF (default the first); a file without time steps has only step 0."""
     path = Path(path)
     if path.suffix.lower() not in MODEL_SUFFIXES:
         raise ValueError(f"{path.name}: not a .vtm or .vtkhdf model file")
     if not path.is_file():
         raise FileNotFoundError(f"model file not found: {path.resolve()}")
     if path.suffix.lower() == ".vtm":
+        if step:
+            raise ValueError(f"{path.name} has no time steps (a .vtm series is one file per step)")
         return read_vtm(path)
     from .tree import as_multiblock
-    from .vtkhdf import read_vtkhdf
+    from .vtkhdf import read_vtkhdf, time_values
 
-    mb = as_multiblock(read_vtkhdf(path))
+    times = time_values(path)
+    if step and not 0 <= step < max(len(times), 1):
+        raise ValueError(f"{path.name} has {len(times) or 1} step(s); --step {step} is out of range")
+    mb = as_multiblock(read_vtkhdf(path, times[step or 0] if times else None))
     if not mb.IsA("vtkMultiBlockDataSet"):
         raise ValueError(f"{path.name}: not a nastran-pv model (no blocks)")
+    if times:  # vtkHDFReader tags the collection and every partition with their time (a "Time"
+        # field and the time-step key, which the .vtm writer would turn into a TimeValue field)
+        from vtkmodules.vtkCommonDataModel import vtkDataObject
+
+        from .fields.common import iter_blocks
+
+        for obj in [mb] + [ds for _, ds in iter_blocks(mb)]:
+            obj.GetFieldData().RemoveArray("Time")
+            obj.GetInformation().Remove(vtkDataObject.DATA_TIME_STEP())
     return mb

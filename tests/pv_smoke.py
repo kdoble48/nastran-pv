@@ -701,6 +701,170 @@ def diff_checks(pv, nv):
             pv.Delete(s)
 
 
+def _table_digest(table):
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    out = {}
+    for i in range(table.GetNumberOfColumns()):
+        col = table.GetColumn(i)
+        if col.IsA("vtkStringArray"):
+            out[col.GetName()] = [col.GetValue(k) for k in range(col.GetNumberOfValues())]
+        else:
+            out[col.GetName()] = [None if v != v else v for v in np.round(vtk_to_numpy(col).astype(float), 9).tolist()]
+    return out
+
+
+def _output_differences(nv, a, b, port=0):
+    """Differences between two pipeline outputs: a model (blocks, arrays, root tables), a table, or
+    any dataset (counts and sorted array values)."""
+    from model_compare import digest, digest_differences, model_digest, model_digest_differences
+
+    from nastran_pv.tree import as_multiblock
+
+    da, db = nv.fetch(a, port), nv.fetch(b, port)
+    if da.IsA("vtkTable"):
+        ta, tb = _table_digest(da), _table_digest(db)
+        return [] if ta == tb else [f"table {ta} != {tb}"]
+    if da.IsA("vtkMultiBlockDataSet") or da.IsA("vtkPartitionedDataSetCollection"):
+        return model_digest_differences(model_digest(as_multiblock(da)), model_digest(as_multiblock(db)))
+    return digest_differences(digest(da), digest(db))
+
+
+def _shown(nv, view, labels):
+    """What ``view`` shows: per visible source its data digest (text for a Text source) and colouring."""
+    from model_compare import digest
+
+    out = []
+    for rep in list(view.Representations):
+        try:
+            visible, src = rep.Visibility, rep.Input
+        except AttributeError:
+            continue
+        if not visible or src is None:
+            continue
+        if src.GetXMLName() == "TextSource":
+            text = src.Text
+            for label in labels:
+                text = text.replace(label, "<model>")
+            out.append(("text", text))
+            continue
+        color = tuple(rep.ColorArrayName) if hasattr(rep, "ColorArrayName") else ()
+        out.append((color, rep.Representation, digest(nv.fetch(src))))
+    return out
+
+
+def _shown_differences(a, b):
+    from model_compare import digest_differences
+
+    if len(a) != len(b):
+        return [f"{len(a)} shown sources != {len(b)}: {[x[:2] for x in a]} vs {[x[:2] for x in b]}"]
+    out = []
+    for x, y in zip(a, b):
+        if x[0] == "text" or y[0] == "text":
+            if x != y:
+                out.append(f"text {x[1]!r} != {y[1]!r}")
+            continue
+        if x[:2] != y[:2]:
+            out.append(f"colouring {x[:2]} != {y[:2]}")
+        out += digest_differences(x[2], y[2])
+    return out
+
+
+PARITY_FILTERS = (  # constructor, properties, output ports
+    ("NastranMassGlyphs", {}, 1), ("NastranBushGlyphs", {}, 1), ("NastranBeamSections", {}, 1),
+    ("NastranDeform", {"ScaleFactor": 2.0}, 1), ("NastranDerivedFields", {}, 1),
+    ("NastranMapTable", {"Key": 1}, 1), ("NastranGroupStats", {}, 2), ("NastranGrow", {}, 1),
+    ("NastranParts", {}, 3), ("NastranPath", {}, 1), ("NastranModelCheck", {}, 2),
+)
+
+
+def _listed(diffs, limit=12):
+    return "".join("\n  " + d for d in diffs[:limit])
+
+
+def parity_checks(pv, nv):
+    """Deck vs converted file: the deck reader and ParaView's reader on the .vtkhdf (or .vtm) that
+    `convert` wrote give the same model, the same output from every Nastran filter and the same
+    picture (shown data, colouring, text) from every view; a series at every time step."""
+    from model_compare import differences, model_digest, model_digest_differences, snapshot
+    from op2_fixture import make_op2
+
+    from nastran_pv.assemble import build_multiblock
+    from nastran_pv.deck import load_deck
+    from nastran_pv.results import attach_op2
+
+    keep = set(pv.GetSources().values())
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        op2 = os.path.join(tmp, "run.op2")
+        make_op2().write_op2(op2)
+        table = os.path.join(tmp, "pid.csv")
+        with open(table, "w") as f:
+            f.write("PID,Allow\n1,10\n2,20\n3,30\n")
+        cases = [("tiny_run", ".vtkhdf", None), ("tiny_run", ".vtm", None), ("beams", ".vtkhdf", None),
+                 ("topology", ".vtkhdf", None), ("nsm", ".vtkhdf", None), ("tiny_run", ".vtkhdf", op2)]
+        for name, suffix, results in cases:
+            deck = os.path.join(HERE, "data", name + ".bdf")
+            path = os.path.join(tmp, name + ("_series" if results else "") + suffix)
+            convert(["convert", deck, "-o", path, "-q"] + (["--results", results, "--all-steps"] if results else []))
+            tag = os.path.basename(path)
+            r = nv.load_reader(deck, op2=results)
+            f = nv.load_reader(path)
+            labels = [k[0] for k, v in pv.GetSources().items() if v in (r, f)]
+            times = nv.timesteps(r)
+            check(times == nv.timesteps(f), f"{tag}: time steps {times} == {nv.timesteps(f)}")
+            vtm = suffix == ".vtm"
+            loaded = load_deck(deck, echo=False)
+            truth = build_multiblock(loaded)  # the model convert wrote
+            res = attach_op2(truth, loaded, results, 0) if results else None
+            for t in times or [None]:
+                if res is not None:
+                    res.attach(truth, int(t), loaded)
+                got = nv.Model(f, t).data
+                # a series stores every array at every step: arrays a step lacks are NaN-filled
+                diffs = [d for d in differences(snapshot(truth, drop_empty=vtm), snapshot(got, drop_empty=vtm))
+                         if not (results and d.endswith("only in file"))]
+                check(not diffs, f"{tag} t={t}: ParaView reads the model convert wrote" + _listed(diffs))
+                diffs = model_digest_differences(model_digest(nv.Model(r, t).data), model_digest(got))
+                check(not diffs, f"{tag} t={t}: the same model as the deck reader" + _listed(diffs))
+            model = nv.Model(r, times[-1] if times else None)
+            mesh = next(b for b in ("Shells", "Solids", "Lines") if model.has(b))
+            eid = int(model.array(mesh, "EID", "cell")[0])
+            nids = model.array(mesh, "NID")
+            props = {"NastranMapTable": {"TableFileName": table}, "NastranGrow": {"SeedIDs": f"EID {eid}"},
+                     "NastranPath": {"FromGrid": int(nids[0]), "ToGrid": int(nids[-1])}}
+            for ctor, base, ports in PARITY_FILTERS:
+                kw = dict(base, **props.get(ctor, {}))
+                fr = getattr(pv, ctor)(Input=r, **kw)
+                ff = getattr(pv, ctor)(Input=f, **kw)
+                for t in times or [None]:
+                    for src in (fr, ff):
+                        if t is None:
+                            src.UpdatePipeline()
+                        else:
+                            src.UpdatePipeline(t)
+                    for port in range(ports):
+                        diffs = _output_differences(nv, fr, ff, port)
+                        check(not diffs, f"{tag}: {ctor} port {port}{'' if t is None else f' t={t}'}: the same"
+                              + _listed(diffs))
+                pv.Delete(fr)
+                pv.Delete(ff)
+            kwargs = {"grow": {"seeds": f"EID {eid}"}}
+            skip = {"random", "randomsweep"} | (set() if results else {"results"})
+            for view_name in [v for v in nv.VIEWS if v not in skip]:
+                shown = []
+                for src in (r, f):
+                    view = pv.CreateRenderView()
+                    if times:
+                        view.ViewTime = times[-1]
+                    nv.apply(view_name, reader=src, view=view, **kwargs.get(view_name, {}))
+                    shown.append(_shown(nv, view, labels))
+                    pv.Delete(view)
+                diffs = _shown_differences(*shown)
+                check(not diffs, f"{tag}: view {view_name} shows the same" + _listed(diffs))
+            for p in [s for s in pv.GetSources().values() if s not in keep]:
+                pv.Delete(p)
+
+
 def main():
     reader = rm.load_reader(DECK)
     model = rm.Model(reader)
@@ -1048,6 +1212,7 @@ def main():
           f"same deck twice: {nv._name(nv.Model(twin), 'mesh')!r}; the first keeps its names")
     pv.Delete(twin)
     converted_checks(pv, nv, reader)
+    parity_checks(pv, nv)
     random_checks(pv, nv)
     topology_checks(pv, nv)
     diff_checks(pv, nv)
