@@ -1105,6 +1105,26 @@ VIEW_SELECTS = {"masses": "mass glyphs", "bushes": "bush glyphs", "bushrotations
                 "path": "path", "check": "check"}
 
 
+def clear_checks(pv, nv, reader):
+    """NPV Clear empties the active view and its scene, sets the model undeformed and deletes nothing;
+    _recorded lists what _show showed."""
+    view = pv.CreateRenderView()
+    pv.SetActiveView(view)
+    pv.SetActiveSource(reader)
+    model = nv.apply("masses", reader=reader, view=view)
+    src = pv.FindSource(nv._name(model, "mesh"))
+    objs, _ = nv._recorded(lambda: nv._show(src, view))
+    check(objs == [src], "_recorded lists what _show showed")
+    deform = pv.FindSource(nv._name(model, "deform"))
+    deform.ScaleFactor = 1.0
+    sources = set(pv.GetSources())
+    nv.run_macro("clear")
+    check(nv.shown_sources(view) == [] and nv.scene_of(view).empty and set(pv.GetSources()) == sources
+          and deform.ScaleFactor == 0.0 and pv.GetActiveSource() is reader,
+          "NPV Clear: empty view and scene, nothing deleted, undeformed, reader selected")
+    pv.Delete(view)
+
+
 def active_source_checks(pv, nv):
     """Every view and command ends with the object it is about selected, and running it again (or
     another one) with that object selected finds the same model and reuses its NPV objects."""
@@ -1776,6 +1796,7 @@ def main():
     random_checks(pv, nv)
     topology_checks(pv, nv)
     diff_checks(pv, nv)
+    clear_checks(pv, nv, reader)
     active_source_checks(pv, nv)
     print("pv_smoke: all checks passed")
 

@@ -22,6 +22,9 @@ Femap-style visibility commands: they set the reader's visibility checklists and
 so they need the deck (:func:`deck_reader`). ``show_only_file``, ``hide_file`` and
 ``highlight_file`` do the same from a CSV/text file of IDs (the reader's ``SelectionFile``);
 highlight makes a real ParaView selection.
+Views edit the active view's scene (:func:`scene_of`: one coloring plus overlays) instead of
+starting over; ``clear`` (NPV Clear) empties the view of every layer, sets the deformation back to 0
+and deletes nothing.
 ``diff`` compares the active model (B) with a second open model (A) through the Nastran Diff filter,
 and :func:`side_by_side` shows A and B in two linked views with one color range.
 Plus :func:`index_colors`, which turns whatever integer array the active representation is
@@ -440,6 +443,90 @@ def _reset_view(view):
     for src in shown_sources(view):
         pv.Hide(src, view)
     view.OrientationAxesVisibility = 1
+
+
+# ------------------------------------------------------------ scene layers
+_SCENES = {}  # view.GetGlobalIDAsString() -> nastran_pv.scene.Scene
+_RECORDING = None  # the list _show appends to inside _recorded, else None
+
+
+def scene_of(view):
+    """The layers shown in ``view`` (a :class:`nastran_pv.scene.Scene`, made on first use). Scenes of
+    views that were closed are dropped."""
+    from nastran_pv.scene import Scene
+
+    alive = {v.GetGlobalIDAsString() for v in pv.GetViews()}
+    for key in [k for k in _SCENES if k not in alive]:
+        del _SCENES[key]
+    return _SCENES.setdefault(view.GetGlobalIDAsString(), Scene())
+
+
+def _show(src, view):
+    """``pv.Show`` that records ``src`` in the active :func:`_recorded` call, if any."""
+    disp = pv.Show(src, view)
+    if _RECORDING is not None and src not in _RECORDING:
+        _RECORDING.append(src)
+    return disp
+
+
+def _recorded(fn):
+    """(what the :func:`_show` calls inside ``fn()`` showed, in order and once each, ``fn()``)."""
+    global _RECORDING
+    if _RECORDING is not None:
+        raise RuntimeError("_recorded calls do not nest")
+    _RECORDING = []
+    try:
+        result = fn()
+        return list(_RECORDING), result
+    finally:
+        _RECORDING = None
+
+
+def _hide(objects, view):
+    """Hide ``objects`` in ``view``, and the scalar bar of any array they were colored by once nothing
+    shown uses it."""
+    reps = {}
+    for rep in list(getattr(view, "Representations", None) or []):
+        try:
+            inp = rep.Input
+        except AttributeError:  # scalar bars and other non-data representations
+            continue
+        reps.setdefault(inp.GetGlobalIDAsString() if inp is not None else None, rep)
+    arrays = []
+    for obj in objects:
+        rep = reps.get(obj.GetGlobalIDAsString())
+        color = getattr(rep, "ColorArrayName", None)  # text and other reps have none
+        array = color[1] if color else ""
+        pv.Hide(obj, view)
+        if array and array not in arrays:
+            arrays.append(array)
+    for array in arrays:
+        pv.HideScalarBarIfNotNeeded(pv.GetColorTransferFunction(array), view)
+
+
+def _clear_view(view):
+    """Hide everything shown in ``view``, forget its scene and turn the orientation axes back on."""
+    _hide(shown_sources(view), view)
+    _SCENES.pop(view.GetGlobalIDAsString(), None)
+    view.OrientationAxesVisibility = 1
+
+
+def clear(view=None):
+    """NPV Clear: empty ``view`` (default: active) of every layer, with the model undeformed (scale 0).
+    Deletes nothing; ends with the model's reader selected (None when no model is open)."""
+    view = view or pv.GetActiveViewOrCreate("RenderView")
+    reader = scene_of(view).model
+    if reader is None:
+        try:
+            reader = find_reader()
+        except RuntimeError:  # no model open: just empty the view
+            reader = None
+    if reader is not None:
+        stop_mode_animation(reader, view)
+        set_deformation(_ReaderOnly(reader), 0.0)
+    _clear_view(view)
+    pv.Render(view)
+    return _finish(reader)
 
 
 def solid(disp, rgb):
@@ -2355,6 +2442,7 @@ ACTIONS = {"animate_mode": animate_mode, "animate_modes": animate_modes, "stop_m
            "show_only_material": show_only_material, "show_only_reached": show_only_reached,
            "hide_reached": hide_reached, "side_by_side": side_by_side}
 ACTIONS.update({"show_only_file": show_only_file, "hide_file": hide_file, "highlight_file": highlight_file})
+ACTIONS["clear"] = clear
 
 
 def run_macro(name):

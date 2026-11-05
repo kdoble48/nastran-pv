@@ -166,6 +166,7 @@ an `NPV ...` filter selected finds the model upstream of it.
 | NPV Show Only | Shows only the selected elements (Select Cells On first); loads and SPCs stay |
 | NPV Hide | Adds the selected elements to the reader's *Hidden Elements* |
 | NPV Show All | Clears both element lists, checks every property, material, type, family and group, and sets *Selection Mode* to Off |
+| NPV Clear | Empties the active view: every layer (the coloring and every overlay) is hidden and the deformation goes back to 0. It deletes nothing, so the next view reuses the NPV objects |
 | NPV Only Property | Unchecks every property except those of the selected elements |
 | NPV Only Material | Unchecks every material except those of the selected elements |
 | NPV Diff | What changed from a second open model (A) to the active one (B): B's elements, rigid elements, connectors, bushes, SPCs and loads by `DiffStatus` (same, added, changed, property), A's removed items red and translucent, the counts and the mass change; the Nastran Diff's *Compare*, *Show* and *Tolerances* settings tune it ([Model diff](diff.md#paraview)) |

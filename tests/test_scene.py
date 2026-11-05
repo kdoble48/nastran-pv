@@ -34,3 +34,12 @@ def test_shared_objects_stay():
     s.add_overlay(Layer("bushrotations", ["rotation glyphs", "BushLines"]))
     assert s.remove_overlay("bushes") == ["bush glyphs"]
     assert s.clear() == ["mesh", "rotation glyphs", "BushLines"] and s.empty and s.model is None
+
+
+def test_clear_macro_installed():
+    import importlib.util, pathlib
+    path = pathlib.Path(__file__).parents[1] / "paraview" / "install_macros.py"
+    spec = importlib.util.spec_from_file_location("install_macros", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.MACROS["Clear"] == "clear"

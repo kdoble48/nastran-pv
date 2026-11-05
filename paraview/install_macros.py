@@ -23,7 +23,7 @@ MACROS = {
     "Index Colors": "index_colors",
     "Parts": "parts", "Grow": "grow", "Grow from Selection": "grow_from_selection",
     "Path from Selection": "path_from_selection", "Model Check": "check",
-    "Show Only": "show_only_selected", "Hide": "hide_selected", "Show All": "show_all",
+    "Show Only": "show_only_selected", "Hide": "hide_selected", "Show All": "show_all", "Clear": "clear",
     "Only Property": "show_only_property", "Only Material": "show_only_material",
     "Show Only Reached": "show_only_reached", "Hide Reached": "hide_reached",
     "Show Only File": "show_only_file", "Hide File": "hide_file", "Highlight File": "highlight_file",
