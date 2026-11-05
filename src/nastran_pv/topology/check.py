@@ -32,6 +32,18 @@ class CheckResult:
     def errors(self) -> int:
         return sum(r["Count"] for r in self.summary if r["Severity"] == "error")
 
+    def only(self, severity: str | None):
+        """The findings of the checks of one ``severity`` (error, info); None: all of them. The
+        ``CHECK_*`` summary table stays whole."""
+        if severity is None:
+            return self.findings
+        out = vtkMultiBlockDataSet()
+        for name, block in iter_blocks(self.findings):
+            if SEVERITY.get(name) == severity:
+                vtkutil.add_block(out, name, block)
+        out.GetFieldData().ShallowCopy(self.findings.GetFieldData())
+        return out
+
 
 def _poly(algorithm):
     algorithm.Update()

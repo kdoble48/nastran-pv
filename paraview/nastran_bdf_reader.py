@@ -153,6 +153,98 @@ class _Settable:
             self.Modified()
 
 
+# ------------------------------------------------------------ property groups
+# A Python proxy is built from its class's own __dict__ only, and its properties are ordered by the
+# line numbers of their setters. A group decorator (_with_<group>) copies its @smproperty setters
+# into the class with line numbers past the class's own (so shared groups come after a filter's own
+# settings) and adds a PropertyGroup after them: a group must follow its properties in the XML.
+_LATE = 100_000  # a copied setter starts at line _LATE + n (n: its place in the class), so its tracebacks
+# show line numbers past 100000, not its source lines
+
+
+def _property_names(fn):
+    """The ParaView property names a decorated setter defines (not its ...Info companions)."""
+    from xml.dom.minidom import parseString
+
+    orig = getattr(fn, "_pv_original_func", fn)
+    root = parseString("<r>" + "".join(orig._pvsm_property_xmls) + "</r>").documentElement
+    return [n.getAttribute("name") for n in root.childNodes
+            if n.nodeType == n.ELEMENT_NODE and n.getAttribute("information_only") != "1"]
+
+
+def _is_property(fn):
+    return callable(fn) and hasattr(getattr(fn, "_pv_original_func", fn), "_pvsm_property_xmls")
+
+
+def _late(cls, fn):
+    """``fn`` (a decorated setter, or a group holder) renumbered to sort after everything in ``cls``."""
+    import types
+
+    orig = getattr(fn, "_pv_original_func", fn)
+    n = cls.__dict__.get("_npv_late", 0) + 1
+    cls._npv_late = n
+    copy = types.FunctionType(orig.__code__.replace(co_firstlineno=_LATE + n), orig.__globals__, orig.__name__,
+                              orig.__defaults__, orig.__closure__)
+    copy.__dict__.update(orig.__dict__)
+    copy.__doc__ = orig.__doc__
+    return copy
+
+
+def _with(label, setters, advanced=False):
+    """Class decorator: the ``setters`` (functions decorated with ``@smproperty``) as one
+    PropertyGroup ``label`` of the class's Properties panel (under the gear with ``advanced``)."""
+    def decorate(cls):
+        names = []
+        for fn in setters:
+            copy = _late(cls, fn)
+            setattr(cls, copy.__name__, copy)
+            names += _property_names(copy)
+
+        def group(self):  # holds the PropertyGroup XML; never called
+            pass
+
+        vis = ' panel_visibility="advanced"' if advanced else ""
+        group._pvsm_property_xmls = [f'<PropertyGroup label="{label}"{vis}>'
+                                     + "".join(f'<Property name="{n}"/>' for n in names) + "</PropertyGroup>"]
+        holder = _late(cls, group)
+        setattr(cls, "_group_" + "".join(c if c.isalnum() else "_" for c in label), holder)
+        return cls
+
+    return decorate
+
+
+def _enum_xml(labels):
+    entries = "".join(f'<Entry value="{i}" text="{k}"/>' for i, k in enumerate(labels))
+    return f'<EnumerationDomain name="enum">{entries}</EnumerationDomain>'
+
+
+def _with_glyph_size(size, lo, hi, resolution, rlo, rhi):
+    """Glyph Size group of the glyph filters: Size (a fraction of the model diagonal; what it
+    sizes is the filter's) and Resolution (advanced). Sets ``_size`` and ``_resolution``."""
+    @smproperty.doublevector(name="Size", default_values=size)
+    @smdomain.doublerange(min=lo, max=hi)
+    def SetSize(self, v):
+        self._set("_size", float(v))
+
+    @smproperty.intvector(name="Resolution", default_values=resolution, panel_visibility="advanced")
+    @smdomain.intrange(min=rlo, max=rhi)
+    def SetResolution(self, v):
+        self._set("_resolution", int(v))
+
+    return _with("Glyph Size", [SetSize, SetResolution])
+
+
+def _with_show_only(entries):
+    """Show Only group of the filters that can drop items from their output: one ShowOnly
+    enumeration, the first entry keeping everything. Sets ``_show_only`` (the entry's index)."""
+    @smproperty.intvector(name="ShowOnly", default_values=0)
+    @smdomain.xml(_enum_xml(entries))
+    def SetShowOnly(self, v):
+        self._set("_show_only", int(v))
+
+    return _with("Show Only", [SetShowOnly])
+
+
 @smproxy.reader(
     name="NastranPVReader",
     label="Nastran Bulk Data (nastran-pv)",
@@ -653,12 +745,61 @@ def _named_block(mb, name):
     return None
 
 
+def _checklist(owner):
+    """A checklist property's selection: a change re-executes ``owner``, except while it is filled."""
+    sel = vtkDataArraySelection()
+    sel.AddObserver("ModifiedEvent", lambda *args: None if owner._listing else owner.Modified())
+    return sel
+
+
+def _fill_checklist(owner, sel, names, on=None):
+    """Add the entries of ``names`` that ``sel`` lacks, without re-executing ``owner``. New entries
+    are checked; with ``on`` (a set of names), only those are, on the first fill (``sel`` empty)
+    only, so later entries come unchecked and a choice made before the first fill stays."""
+    first = sel.GetNumberOfArrays() == 0
+    owner._listing = True
+    try:
+        for name in names:
+            if not sel.ArrayExists(name):
+                sel.AddArray(name, on is None or (first and name in on))
+    finally:
+        owner._listing = False
+
+
+def _checked(sel):
+    return [sel.GetArrayName(i) for i in range(sel.GetNumberOfArrays()) if sel.GetArraySetting(i)]
+
+
+def _input_model(inInfo):
+    """The input as a multiblock (a model tree gathered), or None before it has data."""
+    data = inInfo[0].GetInformationObject(0).Get(vtkDataObject.DATA_OBJECT())
+    if data is None:
+        return None
+    try:
+        from nastran_pv.tree import as_multiblock
+    except ImportError:
+        return None
+    return as_multiblock(data)
+
+
 class _GlyphFilter(_Settable, VTKPythonAlgorithmBase):
     def __init__(self):
         VTKPythonAlgorithmBase.__init__(self, nInputPorts=1, nOutputPorts=1, outputType="vtkPolyData")
+        self._listing = False
 
     def FillInputPortInformation(self, port, info):
         info.Set(self.INPUT_REQUIRED_DATA_TYPE(), "vtkDataObject")
+        return 1
+
+    LISTS = False  # True: _list fills checklists from the input, before the first Apply too
+
+    def _list(self, data):
+        """Fill the filter's checklists from the input model (RequestInformation and RequestData)."""
+
+    def RequestInformation(self, request, inInfo, outInfo):
+        data = _input_model(inInfo) if self.LISTS else None
+        if data is not None and data.IsA("vtkMultiBlockDataSet"):
+            self._list(data)
         return 1
 
     def RequestData(self, request, inInfo, outInfo):
@@ -670,6 +811,8 @@ class _GlyphFilter(_Settable, VTKPythonAlgorithmBase):
         except ImportError as exc:
             return _missing(exc)
         data = as_multiblock(vtkDataObject.GetData(inInfo[0], 0))
+        if data.IsA("vtkMultiBlockDataSet"):
+            self._list(data)
         block = _find_block(data, self.BLOCK, self.REQUIRED)
         out = vtkPolyData.GetData(outInfo, 0)
         if block is None or block.GetNumberOfPoints() == 0:
@@ -678,34 +821,39 @@ class _GlyphFilter(_Settable, VTKPythonAlgorithmBase):
         return 1
 
 
+# copies of nastran_pv.glyphs.MASS_COLOR_ARRAYS / BUSH_SHOW / LOAD_SHOW / LOAD_SCALES (test_plugin_constants)
+_MASS_COLORS = ("Mass", "EID", "NID")
+_BUSH_SHOW = ("all", "grounded", "coincident")
+_LOAD_SHOW = ("force", "moment", "both")
+_LOAD_SCALES = ("magnitude", "fixed")
+
+
 @smproxy.filter(name="NastranPVMassGlyphs", label="Nastran Mass Glyphs")
 @smhint.xml('<ShowInMenu category="Nastran" />')
 @smproperty.input(name="Input", port_index=0)
 @smdomain.datatype(dataTypes=["vtkDataObject"], composite_data_supported=True)
+@_with_glyph_size(0.025, 0.001, 0.2, 16, 6, 64)
 class NastranPVMassGlyphs(_GlyphFilter):
-    """Ellipsoids for concentrated masses (equivalent uniform ellipsoid of mass + inertia)."""
+    """Ellipsoids for concentrated masses (equivalent uniform ellipsoid of mass + inertia).
+    Size: radius of the heaviest mass as a fraction of the model diagonal (relative sizing)."""
 
     BLOCK, REQUIRED = "Masses", "InertiaEllipsoid"
 
     def __init__(self):
         _GlyphFilter.__init__(self)
         self._mode = 0
-        self._relative = 0.025
+        self._size = 0.025
         self._law = 0
         self._minimum = 0.0
         self._resolution = 16
+        self._minimum_mass = 0.0
+        self._color = 0
 
     @smproperty.intvector(name="SizeMode", default_values=0)
     @smdomain.xml('<EnumerationDomain name="enum"><Entry value="0" text="Auto"/>'
                   '<Entry value="1" text="Physical"/><Entry value="2" text="Relative"/></EnumerationDomain>')
     def SetSizeMode(self, v):
         self._set("_mode", int(v))
-
-    @smproperty.doublevector(name="RelativeSize", default_values=0.025)
-    @smdomain.doublerange(min=0.001, max=0.2)
-    def SetRelativeSize(self, v):
-        """Radius of the heaviest mass as a fraction of the model diagonal (relative sizing)."""
-        self._set("_relative", float(v))
 
     @smproperty.intvector(name="RadiusLaw", default_values=0)
     @smdomain.xml('<EnumerationDomain name="enum"><Entry value="0" text="Cube root (equal density)"/>'
@@ -721,25 +869,37 @@ class NastranPVMassGlyphs(_GlyphFilter):
         """Floor for light masses, as a fraction of the heaviest radius (e.g. 0.2)."""
         self._set("_minimum", float(v))
 
-    @smproperty.intvector(name="Resolution", default_values=16)
-    @smdomain.intrange(min=6, max=64)
-    def SetResolution(self, v):
-        self._set("_resolution", int(v))
+    @smproperty.doublevector(name="MinimumMass", default_values=0.0)
+    def SetMinimumMass(self, v):
+        """Masses lighter than this are left out (deck units; the others keep their size)."""
+        self._set("_minimum_mass", float(v))
+
+    @smproperty.intvector(name="ColorBy", default_values=0)
+    @smdomain.xml(_enum_xml(_MASS_COLORS))
+    def SetColorBy(self, v):
+        """The output's active scalars: what the NPV Masses view (and a plain Show) colours by."""
+        self._set("_color", int(v))
 
     def _glyphs(self, block, diag, model):
         from nastran_pv.glyphs import MASS_SIZE_MODES, RADIUS_LAWS, mass_glyphs
 
-        return mass_glyphs(block, diag, MASS_SIZE_MODES[self._mode], self._relative, self._resolution,
-                           law=RADIUS_LAWS[self._law], minimum=self._minimum)
+        return mass_glyphs(block, diag, MASS_SIZE_MODES[self._mode], self._size, self._resolution,
+                           law=RADIUS_LAWS[self._law], minimum=self._minimum, minimum_mass=self._minimum_mass,
+                           scalars=_MASS_COLORS[self._color % len(_MASS_COLORS)])
 
 
 @smproxy.filter(name="NastranPVBushGlyphs", label="Nastran Bush Glyphs")
 @smhint.xml('<ShowInMenu category="Nastran" />')
 @smproperty.input(name="Input", port_index=0)
 @smdomain.datatype(dataTypes=["vtkDataObject"], composite_data_supported=True)
+@_with_glyph_size(0.04, 0.001, 0.3, 12, 4, 48)
+@_with_show_only(("All bushes", "Grounded (no GB)", "Zero length (GA at GB)"))
 class NastranPVBushGlyphs(_GlyphFilter):
     """CBUSH stiffness glyphs: bars (K1-K3) or rings (K4-K6) along the element axes, sized from the
-    bush spacing and log stiffness, released directions in grey; optional translation ellipsoids."""
+    bush spacing and log stiffness, released directions in grey; optional translation ellipsoids.
+    Size: upper bound of the glyph scale as a fraction of the model diagonal (glyphs are otherwise
+    sized from the spacing between bushes). Show Only keeps grounded or zero-length bushes, drawn
+    at the scale of all of them."""
 
     BLOCK, REQUIRED = "Bushes", "KTransLogTensor"
 
@@ -750,6 +910,7 @@ class NastranPVBushGlyphs(_GlyphFilter):
         self._ellipsoids = 0
         self._resolution = 12
         self._stiffness = 0
+        self._show_only = 0
 
     @smproperty.intvector(name="Stiffness", default_values=0)
     @smdomain.xml('<EnumerationDomain name="enum"><Entry value="0" text="Translation (K1-K3)"/>'
@@ -757,13 +918,6 @@ class NastranPVBushGlyphs(_GlyphFilter):
     def SetStiffness(self, v):
         """Which stiffness to draw: translational bars or rotational rings."""
         self._set("_stiffness", int(v))
-
-    @smproperty.doublevector(name="Size", default_values=0.04)
-    @smdomain.doublerange(min=0.001, max=0.3)
-    def SetSize(self, v):
-        """Upper bound of the glyph scale as a fraction of the model diagonal; glyphs are otherwise
-        sized from the spacing between bushes."""
-        self._set("_size", float(v))
 
     @smproperty.intvector(name="ShowTriads", default_values=1)
     @smdomain.xml('<BooleanDomain name="bool"/>')
@@ -775,16 +929,130 @@ class NastranPVBushGlyphs(_GlyphFilter):
     def SetShowEllipsoids(self, v):
         self._set("_ellipsoids", int(v))
 
-    @smproperty.intvector(name="Resolution", default_values=12)
-    @smdomain.intrange(min=4, max=48)
-    def SetResolution(self, v):
-        self._set("_resolution", int(v))
+    def _glyphs(self, block, diag, model):
+        from nastran_pv.glyphs import BUSH_KINDS, bush_glyphs, bush_selection
+
+        keep = bush_selection(block, model, _BUSH_SHOW[self._show_only % len(_BUSH_SHOW)]) if self._show_only else None
+        if self._show_only and keep is None:
+            _message("nastran-pv Bush Glyphs: the Bushes block has no GA/GB (written by an older nastran-pv), so "
+                     "Show Only cannot tell grounded or zero-length bushes: all are drawn. Convert it again.")
+        return bush_glyphs(block, diag, self._size, bool(self._triad), bool(self._ellipsoids), self._resolution,
+                           kind=BUSH_KINDS[self._stiffness], keep=keep)
+
+
+@smproxy.filter(name="NastranPVLoadGlyphs", label="Nastran Load Glyphs")
+@smhint.xml('<ShowInMenu category="Nastran" />')
+@smproperty.input(name="Input", port_index=0)
+@smdomain.datatype(dataTypes=["vtkDataObject"], composite_data_supported=True)
+@_with_glyph_size(0.08, 0.001, 0.5, 6, 3, 32)
+class NastranPVLoadGlyphs(_GlyphFilter):
+    """FORCE/MOMENT arrows of the checked load sets (Loads/* blocks): forces single-headed, moments
+    double-headed, tail on the grid. Size: length of the largest arrow as a fraction of the model
+    diagonal. Every Nth Point 0 keeps at most 1500 arrows per set."""
+
+    BLOCK, REQUIRED = "Loads", "Force"
+    LISTS = True
+
+    def __init__(self):
+        _GlyphFilter.__init__(self)
+        self._sets = _checklist(self)
+        self._show = 0
+        self._scale = 0
+        self._stride = 0
+        self._size = 0.08
+        self._resolution = 6
+
+    @smproperty.dataarrayselection(name="LoadSets")
+    def GetLoadSets(self):
+        """Load sets to draw (first shown: the Case Control LOAD, else the first set with loads)."""
+        return self._sets
+
+    @smproperty.intvector(name="Show", default_values=0)
+    @smdomain.xml(_enum_xml(("Forces", "Moments", "Forces and moments")))
+    def SetShow(self, v):
+        self._set("_show", int(v))
+
+    @smproperty.intvector(name="ArrowLength", default_values=0)
+    @smdomain.xml(_enum_xml(("By magnitude", "Fixed")))
+    def SetArrowLength(self, v):
+        """By magnitude: the largest force (and moment) gets Size; Fixed: every arrow gets Size."""
+        self._set("_scale", int(v))
+
+    @smproperty.intvector(name="EveryNthPoint", default_values=0)
+    @smdomain.intrange(min=0, max=1000)
+    def SetEveryNthPoint(self, v):
+        """Draw every Nth loaded grid of each set; 0 = automatic (at most 1500 arrows a set)."""
+        self._set("_stride", max(int(v), 0))
+
+    def _list(self, data):
+        try:
+            from nastran_pv.glyphs import default_load_set, load_sets_of
+        except ImportError:
+            return
+        default = default_load_set(data)
+        _fill_checklist(self, self._sets, [n for n, _ in load_sets_of(data)], {default} if default else set())
 
     def _glyphs(self, block, diag, model):
-        from nastran_pv.glyphs import BUSH_KINDS, bush_glyphs
+        from nastran_pv.glyphs import load_glyphs, load_sets_of
+        from nastran_pv.vtkutil import add_string_array
 
-        return bush_glyphs(block, diag, self._size, bool(self._triad), bool(self._ellipsoids), self._resolution,
-                           kind=BUSH_KINDS[self._stiffness])
+        on = set(_checked(self._sets))
+        sets = [(n, ds) for n, ds in load_sets_of(model) if n in on] if block.IsA("vtkMultiBlockDataSet") \
+            else [("Loads", block)]
+        out = load_glyphs(sets, diag, _LOAD_SHOW[self._show % 3], self._size, _LOAD_SCALES[self._scale % 2],
+                          self._stride, self._resolution)
+        add_string_array(out.GetFieldData(), "LoadSetNames", [n for n, _ in sets])
+        return out
+
+
+@smproxy.filter(name="NastranPVSPCGlyphs", label="Nastran SPC Glyphs")
+@smhint.xml('<ShowInMenu category="Nastran" />')
+@smproperty.input(name="Input", port_index=0)
+@smdomain.datatype(dataTypes=["vtkDataObject"], composite_data_supported=True)
+@_with_glyph_size(0.006, 0.0005, 0.1, 8, 4, 32)
+class NastranPVSPCGlyphs(_GlyphFilter):
+    """A marker per constrained grid of the checked SPC sets that constrains any of the DOFs (e.g.
+    123: translations only). Size: marker diameter as a fraction of the model diagonal."""
+
+    BLOCK, REQUIRED = "Constraints", "SPCSet"
+    LISTS = True
+
+    def __init__(self):
+        _GlyphFilter.__init__(self)
+        self._spc_sets = _checklist(self)
+        self._dofs = "123456"
+        self._size = 0.006
+        self._resolution = 8
+
+    @smproperty.dataarrayselection(name="SPCSets")
+    def GetSPCSets(self):
+        return self._spc_sets
+
+    @smproperty.stringvector(name="DOFs", default_values="123456")
+    def SetDOFs(self, v):
+        """Show only grids that constrain any of these components (1-6), e.g. 123."""
+        self._set("_dofs", (v or "").strip())
+
+    def _list(self, data):
+        _fill_checklist(self, self._spc_sets, [f"SPC {s}" for s in _spc_set_ids(data)])
+
+    def _glyphs(self, block, diag, model):
+        from nastran_pv.glyphs import spc_glyphs
+
+        on = {int(n.split()[-1]) for n in _checked(self._spc_sets)}
+        return spc_glyphs(block, diag, self._size, sets=on, dofs=self._dofs, resolution=self._resolution)
+
+
+def _spc_set_ids(data):
+    import numpy as np
+
+    blk = _find_block(data, "Constraints", "SPCSet")
+    a = blk.GetPointData().GetArray("SPCSet") if blk is not None and not blk.IsA("vtkMultiBlockDataSet") else None
+    if a is None:
+        return []
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    return sorted({int(v) for v in np.unique(vtk_to_numpy(a))})
 
 
 @smproxy.filter(name="NastranPVBeamSections", label="Nastran Beam Sections")
@@ -804,6 +1072,7 @@ class NastranPVBeamSections(_GlyphFilter):
         self._axes = 0
         self._triads = 0
         self._triad_size = 0.03
+        self._max_triads = 500
         self._scale = 0.0
 
     @smproperty.intvector(name="ShowSections", default_values=1)
@@ -829,6 +1098,12 @@ class NastranPVBeamSections(_GlyphFilter):
         """Arrow length as a fraction of the model diagonal."""
         self._set("_triad_size", float(v))
 
+    @smproperty.intvector(name="MaxTriads", default_values=500)
+    @smdomain.intrange(min=0, max=100000)
+    def SetMaxTriads(self, v):
+        """Draw the triads only for models with at most this many CBAR/CBEAM (0: no limit)."""
+        self._set("_max_triads", max(int(v), 0))
+
     @smproperty.doublevector(name="DeformationScale", default_values=0.0)
     def SetDeformationScale(self, v):
         """0 = undeformed; otherwise points move by scale x the rigid-section displacement."""
@@ -838,7 +1113,7 @@ class NastranPVBeamSections(_GlyphFilter):
         from nastran_pv.sections.sweep import attach_displacement, section_tables, sweep
 
         out = sweep(block, section_tables(model, block), surfaces=bool(self._sections), axes=bool(self._axes),
-                    triads=bool(self._triads), triad_length=self._triad_size * diag)
+                    triads=bool(self._triads), triad_length=self._triad_size * diag, max_triads=self._max_triads)
         attach_displacement(out, block, self._scale)
         return out
 
@@ -851,7 +1126,8 @@ class NastranPVBeamSections(_GlyphFilter):
 class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
     """The whole model moved by Scale Factor x Displacement (blocks without one follow their grids
     by NID). The NPV views draw from it, so every view can show, and animate, a mode shape.
-    Scale Factor 0 passes the model through unchanged.
+    Scale Factor 0 passes the model through unchanged. Auto Scale ignores Scale Factor and scales
+    each time step so that its largest displacement is Auto Scale Peak (8 %) of the model size.
 
     Vibrate Mode makes the play button vibrate one mode: the input is held at Mode Time (the
     reader's time step of that mode), the output's time steps become one cycle of Frames Per Cycle
@@ -864,7 +1140,10 @@ class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
         self._mode_time = 0.0
         self._amplitude = 0.0
         self._frames = 24
+        self._auto = 0
+        self._peak = 0.08
         self._deformer = None  # (input object, its MTime, Deformer): rebuilt when the input changes
+        self._auto_scale = None  # (input object, its MTime, peak fraction, scale)
 
     def FillInputPortInformation(self, port, info):
         info.Set(self.INPUT_REQUIRED_DATA_TYPE(), "vtkDataObject")
@@ -883,6 +1162,19 @@ class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
     @smproperty.doublevector(name="ScaleFactor", default_values=0.0)
     def SetScaleFactor(self, value):
         self._set("_scale", float(value))
+
+    @smproperty.intvector(name="AutoScale", default_values=0)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetAutoScale(self, value):
+        """Scale every time step so its largest displacement is Auto Scale Peak of the model size
+        (Scale Factor is ignored; the NPV Results view turns it on)."""
+        self._set("_auto", int(value))
+
+    @smproperty.doublevector(name="AutoScalePeak", default_values=0.08, panel_visibility="advanced")
+    @smdomain.doublerange(min=0.001, max=1.0)
+    def SetAutoScalePeak(self, value):
+        """Largest displacement as a fraction of the model diagonal under Auto Scale."""
+        self._set("_peak", float(value))
 
     @smproperty.intvector(name="VibrateMode", default_values=0)
     @smdomain.xml('<BooleanDomain name="bool"/>')
@@ -934,7 +1226,7 @@ class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
         import math
 
         try:
-            from nastran_pv.deform import Deformer
+            from nastran_pv.deform import Deformer, peak_scale
         except ImportError as exc:
             return _missing(exc)
         inp = vtkDataObject.GetData(inInfo[0], 0)
@@ -943,6 +1235,10 @@ class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
         if self._deformer is None or self._deformer[:2] != key:  # new input or new time step
             self._deformer = key + (Deformer(inp),)
         scale, phase = self._scale, None
+        if self._auto:
+            if self._auto_scale is None or self._auto_scale[:3] != key + (self._peak,):
+                self._auto_scale = key + (self._peak, peak_scale(inp, self._peak))
+            scale = self._auto_scale[3]
         if self._vibrate:
             info = outInfo.GetInformationObject(0)
             key_t = vtkStreamingDemandDrivenPipeline.UPDATE_TIME_STEP()
@@ -955,11 +1251,6 @@ class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
 
 
 # ------------------------------------------------------- field filters
-def _enum_xml(labels):
-    entries = "".join(f'<Entry value="{i}" text="{k}"/>' for i, k in enumerate(labels))
-    return f'<EnumerationDomain name="enum">{entries}</EnumerationDomain>'
-
-
 class _FieldFilter(_Settable, VTKPythonAlgorithmBase):
     """Model in -> shallow copy with extra arrays out. A model tree (the reader's partitioned
     collection) is gathered into the plain multiblock for the work and scattered back after it,
@@ -1260,11 +1551,7 @@ class _Traversal:
         self._set("_max_hops", int(v))
 
 
-def _with_traversal(cls):
-    for name, fn in _Traversal.__dict__.items():
-        if callable(fn) and any(k.startswith("_pvsm") for k in vars(fn)):
-            setattr(cls, name, fn)
-    return cls
+_with_traversal = _with("Traversal", [fn for fn in _Traversal.__dict__.values() if _is_property(fn)])
 
 
 class _TopologyFilter(_FieldFilter):
@@ -1410,8 +1697,10 @@ class NastranPVParts(_TopologyFilter):
 @smdomain.datatype(dataTypes=["vtkMultiBlockDataSet", "vtkPartitionedDataSetCollection"],
                   composite_data_supported=True)
 @_with_traversal
+@_with_show_only(("Whole model", "Path only"))
 class NastranPVPath(_TopologyFilter):
-    """Shortest element path (``OnPath``, ``PathLength``) between two grids."""
+    """Shortest element path (``OnPath``, ``PathLength``) between two grids; Show Only Path only
+    outputs just the path's elements."""
 
     LABEL = "Path"
 
@@ -1419,6 +1708,10 @@ class NastranPVPath(_TopologyFilter):
         _TopologyFilter.__init__(self)
         self._from = 0
         self._to = 0
+        self._show_only = 0
+
+    def _keeps_tree(self):
+        return not self._show_only
 
     @smproperty.intvector(name="FromGrid", default_values=0)
     def SetFromGrid(self, v):
@@ -1433,7 +1726,9 @@ class NastranPVPath(_TopologyFilter):
 
         if not (self._from and self._to):
             return None
-        self._report(path(mb, self._from, self._to, self._rules(), graph=graph).warnings)
+        res = path(mb, self._from, self._to, self._rules(), graph=graph, extract=bool(self._show_only))
+        self._report(res.warnings)
+        return res.extracted
 
 
 @smproxy.filter(name="NastranPVModelCheck", label="Nastran Model Check")
@@ -1442,10 +1737,12 @@ class NastranPVPath(_TopologyFilter):
 @smdomain.datatype(dataTypes=["vtkMultiBlockDataSet", "vtkPartitionedDataSetCollection"],
                   composite_data_supported=True)
 @_with_traversal
+@_with_show_only(("All findings", "Errors only"))
 class NastranPVModelCheck(_TopologyFilter):
     """Free edges/faces, coincident grids, duplicate elements, dangling connectors, floating parts.
 
-    Output 0: one block of findings per check; output 1: the summary table.
+    Output 0: one block of findings per check (Show Only Errors only: of the error checks, without
+    free edges/faces and floating parts); output 1: the summary table of every check run.
     """
 
     LABEL = "Model Check"
@@ -1454,6 +1751,7 @@ class NastranPVModelCheck(_TopologyFilter):
         _TopologyFilter.__init__(self, n_out=2)
         self._checks = {c: 1 for c in _CHECKS}
         self._tol = 1e-6
+        self._show_only = 0
 
     def _keeps_tree(self):
         return False  # one block of findings per check
@@ -1505,10 +1803,105 @@ class NastranPVModelCheck(_TopologyFilter):
                     graph=graph)
         _fill_table(vtkTable.GetData(outInfo, 1), res.summary)
         self._report(res.warnings)
-        return res.findings
+        return res.only("error" if self._show_only else None)
 
 
 # ---------------------------------------------------------- model diff
+# copies of nastran_pv.diff.KINDS, STATUS_NAMES and REASON_NAMES (in bit order): test_plugin_constants
+_DIFF_KINDS = ("elements", "masses", "properties", "materials", "rigid", "connectors", "bushes", "loads", "spcs",
+               "coords")
+_DIFF_KIND_LABELS = ("Elements", "Concentrated masses", "Properties", "Materials", "Rigid elements", "Connectors",
+                     "Bushes", "Loads", "SPCs", "Coordinate systems")
+_DIFF_STATUSES = ("same", "added", "changed", "property", "removed")
+_DIFF_REASONS = ("type", "connectivity", "PID", "MID", "grid moved", "property", "material", "mass", "DOF",
+                 "stiffness", "orientation", "value", "system")
+
+
+def _bool_setter(name, attr, key, default=1):
+    """An on/off property ``name`` that sets ``self.<attr>[key]`` (its command: Set<name>)."""
+    def setter(self, v):
+        self._set_key(attr, key, int(v))
+
+    setter.__name__ = setter.__qualname__ = "Set" + name  # the property's command, read when decorating
+    return smproperty.intvector(name=name, default_values=default)(smdomain.xml('<BooleanDomain name="bool"/>')(setter))
+
+
+class _DiffCompare:
+    """What Nastran Diff compares (a change re-runs the comparison)."""
+
+    @smproperty.dataarrayselection(name="Kinds")
+    def GetKinds(self):
+        """Kinds to compare (grids always); unchecked kinds are skipped, with a note."""
+        return self._kinds
+
+    @smproperty.intvector(name="IgnoreGridMoves", default_values=0)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetIgnoreGridMoves(self, v):
+        """Moved grids count as same, and nothing is changed only because a grid moved."""
+        self._set("_ignore_moves", int(v))
+
+    @smproperty.intvector(name="SwapInputs", default_values=0)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetSwapInputs(self, v):
+        """Compare the other way round: Input is the reference (A), Reference the modified model (B)."""
+        self._set("_swap", int(v))
+
+
+class _DiffTolerances:
+    """How closely Nastran Diff compares (advanced; a change re-runs the comparison)."""
+
+    @smproperty.doublevector(name="GridTolerance", default_values=1e-6)
+    def SetGridTolerance(self, v):
+        """A grid moved when it moved more than this (see Grid Tolerance Mode)."""
+        self._set("_grid_tol", float(v))
+
+    @smproperty.intvector(name="GridToleranceMode", default_values=0)
+    @smdomain.xml(_enum_xml(("Fraction of A's diagonal", "Model units")))
+    def SetGridToleranceMode(self, v):
+        self._set("_grid_absolute", int(v))
+
+    @smproperty.doublevector(name="RelativeTolerance", default_values=1e-6)
+    def SetRelativeTolerance(self, v):
+        """Values differ when |b - a| > this x max(|a|, |b|)."""
+        self._set("_rel_tol", float(v))
+
+    @smproperty.doublevector(name="LoadTolerance", default_values=-1.0)
+    def SetLoadTolerance(self, v):
+        """Relative tolerance of forces and moments; negative: Relative Tolerance."""
+        self._set("_load_tol", float(v))
+
+    @smproperty.doublevector(name="StiffnessTolerance", default_values=-1.0)
+    def SetStiffnessTolerance(self, v):
+        """Relative tolerance of bush K; negative: Relative Tolerance."""
+        self._set("_stiffness_tol", float(v))
+
+    @smproperty.doublevector(name="MassTolerance", default_values=-1.0)
+    def SetMassTolerance(self, v):
+        """Relative tolerance of element, concentrated and model masses; negative: Relative Tolerance."""
+        self._set("_mass_tol", float(v))
+
+    @smproperty.doublevector(name="AbsoluteFloor", default_values=0.0)
+    def SetAbsoluteFloor(self, v):
+        """Values within this of each other are equal, whatever the relative tolerance."""
+        self._set("_floor", float(v))
+
+
+def _diff_show_setters():
+    """Show group: one checkbox per DiffStatus (Removed: the Removed block) and the reasons."""
+    setters = [_bool_setter("Show" + s.capitalize(), "_show", s) for s in _DIFF_STATUSES]
+
+    @smproperty.dataarrayselection(name="Reasons")
+    def GetReasons(self):
+        """Keep only items of B whose DiffReason has one of the checked reasons; none checked: all."""
+        return self._reasons
+
+    return setters + [GetReasons]
+
+
+def _members(cls):
+    return [fn for fn in cls.__dict__.values() if _is_property(fn)]
+
+
 @smproxy.filter(name="NastranPVDiff", label="Nastran Diff")
 @smhint.xml('<ShowInMenu category="Nastran" />')
 @smproperty.input(name="Reference", port_index=1)
@@ -1517,19 +1910,36 @@ class NastranPVModelCheck(_TopologyFilter):
 @smproperty.input(name="Input", port_index=0)
 @smdomain.datatype(dataTypes=["vtkMultiBlockDataSet", "vtkPartitionedDataSetCollection"],
                   composite_data_supported=True)
+@_with("Tolerances", _members(_DiffTolerances), advanced=True)
+@_with("Show", _diff_show_setters())
+@_with("Compare", _members(_DiffCompare))
 class NastranPVDiff(_Settable, VTKPythonAlgorithmBase):
     """What changed from the Reference model (A) to the Input model (B): two readers, or .vtm/VTKHDF
     files written by nastran-pv.
 
     Output 0: B's blocks (a multiblock) with ``DiffStatus``, ``DiffReason`` and the deltas on the
     mesh, masses, rigid elements, connectors, bushes, SPCs and loads, plus a ``Removed`` block of A's
-    removed items; output 1: every difference as a table (coordinate systems included).
+    removed items, filtered by the Show group; output 1: every difference as a table (coordinate
+    systems included). The comparison is cached per inputs and Compare/Tolerances settings, so the
+    Show group only re-filters it.
     """
 
     def __init__(self):
         VTKPythonAlgorithmBase.__init__(self, nInputPorts=2, nOutputPorts=2, outputType="vtkDataObject")
+        self._listing = False
+        self._kinds = _checklist(self)
+        self._reasons = _checklist(self)
+        _fill_checklist(self, self._kinds, _DIFF_KIND_LABELS)
+        _fill_checklist(self, self._reasons, _DIFF_REASONS, set())
+        self._ignore_moves = 0
+        self._swap = 0
         self._grid_tol = 1e-6
+        self._grid_absolute = 0
         self._rel_tol = 1e-6
+        self._load_tol = self._stiffness_tol = self._mass_tol = -1.0
+        self._floor = 0.0
+        self._show = {s: 1 for s in _DIFF_STATUSES}
+        self._cache = None  # (key, annotated B, table rows)
 
     def FillInputPortInformation(self, port, info):
         info.Set(self.INPUT_REQUIRED_DATA_TYPE(), "vtkDataObject")
@@ -1539,39 +1949,57 @@ class NastranPVDiff(_Settable, VTKPythonAlgorithmBase):
         info.Set(vtkDataObject.DATA_TYPE_NAME(), "vtkMultiBlockDataSet" if port == 0 else "vtkTable")
         return 1
 
-    @smproperty.doublevector(name="GridTolerance", default_values=1e-6)
-    def SetGridTolerance(self, v):
-        """A grid moved when it moved more than this fraction of A's bounding-box diagonal."""
-        self._set("_grid_tol", float(v))
+    def _tolerances(self):
+        from nastran_pv.diff import Tolerances
 
-    @smproperty.doublevector(name="RelativeTolerance", default_values=1e-6)
-    def SetRelativeTolerance(self, v):
-        """Values differ when |b - a| > this x max(|a|, |b|)."""
-        self._set("_rel_tol", float(v))
+        on = set(_checked(self._kinds))
+        own = lambda v: v if v >= 0 else None  # noqa: E731
+        return Tolerances(grid=self._grid_tol, rel=self._rel_tol, grid_absolute=bool(self._grid_absolute),
+                          load=own(self._load_tol), stiffness=own(self._stiffness_tol), mass=own(self._mass_tol),
+                          floor=self._floor, ignore_moves=bool(self._ignore_moves),
+                          kinds=frozenset(k for k, label in zip(_DIFF_KINDS, _DIFF_KIND_LABELS) if label in on))
 
-    def RequestData(self, request, inInfo, outInfo):
-        from vtkmodules.vtkCommonDataModel import vtkTable
+    def _compare(self, b_in, a_in, tol):
+        """``(annotated B, table rows)``, computed again only when an input or ``tol`` changed."""
+        from nastran_pv.diff import annotate, table_rows
+        from nastran_pv.fields import shallow_clone
 
-        try:
-            from nastran_pv.diff import Tolerances, annotate, table_rows
-            from nastran_pv.fields import shallow_clone
-        except ImportError as exc:
-            return _missing(exc)
-        b_in, a_in = vtkDataObject.GetData(inInfo[0], 0), vtkDataObject.GetData(inInfo[1], 0)
-        if b_in is None or a_in is None:
-            return 1
+        key = (b_in, b_in.GetMTime(), a_in, a_in.GetMTime(), tol)
+        if self._cache is not None and self._cache[0] == key:
+            return self._cache[1:]
         (b, b_cut), (a, a_cut) = _whole_model(b_in), _whole_model(a_in)
         b = shallow_clone(b)  # never add arrays to the reader's cached model
         if b_cut or a_cut:
             _message("nastran-pv Diff: an input comes through another filter, so the diff sees only the "
                      "elements that filter passes (not those the reader hides). Apply Nastran Diff directly "
                      "to the readers to compare the whole models.")
+        rows = []
         try:
-            d = annotate(b, a, Tolerances(self._grid_tol, self._rel_tol))
-            _fill_table(vtkTable.GetData(outInfo, 1), table_rows(d))
-            for note in d.notes:  # kinds one input cannot provide (an older file)
+            d = annotate(b, a, tol)
+            rows = table_rows(d)
+            for note in d.notes:  # kinds not compared: unchecked, or one input cannot provide them
                 _message(f"nastran-pv Diff: {note}")
         except Exception as exc:  # report, pass B through unchanged
             _message(f"nastran-pv Diff: {exc}", error=True)
-        vtkMultiBlockDataSet.GetData(outInfo, 0).ShallowCopy(b)
+        self._cache = (key, b, rows)
+        return b, rows
+
+    def RequestData(self, request, inInfo, outInfo):
+        from vtkmodules.vtkCommonDataModel import vtkTable
+
+        try:
+            from nastran_pv.diff import show_only
+        except ImportError as exc:
+            return _missing(exc)
+        b_in, a_in = vtkDataObject.GetData(inInfo[0], 0), vtkDataObject.GetData(inInfo[1], 0)
+        if b_in is None or a_in is None:
+            return 1
+        if self._swap:
+            b_in, a_in = a_in, b_in
+        b, rows = self._compare(b_in, a_in, self._tolerances())
+        _fill_table(vtkTable.GetData(outInfo, 1), rows)
+        reasons = sum(1 << i for i, r in enumerate(_DIFF_REASONS) if r in set(_checked(self._reasons)))
+        statuses = [i for i, s in enumerate(_DIFF_STATUSES[:4]) if self._show[s]]
+        vtkMultiBlockDataSet.GetData(outInfo, 0).ShallowCopy(
+            show_only(b, statuses, reasons, removed=bool(self._show["removed"])))
         return 1

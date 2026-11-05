@@ -44,6 +44,21 @@ caps each list in the terminal (default 30). `--csv FILE` writes every row of ev
 long table with the columns `Item Id Name Status Field A B Delta Rel`. `--nsm-set ID` picks the
 bulk NSM set for both decks, as in `convert`.
 
+### Settings
+
+These change what is compared, in `diff`, `convert --diff-against` and on the Nastran Diff filter
+([ParaView](#paraview)):
+
+| Flag | Nastran Diff | Effect |
+|---|---|---|
+| `--skip KIND[,KIND]` | *Kinds* (Compare) | Kinds not compared: `elements`, `masses` (concentrated), `properties`, `materials`, `rigid`, `connectors`, `bushes`, `loads`, `spcs`, `coords` (with the grids' CP/CD). Each gets a note and no summary row; grids are always compared. Skipping `properties` or `materials` also leaves the elements alone that changed only through them |
+| `--ignore-grid-moves` | *Ignore Grid Moves* (Compare) | Moved grids count as same, and nothing is changed only because a grid moved (elements, connections, loads, SPCs, mass and bush positions, coordinate system origins) |
+| `--grid-tol R` | *Grid Tolerance* | A grid moved when it moved more than R × A's bounding-box diagonal (default 1e-6) |
+| `--grid-tol-absolute` | *Grid Tolerance Mode* *Model units* | `--grid-tol` is a distance in model units |
+| `--rel-tol R` | *Relative Tolerance* | Values differ when `|b - a| > R × max(|a|, |b|)` (default 1e-6) |
+| `--load-tol R`, `--stiffness-tol R`, `--mass-tol R` | *Load*, *Stiffness*, *Mass Tolerance* (negative: *Relative Tolerance*) | Their own `--rel-tol` for forces and moments, bush K, and element, concentrated and model masses |
+| `--abs-floor V` | *Absolute Floor* | Values within V of each other are equal, whatever the relative tolerance (for values near zero; default 0) |
+
 ### What is compared
 
 | Item | Matched by | Changed when |
@@ -64,14 +79,15 @@ bulk NSM set for both decks, as in `convert`.
 A grid whose CP or CD id changed, or whose CP/CD coordinate system changed, is reported too
 (status *system*), even when it did not move.
 
-Values differ when `|b - a| > --rel-tol × max(|a|, |b|)` (default 1e-6). Properties and materials
+Values differ when `|b - a| > max(--rel-tol × max(|a|, |b|), --abs-floor)`, with the kind's own
+tolerance where one is given ([Settings](#settings)). Properties and materials
 are compared through the elements that use them, so a card that no element references is not
 reported. A density change is a material change (`Rho`), not also a property change, and derived
 fields such as the shell `Area` from `--derive size` are not property values, so a converted file
 with derived fields compares cleanly with a plain one. An element that moved from one block to
 another (a CQUAD4 that became a CBAR, or a shell id reused by a solid: Shells to Solids) counts as
 removed from the one block and added to the other. Force and moment vectors differ when
-`|b - a| > --rel-tol × max(|a|, |b|)`.
+`|b - a| > --load-tol × max(|a|, |b|)` (`--load-tol` defaults to `--rel-tol`).
 
 Not compared, because the model does not hold them: pressure, distributed and thermal loads
 (PLOAD*, PLOAD4, TEMP), spring and damper values (CELAS/PELAS K, CDAMP B) and MPC coefficients.
@@ -98,8 +114,8 @@ pair their keys with the same code.
 nastran-pv convert modified.bdf --diff-against baseline.bdf -o out/diff.vtm
 ```
 
-`--diff-against A` adds these arrays to B (the converted model) and takes the same `--grid-tol` and
-`--rel-tol`:
+`--diff-against A` adds these arrays to B (the converted model) and takes the same
+[settings](#settings) as `diff`:
 
 | Array | Where | Meaning |
 |---|---|---|
@@ -153,10 +169,21 @@ nastran-pv render modified.bdf --preset diff --against baseline.bdf --views top
 both in the Pipeline Browser and apply it; in the input dialog, set *Input* to B and *Reference*
 to A. Output 0 is B with the arrays above and the
 `Removed` block. Output 1 is the long table, which you can open in a SpreadSheet view; text values
-such as element types and grid lists are in its `Text` column. Kinds the diff had to skip are
-listed in Output Messages. *GridTolerance* and
-*RelativeTolerance* are `--grid-tol` and `--rel-tol`. From Python:
-`pv.NastranDiff(Input=b, Reference=a)`.
+such as element types and grid lists are in its `Text` column. Kinds the diff skipped are
+listed in Output Messages. Its Properties panel has three groups:
+
+- **Compare**: *Kinds* (a checklist of what to compare), *Ignore Grid Moves*, and *Swap Inputs*,
+  which compares the other way round (Input as A) without reconnecting the inputs.
+- **Show**: *Show Same*, *Show Added*, *Show Changed*, *Show Property* and *Show Removed* (the
+  `Removed` block) keep those items in output 0; unchecking *Show Same* leaves only the changes on
+  screen, in any view. *Reasons* keeps only B's items whose `DiffReason` has one of the
+  checked reasons, for example only PID changes or only moved grids; with none checked it does
+  nothing. The table (output 1) always lists every difference.
+- **Tolerances** (advanced, the gear button): the [settings](#settings) of the CLI.
+
+The comparison is kept per inputs and Compare/Tolerances settings, so changing a Show setting
+only filters it again. NPV Diff reruns keep these settings, and its summary says what is shown.
+From Python: `pv.NastranDiff(Input=b, Reference=a, Kinds=["Elements", "Loads"], ShowSame=0)`.
 
 Applied directly to a deck reader, the diff compares the whole model, including elements the
 reader hides (*Hidden Elements*, *Show Only*, unchecked properties and the other checklists), so

@@ -87,6 +87,14 @@ with `cannot read DECK: <error>` and writes no PNG.
   `solid`, `nv.fetch`). The reader outputs the model tree, so use `nv.Model(reader)` (a gathered
   multiblock) or `nv.fetch` + `nastran_pv.tree.as_multiblock` instead of a bare `Fetch`, and
   `nv.selectors([...])` for `ExtractBlock`.
+- Each view's settings live on the filter it selects (`docs/paraview.md#filter-properties`):
+  `NPV mass glyphs` (*Size*, *MinimumMass*, *ColorBy*), `NPV bush glyphs` (*ShowOnly* grounded or
+  zero-length), `NPV load glyphs` (*LoadSets*, *Show* forces/moments, *ArrowLength*,
+  *EveryNthPoint*), `NPV spc glyphs` (*SPCSets*, *DOFs*), `NPV beam axes` (*MaxTriads*),
+  `NPV deform` (*AutoScale* in the results view). A rerun keeps them; pass arguments to override:
+  `nv.apply("loads", sets=["SID_2"], show="Moments")`, `nv.apply("spc", dofs="123")`,
+  `nv.apply("masses", minimum_mass=0.5, color_by="EID")`, `nv.apply("results", scale=50)`. Set
+  checklists with a list of names (`g.LoadSets = ["LOAD_1001"]`) after `g.UpdatePipelineInformation()`.
 - Hiding parts from a script: set the reader's `VisibleProperties`/`VisibleMaterials`/
   `VisibleElementTypes`/`VisibleFamilies`/`VisibleGroups` lists or `ShowOnlyElements`/`HiddenElements`
   (`nv.show_all(reader)` resets them); `docs/paraview.md#model-tree-and-visibility`.

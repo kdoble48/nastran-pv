@@ -156,7 +156,11 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   `nastran_views.side_by_side` adds a second, camera-linked view. The reader tags its output with
   `NPVWholeModel` (field string + array signature) so a Nastran Diff fed directly by it diffs the
   whole cached multiblock, hidden elements included; downstream pipeline objects get copies, so
-  object identity cannot be used.
+  object identity cannot be used. `Tolerances` (frozen, hashable) also carries what is compared:
+  `kinds` (`KINDS`; unchecked ones skip with a note), `ignore_moves`, `grid_absolute`, per-kind
+  `load`/`stiffness`/`mass` and an absolute `floor`; `show_only` filters an annotated output by
+  status, reason bits and the Removed block (display only: the proxy caches the annotated B per
+  input objects + MTimes + `Tolerances`).
 - `selection.py`: selection from a file of IDs. `read_ids` reads CSV/TSV/text/Excel/JSON (ranges,
   `THRU`/`BY`; the key comes from the column header) into an `IdList`; `item_masks` matches it per
   block (EID/PID/MID/FAMILY/GROUP, NID with `grids="all"|"any"`; masses, SPCs and loads on the grids
@@ -191,10 +195,19 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   CLI `--random/--drive/--damping/--g`; reader `Random*` properties; views `random`/`randomsweep`
   (the sweep's frequency label indexes `RandomFrameFrequencies` by `time_index`: a temporal VTKHDF
   has no root field data, and `min`/`max` are numpy reductions in PythonAnnotation).
-- `glyphs.py`: mass ellipsoids and bush triads as real `vtkPolyData`.
-- `paraview/nastran_bdf_reader.py`: one plugin file containing the reader, three glyph filters
-  (masses, bushes, beam sections), the deform filter, three field filters, four topology
+- `glyphs.py`: mass ellipsoids, bush triads, load arrows (`load_glyphs`; forces single-, moments
+  double-headed) and SPC markers (`spc_glyphs`) as real `vtkPolyData`, plus the subsets the filters
+  offer (`minimum_mass`, `bush_selection`, `default_load_set`).
+- `paraview/nastran_bdf_reader.py`: one plugin file containing the reader, five glyph filters
+  (masses, bushes, loads, SPCs, beam sections), the deform filter, three field filters, four topology
   filters (grow, parts, path, model check) and the two-input *Nastran Diff*.
+  - Shared settings are class decorators, one PropertyGroup each: `_with(label, setters)` copies
+    `@smproperty` setters into the class (renumbered past its own lines, so the group follows the
+    filter's own settings) and appends the group XML after them; `_with_glyph_size`,
+    `_with_show_only`, `_with_traversal`. Checklists (`LoadSets`, `SPCSets`, Diff `Kinds`/`Reasons`)
+    are `vtkDataArraySelection`s filled with `_fill_checklist`.
+  - The views set a filter property only when its argument is passed (`_set_given`), so a rerun
+    keeps what the user changed.
   - At import it bootstraps `sys.path` with `../src`, then `_vendor`, then
     `NASTRAN_PV_SITE_PACKAGES`, and imports nastran_pv lazily.
   - The reader caches the deck by the mtimes of the main file and every INCLUDE, and caches the
@@ -234,8 +247,10 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
     `NastranMassGlyphs`, `NastranMapTable`, etc.
   - `reader.TimestepValues` is a bare float when there is one step; use `nastran_views.timesteps`.
   - `ColorBy(rep, None)` fails in ParaView 6; use `nastran_views.solid`.
-  - A Python proxy's properties come from its class's own `__dict__` only; the topology filters'
-    shared properties are copied in by `_with_traversal`.
+  - A Python proxy's properties come from its class's own `__dict__` only (shared ones are copied
+    in by the `_with_*` decorators), ordered by their setters' line numbers, and a `PropertyGroup`
+    must come after its properties in the XML or ParaView drops them from it.
+  - `str(proxy.SomeEnum)` is quoted in ParaView 6; read enumerations with `nastran_views.enum_text`.
   - Deleting a proxy that was the active source leaves no active source; `selected_ids` restores it.
   - `Fetch` of a `vtkPartitionedDataSetCollection` drops its data assembly (partitions, order and
     field data survive); `nastran_views.fetch` copies it back from the data information.

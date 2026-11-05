@@ -106,26 +106,29 @@ python paraview/install_macros.py --remove
 Restart ParaView, open a deck, select the reader (or anything downstream of it) and click a button.
 Each view hides what is currently shown and builds a ready-to-read state: the mesh drawn as a
 translucent ghost, the relevant glyphs, an indexed or continuous lookup table, a legend and a short
-summary. Running a view again reuses its pipeline objects, which are named `NPV ...`. A macro
-ends with the filter it is about selected (*NPV mass glyphs*, *NPV beam sections*, *NPV grow*, the
-Nastran Diff, *NPV deform* for Results and the animation macros), so its Properties panel is open.
+summary. Running a view again reuses its pipeline objects, which are named `NPV ...`, and keeps
+what you changed on them. A macro ends with the filter it is about selected (*NPV mass glyphs*,
+*NPV load glyphs*, *NPV beam sections*, *NPV grow*, the Nastran Diff, *NPV deform* for Results and
+the animation macros), so its Properties panel is open with the settings that tune that view
+([Filter properties](#filter-properties)): change one, click Apply (or turn on *Auto Apply*), and
+the view follows. Opacity, line width and colors are in the *Display* section of the same panel.
 Views that only color the model, and the visibility macros, end on the reader. Any macro run with
 an `NPV ...` filter selected finds the model upstream of it.
 
 | Macro | Shows |
 |---|---|
-| NPV Masses | Mass ellipsoids from mass and inertia, colored by mass; grid→CG offsets; model CG marker; total mass |
-| NPV Bushes | CBUSH translational stiffness: K1/K2/K3 bars along the element axes (length ~ log stiffness, the clearly stiffest axis thicker, released directions grey) and thin GA–GB lines |
+| NPV Masses | Mass ellipsoids from mass and inertia, colored by mass (or *Color By* EID/NID); grid→CG offsets; model CG marker; total mass |
+| NPV Bushes | CBUSH translational stiffness: K1/K2/K3 bars along the element axes (length ~ log stiffness, the clearly stiffest axis thicker, released directions grey) and thin GA–GB lines; *Show Only* keeps the grounded or zero-length ones |
 | NPV Bush Rotations | CBUSH rotational stiffness: K4/K5/K6 rings around the element axes (radius ~ log stiffness, on their own scale); says so when no CBUSH has rotational stiffness |
-| NPV Beams | CBAR/CBEAM cross sections swept along the beams, colored by PID, with the shear-center axis (black), neutral axis (orange) and, up to 500 beams, x/y/z triads; undeformed like the ghost mesh (`nv.apply("beams", scale=10)` or the filter's *DeformationScale* deforms it; [Beam sections](beam-sections.md)) |
-| NPV Loads | Force arrows for the active LOAD set, scaled by magnitude (at most 1,500 arrows, every Nth loaded grid, on large models); resultant force |
-| NPV SPC | Constrained grids colored by DOF code |
+| NPV Beams | CBAR/CBEAM cross sections swept along the beams, colored by PID, with the shear-center axis (black), neutral axis (orange) and, up to *Max Triads* (500) beams, x/y/z triads (*NPV beam axes*); undeformed like the ghost mesh (`nv.apply("beams", scale=10)` or the filters' *DeformationScale* deforms it; [Beam sections](beam-sections.md)) |
+| NPV Loads | Force arrows (*Nastran Load Glyphs*) for the active LOAD set, scaled by magnitude (at most 1,500 arrows a set, every Nth loaded grid, on large models); resultant force. Other sets, moments and fixed-length arrows are settings of *NPV load glyphs* |
+| NPV SPC | Constrained grids (*Nastran SPC Glyphs*) colored by DOF code; *SPC Sets* and *DOFs* pick which |
 | NPV Rigid | RBE2/RBE3/... spider legs by type |
 | NPV Family / Group / PID / MID / Element Type | Mesh with an indexed color per value, with names in the legend |
 | NPV Thickness | Shell thickness |
 | NPV NSM | Nonstructural mass: shells by NSM per area, lines by NSM per length (two legends); totals by source and per NSM set, or the defined sets when none is selected. The reader's *NSMSet* picks the bulk set (-1 = Case Control `NSM=`, or the only set of a bulk-only file; 0 = none; see [Nonstructural mass](model.md#nonstructural-mass)) |
-| NPV Results | Deformed shape colored by displacement over the undeformed outline, for the current time step; the largest displacement is drawn at 8 % of the model size (*NPV deform* > *Scale Factor*) |
-| NPV Random RMS | Random response (reader *Random ASD* set, see [Random vibration](random-vibration.md)): the mesh colored by acceleration RMS on a log scale, with the drive, input RMS and captured mass |
+| NPV Results | Deformed shape colored by displacement over the undeformed outline, for the current time step; each step's largest displacement is drawn at 8 % of the model size (*NPV deform* > *Auto Scale*; uncheck it to type a *Scale Factor*, which rerunning NPV Results keeps; any other view in between resets it to 0, and NPV Results then turns Auto Scale back on) |
+| NPV Random RMS | Random response (reader *Random ASD* set, see [Random vibration](random-vibration.md)): the mesh colored by acceleration RMS on a log scale, with the drive, input RMS and captured mass. Drive, damping and g are the reader's *Random* properties, since the reader computes the response |
 | NPV Random Sweep | The response ASD at the current frequency frame on one fixed log range, with the frame's frequency: press play to sweep |
 | NPV Animate Mode | Vibrates the mode the time controls are on, in the view as it is (masses, PID, loads, results, a show-only subset, anything you switched on): two cycles at 24 frames/s. It then leaves the **play button** looping that mode: the time steps become the 24 phases of one cycle (the time widget reads *Phase*), and the mode and its frequency stay in the upper right corner. A converted single-step file (`convert --results` without `--all-steps`) has one mode. From Python: `nv.play_mode(3, frames=36)` |
 | NPV Stop Mode Animation | Gives the time controls back to the modes, on the mode that vibrated. Any NPV view, Animate All Modes and Save Mode Animations do this too. Step to another mode and click NPV Animate Mode again |
@@ -134,15 +137,15 @@ an `NPV ...` filter selected finds the model upstream of it.
 | NPV Parts | Connected parts in indexed colors; uncheck card types on *NPV parts* to split at connectors |
 | NPV Grow | Elements reached from the seeds, colored by element hops |
 | NPV Grow from Selection | Seeds *NPV grow* with the selected cells (EIDs) or grids, then shows NPV Grow |
-| NPV Path from Selection | Shortest element path between two selected grids |
-| NPV Model Check | Free edges and faces, coincident grids, duplicates, dangling connectors, floating parts |
+| NPV Path from Selection | Shortest element path between two selected grids (*Show Only* *Path only* on *NPV path* outputs just the path) |
+| NPV Model Check | Free edges and faces, coincident grids, duplicates, dangling connectors, floating parts (*Show Only* *Errors only* on *NPV check* drops the informational ones) |
 | NPV Index Colors | Turns the selected object's current integer coloring (PID, MID, FamilyId, …) into an indexed LUT with annotations |
 | NPV Show Only | Shows only the selected elements (Select Cells On first); loads and SPCs stay |
 | NPV Hide | Adds the selected elements to the reader's *Hidden Elements* |
 | NPV Show All | Clears both element lists, checks every property, material, type, family and group, and sets *Selection Mode* to Off |
 | NPV Only Property | Unchecks every property except those of the selected elements |
 | NPV Only Material | Unchecks every material except those of the selected elements |
-| NPV Diff | What changed from a second open model (A) to the active one (B): B's elements, rigid elements, connectors, bushes, SPCs and loads by `DiffStatus` (same, added, changed, property), A's removed items red and translucent, the counts and the mass change ([Model diff](diff.md#paraview)) |
+| NPV Diff | What changed from a second open model (A) to the active one (B): B's elements, rigid elements, connectors, bushes, SPCs and loads by `DiffStatus` (same, added, changed, property), A's removed items red and translucent, the counts and the mass change; the Nastran Diff's *Compare*, *Show* and *Tolerances* settings tune it ([Model diff](diff.md#paraview)) |
 | NPV Side by Side | A and B (or B's diff) in two views with linked cameras, colored by the active view's array over one shared range ([Side by side](diff.md#side-by-side)) |
 | NPV Show Only Reached / NPV Hide Reached | Shows only, or hides, what *NPV grow* reached; with *Stay Within* that is "everything connected to this point inside its group" ([Model tools](tools.md#paraview)) |
 | NPV Show Only File / NPV Hide File | Shows only, or hides, what the reader's *Selection File* lists ([above](#selection-from-an-id-file)); set the file on the reader first, since macros cannot open a file dialog |
@@ -151,6 +154,34 @@ an `NPV ...` filter selected finds the model upstream of it.
 The same views can be called from the Python shell (`import nastran_views as nv; nv.apply("masses")`),
 from `render_model.py`, and as `nastran-pv render` presets (see [CLI](cli.md#batch-screenshots)).
 
+## Filter properties
+
+Each macro's filter holds the settings of its view, named in Nastran terms. Running the macro
+again keeps what you changed; from Python an argument you pass explicitly wins
+(`nv.apply("loads", sets=["LOAD_2"], show="Moments")`), and the rest stays as it is.
+
+| Macro | Filter it selects | Settings |
+|---|---|---|
+| Masses | *NPV mass glyphs* | *SizeMode*, *RadiusLaw*, *MinimumRelativeSize*, *Minimum Mass*, *Color By* (Mass, EID, NID); *Glyph Size* group |
+| Bushes, Bush Rotations | *NPV bush glyphs*, *NPV bush rotation glyphs* | *Stiffness*, *ShowTriads*, *ShowEllipsoids*; *Show Only* and *Glyph Size* groups |
+| Beams | *NPV beam sections* (the triads are on *NPV beam axes*) | *ShowSections*, *ShowAxes*, *ShowTriads*, *TriadSize*, *Max Triads*, *DeformationScale* |
+| Loads | *NPV load glyphs* | *Load Sets*, *Show*, *Arrow Length*, *Every Nth Point*; *Glyph Size* group |
+| SPC | *NPV spc glyphs* | *SPC Sets*, *DOFs*; *Glyph Size* group |
+| Results, Animate Mode | *NPV deform* | *Auto Scale*, *Scale Factor*, *Auto Scale Peak* (advanced); the undeformed outline's opacity is the Display opacity of *NPV undeformed mesh* |
+| Random RMS, Random Sweep | the reader | *Random ASD*, *Random Drive*, *Random Damping*, *Random G*, *Random Frames* (the reader computes the response) |
+| Grow, Path, Model Check, Parts | *NPV grow*, *NPV path*, *NPV check*, *NPV parts* | the *Traversal* group; Path and Model Check also *Show Only* ([Model tools](tools.md#paraview)) |
+| Diff | the Nastran Diff | *Compare*, *Show* and *Tolerances* groups ([Model diff](diff.md#paraview)) |
+
+Settings shared by several filters come in groups that look and act the same on each:
+
+- **Glyph Size**: *Size*, a fraction of the model diagonal (what it sizes is in each filter's
+  entry below), and *Resolution* (advanced, the gear button).
+- **Show Only**: what the filter keeps in its output; the first entry keeps everything.
+- **Traversal**: the card types and rules of the topology filters ([Model tools](tools.md#paraview)).
+
+The views that only color the reader (PID, MID, family, group, element type, thickness, NSM) and
+the selection commands make no filter of their own.
+
 ## Glyph filters
 
 *Filters > Nastran* adds these filters you can apply to the reader by hand:
@@ -158,7 +189,10 @@ from `render_model.py`, and as `nastran-pv render` presets (see [CLI](cli.md#bat
 * **Nastran Deform** moves the whole model by *Scale Factor* × `Displacement`. Blocks without
   one (load sets, ...) follow their grids by NID. The NPV views draw through it (*NPV deform*),
   which is how NPV Results and the animation macros deform every view; at 0 it passes the
-  model through. *Vibrate Mode* (set by NPV Animate Mode) holds the input at *Mode Time* and
+  model through. *Auto Scale* (NPV Results turns it on) ignores *Scale Factor* and scales each
+  time step so its largest displacement is *Auto Scale Peak* (0.08) × the model diagonal; the
+  other views and the animation macros turn it off while they set their own scale.
+  *Vibrate Mode* (set by NPV Animate Mode) holds the input at *Mode Time* and
   makes its own time steps one cycle of *Frames Per Cycle* phases, drawing *Amplitude* ×
   sin(2π phase) × `Displacement`, so the play button vibrates the mode.
 
@@ -169,8 +203,9 @@ from `render_model.py`, and as `nastran-pv render` presets (see [CLI](cli.md#bat
       the largest one (0 for a disc or rod) is drawn at 5 %. Masses without inertia become spheres at the median density of
       the others. When no mass has inertia it uses Relative. Inertia that no body can have (one
       principal moment above the sum of the other two) gives a sphere and a load warning.
-    - **Relative** gives the heaviest mass a radius of *RelativeSize* × the model diagonal; the
-      other masses follow *RadiusLaw*.
+    - **Relative** gives the heaviest mass a radius of *Size* × the model diagonal (called
+      *RelativeSize* before; a saved state or script that sets it gets the default size, so set
+      *Size* instead); the other masses follow *RadiusLaw*.
     - **Auto** (the default) picks Physical only when the masses carry real inertia of a visible
       size. Otherwise it uses Relative, because spheres sized without inertia are not physical
       lengths.
@@ -178,11 +213,15 @@ from `render_model.py`, and as `nastran-pv render` presets (see [CLI](cli.md#bat
     mass), **Logarithmic** or **Uniform**.
   - *MinimumRelativeSize*: a floor as a fraction of the heaviest radius, e.g. 0.15, so light
     masses stay visible under Linear.
+  - *Minimum Mass*: masses lighter than this (deck units) are left out; the sizing is still
+    decided on all of them, so the others keep their size.
+  - *Color By*: `Mass`, `EID` or `NID`, set as the output's active scalars; NPV Masses colors by it
+    (ids with an indexed legend).
 
   The NPV Masses legend states the sizing used, e.g. "radius ~ m^(1/3); heaviest radius 0.945
   (2.5% of model)". To resize, select *NPV mass glyphs* in the Pipeline Browser, change the
   properties and click Apply. From Python:
-  `nastran_views.apply("masses", law="linear", relative=0.03, minimum=0.15)`.
+  `nastran_views.apply("masses", law="linear", relative=0.03, minimum=0.15, minimum_mass=0.5)`.
 * **Nastran Bush Glyphs** draws each CBUSH's stiffness along its element axes. *Stiffness* picks
   *Translation (K1-K3)*: double-ended bars of length `2 s (0.25 + 0.75 k)`, or *Rotation (K4-K6)*:
   rings of radius `s (0.25 + 0.6 k)`, where `k = log10(1+Kᵢ/K_ref)` normalized to [0, 1] over the
@@ -192,13 +231,29 @@ from `render_model.py`, and as `nastran-pv render` presets (see [CLI](cli.md#bat
   - An axis more than 1.5× stiffer than the next one is drawn thicker; a released direction
     (K = 0) is a small grey glyph; a bush without PBUSH stiffness gets none.
   - *ShowTriads* (on) draws the per-axis bars or rings; *ShowEllipsoids* adds log-stiffness
-    ellipsoids (translation only).
+    ellipsoids (translation only). With both off, NPV Bushes turns *ShowTriads* back on.
+  - *Show Only*: **All bushes**, **Grounded (no GB)** (GB blank, or GB = GA) or **Zero length (GA
+    at GB)** (GA and GB at one place). The kept bushes are drawn at the scale of all of them.
   - Cell arrays `Axis` (0 = released or ellipsoid), `Stiffness`, `Log10Stiffness`, `EID`,
     `Released` and `Dominant` are available for coloring.
+* **Nastran Load Glyphs** draws the loads of the checked *Load Sets* (the `Loads/*` blocks;
+  checked first: the Case Control `LOAD`, else the first set with loads) as arrows with their
+  tail on the grid: forces single-headed, moments double-headed. *Show* picks **Forces**,
+  **Moments** or **Forces and moments**. *Arrow Length* **By magnitude** gives the largest force
+  (and, on its own scale, the largest moment) over the checked sets *Size* × the model diagonal
+  (0.08) and the others their share; **Fixed** draws every arrow that long. *Every Nth Point*
+  draws every Nth loaded grid of each set; 0 (the default) keeps at most 1,500 arrows a set. Point
+  arrays `Magnitude`, `LoadKind` (0 force, 1 moment), `LoadSet` and `NID`; GRAV is not drawn.
+  With **Forces and moments** both kinds share one `Magnitude` color range (force and moment
+  units mixed); color by `LoadKind` to tell them apart, or show one kind at a time.
+* **Nastran SPC Glyphs** puts a sphere of diameter *Size* × the model diagonal (0.006) on every
+  constrained grid of the checked *SPC Sets* that constrains any of the *DOFs* (default `123456`;
+  `123` keeps the grids that fix a translation). Point arrays `DOFCode`, `SPCSet`, `NID` and `CD`.
 * **Nastran Beam Sections** sweeps each CBAR/CBEAM's cross section along it (see
   [Beam sections](beam-sections.md)). *ShowSections*, *ShowAxes* (shear-center and neutral axes) and
   *ShowTriads* (x/y/z arrows, *TriadSize* × model diagonal) pick the parts; the `BeamPart` cell array
-  tells them apart. *DeformationScale* (0 = undeformed) moves the sections rigidly with the end
+  tells them apart. *Max Triads* (500; 0 = no limit) leaves the triads out of models with more
+  beams. *DeformationScale* (0 = undeformed) moves the sections rigidly with the end
   grids' displacement and rotation at the current time step. The output follows the reader's
   visibility checklists and hidden elements.
 

@@ -203,13 +203,16 @@ def _add_triads(parts: _Parts, beams: _Beams, length: float) -> None:
 
 
 def sweep(lines, tables: dict, *, surfaces: bool = True, axes: bool = False, triads: bool = False,
-          triad_length: float = 1.0) -> vtkPolyData:
-    """The swept beam sections of ``lines`` (empty polydata when there is nothing to sweep)."""
+          triad_length: float = 1.0, max_triads: int = 0) -> vtkPolyData:
+    """The swept beam sections of ``lines`` (empty polydata when there is nothing to sweep).
+    ``max_triads`` > 0 draws the triads only when there are at most that many beams (field data
+    ``TriadsDrawn`` 1 or 0)."""
     parts = _Parts()
     if lines is None or not tables or lines.GetNumberOfCells() == 0:
         return parts.polydata()
     pid = get_array(lines.GetCellData(), "PID")
     ok = has_frame(lines) & np.isin(pid, list(tables))
+    triads = triads and not (max_triads and max_triads > 0 and int(has_frame(lines).sum()) > max_triads)
     for p in np.unique(pid[ok]):
         beams = _Beams(lines, np.nonzero(ok & (pid == p))[0])
         stations = _loft(tables[int(p)])
@@ -219,7 +222,9 @@ def sweep(lines, tables: dict, *, surfaces: bool = True, axes: bool = False, tri
             _add_axes(parts, beams, stations)
         if triads:
             _add_triads(parts, beams, triad_length)
-    return parts.polydata()
+    out = parts.polydata()
+    vtkutil.add_array(out.GetFieldData(), "TriadsDrawn", np.array([int(bool(triads))]))
+    return out
 
 
 def attach_displacement(sections, lines, scale: float = 0.0) -> None:

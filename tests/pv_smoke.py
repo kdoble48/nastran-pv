@@ -137,6 +137,21 @@ def topology_checks(pv, nv):
     for name in ("parts", "grow", "path", "check"):
         nv.apply(name, reader=topo, view=view)
     check(True, "topology views build on the topology deck")
+    path_src.ShowOnly = "Path only"
+    nv.apply("path", reader=topo, view=view)
+    out = rm.nv.fetch(path_src)
+    cells = {n: out.GetBlock(i).GetNumberOfCells() for i, n in enumerate(nv.block_names(out))}
+    elements = sum(cells.get(b, 0) for b in ("Shells", "Solids", "Lines", "Rigid", "Connectors", "BushLines"))
+    check(nv.enum_text(path_src, "ShowOnly") == "Path only" and elements == 9 and cells["Shells"] == 5
+          and "9 element(s)" in _info(nv, nv.Model(topo)), f"Path Show Only Path only: the 9 path cells {cells}")
+    path_src.ShowOnly = "Whole model"
+    mc = pv.FindSource(nv._name(nv.Model(topo), "check"))
+    mc.ShowOnly = "Errors only"
+    nv.apply("check", reader=topo, view=view)
+    names = nv.block_names(rm.nv.fetch(mc))
+    check(names == ["CoincidentGrids", "DuplicateElements", "DanglingConnectors"]
+          and "errors only" in _info(nv, nv.Model(topo)), f"Model Check Show Only Errors only, kept on rerun: {names}")
+    mc.ShowOnly = "All findings"
 
     import export_site as es
 
@@ -298,6 +313,15 @@ def beam_checks(pv, nv, view, tmp):
     text = pv.FindSource(nv._name(model, "info")).Text
     check("12 CBAR/CBEAM, 6 section PID(s)" in text and "4 PBAR/PBEAM station(s)" in text
           and "Deformation" not in text, f"beams view text: {text!r}")
+    axes = pv.FindSource(nv._name(model, "beam axes"))
+    check(axes.ShowTriads == 1 and 3 in _cell_values(axes, "BeamPart"), "beam axes: triads (12 beams <= Max Triads)")
+    axes.MaxTriads = 5
+    nv.apply("beams", reader=beams, view=view)
+    check(axes.MaxTriads == 5 and _cell_values(axes, "BeamPart") == {1, 2}
+          and "triads off above 5 beams" in _info(nv, model), "Max Triads 5: no triads for 12 beams, kept on rerun")
+    nv.apply("beams", reader=beams, view=view, triads=True)
+    check(axes.MaxTriads == 0 and 3 in _cell_values(axes, "BeamPart"), "beams view triads=True: whatever the count")
+    axes.MaxTriads = 500
     nv.apply("beams", reader=beams, view=view, scale=5.0)
     check(pv.FindSource(nv._name(model, "beam sections")).DeformationScale == 5.0, "beams view scale=")
     beams.OP2FileName = ""
@@ -649,6 +673,7 @@ def diff_checks(pv, nv):
     check(pv.GetActiveSource() is d and set(pv.GetSources()) == before, "diff rerun from the diff: no new objects")
     lut = pv.GetColorTransferFunction("DiffStatus")
     check(lut.InterpretValuesAsCategories == 1 and "removed" in list(lut.Annotations), "DiffStatus legend")
+    diff_property_checks(pv, nv, d, b, view, want)
 
     pv.SetActiveView(view)
     left, right = nv.side_by_side(array="Thickness", view=view)  # run with the diff selected
@@ -706,6 +731,75 @@ def diff_checks(pv, nv):
         for s in (fd, fa, fb):
             pv.Delete(s)
     diff2_checks(pv, nv)
+
+
+KIND_LABELS = ["Elements", "Concentrated masses", "Properties", "Materials", "Rigid elements", "Connectors",
+               "Bushes", "Loads", "SPCs", "Coordinate systems"]
+
+
+def diff_property_checks(pv, nv, d, b, view, want):
+    """Nastran Diff's Compare, Show and Tolerances groups (issue #49) on diff_a (A) / diff_b (B); the
+    expected values are those of tests/test_diff_options.py."""
+    model = nv.Model(b)
+    d.ShowSame = 0
+    nv.apply("diff", reader=b, view=view)
+    check(d.ShowSame == 0 and _by_eid(d, "Shells", "DiffStatus") == {1: 3, 2: 2, 5: 1}
+          and "shown: added, changed, property, removed" in _info(nv, model), "Show Same off drops E6, kept on rerun")
+    d.ShowRemoved = 0
+    d.UpdatePipeline()
+    check("Removed" not in nv.block_names(rm.nv.fetch(d)), "Show Removed off drops the Removed block")
+    d.Reasons = ["PID"]
+    d.UpdatePipeline()
+    check(_by_eid(d, "Shells", "DiffStatus") == {2: 2}, "Reasons PID: only E2 (PID 10 -> 20)")
+    d.ShowSame, d.ShowRemoved, d.Reasons = 1, 1, []
+    d.Kinds = [k for k in KIND_LABELS if k != "Elements"]
+    d.UpdatePipeline()
+    counts, _ = _diff_counts(nv, d)
+    check("elements" not in counts and counts["masses"] == want["masses"], f"Kinds without Elements: {sorted(counts)}")
+    d.Kinds = KIND_LABELS
+    d.IgnoreGridMoves = 1
+    d.UpdatePipeline()
+    check(_diff_counts(nv, d)[0]["grids"] == (1, 1, 0), "Ignore Grid Moves: grid 8 is not moved")
+    d.IgnoreGridMoves = 0
+    d.GridToleranceMode = "Model units"
+    d.GridTolerance = 0.5
+    d.UpdatePipeline()
+    moved_abs = _diff_counts(nv, d)[0]["grids"]
+    d.GridToleranceMode = "Fraction of A's diagonal"
+    d.UpdatePipeline()
+    check(moved_abs == (1, 1, 1) and _diff_counts(nv, d)[0]["grids"] == (1, 1, 0),
+          "Grid Tolerance 0.5: grid 8 (moved 1.0) moved in model units, not as 0.5 x diagonal 3.6")
+    d.GridTolerance = 1e-6
+    d.MassTolerance = 0.5
+    d.UpdatePipeline()
+    check(_diff_counts(nv, d)[0]["masses"] == (1, 0, 0), "Mass Tolerance 0.5: CONM2 100 2.0 -> 2.5 is the same")
+    d.MassTolerance = -1.0
+    d.SwapInputs = 1
+    d.UpdatePipeline()
+    counts, delta = _diff_counts(nv, d)
+    check(counts["elements"] == (2, 2, 3) and abs(delta + 3.5) < 1e-9 and _by_eid(d, "Shells", "DiffStatus")[3] == 1,
+          f"Swap A/B: B -> A, E3 added, mass delta {delta}")
+    check(nv._diff_text(d, model).startswith("diff_a.bdf vs diff_b.bdf"), "Swap A/B: the summary names B first")
+    d.SwapInputs = 0
+    d.UpdatePipeline()
+    check(_diff_counts(nv, d)[0] == want, "settings back: the original diff")
+    import nastran_pv.diff as nd  # the builtin session runs the plugin in this interpreter
+
+    real, calls = nd.annotate, []
+    nd.annotate = lambda *a, **k: calls.append(1) or real(*a, **k)
+    try:
+        for prop, value in (("ShowSame", 0), ("ShowSame", 1), ("ShowRemoved", 0), ("ShowRemoved", 1),
+                            ("Reasons", ["MID"]), ("Reasons", [])):
+            setattr(d, prop, value)
+            d.UpdatePipeline()
+        shown_only = len(calls)
+        d.RelativeTolerance = 1e-5
+        d.UpdatePipeline()
+        check(shown_only == 0 and len(calls) == 1, f"Show settings re-filter the cached diff ({shown_only} "
+                                                     f"comparisons), a tolerance re-runs it ({len(calls) - shown_only})")
+    finally:
+        nd.annotate = real
+        d.RelativeTolerance = 1e-6
 
 
 def diff2_checks(pv, nv):
@@ -833,6 +927,7 @@ def _shown_differences(a, b):
 
 PARITY_FILTERS = (  # constructor, properties, output ports
     ("NastranMassGlyphs", {}, 1), ("NastranBushGlyphs", {}, 1), ("NastranBeamSections", {}, 1),
+    ("NastranLoadGlyphs", {"Show": "Forces and moments"}, 1), ("NastranSPCGlyphs", {}, 1),
     ("NastranDeform", {"ScaleFactor": 2.0}, 1), ("NastranDerivedFields", {}, 1),
     ("NastranMapTable", {"Key": 1}, 1), ("NastranGroupStats", {}, 2), ("NastranGrow", {}, 1),
     ("NastranParts", {}, 3), ("NastranPath", {}, 1), ("NastranModelCheck", {}, 2),
@@ -931,7 +1026,7 @@ def parity_checks(pv, nv):
 # what each view selects on tiny_run.bdf ("NPV <what> [<deck>]"; None: the reader). The deck has no
 # CBAR/CBEAM (beams: beam_checks), no NSM and no random response; diff: diff_checks
 VIEW_SELECTS = {"masses": "mass glyphs", "bushes": "bush glyphs", "bushrotations": "bush rotation glyphs",
-                "beams": None, "loads": "load arrows", "spc": "spc glyphs", "rigid": None, "family": None,
+                "beams": None, "loads": "load glyphs", "spc": "spc glyphs", "rigid": None, "family": None,
                 "group": None, "pid": None, "mid": None, "elementtype": None, "thickness": None, "nsm": None,
                 "results": "deform", "random": None, "randomsweep": None, "parts": "parts", "grow": "grow",
                 "path": "path", "check": "check"}
@@ -965,9 +1060,7 @@ def active_source_checks(pv, nv):
         nv.apply(name, view=view)
         first, sources = active_name(), set(pv.GetSources())
         want = expected(what)
-        tag = nv._name(model, "")[len("NPV "):]  # "[tiny_run.bdf #id]"
-        ok = (first.startswith("NPV load arrows") and first.endswith(tag)) if name == "loads" else first == want
-        check(ok, f"{name}: {first!r} selected")
+        check(first == want, f"{name}: {first!r} selected")
         nv.apply(name, view=view)
         check(active_name() == first and set(pv.GetSources()) == sources, f"{name} again from {first!r}: same objects")
     nv.run_macro("masses")
@@ -1043,6 +1136,138 @@ def calc_nan_checks(pv, nv):
                 pv.Delete(p)
 
 
+def _point_values(src, name):
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    a = rm.nv.fetch(src).GetPointData().GetArray(name)
+    return set(vtk_to_numpy(a).tolist()) if a is not None else set()
+
+
+def _info(nv, model):
+    return nv.pv.FindSource(nv._name(model, "info")).Text
+
+
+GRAV_MOMENT_DECK = """SOL 101
+CEND
+LOAD = 5
+BEGIN BULK
+GRID,1,,0.,0.,0.
+GRID,2,,1.,0.,0.
+GRID,3,,1.,1.,0.
+GRID,4,,0.,1.,0.
+CQUAD4,1,1,1,2,3,4
+PSHELL,1,1,0.1
+MAT1,1,7e10,,0.3,2700.
+GRAV,5,,9.81,0.,0.,-1.
+MOMENT,6,3,,1.,0.,0.,1.
+ENDDATA
+"""
+
+
+def filter_property_checks(pv, nv, reader, view):
+    """Each macro's filter property (tiny_run.bdf): set it, update, the output changes; rerunning the
+    macro keeps it; an explicit macro argument wins. Settings are put back afterwards."""
+    model = nv.apply("masses", reader=reader, view=view)
+    g = pv.FindSource(nv._name(model, "mass glyphs"))
+    check(_point_values(g, "EID") == {201, 202}, "mass glyphs: both CONM2")
+    g.MinimumMass = 2.0
+    nv.apply("masses", reader=reader, view=view)
+    check(g.MinimumMass == 2.0 and _point_values(g, "EID") == {201}
+          and "1 lighter than Minimum Mass 2 not drawn" in _info(nv, model), "Minimum Mass drops CONM2 202, kept on rerun")
+    check("RelativeSize" not in g.ListProperties(), "one mass size property, Size (no half-synced alias)")
+    g.ColorBy = "EID"
+    nv.apply("masses", reader=reader, view=view)
+    check(nv._shown_array(view) == ("POINTS", "EID")
+          and rm.nv.fetch(g).GetPointData().GetScalars().GetName() == "EID", "Color By EID: active scalars and view")
+    g.SizeMode = "Relative"
+    g.UpdatePipeline()
+    r0 = max(_point_values(g, "GlyphRadius"))
+    g.Size = 0.05
+    g.UpdatePipeline()
+    check(abs(max(_point_values(g, "GlyphRadius")) - 2 * r0) < 1e-9, "Size 0.05 doubles the heaviest radius")
+    nv.apply("masses", reader=reader, view=view, relative=0.01, minimum_mass=0.0, color_by="Mass", mode="Auto")
+    check(g.Size == 0.01 and g.MinimumMass == 0.0 and nv.enum_text(g, "ColorBy") == "Mass", "masses view arguments win")
+    g.Size = 0.025
+
+    model = nv.apply("bushes", reader=reader, view=view)
+    b = pv.FindSource(nv._name(model, "bush glyphs"))
+    b.ShowOnly = "Grounded (no GB)"
+    nv.apply("bushes", reader=reader, view=view)
+    eids = _cell_values(b, "EID")
+    check(nv.enum_text(b, "ShowOnly") == "Grounded (no GB)" and eids == {502} and "only the grounded" in _info(nv, model),
+          f"Show Only grounded bushes, kept on rerun: {eids}")
+    b.ShowOnly = "Zero length (GA at GB)"
+    b.UpdatePipeline()
+    check(_cell_values(b, "EID") == {503}, "Show Only zero-length bushes: CBUSH 503 (grids 4 and 12)")
+    b.ShowOnly = "All bushes"
+    nv.apply("bushes", reader=reader, view=view, size=0.02)
+    check(b.Size == 0.02 and _cell_values(b, "EID") == {501, 502, 503}, "bushes view size= wins")
+    b.Size = 0.04
+
+    model = nv.apply("loads", reader=reader, view=view)
+    lg = pv.FindSource(nv._name(model, "load glyphs"))
+    check(list(lg.LoadSets) == ["LOAD_1001"] and _point_values(lg, "LoadSet") == {1001}
+          and "LOAD_1001: 2 loaded grids" in _info(nv, model), f"Load Sets default: the Case Control LOAD {list(lg.LoadSets)}")
+    lg.LoadSets = ["SID_1", "SID_2"]
+    nv.apply("loads", reader=reader, view=view)
+    check(_point_values(lg, "LoadSet") == {1, 2} and "SID_2: 1 loaded grids" in _info(nv, model),
+          "Load Sets SID_1 + SID_2, kept on rerun")
+    lg.Show = "Moments"
+    lg.UpdatePipeline()
+    check(_root(lg, "ArrowCount") == [1] and _point_values(lg, "LoadKind") == {1}, "Show Moments: the one MOMENT")
+    lg.Show = "Forces and moments"
+    lg.UpdatePipeline()
+    check(_root(lg, "ArrowCount") == [4], "Show forces and moments: 3 forces + 1 moment")
+    nv.apply("loads", reader=reader, view=view, sets=["LOAD_1001"], show="Forces")
+    check(list(lg.LoadSets) == ["LOAD_1001"] and _root(lg, "ArrowCount") == [2], "loads view sets=/show= win")
+    x0 = lg.GetDataInformation().GetBounds()
+    lg.ArrowLength = "Fixed"
+    lg.UpdatePipeline()
+    x1 = lg.GetDataInformation().GetBounds()
+    check(x1 != x0, "Arrow Length Fixed: every arrow as long as the largest")
+    lg.ArrowLength = "By magnitude"
+
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        path = os.path.join(tmp, "grav.bdf")
+        with open(path, "w") as f:
+            f.write(GRAV_MOMENT_DECK)
+        gr = rm.load_reader(path)
+        gm = nv.apply("loads", reader=gr, view=view)
+        text = _info(nv, gm)
+        check("SID_6: no forces to draw" in text and "Show on 'NPV load glyphs'" in text,
+              f"loads view on a moment-only set with Show Forces says so: {text!r}")
+        nv.apply("loads", reader=gr, view=view, show="Moments")
+        check("SID_6: 1 loaded grids" in _info(nv, gm), "Show Moments draws the MOMENT")
+        for what in ("load glyphs", "mesh", "deform", "info"):
+            pv.Delete(pv.FindSource(nv._name(gm, what)))
+        pv.Delete(gr)
+
+    name = nv._name(model, "spc glyphs")  # an older nastran-pv left a ParaView Glyph of this name
+    pv.Delete(pv.FindSource(name))
+    old = pv.Glyph(Input=reader, GlyphType="Sphere")
+    pv.RenameSource(name, old)
+    model = nv.apply("spc", reader=reader, view=view)
+    sg = pv.FindSource(nv._name(model, "spc glyphs"))
+    check(sg.GetXMLName() == "NastranPVSPCGlyphs", "an old Glyph named 'NPV spc glyphs' is replaced")
+    check(_point_values(sg, "NID") == {1, 2, 3, 4}, "spc glyphs: the four constrained grids")
+    sg.DOFs = "45"
+    nv.apply("spc", reader=reader, view=view)
+    check(sg.DOFs == "45" and _point_values(sg, "NID") == {1, 4} and "(of 4" in _info(nv, model),
+          "DOFs 45: only the 123456 grids, kept on rerun")
+    nv.apply("spc", reader=reader, view=view, sets=[2], dofs="123456")
+    check(_point_values(sg, "NID") == {2} and list(sg.SPCSets) == ["SPC 2"], "spc view sets= / dofs= win")
+    sg.SPCSets = ["SPC 1", "SPC 2"]
+    sg.UpdatePipeline()
+    check(_point_values(sg, "NID") == {1, 2, 3, 4}, "both SPC sets again")
+
+
+def _cell_values(src, name):
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    a = rm.nv.fetch(src).GetCellData().GetArray(name)
+    return set(vtk_to_numpy(a).tolist()) if a is not None else set()
+
+
 def main():
     reader = rm.load_reader(DECK)
     model = rm.Model(reader)
@@ -1086,9 +1311,40 @@ def main():
         anim = pv.CreateRenderView()
         model = nv.apply("results", reader=reader, view=anim)  # the results view: peak deflection
         deform = pv.FindSource(nv._name(model, "deform"))
-        check(deform is not None and deform.ScaleFactor > 0, "results view draws through NPV deform")
+        check(deform is not None and deform.ScaleFactor > 0 and deform.AutoScale == 1,
+              "results view draws through NPV deform, on Auto Scale")
+        shells = nv._extract(model, "Shells")  # grids 1-7, x from 0: mode 1 moves them all by T1 = 1.0
+        side = nv.deformed(model, shells, "probe")  # like the topology views' deforms of a part
+        nv.apply("results", reader=reader, view=anim)
+        check(deform.AutoScale == 1 and side.AutoScale == 0 and side.ScaleFactor == deform.ScaleFactor,
+              "Auto Scale only on the model's NPV deform; the others get its scale, not their own peak")
+        pv.Delete(side)
+        nv._set_time(anim, full[1])
+        shells.UpdatePipeline(full[1])
+        peak1 = nv.peak_deformation(nv.Model(reader, full[1]))
+        x0 = shells.GetDataInformation().GetBounds()[0]
+        check(abs(x0 - peak1) < 1e-6, f"Auto Scale follows the step: mode 1 at x{peak1:.4g} "
+                                      f"(start step x{deform.ScaleFactor:.4g}), x min {x0:.4g}")
+        deform.AutoScalePeak = 0.16
+        shells.UpdatePipeline(full[1])
+        check(abs(nv.peak_deformation(nv.Model(reader, full[1])) - 2 * peak1) < 1e-9
+              and abs(shells.GetDataInformation().GetBounds()[0] - 2 * peak1) < 1e-6,
+              "Auto Scale Peak 0.16: the view and the animations' scale double")
+        deform.AutoScalePeak = 0.08
+        deform.AutoScale = 0
+        deform.ScaleFactor = 0.5
+        nv.apply("results", reader=reader, view=anim)
+        rtext = pv.FindSource(nv._name(model, "info")).Text
+        check(deform.ScaleFactor == 0.5 and not deform.AutoScale and "x0.5 (Auto Scale off" in rtext,
+              f"results view rerun keeps a typed Scale Factor: {rtext!r}")
+        nv.apply("results", reader=reader, view=anim, scale=2.0)
+        check(deform.ScaleFactor == 2.0 and not deform.AutoScale, "results view scale= wins")
+        nv._set_time(anim, full[0])
         model = nv.apply("masses", reader=reader, view=anim)  # other views: undeformed
-        check(deform.ScaleFactor == 0.0, "the masses view resets the deformation")
+        check(deform.ScaleFactor == 0.0 and not deform.AutoScale, "the masses view resets the deformation")
+        nv.apply("results", reader=reader, view=anim)
+        check(deform.AutoScale == 1, "results view after another view: Auto Scale again")
+        model = nv.apply("masses", reader=reader, view=anim)
         glyphs = pv.FindSource(nv._name(model, "mass glyphs"))
         mesh = nv._extract(model, "Shells")  # grids 1-7: the ones the fixture displaces
 
@@ -1196,6 +1452,7 @@ def main():
     for name in nv.VIEWS:
         nv.apply(name, reader=reader, view=view)
     check(True, f"all views build: {', '.join(nv.VIEWS)}")
+    filter_property_checks(pv, nv, reader, view)
     with tempfile.TemporaryDirectory() as tmp:
         load_error_checks(pv, nv, tmp)
         beam_checks(pv, nv, view, tmp)
@@ -1212,15 +1469,12 @@ def main():
     nloads = rm.Model(reader).block("Loads")
     npts = max(nloads.GetBlock(i).GetNumberOfPoints() for i in range(nloads.GetNumberOfBlocks()))
     check(npts > 1, f"tiny deck load set has {npts} points")
-    nv.MAX_LOAD_ARROWS = 1
-    lmodel = nv.apply("loads", reader=reader, view=view)
+    lmodel = nv.apply("loads", reader=reader, view=view, stride=2)
     info = pv.FindSource(nv._name(lmodel, "info"))  # this reader's objects: "NPV <what> [<reader>]"
-    tag = nv._name(lmodel, "info")[len("NPV info"):]
-    glyph = next(s for (n, _), s in pv.GetSources().items()
-                 if n.startswith("NPV load arrows") and n.endswith(tag))
-    check(glyph.GlyphMode == "Every Nth Point" and "showing 1 of" in info.Text,
-          f"loads arrow cap: {glyph.GlyphMode!r}, {info.Text!r}")
-    nv.MAX_LOAD_ARROWS = 1500
+    glyph = pv.FindSource(nv._name(lmodel, "load glyphs"))
+    check(glyph.EveryNthPoint == 2 and "arrows on 1 of every 2 loaded grids" in info.Text,
+          f"loads arrow stride: {glyph.EveryNthPoint}, {info.Text!r}")
+    glyph.EveryNthPoint = 0
     nv.set_camera(view, "showcase")
     pos, foc = np.array(view.CameraPosition), np.array(view.CameraFocalPoint)
     d = (pos - foc) / np.linalg.norm(pos - foc)

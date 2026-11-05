@@ -19,10 +19,10 @@ ELEMENT_ITEM, MASS_ITEM, RIGID_ITEM, CONNECTOR_ITEM, BUSH_ITEM, LOAD_ITEM, SPC_I
 
 
 # ------------------------------------------------------------------ helpers
-def _vdiff(a, b, rel) -> bool:
-    """Vectors differ: |b - a| > rel x max(|a|, |b|)."""
+def _vdiff(a, b, rel, floor=0.0) -> bool:
+    """Vectors differ: |b - a| > max(rel x max(|a|, |b|), floor)."""
     a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
-    return bool(np.linalg.norm(b - a) > rel * max(np.linalg.norm(a), np.linalg.norm(b)))
+    return bool(np.linalg.norm(b - a) > max(rel * max(np.linalg.norm(a), np.linalg.norm(b)), floor))
 
 
 def _legs_text(legs) -> str:
@@ -213,12 +213,12 @@ def compare_coords(A, B, row, tol, res: Result) -> None:
         if a[0] != b[0]:
             reason |= TYPE
             row("coord", cid, "changed", "Type", a[0], b[0], name=b[0])
-        if np.linalg.norm(b[1] - a[1]) > tol.grid * A.diagonal():
+        if not tol.ignore_moves and np.linalg.norm(b[1] - a[1]) > tol.distance(A.diagonal()):
             reason |= MOVED
             for c, axis in enumerate("XYZ"):
                 if b[1][c] != a[1][c]:
                     row("coord", cid, "changed", f"Origin{axis}", float(a[1][c]), float(b[1][c]), name=b[0])
-        moved_axes = np.abs(b[2] - a[2]) > tol.rel
+        moved_axes = np.abs(b[2] - a[2]) > max(tol.rel, tol.floor)  # unit vectors: absolute
         if moved_axes.any():
             reason |= ORIENTATION
             for k in np.flatnonzero(moved_axes):
@@ -325,19 +325,19 @@ def compare_bushes(A, B, moved, row, tol, res: Result) -> None:
         if grids_moved:
             r |= MOVED
             row("bush", eid, "changed", REASON_NAMES[MOVED], name="CBUSH")
-        axes = np.abs(b["axes"] - a["axes"]) > tol.rel
+        axes = np.abs(b["axes"] - a["axes"]) > max(tol.rel, tol.floor)  # unit vectors: absolute
         if axes.any():
             r |= ORIENTATION
             for k in np.flatnonzero(axes):
                 row("bush", eid, "changed", f"Axis{k // 3 + 1}{'XYZ'[k % 3]}", float(a["axes"][k]),
                     float(b["axes"][k]), name="CBUSH")
-        if not grids_moved and np.linalg.norm(b["xyz"] - a["xyz"]) > tol.grid * diag:
+        if not grids_moved and not tol.ignore_moves and np.linalg.norm(b["xyz"] - a["xyz"]) > tol.distance(diag):
             r |= ORIENTATION
             for c, axis in enumerate("XYZ"):
                 if b["xyz"][c] != a["xyz"][c]:
                     row("bush", eid, "changed", axis, float(a["xyz"][c]), float(b["xyz"][c]), name="CBUSH")
         ka, kb = np.resize(a["k"], 6), np.resize(b["k"], 6)
-        dk = differs(ka, kb, tol.rel)
+        dk = differs(ka, kb, tol.of("stiffness"), tol.floor)
         if dk.any():
             r |= STIFFNESS
             for c in np.flatnonzero(dk):
@@ -391,6 +391,10 @@ def compare_loads(A, B, moved, row, tol, res: Result, gravity: bool = True) -> N
                          "CORD_ table (an older file)")
     all_status, n_a, n_b, n_removed = [], 0, 0, 0
     comps = [(f"F{x}", 0, c) for c, x in enumerate("XYZ")] + [(f"M{x}", 1, c) for c, x in enumerate("XYZ")]
+    rel, floor = tol.of("load"), tol.floor
+
+    def beyond(delta, scale):
+        return abs(delta) > max(rel * scale, floor)
 
     def vec_rows(nid, name, st, fa, ma, fb, mb_):
         va, vb = (fa, ma), (fb, mb_)
@@ -399,8 +403,7 @@ def compare_loads(A, B, moved, row, tol, res: Result, gravity: bool = True) -> N
             b = None if vb[w] is None else float(vb[w][c])
             scale = max(np.linalg.norm(va[w]) if va[w] is not None else 0.0,
                         np.linalg.norm(vb[w]) if vb[w] is not None else 0.0)
-            if (a is None and b) or (b is None and a) or \
-                    (a is not None and b is not None and abs(b - a) > tol.rel * scale):
+            if (a is None and b) or (b is None and a) or (a is not None and b is not None and beyond(b - a, scale)):
                 row("load", nid, st, fld, a, b, name=name)
 
     for name in sorted(set(sa) | set(sb), key=lambda k: ((sa.get(k) or sb.get(k))["sid"], k)):
@@ -421,7 +424,7 @@ def compare_loads(A, B, moved, row, tol, res: Result, gravity: bool = True) -> N
                 dF[k] -= a["F"][i]
                 dM[k] -= a["M"][i]
                 r = 0
-                if _vdiff(a["F"][i], b["F"][k], tol.rel) or _vdiff(a["M"][i], b["M"][k], tol.rel):
+                if _vdiff(a["F"][i], b["F"][k], rel, floor) or _vdiff(a["M"][i], b["M"][k], rel, floor):
                     r |= VALUE
                     vec_rows(nid, name, "changed", a["F"][i], a["M"][i], b["F"][k], b["M"][k])
                 if nid in moved:
@@ -449,7 +452,7 @@ def compare_loads(A, B, moved, row, tol, res: Result, gravity: bool = True) -> N
         for w, prefix in enumerate("FMG"):
             scale = max(np.linalg.norm(ra[w]), np.linalg.norm(rb[w]))
             for c, x in enumerate("XYZ"):
-                if abs(rb[w][c] - ra[w][c]) > tol.rel * scale:
+                if beyond(rb[w][c] - ra[w][c], scale):
                     row("load_set", sid, "changed" if a is not None and b is not None else ("added" if a is None
                                                                                             else "removed"),
                         f"{prefix}{x}", float(ra[w][c]), float(rb[w][c]), name=name)
@@ -484,7 +487,7 @@ def compare_spcs(A, B, moved, row, tol, res: Result, enforced: bool) -> None:
             r |= DOF
             row("spc", nid, "changed", "DOF", a["dof"], b["dof"], name=name)
         if enforced:
-            dd = differs(a["d"], b["d"], tol.rel)
+            dd = differs(a["d"], b["d"], tol.rel, tol.floor)
             if dd.any():
                 r |= VALUE
                 for c in np.flatnonzero(dd):
@@ -511,10 +514,15 @@ def compare_spcs(A, B, moved, row, tol, res: Result, enforced: bool) -> None:
 
 def compare(A, B, moved_nids, row, tol, res: Result) -> None:
     """Rigid elements, connectors, bushes, loads and SPCs (after :func:`compare_coords`)."""
+    from .diff import skipped_note
+
     moved = {int(n) for n in moved_nids}
     for block, item, label, type_array, mpc_key, code in (
             ("Rigid", "rigid", "rigid", "RigidType", False, RIGID_ITEM),
             ("Connectors", "connector", "connectors", "ConnectorType", True, CONNECTOR_ITEM)):
+        if not tol.compares(label):
+            res.notes.append(skipped_note(label))
+            continue
         da, db = A.blocks.get(block), B.blocks.get(block)
         ia = leg_items(da, type_array, mpc_key) if da is not None else {}
         ib = leg_items(db, type_array, mpc_key) if db is not None else {}
@@ -525,9 +533,18 @@ def compare(A, B, moved_nids, row, tol, res: Result) -> None:
         _connections(item, label, ia, ib, moved, row, res, block, code)
         if db is None:
             res.items.pop(block, None)
-    compare_bushes(A, B, moved, row, tol, res)
+    if tol.compares("bushes"):
+        compare_bushes(A, B, moved, row, tol, res)
+    else:
+        res.notes.append(skipped_note("bushes"))
     both_v2 = coord_table(A.mb) is not None and coord_table(B.mb) is not None
-    compare_loads(A, B, moved, row, tol, res, gravity=both_v2)
+    if tol.compares("loads"):
+        compare_loads(A, B, moved, row, tol, res, gravity=both_v2)
+    else:
+        res.notes.append(skipped_note("loads"))
+    if not tol.compares("spcs"):
+        res.notes.append(skipped_note("SPCs"))
+        return
     if not both_v2:
         res.notes.append("SPC enforced values not compared: a model has no CORD_ table (an older file)")
     compare_spcs(A, B, moved, row, tol, res, enforced=both_v2)

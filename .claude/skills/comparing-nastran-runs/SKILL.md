@@ -27,6 +27,14 @@ PLOAD*/TEMP, spring values and MPC coefficients are not in the model, so not dif
 written before the `CORD_` table existed skips coords/CP/CD/SPC enforced values/GRAV with a note above
 the table: convert it again. User page: `docs/diff.md`.
 
+Narrow a diff with `--skip loads,spcs` (kinds: elements masses properties materials rigid connectors
+bushes loads spcs coords), `--ignore-grid-moves` (a remeshed-in-place or shifted model: only
+property/load changes), `--grid-tol 0.5 --grid-tol-absolute` (model units), and per-kind
+`--load-tol/--stiffness-tol/--mass-tol` plus `--abs-floor` for values near zero; the same work on
+`convert --diff-against` and as the Nastran Diff's *Compare*/*Tolerances* groups
+(`diff.Tolerances` in code). In ParaView, *ShowSame 0* (and *Reasons*, *ShowRemoved*) on the diff
+filter leaves only the changes in any view without re-running the comparison; *SwapInputs* flips A/B.
+
 ## Store workflow
 
 ```bash

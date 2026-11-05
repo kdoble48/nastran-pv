@@ -87,20 +87,20 @@ def gather_cells(blocks, graph, cells, arrays=None):
     return out
 
 
-def extract_reached(mb, name):
-    """Copy of ``mb`` (same block tree) keeping only cells whose ``name`` cell array is >= 0."""
+def extract_reached(mb, name, minimum=0):
+    """Copy of ``mb`` (same block tree) keeping only cells whose ``name`` cell array is >= ``minimum``."""
     out = vtkMultiBlockDataSet()
     for i in range(mb.GetNumberOfBlocks()):
         blk = mb.GetBlock(i)
         if blk is None:
             continue
         if blk.IsA("vtkMultiBlockDataSet"):
-            kept = extract_reached(blk, name)
+            kept = extract_reached(blk, name, minimum)
         else:
             values = get_array(blk.GetCellData(), name)
             if values is None:
                 continue
-            kept = _extract(blk, np.flatnonzero(values >= 0))
+            kept = _extract(blk, np.flatnonzero(values >= minimum))
         j = out.GetNumberOfBlocks()
         out.SetBlock(j, kept)
         out.GetMetaData(j).Set(vtkMultiBlockDataSet.NAME(), mb.GetMetaData(i).Get(vtkMultiBlockDataSet.NAME()))

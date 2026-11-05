@@ -106,7 +106,10 @@ def _leaves(data):
 
 
 
-SKIP = ("vtkOriginalCellIds", "vtkOriginalPointIds", "vtkBlockColors", "vtkCompositeIndex")
+# Normals: shading derived from the glyph geometry, which the digest compares already; unit vectors
+# rounded to 9 decimals land on either side of a rounding boundary with last-bit noise, which
+# reorders the digest's sorted rows (a flaky deck-vs-file mismatch, not a difference)
+SKIP = ("vtkOriginalCellIds", "vtkOriginalPointIds", "vtkBlockColors", "vtkCompositeIndex", "Normals")
 PLUMBING = ("BlockPath", "RootFieldNames", "NPVWholeModel",  # how a model travels, not what it is
             "Time")  # ParaView's VTKHDF reader tags a temporal file's blocks with their time
 

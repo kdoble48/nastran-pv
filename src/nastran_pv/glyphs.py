@@ -51,14 +51,18 @@ def unit_arrow(resolution: int = 12):
     return _template(a)  # along +x, from 0 to 1
 
 
-def instance(templates, mats, origins):
-    """Place one template per (3x3 matrix, origin): p' = origin + M p."""
+def instance(templates, mats, origins, rotations=None):
+    """Place one template per (3x3 matrix, origin): p' = origin + M p. ``rotations`` (when every
+    M is a rotation times a uniform scale) turn the normals directly, without the SVD of a
+    pseudo-inverse, whose last bits vary from one run to the next."""
     pts, polys, nrm = templates
     n, m = len(mats), len(pts)
     xyz = origins[:, None, :] + np.einsum("nij,mj->nmi", mats, pts)
     conn = (polys[None, :, :] + (np.arange(n) * m)[:, None, None]).reshape(-1)
     normals = None
-    if nrm is not None:
+    if nrm is not None and rotations is not None:
+        normals = np.einsum("nij,mj->nmi", rotations, nrm).reshape(-1, 3)
+    elif nrm is not None:
         inv_t = np.transpose(np.linalg.pinv(mats), (0, 2, 1))  # normals transform with M^-T
         normals = np.einsum("nij,mj->nmi", inv_t, nrm)
         length = np.linalg.norm(normals, axis=2, keepdims=True)
@@ -77,11 +81,13 @@ def _polydata(xyz, conn, ntri_per, count, normals=None) -> vtkPolyData:
     return pd
 
 
-def _repeat_point_arrays(src_pd, dst_pd, per: int, names) -> None:
+def _repeat_point_arrays(src_pd, dst_pd, per: int, names, rows=None) -> None:
+    """Point arrays of ``src_pd`` (its ``rows``, default all) repeated ``per`` times, one glyph each."""
     for name in names:
         a = src_pd.GetPointData().GetArray(name)
         if a is not None:
-            vtkutil.add_array(dst_pd.GetPointData(), name, np.repeat(vtkutil.to_numpy(a), per, axis=0))
+            v = vtkutil.to_numpy(a)
+            vtkutil.add_array(dst_pd.GetPointData(), name, np.repeat(v if rows is None else v[rows], per, axis=0))
 
 
 # --------------------------------------------------------------------- masses
@@ -148,12 +154,18 @@ def mass_glyph_matrices(tensors, eq_radius, mass, has_inertia, diag, mode="auto"
     return shape * target[:, None, None], mode, text, target
 
 
+MASS_COLOR_ARRAYS = ("Mass", "EID", "NID")  # Nastran Mass Glyphs' Color By: the output's active scalars
+
+
 def mass_glyphs(masses: vtkPolyData, diag: float, mode: str = "auto", relative: float = 0.025,
-                resolution: int = 16, law: str = "cbrt", minimum: float = 0.0) -> vtkPolyData:
+                resolution: int = 16, law: str = "cbrt", minimum: float = 0.0, minimum_mass: float = 0.0,
+                scalars: str = "Mass") -> vtkPolyData:
     """Ellipsoid surfaces for a ``Masses`` block (see builders.masses).
 
-    Field data ``GlyphSizeMode`` / ``GlyphSizing`` describe the sizing used;
-    point data ``GlyphRadius`` is each glyph's equivalent radius.
+    Masses below ``minimum_mass`` are left out; the sizing is decided on all of them, so the others
+    keep their size. ``scalars`` names the point array set as the active scalars (what ParaView
+    colours by when it shows the output). Field data ``GlyphSizeMode`` / ``GlyphSizing`` describe
+    the sizing used; point data ``GlyphRadius`` is each glyph's equivalent radius.
     """
     n = masses.GetNumberOfPoints()
     if n == 0:
@@ -166,14 +178,21 @@ def mass_glyphs(masses: vtkPolyData, diag: float, mode: str = "auto", relative: 
     has = pd.GetArray("HasInertia")
     has = vtkutil.to_numpy(has).astype(bool) if has is not None else None
     mats, used, text, glyph_r = mass_glyph_matrices(tensors, radius, mass, has, diag, mode, relative, law, minimum)
-    tmpl = unit_sphere(resolution)
-    xyz, conn, ntri, normals = instance(tmpl, mats, centres)
-    out = _polydata(xyz, conn, ntri, n, normals)
-    per = len(tmpl[0])
-    _repeat_point_arrays(masses, out, per, ("Mass", "EID", "NID", "MassScale", "EquivalentRadius", "HasInertia"))
-    vtkutil.add_array(out.GetPointData(), "GlyphRadius", np.repeat(glyph_r, per))
+    rows = np.flatnonzero(mass >= minimum_mass)
+    out = vtkPolyData()
+    if len(rows):
+        tmpl = unit_sphere(resolution)
+        xyz, conn, ntri, normals = instance(tmpl, mats[rows], centres[rows])
+        out = _polydata(xyz, conn, ntri, len(rows), normals)
+        per = len(tmpl[0])
+        _repeat_point_arrays(masses, out, per, ("Mass", "EID", "NID", "MassScale", "EquivalentRadius", "HasInertia"),
+                             rows)
+        vtkutil.add_array(out.GetPointData(), "GlyphRadius", np.repeat(glyph_r[rows], per))
+        if out.GetPointData().GetArray(scalars) is not None:
+            out.GetPointData().SetActiveScalars(scalars)
     vtkutil.add_string_array(out.GetFieldData(), "GlyphSizeMode", [used])
     vtkutil.add_string_array(out.GetFieldData(), "GlyphSizing", [text])
+    vtkutil.add_array(out.GetFieldData(), "HiddenMassCount", np.array([n - len(rows)]))
     return out
 
 
@@ -309,8 +328,44 @@ def bush_glyph_scale(loc: np.ndarray, diag: float, size: float) -> float:
     return float(min(0.45 * np.median(nearest), cap))
 
 
+BUSH_SHOW = ("all", "grounded", "coincident")  # Nastran Bush Glyphs' Show Only entries
+
+
+def bush_selection(bushes: vtkPolyData, model, which: str = "all") -> np.ndarray:
+    """Bool per bush: ``all``; ``grounded`` (one grid: GB blank, or GB = GA); ``coincident`` (GA and
+    GB at the same place, a zero-length spring: its ``BushLines`` line is shorter than 1e-6 x the
+    model diagonal). None when the block lacks GA/GB (an older file): unknown."""
+    if which not in BUSH_SHOW:
+        raise ValueError(f"which must be one of {BUSH_SHOW}")
+    n = bushes.GetNumberOfPoints()
+    if which == "all" or n == 0:
+        return np.ones(n, dtype=bool)
+    pd = bushes.GetPointData()
+    if pd.GetArray("GA") is None or pd.GetArray("GB") is None:
+        return None  # a file written before GA/GB existed: unknown, the caller shows all
+    eid = vtkutil.to_numpy(pd.GetArray("EID")).astype(np.int64)
+    ga, gb = (vtkutil.to_numpy(pd.GetArray(k)).astype(np.int64) for k in ("GA", "GB"))
+    if which == "grounded":
+        return (gb <= 0) | (gb == ga)
+    from .fields.common import iter_blocks
+
+    lines = dict(iter_blocks(model)).get("BushLines") if model is not None else None
+    if lines is None or lines.GetNumberOfCells() == 0 or lines.GetCellData().GetArray("EID") is None:
+        return np.zeros(n, dtype=bool)
+    from vtkmodules.vtkCommonCore import vtkIdList
+
+    xyz = vtkutil.to_numpy(lines.GetPoints().GetData()).reshape(-1, 3)
+    ids, length = vtkIdList(), np.zeros(lines.GetNumberOfCells())
+    for k in range(lines.GetNumberOfCells()):  # polydata or, from a model tree, an unstructured grid
+        lines.GetCellPoints(k, ids)
+        length[k] = np.linalg.norm(xyz[ids.GetId(ids.GetNumberOfIds() - 1)] - xyz[ids.GetId(0)])
+    short = vtkutil.to_numpy(lines.GetCellData().GetArray("EID"))[length <= 1e-6 * model_diagonal(model)]
+    return np.isin(eid, short) & (gb > 0) & (gb != ga)
+
+
 def bush_glyphs(bushes: vtkPolyData, diag: float, size: float = 0.04, triad: bool = True,
-                ellipsoid: bool = False, resolution: int = 12, kind: str = "translation") -> vtkPolyData:
+                ellipsoid: bool = False, resolution: int = 12, kind: str = "translation",
+                keep: np.ndarray | None = None) -> vtkPolyData:
     """Stiffness glyphs for a ``Bushes`` block, translations (K1-K3) or rotations (K4-K6).
 
     Per bush and element axis: a double-ended bar centred on the spring (translation) or a ring
@@ -325,6 +380,8 @@ def bush_glyphs(bushes: vtkPolyData, diag: float, size: float = 0.04, triad: boo
     ``StiffnessReference`` (the K_ref used),
     ``ReleasedCount`` (bushes with a released axis), ``NoStiffnessCount``, ``EllipsoidCount``.
     The output is empty (field data only) when no bush has a positive stiffness of this kind.
+    ``keep`` (bool per bush, :func:`bush_selection`) draws only those bushes, at the scale of all
+    of them; the counts are of the kept ones.
     """
     if kind not in BUSH_KINDS:
         raise ValueError(f"kind must be one of {BUSH_KINDS}")
@@ -340,8 +397,10 @@ def bush_glyphs(bushes: vtkPolyData, diag: float, size: float = 0.04, triad: boo
     k = bush_log_stiffness(bushes, kind)
     missing = np.isnan(Kv).any(axis=1)
     kz = np.nan_to_num(Kv)
-    has_any = bool((kz[~missing] > 0).any())
     s = bush_glyph_scale(loc[~missing], diag, size) if (~missing).any() else size * diag
+    if keep is not None:  # the scale stays the model's; what is drawn and counted is the kept bushes
+        missing = missing | ~np.asarray(keep, dtype=bool)
+    has_any = bool((kz[~missing] > 0).any())
     released = (kz <= 0) & ~missing[:, None]
     srt = np.sort(kz, axis=1)
     dominant = (kz == srt[:, 2:3]) & (srt[:, 2:3] > 1.5 * srt[:, 1:2]) & ~missing[:, None]
@@ -351,7 +410,8 @@ def bush_glyphs(bushes: vtkPolyData, diag: float, size: float = 0.04, triad: boo
     vtkutil.add_array(fd, "GlyphScale", np.array([s]))
     vtkutil.add_array(fd, "StiffnessReference", np.array([_reference(bushes, kind)[1]]))
     vtkutil.add_array(fd, "ReleasedCount", np.array([int(released.any(axis=1).sum()) if has_any else 0]))
-    vtkutil.add_array(fd, "NoStiffnessCount", np.array([int(missing.sum())]))
+    no_k = np.isnan(Kv).any(axis=1) if keep is None else np.isnan(Kv).any(axis=1) & np.asarray(keep, dtype=bool)
+    vtkutil.add_array(fd, "NoStiffnessCount", np.array([int(no_k.sum())]))
     if not has_any:
         vtkutil.add_array(fd, "EllipsoidCount", np.array([0]))
         return out
@@ -415,6 +475,198 @@ def bush_glyphs(bushes: vtkPolyData, diag: float, size: float = 0.04, triad: boo
     vtkutil.add_array(cd, "EID", np.concatenate(cols["EID"]).astype(np.int64))
     vtkutil.add_array(cd, "Released", np.concatenate(cols["Released"]).astype(np.uint8))
     vtkutil.add_array(cd, "Dominant", np.concatenate(cols["Dominant"]).astype(np.uint8))
+    return out
+
+
+# ---------------------------------------------------------------------- loads
+LOAD_SHOW = ("force", "moment", "both")
+LOAD_SCALES = ("magnitude", "fixed")
+MAX_LOAD_ARROWS = 1500  # Every Nth Point 0 (automatic): at most this many arrows per load set
+_TIP_LENGTH, _TIP_RADIUS, _SHAFT_RADIUS = 0.35, 0.1, 0.03  # ParaView's Glyph arrow (vtkArrowSource defaults)
+
+
+def load_arrow(resolution: int = 6, heads: int = 1):
+    """Arrow template along +x from 0 to 1, ParaView's Glyph arrow; ``heads=2`` adds a second tip
+    behind the first (the double-headed arrow of a moment)."""
+    from vtkmodules.vtkFiltersCore import vtkAppendPolyData, vtkPolyDataNormals, vtkTriangleFilter
+    from vtkmodules.vtkFiltersSources import vtkConeSource
+
+    arrow = vtkArrowSource()
+    arrow.SetTipResolution(max(int(resolution), 3))
+    arrow.SetShaftResolution(max(int(resolution), 3))
+    arrow.SetTipLength(_TIP_LENGTH)
+    arrow.SetTipRadius(_TIP_RADIUS)
+    arrow.SetShaftRadius(_SHAFT_RADIUS)
+    app = vtkAppendPolyData()
+    app.AddInputConnection(arrow.GetOutputPort())
+    if heads == 2:
+        cone = vtkConeSource()
+        cone.SetResolution(max(int(resolution), 3))
+        cone.SetHeight(_TIP_LENGTH)
+        cone.SetRadius(_TIP_RADIUS)
+        cone.SetDirection(1.0, 0.0, 0.0)
+        cone.SetCenter(1.0 - 1.5 * _TIP_LENGTH, 0.0, 0.0)
+        app.AddInputConnection(cone.GetOutputPort())
+    tri = vtkTriangleFilter()
+    tri.SetInputConnection(app.GetOutputPort())
+    normals = vtkPolyDataNormals()
+    normals.SetInputConnection(tri.GetOutputPort())
+    normals.SplittingOff()
+    return _template(normals)
+
+
+def load_sets_of(mb) -> list:
+    """``[(name, block)]`` of the ``Loads/*`` blocks of a model, in block order."""
+    from .fields.common import iter_blocks
+
+    return [(path.split("/", 1)[1], ds) for path, ds in iter_blocks(mb) if path.startswith("Loads/")]
+
+
+def default_load_set(mb) -> str | None:
+    """The load set the loads view shows by default: the first Case Control set (``ActiveLoadSets``)
+    with load points, else the first set with load points; None when no set has any."""
+    sets = {n: ds for n, ds in load_sets_of(mb) if ds.GetNumberOfPoints()}
+    active = mb.GetFieldData().GetArray("ActiveLoadSets")
+    for sid in (vtkutil.to_numpy(active).astype(int).tolist() if active is not None else []):
+        for name in (f"LOAD_{sid}", f"SID_{sid}"):
+            if name in sets:
+                return name
+    return next(iter(sets), None)
+
+
+def _set_id(ds, name) -> int:
+    a = ds.GetFieldData().GetArray("LoadSet")
+    if a is not None and a.GetNumberOfTuples():
+        return int(a.GetTuple1(0))
+    try:
+        return int(name.rsplit("_", 1)[1])
+    except (IndexError, ValueError):
+        return -1
+
+
+def load_glyphs(sets, diag: float, show: str = "force", size: float = 0.08, scale: str = "magnitude",
+                stride: int = 0, resolution: int = 6) -> vtkPolyData:
+    """Arrows for the load points of ``sets`` (``[(name, Loads/* block)]``, :func:`load_sets_of`).
+
+    Forces get single-headed arrows, moments double-headed ones (``show``: force, moment or both),
+    the tail on the grid. With ``scale`` magnitude the largest force (and, separately, the largest
+    moment) over all the sets is ``size`` x ``diag`` long and the others in proportion; ``fixed``
+    makes every arrow that long. ``stride`` keeps every Nth point of each set; 0 picks N so that a
+    set gets at most :data:`MAX_LOAD_ARROWS` arrows. Zero vectors get no arrow.
+
+    Point arrays: ``Magnitude``, ``LoadKind`` (0 force, 1 moment), ``LoadSet`` (set id), ``NID``.
+    Field data: ``LoadPoints`` (points of the sets), ``ArrowCount``, ``Stride`` (the largest used).
+    """
+    from .fields.common import get_array
+
+    if show not in LOAD_SHOW:
+        raise ValueError(f"show must be one of {LOAD_SHOW}")
+    if scale not in LOAD_SCALES:
+        raise ValueError(f"scale must be one of {LOAD_SCALES}")
+    kinds = [(k, name) for k, name in enumerate(("Force", "Moment")) if show in ("both", name.lower())]
+    rows, n_points, used_stride, peak = [], 0, 1, {}  # rows: (kind, xyz, vectors, nid, sid)
+    for name, ds in sets:
+        n = ds.GetNumberOfPoints()
+        if not n:
+            continue
+        n_points += n
+        step = int(stride) if stride and stride > 0 else -(-n // MAX_LOAD_ARROWS)
+        used_stride = max(used_stride, step)
+        idx = np.arange(0, n, step)
+        pd = ds.GetPointData()
+        xyz = vtkutil.to_numpy(ds.GetPoints().GetData()).reshape(-1, 3).astype(float)[idx]
+        nid = get_array(pd, "NID", np.full(n, -1)).astype(np.int64)[idx]
+        for k, array in kinds:
+            vec = get_array(pd, array)
+            if vec is not None:
+                vec = np.nan_to_num(vec.reshape(-1, 3).astype(float))
+                peak[k] = max(peak.get(k, 0.0), float(np.linalg.norm(vec, axis=1).max()))  # over every point
+                rows.append((k, xyz, vec[idx], nid, _set_id(ds, name)))
+    peak = {k: peak.get(k, 0.0) for k, _ in kinds}
+    pieces = []
+    for k, xyz, vec, nid, sid in rows:
+        mag = np.linalg.norm(vec, axis=1)
+        on = mag > 0
+        if not on.any() or peak[k] <= 0:
+            continue
+        length = size * diag * (mag[on] / peak[k] if scale == "magnitude" else np.ones(int(on.sum())))
+        frames = _frames(vec[on] / mag[on, None])
+        mats = frames * length[:, None, None]
+        pieces.append((k, mats, frames, xyz[on], mag[on], nid[on], np.full(int(on.sum()), sid)))
+    out = vtkPolyData()
+    if pieces:
+        templates = {k: load_arrow(resolution, heads=k + 1) for k in {p[0] for p in pieces}}
+        xyz_all, conn_all, nrm_all, cols, offset, count = [], [], [], {}, 0, 0
+        for k, mats, frames, origin, mag, nid, sid in pieces:
+            xyz, conn, ntri, normals = instance(templates[k], mats, origin, rotations=frames)
+            per = len(templates[k][0])
+            xyz_all.append(xyz)
+            nrm_all.append(normals)
+            conn_all.append(conn + offset)
+            offset += len(xyz)
+            count += len(mats)
+            for col, v in (("Magnitude", mag), ("LoadKind", np.full(len(mag), k)), ("LoadSet", sid), ("NID", nid)):
+                cols.setdefault(col, []).append(np.repeat(v, per))
+        conn = np.concatenate(conn_all)
+        out.SetPoints(vtkutil.make_points(np.vstack(xyz_all)))
+        out.SetPolys(vtkutil.make_cell_array(np.full(len(conn) // 3, 3), conn))
+        out.GetPointData().SetNormals(vtkutil.to_vtk_array("Normals", np.vstack(nrm_all)))
+        for col, parts in cols.items():
+            v = np.concatenate(parts)
+            vtkutil.add_array(out.GetPointData(), col, v.astype(float if col == "Magnitude" else np.int64))
+        out.GetPointData().SetActiveScalars("Magnitude")
+    else:
+        count = 0
+    fd = out.GetFieldData()
+    vtkutil.add_array(fd, "LoadPoints", np.array([n_points]))
+    vtkutil.add_array(fd, "ArrowCount", np.array([count]))
+    vtkutil.add_array(fd, "Stride", np.array([used_stride]))
+    vtkutil.add_string_array(fd, "LoadKindNames", ["force", "moment"])
+    return out
+
+
+# ----------------------------------------------------------------------- SPCs
+def parse_dofs(text) -> np.ndarray:
+    """Bool (6,) of the DOF components 1-6 named in ``text`` ("123", "1 2 6"; other characters ignored)."""
+    mask = np.zeros(6, dtype=bool)
+    for ch in str(text or ""):
+        if ch in "123456":
+            mask[int(ch) - 1] = True
+    return mask
+
+
+def spc_glyphs(constraints: vtkPolyData, diag: float, size: float = 0.006, sets=None, dofs="123456",
+               resolution: int = 8) -> vtkPolyData:
+    """A sphere of diameter ``size`` x ``diag`` per constrained point of a ``Constraints`` block (a
+    grid in two SPC sets gets two). ``sets`` (SPC set ids; None = all) and ``dofs`` (components, e.g.
+    "123") keep only the points of those sets that constrain any of those components.
+
+    Point arrays: ``NID``, ``SPCSet``, ``DOFCode``, ``CD``. Field data ``SPCPoints``: points drawn.
+    """
+    from .fields.common import get_array
+
+    n = constraints.GetNumberOfPoints()
+    out = vtkPolyData()
+    keep = np.zeros(n, dtype=bool)
+    if n:
+        pd = constraints.GetPointData()
+        keep = np.ones(n, dtype=bool)
+        if sets is not None:
+            keep &= np.isin(get_array(pd, "SPCSet", np.full(n, -1)).astype(np.int64), [int(s) for s in sets])
+        mask = get_array(pd, "SPC_DOF")
+        if mask is not None:
+            keep &= (mask.reshape(n, 6).astype(bool) & parse_dofs(dofs)[None, :]).any(axis=1)
+    rows = np.flatnonzero(keep)
+    if len(rows):
+        tmpl = unit_sphere(resolution)
+        centres = vtkutil.to_numpy(constraints.GetPoints().GetData()).reshape(-1, 3).astype(float)[rows]
+        mats = np.tile(np.eye(3) * (0.5 * size * diag), (len(rows), 1, 1))
+        xyz, conn, ntri, normals = instance(tmpl, mats, centres, rotations=np.tile(np.eye(3), (len(rows), 1, 1)))
+        out = _polydata(xyz, conn, ntri, len(rows), normals)
+        _repeat_point_arrays(constraints, out, len(tmpl[0]), ("NID", "SPCSet", "DOFCode", "CD"), rows)
+        if out.GetPointData().GetArray("DOFCode") is not None:
+            out.GetPointData().SetActiveScalars("DOFCode")
+    vtkutil.add_array(out.GetFieldData(), "SPCPoints", np.array([len(rows)]))
     return out
 
 
