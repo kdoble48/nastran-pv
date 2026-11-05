@@ -18,7 +18,7 @@ from .builders.shells import build_shells
 from .builders.solids import build_solids
 from .deck import Deck
 from .families import element_families
-from . import coords, nsm
+from . import coords, includes, nsm
 from .massprops import element_mass, totals
 from .progress import NULL, Progress
 from .materials import COLUMNS, material_table
@@ -221,5 +221,6 @@ def build_multiblock(deck: Deck, opts: Options | None = None, progress: Progress
             beams.write_section_tables(mb, *beams.section_rows(deck, pids))
             if opts.beam_sections:
                 add_beam_sections(mb)
+    includes.write_arrays(mb, deck.includes, deck.path)
     vtkutil.add_string_array(fd, "Warnings", deck.warnings)
     return mb

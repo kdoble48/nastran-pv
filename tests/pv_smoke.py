@@ -400,13 +400,82 @@ def converted_checks(pv, nv, reader):
     check(nv.find_reader() is reader, "with no active source the deck reader is found again")
 
 
+INC_DECK = os.path.join(HERE, "data", "inc_main.bdf")  # main -> inc_wing -> inc_ribs, main -> inc_fuse
+INC_FILES = ["inc_main_bdf", "inc_wing_bdf", "inc_ribs_bdf", "inc_fuse_bdf"]
+
+
+def _gathered_cells(nv, src, block):
+    from nastran_pv.tree import as_multiblock
+    from nastran_pv.assemble import get_block
+
+    blk = get_block(as_multiblock(nv.fetch(src)), block)
+    return blk.GetNumberOfCells() if blk is not None else 0
+
+
+def _files_branch(nv, src):
+    """Every node path under Files/ of a source's model tree."""
+    asm = nv.fetch(src).GetDataAssembly()
+    out = []
+
+    def visit(node, prefix):
+        for child in asm.GetChildNodes(node, False):
+            path = prefix + asm.GetNodeName(child)
+            out.append(path)
+            visit(child, path + "/")
+
+    for child in asm.GetChildNodes(asm.GetRootNode(), False):
+        if asm.GetNodeName(child) == "Files":
+            visit(child, "")
+    return sorted(out)
+
+
+def file_group_checks(pv, nv):
+    """Include-file groups: the reader's Visible Files and the Nastran Files filter, also on a
+    converted .vtm/.vtkhdf opened with ParaView's own reader."""
+    nested = sorted(["inc_main_bdf", "inc_main_bdf/inc_wing_bdf", "inc_main_bdf/inc_wing_bdf/inc_ribs_bdf",
+                     "inc_main_bdf/inc_fuse_bdf"])
+    reader = nv.load_reader(INC_DECK)
+    reader.UpdatePipelineInformation()
+    listed = nv._listed(reader, "VisibleFiles")
+    check(listed == INC_FILES, f"Visible Files lists the includes in read order ({listed})")
+    check(_files_branch(nv, reader) == nested, f"reader tree: Files branch nested as included ({_files_branch(nv, reader)})")
+    reader.VisibleFiles = [f for f in listed if f != "inc_wing_bdf"]
+    check(_cells(reader, "Shells") == 0 and _cells(reader, "Lines") == 2,
+          "unchecking inc_wing_bdf hides its quads; the rods of inc_ribs_bdf (its include) stay")
+    ex = pv.ExtractBlock(Input=reader, Selectors=["/Root/Files/inc_main_bdf/inc_wing_bdf"])
+    ex.UpdatePipeline()
+    check(ex.GetDataInformation().GetNumberOfCells() == 3,
+          "ExtractBlock of a file node takes its includes: inc_wing hidden, inc_ribs (CROD 20, RBE2 30, CONM2 51) stays")
+    pv.Delete(ex)
+    nv.show_all(reader)
+    check(_cells(reader, "Shells") == 2, "Show All checks every file again")
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        for suffix in (".vtm", ".vtkhdf"):
+            path = os.path.join(tmp, "inc" + suffix)
+            convert(["convert", INC_DECK, "-o", path, "-q"])
+            src = nv.load_reader(path)
+            files = pv.NastranFiles(Input=src)
+            files.UpdatePipelineInformation()
+            listed = list(files.GetProperty("VisibleFilesInfo"))[0::2]
+            check(listed == INC_FILES, f"{suffix}: Nastran Files lists the includes ({listed})")
+            check(_files_branch(nv, files) == nested, f"{suffix}: Nastran Files nests the Files branch")
+            files.VisibleFiles = ["inc_main_bdf", "inc_wing_bdf", "inc_fuse_bdf"]
+            check(_gathered_cells(nv, files, "Lines") == 1 and _gathered_cells(nv, files, "Rigid") == 0
+                  and _gathered_cells(nv, files, "Shells") == 2,
+                  f"{suffix}: unchecking inc_ribs_bdf hides CROD 20 and RBE2 30")
+            pv.Delete(files)
+            pv.Delete(src)
+    pv.Delete(reader)
+
+
 def tree_checks(pv, nv, reader):
     """Model tree output, Femap-style visibility checklists and the selection commands."""
     data = nv.fetch(reader)
     check(data.IsA("vtkPartitionedDataSetCollection"), "reader outputs the model tree")
     asm = data.GetDataAssembly()
     top = [asm.GetNodeName(n) for n in asm.GetChildNodes(asm.GetRootNode(), False)]
-    check(top == ["Model", "Properties", "Materials", "ElementTypes", "Families", "Groups"], f"tree branches {top}")
+    check(top == ["Model", "Properties", "Materials", "ElementTypes", "Families", "Groups", "Files"],
+          f"tree branches {top}")
     reader.UpdatePipelineInformation()
     props = nv._listed(reader, "VisibleProperties")
     check(props == ["PBUSH_51", "PSHELL_1", "PSHELL_2", "PSOLID_11", "PSOLID_12"], f"property checklist {props}")
@@ -1644,6 +1713,7 @@ def main():
           f"same deck twice: {nv._name(nv.Model(twin), 'mesh')!r}; the first keeps its names")
     pv.Delete(twin)
     converted_checks(pv, nv, reader)
+    file_group_checks(pv, nv)
     parity_checks(pv, nv)
     calc_nan_checks(pv, nv)
     random_checks(pv, nv)

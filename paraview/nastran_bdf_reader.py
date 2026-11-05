@@ -66,7 +66,8 @@ _HELP = (
 _FLAGS = ("shells", "lines", "solids", "masses", "rigid", "connectors", "bushes", "constraints", "loads")
 # model tree checklists (reader property -> nastran_pv.tree category)
 _VISIBILITY = {"VisibleProperties": "Properties", "VisibleMaterials": "Materials",
-               "VisibleElementTypes": "ElementTypes", "VisibleFamilies": "Families", "VisibleGroups": "Groups"}
+               "VisibleElementTypes": "ElementTypes", "VisibleFamilies": "Families", "VisibleGroups": "Groups",
+               "VisibleFiles": "Files"}
 # selection from an ID file: SelectionKey entries (nastran_pv.selection.KEYS after Auto)
 _SELECTION_KEYS = ("Auto", "EID", "NID", "PID", "MID", "FAMILY", "GROUP")
 _SELECTION_EXTENSIONS = "csv tsv txt dat lst json xlsx xlsm"
@@ -414,7 +415,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
     @smproperty.dataarrayselection(name="VisibleProperties")
     def GetVisibleProperties(self):
         """Femap-style visibility: an element shows only if its property, material, element type,
-        family and group are all checked."""
+        family, group and file are all checked."""
         return self._lists["Properties"]
 
     @smproperty.dataarrayselection(name="VisibleMaterials")
@@ -432,6 +433,12 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
     @smproperty.dataarrayselection(name="VisibleGroups")
     def GetVisibleGroups(self):
         return self._lists["Groups"]
+
+    @smproperty.dataarrayselection(name="VisibleFiles")
+    def GetVisibleFiles(self):
+        """The deck's INCLUDE files, in read order: unchecking one hides the elements, masses and
+        rigid elements whose cards are in that file (not those of the files it includes)."""
+        return self._lists["Files"]
 
     @smproperty.stringvector(name="ShowOnlyElements", default_values="")
     def SetShowOnlyElements(self, v):
@@ -1247,6 +1254,76 @@ class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
         out.ShallowCopy(self._deformer[2].apply(scale))
         if phase is not None:
             out.GetInformation().Set(vtkDataObject.DATA_TIME_STEP(), phase)
+        return 1
+
+
+@smproxy.filter(name="NastranPVFiles", label="Nastran Files")
+@smhint.xml('<ShowInMenu category="Nastran" />')
+@smproperty.input(name="Input", port_index=0)
+@smdomain.datatype(dataTypes=["vtkDataObject"], composite_data_supported=True)
+class NastranPVFiles(_Settable, VTKPythonAlgorithmBase):
+    """The model grouped by INCLUDE file, for any nastran-pv model: the deck reader or a converted
+    .vtm/VTKHDF opened with ParaView's own reader (they keep FileId and the include tree). The
+    output is a model tree with a Files branch nested as the deck includes its files; Visible Files
+    hides the elements, masses and rigid elements of the unchecked files (not of the files they
+    include), like the reader's own Visible Files."""
+
+    def __init__(self):
+        VTKPythonAlgorithmBase.__init__(self, nInputPorts=1, nOutputPorts=1,
+                                        outputType="vtkPartitionedDataSetCollection")
+        self._listing = False
+        self._files = _checklist(self)
+        self._cache = None  # (input object, its MTime, hidden files, output collection)
+        self._warned = None
+
+    def FillInputPortInformation(self, port, info):
+        info.Set(self.INPUT_REQUIRED_DATA_TYPE(), "vtkDataObject")
+        return 1
+
+    @smproperty.dataarrayselection(name="VisibleFiles")
+    def GetVisibleFiles(self):
+        """INCLUDE files in read order; unchecked ones are hidden."""
+        return self._files
+
+    def _list(self, mb):
+        from nastran_pv.tree import category_values
+
+        names = category_values(mb)["Files"]
+        _fill_checklist(self, self._files, names)
+        return names
+
+    def RequestInformation(self, request, inInfo, outInfo):
+        data = _input_model(inInfo)
+        if data is not None and data.IsA("vtkMultiBlockDataSet"):
+            try:
+                self._list(data)
+            except Exception:
+                pass  # RequestData reports it
+        return 1
+
+    def RequestData(self, request, inInfo, outInfo):
+        try:
+            from nastran_pv.tree import Visibility, as_multiblock, build_tree
+        except ImportError as exc:
+            return _missing(exc)
+        inp = vtkDataObject.GetData(inInfo[0], 0)
+        out = vtkPartitionedDataSetCollection.GetData(outInfo, 0)
+        if inp is None:
+            return 1
+        mb = as_multiblock(inp)
+        if not mb.IsA("vtkMultiBlockDataSet"):
+            _message("nastran-pv Nastran Files: the input is not a nastran-pv model", error=True)
+            return 1
+        names = self._list(mb)
+        if not names and self._warned is not inp:
+            self._warned = inp
+            _message("nastran-pv Nastran Files: no include files in this model (a single-file deck, "
+                     "or converted before nastran-pv recorded FileId)")
+        off = frozenset(n for n in names if n not in set(_checked(self._files)))
+        if self._cache is None or self._cache[:3] != (inp, inp.GetMTime(), off):
+            vis = Visibility(hidden={"Files": off} if off else {})
+            self._cache = (inp, inp.GetMTime(), off, build_tree(mb, vis).output(mb))
+        out.ShallowCopy(self._cache[3])
         return 1
 
 

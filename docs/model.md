@@ -2,8 +2,8 @@
 
 Every `.vtm` the CLI writes is a `vtkMultiBlockDataSet` with these named blocks. The ParaView reader
 outputs the same blocks under `Model/` in its [model tree](paraview.md#model-tree-and-visibility), cut
-into one piece per property, material, element type, family and group. A block is left out when the
-deck has nothing for it.
+into one piece per property, material, element type, family, group and include file. A block is left
+out when the deck has nothing for it.
 
 ## Blocks
 
@@ -25,6 +25,24 @@ deck has nothing for it.
 
 Categorical arrays keep their names in block field data: `ElementTypeNames`, `RigidTypeNames`,
 `ConnectorTypeNames`, `FamilyNames` and `GroupNames` (Shells, for decks with family comments).
+
+## Include files
+
+A deck that reads more than one file (INCLUDEs, nested or not) gets `FileId` on every block with
+an `EID`: Shells, Solids, Lines, Masses (point array), MassOffsets, Rigid, Connectors, Bushes
+(point array), BushLines and BeamSections. `FileId` is the file that holds the element's own card,
+in read order (0 is the main file); it is -1 where the file is unknown (a card made by `=`
+replication) and on MPC legs, whose `EID` is the MPC set id. Grids, SPCs and loads have no file,
+so the file of a GRID or FORCE card groups nothing. The same blocks carry, in field data, `FileNames` (the labels `FileId` indexes) and
+`FileParents` (the `FileId` of the file that includes each file, -1 for the main file). The root
+also has the table `FILE_Name FILE_Path FILE_Parent`, where `FILE_Path` is the path relative to
+the main deck's folder.
+
+A label is the file name, or the relative path when two files have the same name, with every
+character other than letters, digits and `_` turned into `_`: `wing.bdf` becomes `wing_bdf` and
+`sub/wing.bdf` becomes `sub_wing_bdf`. Labels are tree node names, and VTK would otherwise drop
+those characters. These arrays are what the [Files branch and checklist](paraview.md#include-files)
+use, also on a converted `.vtm` or VTKHDF. A single-file deck gets none of them.
 
 Root field data: `DeckPath SOL WTMASS ActiveLoadSets ActiveSPCSets StructuralMass ConcentratedMass ModelMass ModelCG`,
 `Warnings` (when there are any), the material table `MAT_ID MAT_Type MAT_E MAT_E2 MAT_G MAT_Nu MAT_Rho`

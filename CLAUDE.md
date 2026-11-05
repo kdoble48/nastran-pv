@@ -96,6 +96,14 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
 - `families.py`: parses pre-processor `$ ... family <NAME>` comments (ICEM/TACS decks such as uCRM-9)
   into `FamilyId`/`GroupId` cell arrays and `FamilyNames`/`GroupNames` on the Shells block only.
   These back the FAMILY/GROUP keys of `map_table` and the `family` view.
+- `includes.py`: which INCLUDE file each card came from. `recording` wraps `add_card`/`add_card_lax`
+  for one read (pyNastran passes them the card's file index but keeps it only under
+  `save_file_structure`); `read_tree` gives `Deck.includes` (files in read order, parents from
+  `include_filenames`, EID -> file). For decks that read 2+ files, `write_arrays` (end of
+  `build_multiblock`) adds `FileId` to every block with an `EID` (point array on vertex-only blocks),
+  `FileNames`/`FileParents` field data on those blocks and the root `FILE_Name/Path/Parent` table.
+  Labels are sanitized to `[A-Za-z0-9_]` (`wing.bdf` -> `wing_bdf`): VTK strips `.` from node names.
+  `parent_labels` falls back to the block fields because ParaView's `.vtm` reader drops root field data.
 - `builders/*`: one module per block. They build VTK data only through `vtkmodules`/`vtkutil`,
   which keeps the same code working in pip-vtk and in pvpython. Mesh builders go through
   `common.CellTable` → `compact_mesh`. `categories.py` holds the *global* ElementType and RigidType
@@ -130,7 +138,8 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
 - `tree.py`: the plugin's model tree. `build_tree` cuts the multiblock into pieces per
   property/material/element type/family/group (AND `Visibility` from the reader's checklists and
   EID lists) and `Tree.output` gives a `vtkPartitionedDataSetCollection` whose assembly has `Model/`
-  (today's blocks) plus `Properties/ Materials/ ElementTypes/ Families/ Groups/`. Time steps only
+  (today's blocks) plus `Properties/ Materials/ ElementTypes/ Families/ Groups/ Files/` (`Files/` nested
+  as included, from `includes.parent_labels`; a file node's subtree holds its includes). Time steps only
   re-slice changed (and drop removed) arrays. Plugin filters `gather` the tree into the plain
   multiblock, run the usual code, and `scatter` new arrays back; the CLI, VTK files and the store
   never see the tree. Every piece carries a `BlockPath` field string, so `gather` also works after a
@@ -199,7 +208,8 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   double-headed) and SPC markers (`spc_glyphs`) as real `vtkPolyData`, plus the subsets the filters
   offer (`minimum_mass`, `bush_selection`, `default_load_set`).
 - `paraview/nastran_bdf_reader.py`: one plugin file containing the reader, five glyph filters
-  (masses, bushes, loads, SPCs, beam sections), the deform filter, three field filters, four topology
+  (masses, bushes, loads, SPCs, beam sections), the deform filter, *Nastran Files* (the `Files` checklist and
+  tree on any model, converted files included), three field filters, four topology
   filters (grow, parts, path, model check) and the two-input *Nastran Diff*.
   - Shared settings are class decorators, one PropertyGroup each: `_with(label, setters)` copies
     `@smproperty` setters into the class (renumbered past its own lines, so the group follows the
