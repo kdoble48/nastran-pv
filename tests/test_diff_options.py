@@ -169,6 +169,7 @@ def test_cli_flags(tmp_path, capsys):
                  "--mass-tol", "0.5", "-q"]) == 0
     out = capsys.readouterr().out
     assert "elements not compared (unchecked)" in out and "materials not compared (unchecked)" in out
+    assert "elements: skipped (not compared)" in out and "elements in B:" not in out
     assert " moved " in out.split("grids:")[-1]  # grid 8: 1.0 > 0.5 model units
     assert main(["diff", a, b, "--ignore-grid-moves", "--abs-floor", "0.2", "-q"]) == 0
     out = capsys.readouterr().out

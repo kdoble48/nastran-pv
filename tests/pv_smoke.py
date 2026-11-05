@@ -1147,6 +1147,23 @@ def _info(nv, model):
     return nv.pv.FindSource(nv._name(model, "info")).Text
 
 
+GRAV_MOMENT_DECK = """SOL 101
+CEND
+LOAD = 5
+BEGIN BULK
+GRID,1,,0.,0.,0.
+GRID,2,,1.,0.,0.
+GRID,3,,1.,1.,0.
+GRID,4,,0.,1.,0.
+CQUAD4,1,1,1,2,3,4
+PSHELL,1,1,0.1
+MAT1,1,7e10,,0.3,2700.
+GRAV,5,,9.81,0.,0.,-1.
+MOMENT,6,3,,1.,0.,0.,1.
+ENDDATA
+"""
+
+
 def filter_property_checks(pv, nv, reader, view):
     """Each macro's filter property (tiny_run.bdf): set it, update, the output changes; rerunning the
     macro keeps it; an explicit macro argument wins. Settings are put back afterwards."""
@@ -1157,6 +1174,7 @@ def filter_property_checks(pv, nv, reader, view):
     nv.apply("masses", reader=reader, view=view)
     check(g.MinimumMass == 2.0 and _point_values(g, "EID") == {201}
           and "1 lighter than Minimum Mass 2 not drawn" in _info(nv, model), "Minimum Mass drops CONM2 202, kept on rerun")
+    check("RelativeSize" not in g.ListProperties(), "one mass size property, Size (no half-synced alias)")
     g.ColorBy = "EID"
     nv.apply("masses", reader=reader, view=view)
     check(nv._shown_array(view) == ("POINTS", "EID")
@@ -1209,8 +1227,28 @@ def filter_property_checks(pv, nv, reader, view):
     check(x1 != x0, "Arrow Length Fixed: every arrow as long as the largest")
     lg.ArrowLength = "By magnitude"
 
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        path = os.path.join(tmp, "grav.bdf")
+        with open(path, "w") as f:
+            f.write(GRAV_MOMENT_DECK)
+        gr = rm.load_reader(path)
+        gm = nv.apply("loads", reader=gr, view=view)
+        text = _info(nv, gm)
+        check("SID_6: no forces to draw" in text and "Show on 'NPV load glyphs'" in text,
+              f"loads view on a moment-only set with Show Forces says so: {text!r}")
+        nv.apply("loads", reader=gr, view=view, show="Moments")
+        check("SID_6: 1 loaded grids" in _info(nv, gm), "Show Moments draws the MOMENT")
+        for what in ("load glyphs", "mesh", "deform", "info"):
+            pv.Delete(pv.FindSource(nv._name(gm, what)))
+        pv.Delete(gr)
+
+    name = nv._name(model, "spc glyphs")  # an older nastran-pv left a ParaView Glyph of this name
+    pv.Delete(pv.FindSource(name))
+    old = pv.Glyph(Input=reader, GlyphType="Sphere")
+    pv.RenameSource(name, old)
     model = nv.apply("spc", reader=reader, view=view)
     sg = pv.FindSource(nv._name(model, "spc glyphs"))
+    check(sg.GetXMLName() == "NastranPVSPCGlyphs", "an old Glyph named 'NPV spc glyphs' is replaced")
     check(_point_values(sg, "NID") == {1, 2, 3, 4}, "spc glyphs: the four constrained grids")
     sg.DOFs = "45"
     nv.apply("spc", reader=reader, view=view)
@@ -1276,6 +1314,11 @@ def main():
         check(deform is not None and deform.ScaleFactor > 0 and deform.AutoScale == 1,
               "results view draws through NPV deform, on Auto Scale")
         shells = nv._extract(model, "Shells")  # grids 1-7, x from 0: mode 1 moves them all by T1 = 1.0
+        side = nv.deformed(model, shells, "probe")  # like the topology views' deforms of a part
+        nv.apply("results", reader=reader, view=anim)
+        check(deform.AutoScale == 1 and side.AutoScale == 0 and side.ScaleFactor == deform.ScaleFactor,
+              "Auto Scale only on the model's NPV deform; the others get its scale, not their own peak")
+        pv.Delete(side)
         nv._set_time(anim, full[1])
         shells.UpdatePipeline(full[1])
         peak1 = nv.peak_deformation(nv.Model(reader, full[1]))

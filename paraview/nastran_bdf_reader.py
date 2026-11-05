@@ -158,7 +158,8 @@ class _Settable:
 # line numbers of their setters. A group decorator (_with_<group>) copies its @smproperty setters
 # into the class with line numbers past the class's own (so shared groups come after a filter's own
 # settings) and adds a PropertyGroup after them: a group must follow its properties in the XML.
-_LATE = 100_000  # tracebacks in copied setters report this offset + their source line
+_LATE = 100_000  # a copied setter starts at line _LATE + n (n: its place in the class), so its tracebacks
+# show line numbers past 100000, not its source lines
 
 
 def _property_names(fn):
@@ -879,12 +880,6 @@ class NastranPVMassGlyphs(_GlyphFilter):
         """The output's active scalars: what the NPV Masses view (and a plain Show) colours by."""
         self._set("_color", int(v))
 
-    @smproperty.doublevector(name="RelativeSize", default_values=0.025, panel_visibility="never")
-    def SetRelativeSize(self, v):
-        """Old name of Size, kept for saved states and scripts; only a non-default value acts."""
-        if float(v) != 0.025:
-            self._set("_size", float(v))
-
     def _glyphs(self, block, diag, model):
         from nastran_pv.glyphs import MASS_SIZE_MODES, RADIUS_LAWS, mass_glyphs
 
@@ -938,6 +933,9 @@ class NastranPVBushGlyphs(_GlyphFilter):
         from nastran_pv.glyphs import BUSH_KINDS, bush_glyphs, bush_selection
 
         keep = bush_selection(block, model, _BUSH_SHOW[self._show_only % len(_BUSH_SHOW)]) if self._show_only else None
+        if self._show_only and keep is None:
+            _message("nastran-pv Bush Glyphs: the Bushes block has no GA/GB (written by an older nastran-pv), so "
+                     "Show Only cannot tell grounded or zero-length bushes: all are drawn. Convert it again.")
         return bush_glyphs(block, diag, self._size, bool(self._triad), bool(self._ellipsoids), self._resolution,
                            kind=BUSH_KINDS[self._stiffness], keep=keep)
 

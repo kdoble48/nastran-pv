@@ -51,14 +51,18 @@ def unit_arrow(resolution: int = 12):
     return _template(a)  # along +x, from 0 to 1
 
 
-def instance(templates, mats, origins):
-    """Place one template per (3x3 matrix, origin): p' = origin + M p."""
+def instance(templates, mats, origins, rotations=None):
+    """Place one template per (3x3 matrix, origin): p' = origin + M p. ``rotations`` (when every
+    M is a rotation times a uniform scale) turn the normals directly, without the SVD of a
+    pseudo-inverse, whose last bits vary from one run to the next."""
     pts, polys, nrm = templates
     n, m = len(mats), len(pts)
     xyz = origins[:, None, :] + np.einsum("nij,mj->nmi", mats, pts)
     conn = (polys[None, :, :] + (np.arange(n) * m)[:, None, None]).reshape(-1)
     normals = None
-    if nrm is not None:
+    if nrm is not None and rotations is not None:
+        normals = np.einsum("nij,mj->nmi", rotations, nrm).reshape(-1, 3)
+    elif nrm is not None:
         inv_t = np.transpose(np.linalg.pinv(mats), (0, 2, 1))  # normals transform with M^-T
         normals = np.einsum("nij,mj->nmi", inv_t, nrm)
         length = np.linalg.norm(normals, axis=2, keepdims=True)
@@ -330,16 +334,17 @@ BUSH_SHOW = ("all", "grounded", "coincident")  # Nastran Bush Glyphs' Show Only 
 def bush_selection(bushes: vtkPolyData, model, which: str = "all") -> np.ndarray:
     """Bool per bush: ``all``; ``grounded`` (one grid: GB blank, or GB = GA); ``coincident`` (GA and
     GB at the same place, a zero-length spring: its ``BushLines`` line is shorter than 1e-6 x the
-    model diagonal)."""
+    model diagonal). None when the block lacks GA/GB (an older file): unknown."""
     if which not in BUSH_SHOW:
         raise ValueError(f"which must be one of {BUSH_SHOW}")
     n = bushes.GetNumberOfPoints()
     if which == "all" or n == 0:
         return np.ones(n, dtype=bool)
     pd = bushes.GetPointData()
+    if pd.GetArray("GA") is None or pd.GetArray("GB") is None:
+        return None  # a file written before GA/GB existed: unknown, the caller shows all
     eid = vtkutil.to_numpy(pd.GetArray("EID")).astype(np.int64)
-    ga, gb = (vtkutil.to_numpy(pd.GetArray(k)).astype(np.int64) if pd.GetArray(k) is not None
-              else np.zeros(n, dtype=np.int64) for k in ("GA", "GB"))
+    ga, gb = (vtkutil.to_numpy(pd.GetArray(k)).astype(np.int64) for k in ("GA", "GB"))
     if which == "grounded":
         return (gb <= 0) | (gb == ga)
     from .fields.common import iter_blocks
@@ -585,14 +590,15 @@ def load_glyphs(sets, diag: float, show: str = "force", size: float = 0.08, scal
         if not on.any() or peak[k] <= 0:
             continue
         length = size * diag * (mag[on] / peak[k] if scale == "magnitude" else np.ones(int(on.sum())))
-        mats = _frames(vec[on] / mag[on, None]) * length[:, None, None]
-        pieces.append((k, mats, xyz[on], mag[on], nid[on], np.full(int(on.sum()), sid)))
+        frames = _frames(vec[on] / mag[on, None])
+        mats = frames * length[:, None, None]
+        pieces.append((k, mats, frames, xyz[on], mag[on], nid[on], np.full(int(on.sum()), sid)))
     out = vtkPolyData()
     if pieces:
         templates = {k: load_arrow(resolution, heads=k + 1) for k in {p[0] for p in pieces}}
         xyz_all, conn_all, nrm_all, cols, offset, count = [], [], [], {}, 0, 0
-        for k, mats, origin, mag, nid, sid in pieces:
-            xyz, conn, ntri, normals = instance(templates[k], mats, origin)
+        for k, mats, frames, origin, mag, nid, sid in pieces:
+            xyz, conn, ntri, normals = instance(templates[k], mats, origin, rotations=frames)
             per = len(templates[k][0])
             xyz_all.append(xyz)
             nrm_all.append(normals)
@@ -655,7 +661,7 @@ def spc_glyphs(constraints: vtkPolyData, diag: float, size: float = 0.006, sets=
         tmpl = unit_sphere(resolution)
         centres = vtkutil.to_numpy(constraints.GetPoints().GetData()).reshape(-1, 3).astype(float)[rows]
         mats = np.tile(np.eye(3) * (0.5 * size * diag), (len(rows), 1, 1))
-        xyz, conn, ntri, normals = instance(tmpl, mats, centres)
+        xyz, conn, ntri, normals = instance(tmpl, mats, centres, rotations=np.tile(np.eye(3), (len(rows), 1, 1)))
         out = _polydata(xyz, conn, ntri, len(rows), normals)
         _repeat_point_arrays(constraints, out, len(tmpl[0]), ("NID", "SPCSet", "DOFCode", "CD"), rows)
         if out.GetPointData().GetArray("DOFCode") is not None:

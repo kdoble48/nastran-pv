@@ -124,3 +124,27 @@ def test_bush_subsets_keep_the_model_scale(run_mb):
     assert arr(only, "GlyphScale", "field")[0] == arr(full, "GlyphScale", "field")[0]
     with pytest.raises(ValueError):
         bush_selection(bushes, run_mb, "floating")
+
+
+def test_glyph_normals_are_unit_and_turn_with_the_arrow(run_mb):
+    """Load arrow and SPC normals come from the arrow frames (no pseudo-inverse): unit length, and
+    an arrow along +z has the template's normals turned onto z."""
+    out = load_glyphs(_sets(run_mb, "LOAD_1001"), diag=10.0)
+    n = arr(out, "Normals")
+    assert np.allclose(np.linalg.norm(n, axis=1), 1.0)
+    up = n[arr(out, "NID") == 3]  # grid 3's force is (0, 0, 100): the shaft's side normals have no z
+    tip = glyphs.load_arrow()[2]
+    assert np.isclose(np.abs(up[:, 2]).max(), np.abs(tip[:, 0]).max())
+    spc = spc_glyphs(get_block(run_mb, "Constraints"), 10.0)
+    assert np.allclose(np.linalg.norm(arr(spc, "Normals"), axis=1), 1.0)
+
+
+def test_bush_selection_without_ga_gb_is_unknown(run_mb):
+    from vtkmodules.vtkCommonDataModel import vtkPolyData
+
+    old = vtkPolyData()
+    old.DeepCopy(get_block(run_mb, "Bushes"))
+    old.GetPointData().RemoveArray("GA")
+    old.GetPointData().RemoveArray("GB")
+    assert bush_selection(old, run_mb, "grounded") is None and bush_selection(old, run_mb, "coincident") is None
+    assert bush_selection(old, run_mb, "all").all()

@@ -249,17 +249,16 @@ def _copy_arrays(src, dst, idx, names=None):
         dst.AddArray(a if idx is None else _take(a, idx))
 
 
-def _ptr(array) -> str:
-    return array.__this__
-
-
 def _pointers(ds) -> dict:
+    """``{(assoc, name): array}`` of a block: the arrays themselves, not just their addresses.
+    Holding them keeps them alive, so a later array cannot be allocated at the same address and
+    pass for an unchanged one (that left pieces with an old time step's Displacement)."""
     out = {}
     for assoc, attr in (("cell", ds.GetCellData()), ("point", ds.GetPointData())):
         for i in range(attr.GetNumberOfArrays()):
             a = attr.GetAbstractArray(i)
             if a.GetName():
-                out[(assoc, a.GetName())] = _ptr(a)
+                out[(assoc, a.GetName())] = a
     return out
 
 
@@ -268,8 +267,9 @@ def _changed(ds, before: dict) -> tuple[dict, dict]:
     each as ``{"cell"/"point": {names}}``."""
     new, gone = {"cell": set(), "point": set()}, {"cell": set(), "point": set()}
     now = _pointers(ds)
-    for key, p in now.items():
-        if before.get(key) != p:
+    for key, a in now.items():
+        held = before.get(key)
+        if held is None or held.__this__ != a.__this__:  # held alive: same address = same array
             new[key[0]].add(key[1])
     for key in before.keys() - now.keys():
         gone[key[0]].add(key[1])

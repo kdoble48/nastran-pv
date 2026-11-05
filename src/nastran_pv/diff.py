@@ -808,7 +808,8 @@ def report_lines(d: ModelDiff, name_a="A", name_b="B") -> list[str]:
         f"A = {name_a}",
         f"B = {name_b}",
         f"elements in B: {br['same']} same, {br['added']} added, {br['changed']} changed (type/PID/grids), "
-        f"{br['property']} via property/material; {br['removed']} removed",
+        f"{br['property']} via property/material; {br['removed']} removed"
+        if any(r["Item"] == "elements" for r in d.summary) else "elements: skipped (not compared)",
         f"model mass {total['A']:.6g} -> {total['B']:.6g}: {total['Delta']:+.6g}{rel}; "
         f"CG moved {cg_shift:.6g}",
         *d.notes,

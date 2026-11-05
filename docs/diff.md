@@ -176,7 +176,7 @@ listed in Output Messages. Its Properties panel has three groups:
   which compares the other way round (Input as A) without reconnecting the inputs.
 - **Show**: *Show Same*, *Show Added*, *Show Changed*, *Show Property* and *Show Removed* (the
   `Removed` block) keep those items in output 0; unchecking *Show Same* leaves only the changes on
-  screen, in any view. *Reasons* (advanced) keeps only B's items whose `DiffReason` has one of the
+  screen, in any view. *Reasons* keeps only B's items whose `DiffReason` has one of the
   checked reasons, for example only PID changes or only moved grids; with none checked it does
   nothing. The table (output 1) always lists every difference.
 - **Tolerances** (advanced, the gear button): the [settings](#settings) of the CLI.

@@ -345,10 +345,15 @@ def _finish(obj):
     return obj
 
 
-def _named(model, what, factory):
-    """Find or create a pipeline object fed by this reader."""
+def _named(model, what, factory, xml=None):
+    """Find or create a pipeline object fed by this reader. With ``xml`` (the proxy's XML name), an
+    object of that name but another type (left by an older nastran-pv: the SPC view used ParaView's
+    Glyph) is deleted and made again."""
     name = _name(model, what)
     src = pv.FindSource(name)
+    if src is not None and xml is not None and _xml_name(src) != xml:
+        pv.Delete(src)  # and its representations
+        src = None
     if src is None:
         src = factory()
         pv.RenameSource(name, src)
@@ -391,13 +396,17 @@ def deform_filters(model):
 
 
 def set_deformation(model, scale, auto=False):
-    """Every NPV deform filter of the model at ``scale`` (Auto Scale off), or with ``auto`` on Auto
-    Scale (``scale`` is then only what Scale Factor shows)."""
+    """Every NPV deform filter of the model at ``scale`` with Auto Scale off; with ``auto`` the
+    model's own 'NPV deform' gets Auto Scale instead. Only that one: the others (after a topology
+    filter, whose output may be a part of the model) would each scale to their own input's peak,
+    so they get ``scale``, the main one's peak at this step."""
+    main = pv.FindSource(_name(model, "deform"))
     for f in deform_filters(model):
         if f.ScaleFactor != scale:
             f.ScaleFactor = scale
-        if bool(f.AutoScale) != bool(auto):
-            f.AutoScale = int(auto)
+        on = bool(auto) and f == main
+        if bool(f.AutoScale) != on:
+            f.AutoScale = int(on)
 
 
 def _extract(model, *blocks, what=None, undeformed=False):
@@ -788,7 +797,7 @@ def view_loads(model, view, sets=None, show=None, size=None, stride=None):
     if loads is None:
         info_text(model, view, "No nodal loads (FORCE/MOMENT) in this deck.")
         return
-    g = _named(model, "load glyphs", lambda: pv.NastranLoadGlyphs(Input=deformed(model)))
+    g = _named(model, "load glyphs", lambda: pv.NastranLoadGlyphs(Input=deformed(model)), "NastranPVLoadGlyphs")
     g.UpdatePipelineInformation()
     if sets is not None:
         g.LoadSets = list(sets)
@@ -801,8 +810,16 @@ def view_loads(model, view, sets=None, show=None, size=None, stride=None):
     drawn = [n for n in drawn if n in names]
     count = int(_glyph_field(g, "ArrowCount"))
     if not count:
-        info_text(model, view, "Load sets contain no nodal forces (GRAV only?)." if drawn or not list(g.LoadSets)
-                  else "No load set checked: check one on 'NPV load glyphs' (Load Sets).")
+        available = list(g.GetProperty("LoadSetsInfo"))[0::2]
+        what = {"Forces": "forces", "Moments": "moments"}.get(enum_text(g, "Show"), "forces or moments")
+        if not available:
+            text = "Only GRAV load sets in this deck (GRAV is not drawn as arrows)."
+        elif not list(g.LoadSets):
+            text = "No load set checked: check one on 'NPV load glyphs' (Load Sets)."
+        else:
+            text = (f"{', '.join(drawn) or 'The checked sets'}: no {what} to draw. Show on 'NPV load glyphs' "
+                    "picks forces, moments or both; GRAV is not drawn.")
+        info_text(model, view, text)
         return g
     d = pv.Show(g, view)
     continuous(d, "POINTS", "Magnitude", preset="Inferno (matplotlib)", view=view)
@@ -829,7 +846,7 @@ def view_spc(model, view, sets=None, dofs=None, size=None):
     if not model.has("Constraints"):
         info_text(model, view, "No SPCs in this deck (free-free model).")
         return
-    g = _named(model, "spc glyphs", lambda: pv.NastranSPCGlyphs(Input=deformed(model)))
+    g = _named(model, "spc glyphs", lambda: pv.NastranSPCGlyphs(Input=deformed(model)), "NastranPVSPCGlyphs")
     g.UpdatePipelineInformation()
     if sets is not None:
         g.SPCSets = [f"SPC {int(s)}" for s in sets]

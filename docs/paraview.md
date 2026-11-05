@@ -127,7 +127,7 @@ an `NPV ...` filter selected finds the model upstream of it.
 | NPV Family / Group / PID / MID / Element Type | Mesh with an indexed color per value, with names in the legend |
 | NPV Thickness | Shell thickness |
 | NPV NSM | Nonstructural mass: shells by NSM per area, lines by NSM per length (two legends); totals by source and per NSM set, or the defined sets when none is selected. The reader's *NSMSet* picks the bulk set (-1 = Case Control `NSM=`, or the only set of a bulk-only file; 0 = none; see [Nonstructural mass](model.md#nonstructural-mass)) |
-| NPV Results | Deformed shape colored by displacement over the undeformed outline, for the current time step; each step's largest displacement is drawn at 8 % of the model size (*NPV deform* > *Auto Scale*; uncheck it to type a *Scale Factor*, which a rerun keeps) |
+| NPV Results | Deformed shape colored by displacement over the undeformed outline, for the current time step; each step's largest displacement is drawn at 8 % of the model size (*NPV deform* > *Auto Scale*; uncheck it to type a *Scale Factor*, which rerunning NPV Results keeps; any other view in between resets it to 0, and NPV Results then turns Auto Scale back on) |
 | NPV Random RMS | Random response (reader *Random ASD* set, see [Random vibration](random-vibration.md)): the mesh colored by acceleration RMS on a log scale, with the drive, input RMS and captured mass. Drive, damping and g are the reader's *Random* properties, since the reader computes the response |
 | NPV Random Sweep | The response ASD at the current frequency frame on one fixed log range, with the frame's frequency: press play to sweep |
 | NPV Animate Mode | Vibrates the mode the time controls are on, in the view as it is (masses, PID, loads, results, a show-only subset, anything you switched on): two cycles at 24 frames/s. It then leaves the **play button** looping that mode: the time steps become the 24 phases of one cycle (the time widget reads *Phase*), and the mode and its frequency stay in the upper right corner. A converted single-step file (`convert --results` without `--all-steps`) has one mode. From Python: `nv.play_mode(3, frames=36)` |
@@ -203,8 +203,9 @@ the selection commands make no filter of their own.
       the largest one (0 for a disc or rod) is drawn at 5 %. Masses without inertia become spheres at the median density of
       the others. When no mass has inertia it uses Relative. Inertia that no body can have (one
       principal moment above the sum of the other two) gives a sphere and a load warning.
-    - **Relative** gives the heaviest mass a radius of *Size* × the model diagonal (scripts and
-      saved states may still say *RelativeSize*); the other masses follow *RadiusLaw*.
+    - **Relative** gives the heaviest mass a radius of *Size* × the model diagonal (called
+      *RelativeSize* before; a saved state or script that sets it gets the default size, so set
+      *Size* instead); the other masses follow *RadiusLaw*.
     - **Auto** (the default) picks Physical only when the masses carry real inertia of a visible
       size. Otherwise it uses Relative, because spheres sized without inertia are not physical
       lengths.
@@ -243,6 +244,8 @@ the selection commands make no filter of their own.
   (0.08) and the others their share; **Fixed** draws every arrow that long. *Every Nth Point*
   draws every Nth loaded grid of each set; 0 (the default) keeps at most 1,500 arrows a set. Point
   arrays `Magnitude`, `LoadKind` (0 force, 1 moment), `LoadSet` and `NID`; GRAV is not drawn.
+  With **Forces and moments** both kinds share one `Magnitude` color range (force and moment
+  units mixed); color by `LoadKind` to tell them apart, or show one kind at a time.
 * **Nastran SPC Glyphs** puts a sphere of diameter *Size* × the model diagonal (0.006) on every
   constrained grid of the checked *SPC Sets* that constrains any of the *DOFs* (default `123456`;
   `123` keeps the grids that fix a translation). Point arrays `DOFCode`, `SPCSet`, `NID` and `CD`.

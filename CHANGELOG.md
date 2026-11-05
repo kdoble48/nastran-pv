@@ -47,7 +47,7 @@ All notable changes to nastran-pv are listed here. The format follows
 
 - NPV Loads and NPV SPC draw through *NPV load glyphs* and *NPV spc glyphs* (Nastran filters)
   instead of ParaView Glyph objects; NPV Results scales each time step to 8 % of the model (Nastran
-  Deform *Auto Scale*); Mass Glyphs' *RelativeSize* is now *Size* (the old name still works);
+  Deform *Auto Scale*); Mass Glyphs' *RelativeSize* is now *Size* (saved states and scripts that set *RelativeSize* need *Size*);
   rerunning a macro keeps the settings changed on its filter (#49).
 - NPV macros and `nastran_views.apply` end with the filter they are about selected (mass glyphs, NPV grow, the Nastran Diff, NPV deform, ...), or the reader for coloring and visibility macros.
 - Simplified the plugin: shared setters and `RequestData`, one upstream walk, one screenshot view (#38).
