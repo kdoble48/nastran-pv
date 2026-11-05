@@ -24,7 +24,7 @@ everything is added/removed. For coarse vs fine use the store by FAMILY/PID belo
 decks, `.vtm` or `.vtkhdf`. It also diffs rigid elements, connectors (MPC by set id), bushes,
 loads (per set and grid, plus per-set resultants in `DIFFLOAD_*`), SPCs and coordinate systems;
 PLOAD*/TEMP, spring values and MPC coefficients are not in the model, so not diffed. A `.vtm`
-written before the `CORD_` table existed skips coords/CP/CD/SPC enforced values with a note above
+written before the `CORD_` table existed skips coords/CP/CD/SPC enforced values/GRAV with a note above
 the table: convert it again. User page: `docs/diff.md`.
 
 ## Store workflow

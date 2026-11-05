@@ -247,6 +247,51 @@ def test_older_files_skip_with_a_note(models):
     assert "loads" not in summary(d) and any(n.startswith("loads") for n in d.notes)
 
 
+def _old_file(mb):
+    """``mb`` as a file written before the v2 tables: no CORD_/GRIDCS_/GRAV_ root arrays."""
+    fd = mb.GetFieldData()
+    names = [fd.GetArrayName(i) for i in range(fd.GetNumberOfArrays())]
+    return _strip(mb, root=[n for n in names if n and n.startswith(("CORD_", "GRIDCS_", "GRAV_", "CoordSystemCount"))])
+
+
+def test_older_file_with_a_grav_only_set(tmp_path):
+    """An older .vtm drops a GRAV-only set's empty block and has no GRAV_ table: gravity is not
+    compared (with a note), so the same model gives no load rows, as an older VTKHDF does."""
+    from nastran_pv.vtkhdf import write_vtkhdf
+
+    deck = tmp_path / "g.bdf"
+    deck.write_text("SOL 101\nCEND\nBEGIN BULK\nGRID,1,,0.,0.,0.\nGRID,2,,1.,0.,0.\nGRID,3,,0.,1.,0.\n"
+                    "CTRIA3,1,1,1,2,3\nPSHELL,1,1,0.1,1\nMAT1,1,7e10,,0.3,2700.\n"
+                    "GRAV,3,,9.81,0.,0.,-1.\nFORCE,1,2,,1.,1.,0.,0.\nENDDATA\n", encoding="latin-1")
+    a = build(deck)
+    for path in (write_vtm(_old_file(a), tmp_path / "old.vtm"), write_vtkhdf(_old_file(a), tmp_path / "old.vtkhdf")):
+        d = diff_models(read_model(path), a)
+        assert not [r for r in d.rows if r["Item"] in ("load", "load_set")], (path, d.rows)
+        assert any(n.startswith("GRAV not compared") for n in d.notes), path
+    d = diff_models(a, a)  # two v2 models: GRAV is compared, no note
+    assert not any(n.startswith("GRAV") for n in d.notes)
+
+
+def test_removed_coordinate_system_flags_its_grids(tmp_path):
+    a_deck, b_deck = tmp_path / "a.bdf", tmp_path / "b.bdf"
+    body = ("SOL 101\nCEND\nBEGIN BULK\nGRID,1,,0.,0.,0.,7\nGRID,2,,1.,0.,0.\nGRID,3,,0.,1.,0.\n"
+            "CTRIA3,1,1,1,2,3\nPSHELL,1,1,0.1,1\nMAT1,1,7e10,,0.3,2700.\n{cord}ENDDATA\n")
+    a_deck.write_text(body.format(cord="CORD2R,7,,0.,0.,0.,0.,0.,1.,+\n+,1.,0.,0.\n"), encoding="latin-1")
+    b_deck.write_text(body.format(cord=""), encoding="latin-1")
+    d = diff_models(build(a_deck), build(b_deck))
+    assert [r["Status"] for r in d.rows if r["Item"] == "coord"] == ["removed"]
+    assert [(r["Id"], r["Field"]) for r in d.rows if r["Item"] == "grid"] == [(1, "CD system")]
+
+
+def test_convert_diff_against_prints_the_notes(models, tmp_path, capsys):
+    from nastran_pv.cli import main
+
+    old = write_vtm(_old_file(models[0]), tmp_path / "old_a.vtm")
+    assert main(["convert", str(B_DECK), "--diff-against", str(old), "-o", str(tmp_path / "d.vtm"), "-q"]) == 0
+    out = capsys.readouterr().out
+    assert "coordinate systems and grid CP/CD not compared" in out and "SPC enforced values not compared" in out
+
+
 def test_missing_blocks_are_empty_not_skipped(models):
     a, b = models
     bare = build(DATA / "diff_a.bdf")  # no rigid, connectors, bushes, loads or SPCs

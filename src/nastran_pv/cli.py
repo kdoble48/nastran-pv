@@ -337,7 +337,7 @@ def diff_against(mb, args) -> list[str]:
     with progress_for(args).stage(f"diff against {Path(args.diff_against).name}"):
         ref, _ = _load_other(args.diff_against, args)
         d = annotate(mb, ref, diff_tolerances(args), against=Path(args.diff_against).resolve())
-    return report_lines(d, args.diff_against, args.input)[2:4]
+    return report_lines(d, args.diff_against, args.input)[2:4] + list(d.notes)
 
 
 def add_diff_tolerances(p) -> None:

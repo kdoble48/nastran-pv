@@ -11,11 +11,11 @@ from __future__ import annotations
 import numpy as np
 
 from . import vtkutil
+from .coords import COUNT
 from .fields.common import field_strings, get_array
 
 ITEM_TYPES = ("element", "mass", "rigid", "connector", "bush", "load", "spc")
 ELEMENT_ITEM, MASS_ITEM, RIGID_ITEM, CONNECTOR_ITEM, BUSH_ITEM, LOAD_ITEM, SPC_ITEM = range(len(ITEM_TYPES))
-COUNT = "CoordSystemCount"  # nastran_pv.coords.COUNT: marks a model built with the CORD_ tables
 
 
 # ------------------------------------------------------------------ helpers
@@ -206,6 +206,8 @@ def compare_coords(A, B, row, tol, res: Result) -> None:
             row("coord", cid, "added" if a is None else "removed", name=(b or a)[0])
             if b is not None:
                 status.append(1)
+            else:  # grids and SPCs of B that still name it are flagged
+                res.changed_coords.add(cid)
             continue
         reason = 0
         if a[0] != b[0]:
@@ -292,7 +294,7 @@ def _connections(item, label, ia, ib, moved, row, res: Result, block, item_type)
 
 def compare_bushes(A, B, moved, row, tol, res: Result) -> None:
     from .diff import (ADDED, CHANGED, CONNECTIVITY, MOVED, ORIENTATION, PID, PROPERTY, REASON_NAMES, SAME,
-                       STIFFNESS)
+                       STIFFNESS, differs)
 
     da, db = A.blocks.get("Bushes"), B.blocks.get("Bushes")
     ia = bush_items(da) if da is not None else {}
@@ -335,8 +337,6 @@ def compare_bushes(A, B, moved, row, tol, res: Result) -> None:
                 if b["xyz"][c] != a["xyz"][c]:
                     row("bush", eid, "changed", axis, float(a["xyz"][c]), float(b["xyz"][c]), name="CBUSH")
         ka, kb = np.resize(a["k"], 6), np.resize(b["k"], 6)
-        from .diff import differs
-
         dk = differs(ka, kb, tol.rel)
         if dk.any():
             r |= STIFFNESS
@@ -368,15 +368,27 @@ def _resultant(s):
     return s["F"].sum(axis=0), (np.cross(s["xyz"], s["F"]) + s["M"]).sum(axis=0), s["G"]
 
 
-def compare_loads(A, B, moved, row, tol, res: Result) -> None:
+def compare_loads(A, B, moved, row, tol, res: Result, gravity: bool = True) -> None:
+    """Load points and per-set resultants. ``gravity=False`` (a model older than the ``CORD_``/``GRAV_``
+    tables): GRAV is not compared and sets without load points are left out on both sides, because
+    an older .vtm drops a GRAV-only set's empty block."""
     from .diff import ADDED, CHANGED, MOVED, REASON_NAMES, SAME, VALUE
 
     sa, sb = load_sets(A.blocks), load_sets(B.blocks)
     if sa is None or sb is None:
         res.notes.append(f"loads not compared: a Loads block of {'A' if sa is None else 'B'} lacks NID/Force")
         return
-    add_gravity(sa, A.mb)
-    add_gravity(sb, B.mb)
+    if gravity:
+        add_gravity(sa, A.mb)
+        add_gravity(sb, B.mb)
+    else:
+        for sets in (sa, sb):
+            for name in [k for k, s in sets.items() if not len(s["nid"])]:
+                del sets[name]
+            for s in sets.values():
+                s["G"] = np.zeros(3)
+        res.notes.append("GRAV not compared, and load sets without load points left out: a model has no "
+                         "CORD_ table (an older file)")
     all_status, n_a, n_b, n_removed = [], 0, 0, 0
     comps = [(f"F{x}", 0, c) for c, x in enumerate("XYZ")] + [(f"M{x}", 1, c) for c, x in enumerate("XYZ")]
 
@@ -448,7 +460,7 @@ def compare_loads(A, B, moved, row, tol, res: Result) -> None:
 
 
 def compare_spcs(A, B, moved, row, tol, res: Result, enforced: bool) -> None:
-    from .diff import ADDED, CHANGED, DOF, FRAME, MOVED, REASON_NAMES, SAME, VALUE
+    from .diff import ADDED, CHANGED, DOF, FRAME, MOVED, REASON_NAMES, SAME, VALUE, differs
 
     da, db = A.blocks.get("Constraints"), B.blocks.get("Constraints")
     ia = spc_points(da) if da is not None else {}
@@ -472,8 +484,6 @@ def compare_spcs(A, B, moved, row, tol, res: Result, enforced: bool) -> None:
             r |= DOF
             row("spc", nid, "changed", "DOF", a["dof"], b["dof"], name=name)
         if enforced:
-            from .diff import differs
-
             dd = differs(a["d"], b["d"], tol.rel)
             if dd.any():
                 r |= VALUE
@@ -516,8 +526,8 @@ def compare(A, B, moved_nids, row, tol, res: Result) -> None:
         if db is None:
             res.items.pop(block, None)
     compare_bushes(A, B, moved, row, tol, res)
-    compare_loads(A, B, moved, row, tol, res)
     both_v2 = coord_table(A.mb) is not None and coord_table(B.mb) is not None
+    compare_loads(A, B, moved, row, tol, res, gravity=both_v2)
     if not both_v2:
         res.notes.append("SPC enforced values not compared: a model has no CORD_ table (an older file)")
     compare_spcs(A, B, moved, row, tol, res, enforced=both_v2)

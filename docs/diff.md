@@ -76,9 +76,10 @@ removed from the one block and added to the other. Force and moment vectors diff
 Not compared, because the model does not hold them: pressure, distributed and thermal loads
 (PLOAD*, PLOAD4, TEMP), spring and damper values (CELAS/PELAS K, CDAMP B) and MPC coefficients.
 A model written before these comparisons existed (a `.vtm` or VTKHDF without the `CORD_` table)
-has its coordinate systems, grid CP/CD and SPC enforced values skipped, and a block without the
-arrays a kind needs has that kind skipped; the report says which in a line above the table, and
-the kind has no summary row.
+has its coordinate systems, grid CP/CD, SPC enforced values and GRAV skipped (load sets with no
+load points are then left out on both sides, since an older `.vtm` drops a GRAV-only set), and a
+block without the arrays a kind needs has that kind skipped; the report (and `convert
+--diff-against`) says which in a line above the table, and the kind has no summary row.
 
 The mass is the sum of `ElementMass` (structural plus NSM) and the concentrated masses, with the
 CG from the element centers, so it matches `ModelMass` and `ModelCG`. The per-PID and per-family
