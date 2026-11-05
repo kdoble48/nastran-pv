@@ -381,16 +381,22 @@ def _cut(ds, kind, items):
     return piece, cell_ids, pts
 
 
-def build_tree(mb, vis: Visibility | None = None, names=None, max_pieces: int = MAX_PIECES) -> Tree:
-    """Cut ``mb`` into category pieces (``mb`` is not modified)."""
+def build_tree(mb, vis: Visibility | None = None, names=None, max_pieces: int = MAX_PIECES,
+               masks: dict | None = None) -> Tree:
+    """Cut ``mb`` into category pieces (``mb`` is not modified).
+
+    ``masks`` ({block path: keep per item}, e.g. from :func:`nastran_pv.selection.scope_masks`) replaces
+    ``vis``: a block listed there keeps its True items, every other block keeps everything."""
     vis = vis or Visibility()
-    selected, warnings = vis.selection_masks(mb)
+    selected, warnings = ({}, []) if masks is not None else vis.selection_masks(mb)
     blocks = []
     for path, ds in iter_blocks(mb):
         kind = _item_kind(ds)
         n = _n_items(ds, kind)
         labels = item_labels(path, ds, names)
-        if vis.everything:
+        if masks is not None:
+            kept = np.flatnonzero(masks[path]) if path in masks else np.arange(n)
+        elif vis.everything:
             kept = np.arange(n)
         else:
             eid = get_array(_attr(ds, kind), "EID")

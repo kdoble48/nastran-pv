@@ -11,8 +11,9 @@ import numpy as np
 import pytest
 
 from nastran_pv import selection, tree
-from nastran_pv.assemble import block_names, get_block
+from nastran_pv.assemble import block_names, build_multiblock, get_block
 from nastran_pv.cli import main
+from nastran_pv.deck import load_deck
 from nastran_pv.fields.common import iter_blocks, shallow_clone
 from nastran_pv.vtkio import read_vtm
 from conftest import DATA, arr, strings
@@ -294,3 +295,91 @@ def test_stats_select(tmp_path, capsys):
                  "--select-grids", "any"]) == 0
     rows = capsys.readouterr().out.splitlines()
     assert [r.split()[0] for r in rows[1:]] == ["1", "2"]  # shells only: no solid touches those grids
+
+
+# ------------------------------------------------------------------ scope_masks (R2 join)
+def kept(mb, masks, path, where="cell", name="EID"):
+    return sorted(int(v) for v in arr(dict(iter_blocks(mb))[path], name, where)[masks[path]])
+
+
+def test_scope_none_without_scope(run_mb):
+    assert selection.scope_masks(run_mb, tree.Visibility()) is None
+
+
+def test_scope_show_only_shell(run_mb):
+    m = selection.scope_masks(run_mb, tree.Visibility(show_only=frozenset({1})))
+    assert kept(run_mb, m, "Shells") == [1] and kept(run_mb, m, "Solids") == []
+    assert sorted(set(kept(run_mb, m, "Rigid"))) == [301, 401]  # 302 is only on shell 2's grid 6
+    assert kept(run_mb, m, "Bushes", "point") == [503]          # 501 (3-8), 502 (6) miss shell 1
+    assert kept(run_mb, m, "Masses", "point") == [201, 202]     # 202 on grid 7: RBE3 401's reference grid
+    assert kept(run_mb, m, "MassOffsets") == [201]
+    assert kept(run_mb, m, "Constraints", "point", "NID") == [1, 2, 3, 4]
+    assert kept(run_mb, m, "Loads/SID_2", "point", "NID") == [6]  # grid 6 joins through RBE2 301
+
+
+def test_scope_named_eids_win(run_mb):
+    eid = lambda *e: frozenset(e)
+    for vis in (tree.Visibility(show_only=eid(201)), tree.Visibility(show_only=eid(1, 201)),
+                tree.Visibility(hidden_eids=eid(202)),
+                tree.Visibility(select=selection.IdList("EID", eid(201))),
+                tree.Visibility(select=selection.IdList("EID", eid(202)), select_hide=True)):
+        assert kept(run_mb, selection.scope_masks(run_mb, vis), "Masses", "point") == [201], vis
+    m = selection.scope_masks(run_mb, tree.Visibility(show_only=eid(201)))
+    assert kept(run_mb, m, "MassOffsets") == [201] and kept(run_mb, m, "Shells") == []
+    assert kept(run_mb, m, "Constraints", "point", "NID") == []
+
+
+def test_scope_show_only_and_pid_file_keep_the_readers_mesh(run_mb):
+    """Show Only 1 2 with a PID 2 selection file: the reader keeps shell 2 (both apply), so the
+    overlays hang only off its grids 2 3 6 5 (not shell 1's grid 1 or 4 through CBUSH 503)."""
+    vis = tree.Visibility(show_only=frozenset({1, 2}), select=selection.IdList("PID", frozenset({2})))
+    m = selection.scope_masks(run_mb, vis)
+    shells = dict(iter_blocks(run_mb))["Shells"]
+    reader = vis.mask(selection.item_labels("Shells", shells, None), arr(shells, "EID", "cell"),
+                      shells.GetNumberOfCells()) & vis.selection_masks(run_mb)[0]["Shells"]
+    assert kept(run_mb, m, "Shells") == [2] and list(m["Shells"]) == list(reader)
+    assert kept(run_mb, m, "Solids") == []
+    assert kept(run_mb, m, "Bushes", "point") == [501, 502]          # 503 (4-12) is on shell 1 and 3 only
+    assert kept(run_mb, m, "Constraints", "point", "NID") == [2, 3, 4]  # 4 through RBE3 401; not grid 1
+
+
+CHAIN = """SOL 101
+CEND
+BEGIN BULK
+GRID,1,,0.,0.,0.
+GRID,2,,1.,0.,0.
+GRID,3,,1.,1.,0.
+GRID,4,,0.,1.,0.
+GRID,5,,2.,0.,0.
+GRID,6,,3.,0.,0.
+GRID,7,,3.,1.,0.
+GRID,8,,2.,1.,0.
+GRID,20,,1.,0.,-1.
+GRID,21,,1.,0.,-2.
+GRID,30,,3.,0.,-1.
+CQUAD4,1,1,1,2,3,4
+CQUAD4,2,2,5,6,7,8
+PSHELL,1,1,0.01
+PSHELL,2,1,0.01
+MAT1,1,7.0e10,,0.3,2700.
+RBE2,10,2,123456,20
+RBE2,14,6,123456,30
+PBUSH,51,K,1.0e6,1.0e6,1.0e6,1.0e6,1.0e6,1.0e6
+CBUSH,11,51,20,21,0.,1.,0.
+CBUSH,13,51,3,5,0.,0.,1.
+CONM2,12,21,,100.
+CONM2,15,30,,5.
+ENDDATA
+"""
+
+
+def test_scope_follows_connector_chains_over_free_grids(tmp_path):
+    p = tmp_path / "chain.bdf"
+    p.write_text(CHAIN)
+    deck = load_deck(p, echo=False)
+    mb = build_multiblock(deck)
+    m = selection.scope_masks(mb, tree.Visibility(hidden={"Properties": frozenset({"PSHELL_2"})}),
+                              tree.names_from_deck(deck))
+    assert kept(mb, m, "Masses", "point") == [12]       # wing 2 -> RBE2 10 -> 20 -> CBUSH 11 -> 21
+    assert sorted(set(kept(mb, m, "Rigid"))) == [10]    # RBE2 14 hangs off the hidden shell 2
+    assert kept(mb, m, "Bushes", "point") == [11, 13]   # 13 touches the wing; grid 5 carries nothing on

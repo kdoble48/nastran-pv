@@ -14,6 +14,8 @@ from vtkmodules.vtkCommonDataModel import vtkDataObjectTree, vtkPointSet
 
 from . import vtkutil
 
+DEFORM_SCALE = "DeformScale"  # root field double on a Nastran Deform output: the scale it applied
+
 
 def _leaves(data):
     """(flat index, point set) of every leaf with points."""

@@ -266,3 +266,10 @@ def test_take_string_array(mb):
         tags = pdc.GetPartition(i, 0).GetCellData().GetAbstractArray("Tag")
         found += [tags.GetValue(k) for k in range(tags.GetNumberOfValues())]
     assert sorted(found) == ["e1", "e2"]
+
+
+def test_build_tree_with_masks(mb, names):
+    eid = arr(get_block(mb, "Shells"), "EID", "cell")
+    pdc = tree.build_tree(mb, names=names, masks={"Shells": np.array([True, False, True])}).output(mb)
+    assert node_eids(pdc, "Model/Shells") == sorted(eid[[0, 2]].tolist())
+    assert len(node_eids(pdc, "Model/Solids")) == 3

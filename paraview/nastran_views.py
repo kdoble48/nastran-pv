@@ -2,8 +2,12 @@
 
 Every view works on a Nastran reader (the active source, or the reader
 upstream of it) or on a ``.vtm``/VTKHDF file written by nastran-pv and opened with
-ParaView's own reader. It hides what else is shown in the active view, and builds or
-reuses named pipeline objects ("NPV ..."), so running a view twice does not
+ParaView's own reader. Views edit the active view's scene (:func:`scene_of`): a coloring
+(``pid``, ``thickness``, ``results``, ...) replaces the coloring and keeps the overlays, an overlay
+(``masses``, ``bushes``, ``bushrotations``, ``beams``, ``loads``, ``spc``, ``rigid``) adds itself
+(over a ghost mesh on an empty view), and a second toolbar click on an overlay removes it
+(``apply(name, toggle=True)``; ``apply`` itself refreshes). A view for another model starts a new
+scene. Views build or reuse named pipeline objects ("NPV ..."), so running a view twice does not
 pile up duplicates. A view or command ends with the filter it is about selected (the mass
 glyphs, NPV grow, the Nastran Diff, NPV deform for results and mode animation), or the reader when
 it only recolours the model or changes the reader's visibility; the model is found upstream of it
@@ -22,6 +26,9 @@ Femap-style visibility commands: they set the reader's visibility checklists and
 so they need the deck (:func:`deck_reader`). ``show_only_file``, ``hide_file`` and
 ``highlight_file`` do the same from a CSV/text file of IDs (the reader's ``SelectionFile``);
 highlight makes a real ParaView selection.
+``clear`` (NPV Clear) is the reset: it empties the view of every layer, sets the deformation
+back to 0 and deletes nothing (``side_by_side`` still resets its two views until comparisons follow
+the scene).
 ``diff`` compares the active model (B) with a second open model (A) through the Nastran Diff filter,
 and :func:`side_by_side` shows A and B in two linked views with one color range.
 Plus :func:`index_colors`, which turns whatever integer array the active representation is
@@ -269,12 +276,15 @@ class Model:
         if time is None:
             view = pv.GetActiveView()
             time = getattr(view, "ViewTime", 0.0) if view is not None else 0.0
+        self.time = time
         reader.UpdatePipeline(time)
         raise_load_error(reader)
         from nastran_pv.tree import as_multiblock
 
         self.data = as_multiblock(fetch(reader))  # the reader outputs the model tree
         self.names = block_names(self.data)
+        self._scoped = None  # (multiblock, block names) of NPV scope, fetched on first use
+        self._scope_active = None  # scope_active(reader), asked once
         b = reader.GetDataInformation().GetBounds()
         self.bounds = b
         self.diag = float(np.linalg.norm(np.array(b[1::2]) - np.array(b[0::2]))) or 1.0
@@ -284,6 +294,28 @@ class Model:
 
     def block(self, name):
         return self.data.GetBlock(self.names.index(name)) if self.has(name) else None
+
+    def scoped(self, name):
+        """Block ``name`` of what the overlays draw (*NPV scope*: the whole model cut by the R2 join),
+        or None when the scope keeps none of it. With nothing hidden that is the reader's own block
+        (NPV scope passes it through), so nothing is fetched again."""
+        if not self.scope_active():
+            return self.block(name)
+        if self._scoped is None:
+            from nastran_pv.tree import as_multiblock
+
+            src = scoped(self)
+            src.UpdatePipeline(self.time)
+            data = as_multiblock(fetch(src))
+            self._scoped = (data, block_names(data))
+        data, names = self._scoped
+        return data.GetBlock(names.index(name)) if name in names else None
+
+    def scope_active(self):
+        """:func:`scope_active` of the reader, asked once per Model."""
+        if self._scope_active is None:
+            self._scope_active = scope_active(self.reader)
+        return self._scope_active
 
     def _holder(self, block_name, name):
         """Block whose field data holds ``name``: ``block_name``, else the root. VTKHDF keeps no
@@ -409,14 +441,70 @@ def set_deformation(model, scale, auto=False):
             f.AutoScale = int(on)
 
 
-def _extract(model, *blocks, what=None, undeformed=False):
-    blocks = [b for b in blocks if model.has(b) or "/" in b]
+SCOPE_XML = "NastranPVScope"
+
+
+def scoped(model):
+    """The ``NPV scope`` filter on the model's NPV deform: what the overlays draw (rule R2). Mesh
+    blocks keep what the reader keeps; masses, connectors, SPCs and loads stay when they hang off a
+    kept element. With no scope (or a converted file) it passes its input through."""
+    return _named(model, "scope", lambda: pv.NastranScope(Input=deformed(model)), SCOPE_XML)
+
+
+_scope_filter = scoped  # _extract's ``scoped`` argument hides the function
+
+
+def _feed(proxy, src):
+    """Set ``proxy.Input`` to ``src`` unless it is fed by it already (objects made before the
+    overlays followed the scope were fed by NPV deform)."""
+    if _input_of(proxy) != src:
+        proxy.Input = src
+    return proxy
+
+
+def scope_active(reader):
+    """True when the deck reader hides anything: an EID list, an unchecked checklist entry, or a
+    Selection File in use. A converted file has no scope."""
+    if _xml_name(reader) != READER_XML:
+        return False
+    if (reader.ShowOnlyElements or "").strip() or (reader.HiddenElements or "").strip():
+        return True
+    if reader.SelectionFile and enum_text(reader, "SelectionMode") != "Off":
+        return True
+    reader.UpdatePipelineInformation()
+    return any(set(_listed(reader, prop)) - set(getattr(reader, prop)) for prop in VISIBILITY_PROPS)
+
+
+def _missing_text(model, what, note=""):
+    """The info text of an overlay with nothing to draw: in the scope, or in the deck (+ ``note``)."""
+    if model.scope_active():
+        return f"No {what} in the reader's scope (NPV Show All shows the whole model)."
+    return f"No {what} in this deck{note}."
+
+
+def _overlay(model, what, make, xml=None):
+    """``NPV <what>``, an overlay filter made by ``make(src)`` on NPV scope, and fed from it (an older
+    one was fed by NPV deform). NPV scope is updated first: filters such as the load glyphs fill their
+    checklists from their input's data, which a scope made just now has not produced yet."""
+    src = scoped(model)
+    src.UpdatePipeline(model.time)  # a pass-through, or the cached cut, once the scope has run
+    return _feed(_named(model, what, lambda: make(src), xml), src)
+
+
+def _extract(model, *blocks, what=None, undeformed=False, scoped=False):
+    """``NPV <blocks>`` (an ExtractBlock of the model's NPV deform); ``scoped``: ``NPV scoped <blocks>``
+    from NPV scope (the overlays' cut); ``undeformed``: from a deform held at scale 0."""
+    has = (lambda b: model.scoped(b) is not None) if scoped else model.has
+    blocks = [b for b in blocks if has(b) or "/" in b]
     if not blocks:
         return None
     name = what or "+".join(blocks)
     if undeformed:  # through a deform filter at scale 0, which holds the mode while it vibrates
         rest = _named(model, "undeformed model", lambda: pv.NastranDeform(Input=model.reader))
         return _named(model, f"undeformed {name}", lambda: extract_blocks(rest, blocks))
+    if scoped:
+        src = _scope_filter(model)
+        return _named(model, f"scoped {name}", lambda: extract_blocks(src, blocks))
     return _named(model, name, lambda: extract_blocks(deformed(model), blocks))
 
 
@@ -434,12 +522,106 @@ def shown_sources(view):
     return out
 
 
-def _reset_view(view):
-    if view is None:
-        return
-    for src in shown_sources(view):
-        pv.Hide(src, view)
+# ------------------------------------------------------------ scene layers
+_SCENES = {}  # view.GetGlobalIDAsString() -> nastran_pv.scene.Scene
+_RECORDING = None  # the list _show appends to inside _recorded, else None
+_INFO_WRITES = 0  # info_text calls so far: apply tells from it which layer wrote the info text
+
+
+def scene_of(view):
+    """The layers shown in ``view`` (a :class:`nastran_pv.scene.Scene`, made on first use). Scenes of
+    views that were closed are dropped."""
+    from nastran_pv.scene import Scene
+
+    alive = {v.GetGlobalIDAsString() for v in pv.GetViews()}
+    for key in [k for k in _SCENES if k not in alive]:
+        del _SCENES[key]
+    return _SCENES.setdefault(view.GetGlobalIDAsString(), Scene())
+
+
+def _show(src, view):
+    """``pv.Show`` that records ``src`` in the active :func:`_recorded` call, if any."""
+    disp = pv.Show(src, view)
+    if _RECORDING is not None and src not in _RECORDING:
+        _RECORDING.append(src)
+    return disp
+
+
+def _recorded(fn):
+    """(what the :func:`_show` calls inside ``fn()`` showed, in order and once each, ``fn()``)."""
+    global _RECORDING
+    if _RECORDING is not None:
+        raise RuntimeError("_recorded calls do not nest")
+    _RECORDING = []
+    try:
+        result = fn()
+        return list(_RECORDING), result
+    finally:
+        _RECORDING = None
+
+
+def _hide(objects, view):
+    """Hide ``objects`` in ``view``, and the scalar bar of any lookup table they were colored with
+    once nothing shown uses it: the representation's own (a separate color map has its own table
+    and legend), else the array's shared one."""
+    reps = {}
+    for rep in list(getattr(view, "Representations", None) or []):
+        try:
+            inp = rep.Input
+        except AttributeError:  # scalar bars and other non-data representations
+            continue
+        reps.setdefault(inp.GetGlobalIDAsString() if inp is not None else None, rep)
+    luts = []
+    for obj in objects:
+        rep = reps.get(obj.GetGlobalIDAsString())
+        color = getattr(rep, "ColorArrayName", None)  # text and other reps have none
+        array = color[1] if color else ""
+        lut = getattr(rep, "LookupTable", None) if array else None
+        pv.Hide(obj, view)
+        if array and lut is None:
+            lut = pv.GetColorTransferFunction(array)
+        if lut is not None and lut not in luts:
+            luts.append(lut)
+    for lut in luts:
+        pv.HideScalarBarIfNotNeeded(lut, view)
+
+
+def _hide_strays(view, reader, fresh):
+    """Hide what no layer holds: ``reader``'s own representation always (the model source is never a
+    layer; Highlight File shows it), and in a ``fresh`` (empty) scene every model source and every
+    ``NPV ...`` object shown in ``view``: left by another model's scene, a reopened state or a
+    pre-scene nastran-pv. An empty scene has no layers, so this resets nothing."""
+    names = {v.GetGlobalIDAsString(): k[0] for k, v in pv.GetSources().items()} if fresh else {}
+    out = [s for s in shown_sources(view)
+           if s == reader or fresh and (names.get(s.GetGlobalIDAsString(), "").startswith("NPV ")
+                                        or _is_model_source(s))]
+    if out:
+        _hide(out, view)
+
+
+def _clear_view(view):
+    """Hide everything shown in ``view``, forget its scene and turn the orientation axes back on."""
+    _hide(shown_sources(view), view)
+    _SCENES.pop(view.GetGlobalIDAsString(), None)
     view.OrientationAxesVisibility = 1
+
+
+def clear(view=None):
+    """NPV Clear: empty ``view`` (default: active) of every layer, with the model undeformed (scale 0).
+    Deletes nothing; ends with the model's reader selected (None when no model is open)."""
+    view = view or pv.GetActiveViewOrCreate("RenderView")
+    reader = scene_of(view).model
+    if reader is None:
+        try:
+            reader = find_reader()
+        except RuntimeError:  # no model open: just empty the view
+            reader = None
+    if reader is not None:
+        stop_mode_animation(reader, view)
+        set_deformation(_ReaderOnly(reader), 0.0)
+    _clear_view(view)
+    pv.Render(view)
+    return _finish(reader)
 
 
 def solid(disp, rgb):
@@ -452,7 +634,7 @@ def ghost_mesh(model, view, opacity=0.2):
     mesh = _extract(model, *[b for b in MESH if model.has(b)], what="mesh")
     if mesh is None:
         return None, None
-    d = pv.Show(mesh, view)
+    d = _show(mesh, view)
     d.Representation = "Surface"
     d.Opacity = opacity
     solid(d, GHOST_RGB)
@@ -460,6 +642,8 @@ def ghost_mesh(model, view, opacity=0.2):
 
 
 def info_text(model, view, text, where="Upper Left Corner"):
+    global _INFO_WRITES
+    _INFO_WRITES += 1
     t = _named(model, "info", lambda: pv.Text())
     t.Text = text
     d = pv.Show(t, view)
@@ -486,10 +670,17 @@ def palette(n):
     return out
 
 
-def categorical(disp, array, values, labels=None, colors=None, legend_max=40, association="CELLS", view=None):
-    """Indexed lookup table: one colour and one annotation per integer value."""
-    pv.ColorBy(disp, (association, array))
-    lut = pv.GetColorTransferFunction(array)
+def categorical(disp, array, values, labels=None, colors=None, legend_max=40, association="CELLS", view=None,
+                separate=False):
+    """Indexed lookup table: one colour and one annotation per integer value. ``separate``: a color
+    map of this representation's own, so the shared one (the mesh's PID legend) is left alone."""
+    if separate:
+        disp.UseSeparateColorMap = 1
+        pv.ColorBy(disp, (association, array), separate=True)  # ColorBy's default resets UseSeparateColorMap
+        lut = pv.GetColorTransferFunction(array, disp, separate=True)
+    else:
+        pv.ColorBy(disp, (association, array))
+        lut = pv.GetColorTransferFunction(array)
     lut.InterpretValuesAsCategories = 1
     lut.Annotations = [x for i, v in enumerate(values) for x in (str(v), labels[i] if labels else str(v))]
     lut.IndexedColors = [c for rgb in (colors or palette(len(values))) for c in rgb]
@@ -611,25 +802,28 @@ def view_masses(model, view, mode=None, relative=None, law=None, minimum=None, m
     (cbrt, linear, sqrt, log, uniform) with a floor of ``minimum`` x that radius; masses below
     ``minimum_mass`` are left out; ``color_by`` Mass, EID or NID. Arguments left None keep the
     filter's settings (its defaults on a first run)."""
-    ghost_mesh(model, view)
-    if not model.has("Masses"):
-        info_text(model, view, "No concentrated masses (CONM1/CONM2/CMASS) in this deck.")
+    masses = model.scoped("Masses")
+    if masses is None:
+        info_text(model, view, _missing_text(model, "concentrated masses (CONM1/CONM2/CMASS)"))
         return
-    glyphs = _named(model, "mass glyphs", lambda: pv.NastranMassGlyphs(Input=deformed(model)))
+    glyphs = _overlay(model, "mass glyphs", lambda src: pv.NastranMassGlyphs(Input=src))
     _set_given(glyphs, SizeMode=mode, Size=relative, RadiusLaw=LAW_NAMES[law] if law else None,
                MinimumRelativeSize=minimum, MinimumMass=minimum_mass, ColorBy=color_by)
     glyphs.UpdatePipeline()
-    d = pv.Show(glyphs, view)
+    d = _show(glyphs, view)
     _color_points(model, d, glyphs, enum_text(glyphs, "ColorBy"), view)
-    if model.has("MassOffsets"):
-        od = pv.Show(_extract(model, "MassOffsets"), view)
+    offsets = _extract(model, "MassOffsets", scoped=True)
+    if offsets is not None:
+        od = _show(offsets, view)
         solid(od, [0.15, 0.15, 0.15])
         od.LineWidth = 2.0
     cg = model.field("ModelCG")
     conc = model.field("ConcentratedMass")
     total = model.field("ModelMass")
-    n = model.block("Masses").GetNumberOfPoints()
+    n = masses.GetNumberOfPoints()
     text = f"Concentrated mass: {conc[0]:.6g}  ({n} items)"
+    if model.scope_active():
+        text = f"Concentrated mass (whole model): {conc[0]:.6g}\n{n} items in the reader's scope"
     hidden = int(_glyph_field(glyphs, "HiddenMassCount"))
     if hidden:
         text += f"\n{hidden} lighter than Minimum Mass {glyphs.MinimumMass:g} not drawn"
@@ -641,7 +835,7 @@ def view_masses(model, view, mode=None, relative=None, law=None, minimum=None, m
         marker.Center = list(map(float, cg))
         marker.Radius = 0.02 * model.diag
         marker.ThetaResolution = marker.PhiResolution = 24
-        md = pv.Show(marker, view)
+        md = _show(marker, view)
         solid(md, [0.05, 0.05, 0.05])
         text += f"\nCG (black sphere): ({cg[0]:.4g}, {cg[1]:.4g}, {cg[2]:.4g})"
     glyph_fd = fetch(glyphs).GetFieldData()
@@ -667,22 +861,23 @@ def _glyph_field(src, name, default=0.0):
 def _bush_view(model, view, kind, size=None, ellipsoids=None):
     """Shared body of the bushes (translation) and bush rotations views."""
     rotation = kind == "rotation"
-    ghost_mesh(model, view)
-    if not model.has("Bushes"):
-        info_text(model, view, "No CBUSH elements in this deck.")
+    bushes = model.scoped("Bushes")
+    if bushes is None:
+        info_text(model, view, _missing_text(model, "CBUSH elements"))
         return
     what = "bush rotation glyphs" if rotation else "bush glyphs"
-    glyphs = _named(model, what, lambda: pv.NastranBushGlyphs(Input=deformed(model)))
+    glyphs = _overlay(model, what, lambda src: pv.NastranBushGlyphs(Input=src))
     _set_given(glyphs, Stiffness=int(rotation), Size=size,
                ShowEllipsoids=None if ellipsoids is None else int(ellipsoids and not rotation))
     if not glyphs.ShowTriads and not (glyphs.ShowEllipsoids and not rotation):
         glyphs.ShowTriads = 1  # nothing would be drawn
     glyphs.UpdatePipeline()
-    if model.has("BushLines"):
-        ld = pv.Show(_extract(model, "BushLines"), view)
+    links = _extract(model, "BushLines", scoped=True)
+    if links is not None:
+        ld = _show(links, view)
         solid(ld, list(BUSH_LINE_RGB))
         ld.LineWidth = 1.5
-    n = model.block("Bushes").GetNumberOfPoints()
+    n = bushes.GetNumberOfPoints()
     first = 4 if rotation else 1
     names = [f"K{first + i}" for i in range(3)]
     span = f"{names[0]}-{names[2]}"
@@ -694,7 +889,7 @@ def _bush_view(model, view, kind, size=None, ellipsoids=None):
                                                  f"No {'rotational' if rotation else 'translational'} stiffness "
                                                  f"({span}) on any CBUSH."))
         return glyphs
-    d = pv.Show(glyphs, view)
+    d = _show(glyphs, view)
     released = int(_glyph_field(glyphs, "ReleasedCount"))
     missing = int(_glyph_field(glyphs, "NoStiffnessCount"))
     ellipsoid = bool(glyphs.ShowEllipsoids and not rotation)
@@ -734,12 +929,12 @@ BEAM_PART_RGB = {1: (0.05, 0.05, 0.05), 2: (0.95, 0.55, 0.05), 3: (0.85, 0.12, 0
 
 
 def _beam_axes(model):
-    def make():
-        axes = pv.NastranBeamSections(Input=deformed(model))
+    def make(src):
+        axes = pv.NastranBeamSections(Input=src)
         axes.ShowSections, axes.ShowAxes, axes.ShowTriads = 0, 1, 1
         return axes
 
-    return _named(model, "beam axes", make)
+    return _overlay(model, "beam axes", make)
 
 
 def view_beams(model, view, triads=None, max_triads=None, scale=None):
@@ -747,23 +942,30 @@ def view_beams(model, view, triads=None, max_triads=None, scale=None):
     triads when there are at most Max Triads (500) beams ('NPV beam axes'). Undeformed, like the
     ghost mesh, unless ``scale`` (the filters' DeformationScale) is given. ``triads`` True draws them
     whatever the count; arguments left None keep the filters' settings."""
-    ghost_mesh(model, view)
-    axis2 = model.array("Lines", "Axis2", "cell")
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    lines = model.scoped("Lines")
+    axis2 = lines.GetCellData().GetArray("Axis2") if lines is not None else None
+    beam = np.isfinite(vtk_to_numpy(axis2)[:, 0]) if axis2 is not None else np.zeros(0, bool)
     pids = model.field("SECTION_PID")
-    n = int(np.isfinite(axis2[:, 0]).sum()) if axis2 is not None else 0
-    if not n or pids is None:
-        info_text(model, view, "No CBAR/CBEAM with a section (PBARL, PBEAML, PBAR, PBEAM) in this deck.")
+    n = int(beam.sum())
+    values = set() if pids is None else {int(p) for p in pids}
+    line_pid = lines.GetCellData().GetArray("PID") if n else None
+    if line_pid is not None:  # the section PIDs of the beams in the scope
+        values &= {int(p) for p in vtk_to_numpy(line_pid)[beam]}
+    values = sorted(values)
+    if not n or not values:
+        info_text(model, view, _missing_text(model, "CBAR/CBEAM with a section (PBARL, PBEAML, PBAR, PBEAM)"))
         return
-    sections = _named(model, "beam sections", lambda: pv.NastranBeamSections(Input=deformed(model)))
+    sections = _overlay(model, "beam sections", lambda src: pv.NastranBeamSections(Input=src))
     _set_given(sections, DeformationScale=scale)
-    d = pv.Show(sections, view)
-    values = sorted({int(p) for p in pids})
-    categorical(d, "PID", values, labels_for(model, "PID", values), view=view)
+    d = _show(sections, view)
+    categorical(d, "PID", values, labels_for(model, "PID", values), view=view, separate=True)
     axes = _beam_axes(model)
     _set_given(axes, DeformationScale=scale, ShowTriads=None if triads is None else int(triads),
                MaxTriads=max_triads if max_triads is not None else (0 if triads else None))
     axes.UpdatePipeline()
-    ad = pv.Show(axes, view)
+    ad = _show(axes, view)
     parts = [1, 2] + ([3, 4, 5] if _glyph_field(axes, "TriadsDrawn") else [])
     categorical(ad, "BeamPart", parts, labels_for(model, "BeamPart", parts),
                 [BEAM_PART_RGB[p] for p in parts], view=view)
@@ -796,12 +998,11 @@ def view_loads(model, view, sets=None, show=None, size=None, stride=None):
     (first: the Case Control LOAD, else the first set with loads). ``sets`` (block names such as
     LOAD_1001), ``show`` (Forces, Moments, Forces and moments), ``size`` and ``stride`` (Every Nth
     Point) set the filter; left None they keep its settings."""
-    ghost_mesh(model, view, opacity=0.5)
-    loads = model.block("Loads")
+    loads = model.scoped("Loads")
     if loads is None:
-        info_text(model, view, "No nodal loads (FORCE/MOMENT) in this deck.")
+        info_text(model, view, _missing_text(model, "nodal loads (FORCE/MOMENT)"))
         return
-    g = _named(model, "load glyphs", lambda: pv.NastranLoadGlyphs(Input=deformed(model)), "NastranPVLoadGlyphs")
+    g = _overlay(model, "load glyphs", lambda src: pv.NastranLoadGlyphs(Input=src), "NastranPVLoadGlyphs")
     g.UpdatePipelineInformation()
     if sets is not None:
         g.LoadSets = list(sets)
@@ -825,7 +1026,7 @@ def view_loads(model, view, sets=None, show=None, size=None, stride=None):
                     "picks forces, moments or both; GRAV is not drawn.")
         info_text(model, view, text)
         return g
-    d = pv.Show(g, view)
+    d = _show(g, view)
     continuous(d, "POINTS", "Magnitude", preset="Inferno (matplotlib)", view=view)
     lines = []
     for name in drawn[:6]:
@@ -846,23 +1047,23 @@ def view_loads(model, view, sets=None, show=None, size=None, stride=None):
 def view_spc(model, view, sets=None, dofs=None, size=None):
     """A marker per constrained grid (Nastran SPC Glyphs), coloured by DOF code. ``sets`` (SPC set
     ids), ``dofs`` (e.g. "123") and ``size`` set 'NPV spc glyphs'; left None they keep its settings."""
-    ghost_mesh(model, view, opacity=0.35)
-    if not model.has("Constraints"):
-        info_text(model, view, "No SPCs in this deck (free-free model).")
+    constraints = model.scoped("Constraints")
+    if constraints is None:
+        info_text(model, view, _missing_text(model, "SPCs", " (free-free model)"))
         return
-    g = _named(model, "spc glyphs", lambda: pv.NastranSPCGlyphs(Input=deformed(model)), "NastranPVSPCGlyphs")
+    g = _overlay(model, "spc glyphs", lambda src: pv.NastranSPCGlyphs(Input=src), "NastranPVSPCGlyphs")
     g.UpdatePipelineInformation()
     if sets is not None:
         g.SPCSets = [f"SPC {int(s)}" for s in sets]
     _set_given(g, DOFs=None if dofs is None else str(dofs), Size=size)
     g.UpdatePipeline()
-    total = model.block("Constraints").GetNumberOfPoints()
+    total = constraints.GetNumberOfPoints()
     shown = int(_glyph_field(g, "SPCPoints"))
     if not shown:
         info_text(model, view, f"{total} constrained grids, none in the checked SPC sets with DOFs "
                                f"{g.DOFs or '(none)'} ('NPV spc glyphs').")
         return g
-    d = pv.Show(g, view)
+    d = _show(g, view)
     codes = sorted({int(v) for v in _gather(fetch(g), "DOFCode", "POINTS")})
     categorical(d, "DOFCode", codes, labels_for(model, "DOFCode", codes), association="POINTS", view=view)
     text = f"{shown} constrained grids, coloured by DOF code"
@@ -873,15 +1074,15 @@ def view_spc(model, view, sets=None, dofs=None, size=None):
 
 
 def view_rigid(model, view):
-    ghost_mesh(model, view, opacity=0.3)
-    if not model.has("Rigid"):
-        info_text(model, view, "No rigid elements in this deck.")
+    rigid = model.scoped("Rigid")
+    if rigid is None:
+        info_text(model, view, _missing_text(model, "rigid elements"))
         return
-    d = pv.Show(_extract(model, "Rigid"), view)
-    types = model.unique("RigidType", "cell", ("Rigid",))
+    d = _show(_extract(model, "Rigid", scoped=True), view)
+    types = sorted({int(t) for t in _gather(rigid, "RigidType", "CELLS")})
     categorical(d, "RigidType", types, labels_for(model, "RigidType", types), view=view)
     d.LineWidth = 2.5
-    info_text(model, view, f"{model.block('Rigid').GetNumberOfCells()} rigid-element legs")
+    info_text(model, view, f"{rigid.GetNumberOfCells()} rigid-element legs")
 
 
 def _mesh_categorical(model, view, array, blocks=MESH):
@@ -889,7 +1090,7 @@ def _mesh_categorical(model, view, array, blocks=MESH):
     if mesh is None:
         info_text(model, view, f"No elements carry {array}.")
         return None
-    d = pv.Show(mesh, view)
+    d = _show(mesh, view)
     d.Representation = "Surface"
     d.Opacity = 1.0
     values = model.unique(array, "cell", blocks)
@@ -926,7 +1127,7 @@ def view_elementtype(model, view):
 def view_thickness(model, view):
     if not model.has("Shells"):
         return view_pid(model, view)
-    d = pv.Show(_extract(model, "Shells"), view)
+    d = _show(_extract(model, "Shells"), view)
     continuous(d, "CELLS", "Thickness", view=view)
 
 
@@ -953,7 +1154,7 @@ def view_nsm(model, view, top=8):
         info_text(model, view, text)
         return
     for b in blocks:
-        d = pv.Show(_extract(model, b), view)
+        d = _show(_extract(model, b), view)
         continuous(d, "CELLS", NSM_DENSITY[b], preset="Inferno (matplotlib)", view=view)
         if b == "Lines":
             d.LineWidth = 4.0
@@ -1013,11 +1214,11 @@ def view_results(model, view, scale=None):
         set_deformation(model, peak, auto=True)
     else:
         set_deformation(model, scale)
-    d = pv.Show(mesh, view)
+    d = _show(mesh, view)
     d.Representation = "Surface"
     d.Opacity = 1.0
     continuous(d, "POINTS", "DisplacementMagnitude", preset="Turbo", view=view)
-    ghost = pv.Show(_extract(model, *mesh_blocks, what="mesh", undeformed=True), view)
+    ghost = _show(_extract(model, *mesh_blocks, what="mesh", undeformed=True), view)
     ghost.Representation = "Wireframe"
     ghost.Opacity = 0.15
     solid(ghost, [0.3, 0.3, 0.3])
@@ -1048,7 +1249,7 @@ def _random_mesh(model, view, array, rng):
     blocks = [b for b in MESH if model.has(b)]
     mesh = _extract(model, *blocks, what="mesh")
     set_deformation(model, 0.0)
-    d = pv.Show(mesh, view)
+    d = _show(mesh, view)
     d.Representation = "Surface"
     d.Opacity = 1.0
     lut = continuous(d, "POINTS", array, preset="Turbo", view=view)
@@ -1121,7 +1322,7 @@ def view_randomsweep(model, view):
     labels = [f"Random {drive} {float(f):.4g} Hz" for f in freqs] if freqs is not None else []
     # (min/max are numpy reductions in the annotation namespace: index directly)
     label.Expression = f"{labels!r}[int(time_index) % {len(labels)}]" if labels else "''"
-    ld = pv.Show(label, view)
+    ld = _show(label, view)
     ld.WindowLocation = "Upper Right Corner"
     ld.FontSize = 14
     info_text(model, view, f"{_random_header(model)}\n{RANDOM_SETTINGS}\nResponse ASD (sum of X, Y, Z): play the time steps "
@@ -1169,7 +1370,7 @@ def _exclude(src, names):
 def view_parts(model, view, exclude=()):
     p = _named(model, "parts", lambda: pv.NastranParts(Input=model.reader))
     _exclude(p, exclude)
-    d = pv.Show(_topology_blocks(model, p, "parts"), view)
+    d = _show(_topology_blocks(model, p, "parts"), view)
     d.Representation = "Surface"
     d.LineWidth = 2.5
     values = sorted({int(v) for v in _gather(fetch(p), "PartId", "CELLS")})
@@ -1193,7 +1394,7 @@ def view_grow(model, view, seeds=None, exclude=()):
                                "(or type Seed IDs on 'NPV grow').")
         return g
     ghost_mesh(model, view, opacity=0.15)
-    d = pv.Show(_at_least(model, g, "Hops", 0, "grow reached"), view)
+    d = _show(_at_least(model, g, "Hops", 0, "grow reached"), view)
     d.Representation = "Surface"
     d.LineWidth = 2.5
     continuous(d, "CELLS", "Hops", preset="Turbo", view=view)
@@ -1211,7 +1412,7 @@ def view_path(model, view):
         info_text(model, view, "Select two grids (Select Points On), then click 'NPV Path from Selection'.")
         return p
     ghost_mesh(model, view, opacity=0.15)
-    d = pv.Show(_at_least(model, p, "OnPath", 1, "path cells"), view)
+    d = _show(_at_least(model, p, "OnPath", 1, "path cells"), view)
     d.Representation = "Surface"
     d.LineWidth = 4
     solid(d, list(SET1[0]))
@@ -1232,7 +1433,7 @@ def _check_layer(model, c, view, what, blocks, codes):
     from nastran_pv.topology import CHECKS
 
     ex = _named(model, what, lambda: extract_blocks(c, blocks))
-    d = pv.Show(ex, view)
+    d = _show(ex, view)
     # both layers share the "Check" lookup table, so there is one legend naming the checks found
     lut = categorical(d, "Check", codes, [CHECKS[k] for k in codes],
                       colors=[CHECK_RGB[CHECKS[k]] for k in codes], view=view)
@@ -1730,7 +1931,7 @@ def _diff_layers(model, diff, view):
     from nastran_pv.diff import STATUS_NAMES
 
     mesh = _named(model, "diff mesh", lambda: extract_blocks(diff, list(MESH) + list(DIFF_ITEM_BLOCKS)))
-    d = pv.Show(mesh, view)
+    d = _show(mesh, view)
     d.Representation = "Surface"
     d.Opacity = 1.0
     d.LineWidth = 3
@@ -1738,7 +1939,7 @@ def _diff_layers(model, diff, view):
     d.RenderPointsAsSpheres = 1
     categorical(d, "DiffStatus", list(range(len(STATUS_NAMES))), list(STATUS_NAMES), colors=DIFF_RGB, view=view)
     removed = _named(model, "diff removed", lambda: extract_blocks(diff, ["Removed"]))
-    r = pv.Show(removed, view)
+    r = _show(removed, view)
     r.Representation = "Surface"
     r.Opacity = 0.4
     r.LineWidth = 3
@@ -1762,14 +1963,21 @@ def view_diff(model, view, reference=None):
 
 
 def _shown_array(view):
-    """``(association, array)`` the view's first coloured representation shows, or None."""
+    """``(association, array)`` the view's coloring layer shows, else its first coloured
+    representation, or None."""
+    reps = []
     for rep in list(getattr(view, "Representations", None) or []):
         try:
             if rep.Visibility and rep.ColorArrayName[1]:
-                return tuple(rep.ColorArrayName)
+                reps.append(rep)
         except AttributeError:
             continue
-    return None
+    coloring = scene_of(view).coloring
+    for obj in coloring.objects if coloring is not None else []:
+        for rep in reps:
+            if rep.Input == obj:
+                return tuple(rep.ColorArrayName)
+    return tuple(reps[0].ColorArrayName) if reps else None
 
 
 def _partner_view(left):
@@ -1859,7 +2067,7 @@ def side_by_side(array=None, reference=None, view=None):
         assoc, array = "CELLS", "DiffStatus" if diff is not None else "PID"
     right = _partner_view(left)
     for v in (left, right):
-        _reset_view(v)
+        _clear_view(v)
     if array == "DiffStatus":
         if diff is None:
             raise RuntimeError("DiffStatus needs a diff: run 'NPV Diff' first (or pass another array).")
@@ -1911,20 +2119,53 @@ VIEWS = {
 }
 
 
-def apply(name, reader=None, view=None, model=None, reset_camera=True, **kwargs):
-    """Build view ``name`` in ``view`` (default: active) for ``reader`` (default: found). Ends with
-    the filter the view is about selected (what its view function returns), else the reader."""
+def apply(name, reader=None, view=None, model=None, reset_camera=None, toggle=False, **kwargs):
+    """Add view ``name`` to the scene of ``view`` (default: active) for ``reader`` (default: found).
+    A coloring (PID, Thickness, Results, ...) replaces the scene's coloring; an overlay (Masses,
+    Loads, ...) adds itself, over a ghost mesh when the scene has no coloring, and with ``toggle``
+    (the toolbar macros) an overlay already shown is removed instead. A command for another model
+    starts a new scene; a fresh scene starts undeformed. The camera resets when ``reset_camera`` is
+    true, or (None) when the scene was empty. Ends with the filter the view is about selected (what
+    its view function returns), else the reader."""
+    from nastran_pv.scene import GHOST, GHOST_OPACITY, Layer, kind
+
     ensure_plugin()
     view = view or pv.GetActiveViewOrCreate("RenderView")
     reader = reader or find_reader()
     stop_mode_animation(reader, view)  # back on the mode's time step, time controls step modes again
     model = model or Model(reader, getattr(view, "ViewTime", 0.0))
-    _reset_view(view)
+    scene = scene_of(view)
+    if scene.model is not None and scene.model != reader:  # one subject per single-model scene
+        _hide(scene.clear(), view)
     pv.SetActiveView(view)
-    if name != "results":  # views show the undeformed model; results keeps or sets its own scale
+    fresh = scene.empty
+    _hide_strays(view, reader, fresh)
+    if fresh and name != "results":  # a new scene is undeformed; later only results changes the scale
         set_deformation(model, 0.0)
-    selected = VIEWS[name](model, view, **kwargs)
-    if reset_camera:
+    scene.model = reader
+    if kind(name) == "overlay":
+        if toggle and name in scene.overlays:
+            layer = scene.overlays[name]
+            wrote = scene.info == name
+            _hide(scene.remove_overlay(name), view)
+            info = pv.FindSource(_name(model, "info")) if wrote else None
+            if info is not None:  # only the text this overlay wrote: another one's summary stays
+                pv.Hide(info, view)
+            pv.Render(view)
+            _finish(layer.selected or reader)
+            return model
+        if scene.coloring is None:
+            objects, _ = _recorded(lambda: ghost_mesh(model, view, GHOST_OPACITY.get(name, 0.2)))
+            _hide(scene.set_coloring(Layer(GHOST, objects)), view)
+    writes = _INFO_WRITES
+    objects, selected = _recorded(lambda: VIEWS[name](model, view, **kwargs))
+    if kind(name) == "overlay":
+        _hide(scene.add_overlay(Layer(name, objects, selected)), view)
+    else:
+        _hide(scene.set_coloring(Layer(name, objects, selected)), view)
+    if _INFO_WRITES != writes:
+        scene.info = name
+    if reset_camera or (reset_camera is None and fresh):
         view.ResetCamera(False)
     pv.Render(view)
     _finish(selected or model.reader)
@@ -2355,6 +2596,7 @@ ACTIONS = {"animate_mode": animate_mode, "animate_modes": animate_modes, "stop_m
            "show_only_material": show_only_material, "show_only_reached": show_only_reached,
            "hide_reached": hide_reached, "side_by_side": side_by_side}
 ACTIONS.update({"show_only_file": show_only_file, "hide_file": hide_file, "highlight_file": highlight_file})
+ACTIONS["clear"] = clear
 
 
 def run_macro(name):
@@ -2365,7 +2607,7 @@ def run_macro(name):
         if name in ACTIONS:
             ACTIONS[name]()
         else:
-            apply(name)
+            apply(name, toggle=True)  # a second click removes an overlay; nv.apply refreshes it
     except (RuntimeError, ValueError) as exc:  # what the user should do next, not a traceback dump
         vtkOutputWindow.GetInstance().DisplayErrorText(f"nastran-pv: {exc}\n")
     except Exception:  # a bug: the traceback is what a report needs
