@@ -64,7 +64,7 @@ python -m venv .venv && .venv/Scripts/python -m pip install -r docs/requirements
 - Running `install_deps.py` with the ParaView GUI open leaves scipy half-installed. Close the GUI
   and re-run it.
 - Empty categorical scenes in the browser: the trame-vtk serializer for
-  `vtkPartitionedDataSetCollection` isn't registered. See the gotcha in CLAUDE.md about
+  `vtkPartitionedDataSetCollection` isn't registered. See the gotcha in docs/architecture.md about
   `_init_serializers`.
 - Stale scenes after an upload: scene URLs carry the build version tag. Rebuild instead of renaming
   files.

@@ -86,7 +86,8 @@ with `cannot read DECK: <error>` and writes no PNG.
   Views edit the view's scene: a coloring (pid, thickness, results, ...) replaces the coloring, but
   overlays (masses, bushes, beams, loads, spc, rigid) accumulate in one view, so use a fresh view
   per picture (`nv.white_view(size)`, as `render_model.render` does) or `nv.clear(view)` between
-  pictures (`docs/paraview.md#how-views-combine`). Read the pvpython quirks in CLAUDE.md first (proxy-label constructor names, `block_names`, `timesteps`,
+  pictures (`docs/paraview.md#how-views-combine`). Read the pvpython quirks in
+  docs/architecture.md#gotchas first (proxy-label constructor names, `block_names`, `timesteps`,
   `solid`, `nv.fetch`). The reader outputs the model tree, so use `nv.Model(reader)` (a gathered
   multiblock) or `nv.fetch` + `nastran_pv.tree.as_multiblock` instead of a bare `Fetch`, and
   `nv.selectors([...])` for `ExtractBlock`.
