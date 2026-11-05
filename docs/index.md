@@ -21,7 +21,8 @@ you use.
 - [ParaView tutorials](paraview-tutorials.md): step-by-step walkthroughs in the ParaView GUI, from
   browsing the model tree and Femap-style hiding to masses, mode shapes, model checks and your own
   tables.
-- [CLI](cli.md): `convert`, `stats`, `view`, `render` and `setup`, with examples.
+- [CLI](cli.md): `convert`, `stats`, `check`, `sections`, `diff`, `store`, `view`, `render` and
+  `setup`, with examples.
 - [Fields](fields.md): add derived, table-mapped and computed fields, from the CLI or from the
   ParaView filters.
 - [Model tools](tools.md): connectivity traversal (grow), parts, shortest paths and model checks,

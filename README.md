@@ -6,9 +6,13 @@ Open Nastran bulk-data decks in [ParaView](https://www.paraview.org/) and see th
 - rigid-element spiders
 - CBUSH directional stiffness
 - SPCs and applied loads
-- results from OP2 or MSC/NX HDF5 files, optionally
+- CBAR/CBEAM cross sections swept in 3D, with their section properties
+- results from OP2 or MSC/NX HDF5 files, optionally, with animated mode shapes and random
+  vibration response from normal modes
 - extra fields: derived from the deck, mapped from CSV/Excel/SQL tables, or computed from
   expressions
+- model tools: connectivity (grow, parts, paths) and model checks
+- selections from a file of IDs, and a diff of two versions of a model
 - a SQLite store for comparing runs and meshes
 
 It has two front ends that share one core, built on [pyNastran](https://github.com/SteveDoyle2/pyNastran):
@@ -16,7 +20,7 @@ It has two front ends that share one core, built on [pyNastran](https://github.c
 * **ParaView plugin.** A reader (File > Open on a `.bdf`/`.dat`/`.nas`), glyph and field filters,
   and one-click toolbar views.
 * **`nastran-pv` CLI.** Converts decks to `.vtm` or VTKHDF, adds fields, prints statistics,
-  manages the store, and launches ParaView or batch rendering.
+  checks and diffs models, manages the store, and launches ParaView or batch rendering.
 
 ## Install
 
@@ -40,10 +44,14 @@ nastran-pv stats out/model.vtm --by PID --field ElementMass
 
 The full documentation, including an interactive 3D view gallery, is at <https://kdoble48.github.io/nastran-pv/> (sources indexed in [docs/index.md](docs/index.md)):
 
-- [ParaView](docs/paraview.md): the reader, one-click views, glyph filters, indexed colors
-- [CLI](docs/cli.md), [Fields](docs/fields.md), [Run store](docs/store.md)
-- [Model blocks and arrays](docs/model.md), [Output formats](docs/output-formats.md)
-- [Development](docs/development.md): tests, lint, and how to write these docs
+- [ParaView](docs/paraview.md) and [ParaView tutorials](docs/paraview-tutorials.md): the reader,
+  one-click views, glyph filters, indexed colors
+- [CLI](docs/cli.md), [Fields](docs/fields.md), [Model tools](docs/tools.md),
+  [Model diff](docs/diff.md), [Run store](docs/store.md), [Random vibration](docs/random-vibration.md)
+- [Model blocks and arrays](docs/model.md), [Output formats](docs/output-formats.md),
+  [Beam sections](docs/beam-sections.md)
+- [Development](docs/development.md) and [Versioning](docs/versioning.md): tests, lint, how to
+  write these docs, and the version policy
 
 ## License
 

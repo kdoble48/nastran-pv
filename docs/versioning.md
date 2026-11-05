@@ -10,7 +10,7 @@ These are the names users and scripts depend on. Changing or removing one is a b
 
 | Kind | What it covers |
 |---|---|
-| CLI | Commands, flags and their defaults in `nastran-pv` (`convert`, `stats`, `check`, `sections`, `store`, `view`, `render`, `setup`), see [CLI](cli.md) |
+| CLI | Commands, flags and their defaults in `nastran-pv` (`convert`, `diff`, `stats`, `check`, `sections`, `store`, `view`, `render`, `setup`), see [CLI](cli.md) |
 | Views and macros | View names (`launch.VIEW_NAMES`, `--view`/`--preset`), the NPV toolbar macros and the plugin's proxy labels and properties, see [ParaView](paraview.md) |
 | Data | Block names, array names and meanings, root field data and `*_` table names in `.vtm`/VTKHDF output, see [Model blocks and arrays](model.md) and [Output formats](output-formats.md) |
 | Store | The SQLite schema of the run store, see [Run store](store.md) |

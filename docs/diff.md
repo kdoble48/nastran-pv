@@ -19,6 +19,7 @@ nastran-pv diff out/baseline.vtm modified.bdf --csv out/diff.csv
 ```text
 elements in B: 1 same, 2 added, 1 changed (type/PID/grids), 2 via property/material; 2 removed
 model mass 10.9 -> 14.4: +3.5 (+32.110%); CG moved 0.963391
+not compared: rigid elements, connectors, bushes, loads, SPCs, coordinate systems
 
 Item        A   B   Same  Added  Removed  Changed
 grids       11  11  9     1      1        1
@@ -32,14 +33,15 @@ Next come the mass table and one list per item: model totals and CG; the mass pe
 family that changed; the property and material values that changed; and the elements, concentrated
 masses and grids that were added, removed or changed, with the old and new values. `--limit N`
 caps each list in the terminal (default 30). `--csv FILE` writes every row of every list to one
-long table with the columns `Item Id Name Status Field A B Delta Rel`.
+long table with the columns `Item Id Name Status Field A B Delta Rel`. `--nsm-set ID` picks the
+bulk NSM set for both decks, as in `convert`.
 
 ### What is compared
 
 | Item | Matched by | Changed when |
 |---|---|---|
-| Grid | NID (grids used by an element, connector, SPC or load) | it moved more than `--grid-tol` × A's bounding-box diagonal (default 1e-6) |
-| Element | EID, within Shells, Solids or Lines | its element type, PID, MID or grid list differs, or one of its grids moved |
+| Grid | NID (grids used by an element, connector, CBUSH, SPC or load) | it moved more than `--grid-tol` × A's bounding-box diagonal (default 1e-6) |
+| Element | EID, within Shells, Solids or Lines | its element type, PID or grid list differs, or one of its grids moved (*changed*); its MID, property or material values differ (*property*) |
 | Concentrated mass | EID in `Masses` | its mass or CG position (grid plus offset) differs; a moved mass gets X/Y/Z rows like a grid |
 | Property | PID | its elements' `MID`, and `Thickness`/`NSMPerArea` (shells) or `Area`/`NSMPerLength` (lines) differ |
 | Material | MID | `Type`, `E`, `E2`, `G`, `Nu` or `Rho` (the `MAT_*` table) differ |
@@ -130,7 +132,7 @@ says so.
 
 **NPV Side by Side** shows A in the active view and B in a second view beside it. The cameras are
 linked, and both are colored by one array over one shared range: the array the active view shows,
-else `PID`. When B has a diff, the right view shows the diff output, and coloring by `DiffStatus`
+else `DiffStatus` when B has a diff, else `PID`. When B has a diff, the right view shows the diff output, and coloring by `DiffStatus`
 shows A's removed elements on the left and B's changes on the right. Run it again after changing
 the coloring: it reuses the second view.
 

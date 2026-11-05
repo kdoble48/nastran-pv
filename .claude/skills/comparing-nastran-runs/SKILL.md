@@ -39,7 +39,7 @@ python -m nastran_pv store open 2 --db $DB                      # opens the save
 ```
 
 `store add` takes all the `convert` field options (`--derive`, `--map`, `--calc`, `--results`,
-`--step`). See `converting-nastran-decks`.
+`--step`, `--random`) and `--select` (store only the IDs a file lists). See `converting-nastran-decks`.
 
 ## Choosing the key
 
