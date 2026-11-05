@@ -267,7 +267,8 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   - Every array must exist at every time step; `_fill_missing` adds NaN arrays.
   - Empty `vtkStringArray`s break the reader, so `add_string_array` skips them.
   - A collection's own field data is not written, so the root summary is copied onto the mesh
-    partitions.
+    partitions and listed in `RootFieldNames`; `vtkutil.promote_root_fields` (in `tree.gather`, so
+    `read_model` and the plugin) moves them back and drops a series step's NaN fill.
   - Rewritten HDF5 files need `track_order=True` on the file and all groups.
   - On read-back the assembly root node is named `assembly`, so select blocks with `//Name`.
 - Bash heredocs containing `\n` inside Python string literals get mangled by the tool runner. Write

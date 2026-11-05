@@ -129,8 +129,6 @@ def digest(data, skip=SKIP):
                 if a is None or not a.GetName() or a.GetName() in skip:
                     continue
                 v = vtk_to_numpy(a).astype(float).reshape(-1, a.GetNumberOfComponents())
-                if v.size and np.all(np.isnan(v)):
-                    continue
                 if assoc == "cell":
                     cell_values.setdefault(a.GetName(), []).append(v)
                 else:
@@ -139,9 +137,14 @@ def digest(data, skip=SKIP):
     out = {"cells": cells, "points": len(np.unique(np.round(allxyz, 9), axis=0)) if len(allxyz) else 0}
     for name, parts in cell_values.items():
         v = np.concatenate(parts)
+        if v.size and np.all(np.isnan(v)):
+            continue
         out[("cell", name)] = v[np.lexsort(np.round(v.T[::-1], 9))] if len(v) else v
     for name, parts in point_rows.items():
-        out[("point", name)] = np.unique(np.round(np.concatenate(parts), 9), axis=0)
+        v = np.concatenate(parts)
+        if v.size and np.all(np.isnan(v[:, 3:])):
+            continue
+        out[("point", name)] = np.unique(np.round(v, 9), axis=0)
     return out
 
 
@@ -156,7 +159,8 @@ def digest_differences(ref, got, labels=("deck", "file")):
             if a != b:
                 out.append(f"{key}: {a} != {b}")
         elif a.shape != b.shape or not np.allclose(a, b, equal_nan=True):
-            out.append(f"{key}: values differ")
+            out.append(f"{key}: values differ ({a.shape} {a.reshape(-1)[:6].tolist()} vs "
+                       f"{b.shape} {b.reshape(-1)[:6].tolist()})")
     return out
 
 
