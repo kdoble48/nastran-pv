@@ -11,6 +11,7 @@ import io
 import re
 import sqlite3
 
+import numpy as np
 import pytest
 
 from nastran_pv import vtkutil
@@ -285,3 +286,23 @@ def test_store_add(files, tmp_path, name):
     assert a == b  # the run's deck column is the original deck for both
     with Store(tmp_path / "deck.db") as sa, Store(tmp_path / "vtkhdf.db") as sb:
         assert_same_model(sa.load(1), sb.load(1))
+
+
+def test_promote_keeps_this_steps_label():
+    """VTK 9.3's VTKHDF reader (ParaView 5.13) gives a series' ResultLabel with every step's value;
+    the numeric ResultStep (read correctly) picks this step's."""
+    from vtkmodules.vtkCommonDataModel import vtkMultiBlockDataSet, vtkPolyData
+
+    blk = vtkPolyData()
+    fd = blk.GetFieldData()
+    vtkutil.add_string_array(fd, "ResultLabel", ["Subcase 1", "Mode 1", "Mode 2"])
+    vtkutil.add_array(fd, "ResultStep", np.array([1]))
+    vtkutil.add_array(fd, "ModelMass", np.array([2.0]))
+    vtkutil.add_string_array(fd, vtkutil.ROOT_FIELDS, ["ResultLabel", "ResultStep", "ModelMass"])
+    mb = vtkMultiBlockDataSet()
+    vtkutil.add_block(mb, "Shells", blk)
+    vtkutil.promote_root_fields(mb)
+    root = mb.GetFieldData()
+    assert root.GetAbstractArray("ResultLabel").GetNumberOfValues() == 1
+    assert root.GetAbstractArray("ResultLabel").GetValue(0) == "Mode 1"
+    assert blk.GetFieldData().GetNumberOfArrays() == 0  # the root copies leave the block

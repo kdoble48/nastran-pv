@@ -106,6 +106,7 @@ def promote_root_fields(mb) -> None:
         fd.RemoveArray(ROOT_FIELDS)
     if marked:
         drop_fill_arrays(mb)
+        _one_step_label(root)
         return
     if any(root.GetAbstractArray(m) is not None for m in ROOT_MARKS):
         return
@@ -117,6 +118,20 @@ def promote_root_fields(mb) -> None:
                 if arr is not None and root.GetAbstractArray(arr.GetName()) is None:
                     root.AddArray(arr)
             return
+
+
+def _one_step_label(root) -> None:
+    """VTK 9.3's vtkHDFReader (ParaView 5.13) returns a string field array of a temporal file with
+    the values of every step: keep the label of this step (``ResultStep``, the numeric step index,
+    which it slices correctly; a series written by ``convert`` holds every step in order)."""
+    label, step = root.GetAbstractArray("ResultLabel"), root.GetArray("ResultStep")
+    if label is None or step is None or label.GetNumberOfValues() < 2 or step.GetNumberOfTuples() != 1:
+        return
+    k = int(step.GetTuple1(0))
+    if 0 <= k < label.GetNumberOfValues():
+        value = label.GetValue(k)
+        root.RemoveArray("ResultLabel")
+        add_string_array(root, "ResultLabel", [value])
 
 
 def drop_fill_arrays(mb) -> None:

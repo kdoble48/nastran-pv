@@ -731,7 +731,9 @@ def _output_differences(nv, a, b, port=0):
         ta, tb = _table_digest(da), _table_digest(db)
         return [] if ta == tb else [f"table {ta} != {tb}"]
     if da.IsA("vtkMultiBlockDataSet") or da.IsA("vtkPartitionedDataSetCollection"):
-        return model_digest_differences(model_digest(as_multiblock(da)), model_digest(as_multiblock(db)))
+        diffs = model_digest_differences(model_digest(as_multiblock(da)), model_digest(as_multiblock(db)))
+        # ParaView 5.x: convert ran in the system Python, whose pyNastran words its warnings differently
+        return [d for d in diffs if rm.nv._paraview_major() >= 6 or not d.endswith("field Warnings: differs")]
     return digest_differences(digest(da), digest(db))
 
 
@@ -818,6 +820,9 @@ def parity_checks(pv, nv):
             times = nv.timesteps(r)
             check(times == nv.timesteps(f), f"{tag}: time steps {times} == {nv.timesteps(f)}")
             vtm = suffix == ".vtm"
+            # ParaView 5.x: convert ran in the system Python, whose pyNastran words its warnings differently
+            # and ParaView's VTKHDF reader tags a series with a Time field
+            ignore = ("Time",) if rm.nv._paraview_major() >= 6 else ("Time", "Warnings")
             loaded = load_deck(deck, echo=False)
             truth = build_multiblock(loaded)  # the model convert wrote
             res = attach_op2(truth, loaded, results, 0) if results else None
@@ -825,11 +830,10 @@ def parity_checks(pv, nv):
                 if res is not None:
                     res.attach(truth, int(t), loaded)
                 got = nv.Model(f, t).data
-                # a series stores every array at every step: arrays a step lacks are NaN-filled
-                diffs = [d for d in differences(snapshot(truth, drop_empty=vtm), snapshot(got, drop_empty=vtm))
-                         if not (results and d.endswith("only in file"))]
+                diffs = differences(snapshot(truth, drop_empty=vtm), snapshot(got, drop_empty=vtm), ignore)
                 check(not diffs, f"{tag} t={t}: ParaView reads the model convert wrote" + _listed(diffs))
-                diffs = model_digest_differences(model_digest(nv.Model(r, t).data), model_digest(got))
+                diffs = [d for d in model_digest_differences(model_digest(nv.Model(r, t).data), model_digest(got))
+                         if not any(d.endswith(f"field {i}: differs") for i in ignore)]
                 check(not diffs, f"{tag} t={t}: the same model as the deck reader" + _listed(diffs))
             model = nv.Model(r, times[-1] if times else None)
             mesh = next(b for b in ("Shells", "Solids", "Lines") if model.has(b))
