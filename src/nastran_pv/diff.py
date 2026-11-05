@@ -53,10 +53,51 @@ IDS = ("PID", "MID", "DOF", "CP", "CD", "CP system", "CD system", "GA", "GB")  #
 DELTA_ARRAYS = {"Shells": ("Thickness", "DeltaThickness"), "Lines": ("Area", "DeltaArea")}
 
 
-@dataclass
+# what a diff can compare (grids always): the Kinds checklist of the plugin, `diff --skip`
+KINDS = ("elements", "masses", "properties", "materials", "rigid", "connectors", "bushes", "loads", "spcs", "coords")
+
+
+@dataclass(frozen=True)
 class Tolerances:
-    grid: float = 1e-6  # grid move, as a fraction of A's bounding-box diagonal
-    rel: float = 1e-6  # values: |b - a| > rel * max(|a|, |b|)
+    """What a diff compares and how closely (hashable: the plugin caches a diff per settings).
+
+    ``grid`` is a fraction of A's bounding-box diagonal, or a distance in model units with
+    ``grid_absolute``. Values differ when ``|b - a| > max(tol x max(|a|, |b|), floor)``, where tol is
+    ``rel`` or the kind's own ``load`` (force/moment), ``stiffness`` (bush K) or ``mass`` (element,
+    concentrated and model mass). ``ignore_moves``: moved grids count as same, and nothing is
+    changed only because a grid moved. ``kinds`` not listed are skipped with a note."""
+
+    grid: float = 1e-6
+    rel: float = 1e-6
+    grid_absolute: bool = False
+    load: float | None = None
+    stiffness: float | None = None
+    mass: float | None = None
+    floor: float = 0.0
+    ignore_moves: bool = False
+    kinds: frozenset = frozenset(KINDS)
+
+    def __post_init__(self):
+        object.__setattr__(self, "kinds", frozenset(self.kinds))
+        unknown = sorted(self.kinds - set(KINDS))
+        if unknown:
+            raise ValueError(f"unknown diff kind(s) {unknown}; choose from {', '.join(KINDS)}")
+
+    def of(self, kind: str) -> float:
+        """The relative tolerance of ``load``, ``stiffness`` or ``mass`` values."""
+        own = getattr(self, kind)
+        return self.rel if own is None else own
+
+    def distance(self, diagonal: float) -> float:
+        """The grid tolerance in model units for a reference model of this ``diagonal``."""
+        return self.grid if self.grid_absolute else self.grid * diagonal
+
+    def compares(self, kind: str) -> bool:
+        return kind in self.kinds
+
+
+def skipped_note(label: str) -> str:
+    return f"{label} not compared (unchecked)"
 
 
 @dataclass
@@ -90,12 +131,13 @@ class ModelDiff:
 
 
 # ------------------------------------------------------------------ helpers
-def differs(a, b, rel: float) -> np.ndarray:
-    """Element-wise: values differ beyond ``rel`` (NaN equals NaN; NaN vs a number differs)."""
+def differs(a, b, rel: float, floor: float = 0.0) -> np.ndarray:
+    """Element-wise: values differ beyond ``rel`` and the absolute ``floor`` (NaN equals NaN; NaN
+    vs a number differs)."""
     a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
     na, nb = np.isnan(a), np.isnan(b)
     with np.errstate(invalid="ignore"):
-        big = np.abs(b - a) > rel * np.maximum(np.abs(a), np.abs(b))
+        big = np.abs(b - a) > np.maximum(rel * np.maximum(np.abs(a), np.abs(b)), floor)
     return np.where(na | nb, na != nb, big)
 
 
@@ -296,9 +338,12 @@ def diff_models(a, b, tol: Tolerances | None = None) -> ModelDiff:
     in_a = ia >= 0
     dxyz = np.zeros_like(B.xyz)
     dxyz[in_a] = B.xyz[in_a] - A.xyz[ia[in_a]]
-    moved = in_a & (np.linalg.norm(dxyz, axis=1) > tol.grid * A.diagonal())
+    moved = in_a & (np.linalg.norm(dxyz, axis=1) > tol.distance(A.diagonal())) & (not tol.ignore_moves)
     v2 = diff_items.Result()
-    diff_items.compare_coords(A, B, row, tol, v2)  # coordinate systems and the grids' CP/CD
+    if tol.compares("coords"):
+        diff_items.compare_coords(A, B, row, tol, v2)  # coordinate systems and the grids' CP/CD
+    else:
+        v2.notes.append(skipped_note("coordinate systems and grid CP/CD"))
     system = v2.grid_system if v2.grid_system is not None else np.zeros(len(B.nid), dtype=bool)
     grid_status = np.where(~in_a, 1, np.where(moved, 2, np.where(system & in_a, 3, 0))).astype(np.int64)
     removed_grids = A.nid[vtkutil.match_ids(B.nid, A.nid) < 0]
@@ -316,17 +361,18 @@ def diff_models(a, b, tol: Tolerances | None = None) -> ModelDiff:
     moved_nids = B.nid[moved]
 
     # properties and materials (seen through the elements)
-    pa, pb = A.property_values(), B.property_values()
+    notes = []
+    pa, pb = (A.property_values(), B.property_values()) if tol.compares("properties") else ({}, {})
     prop_changed = set()
     for p in sorted(set(pa) | set(pb)):
         if p not in pa or p not in pb:
             row("property", p, "added" if p in pb else "removed")
             continue
         for f in PROPERTY_FIELDS:
-            if differs(pa[p][f], pb[p][f], tol.rel):
+            if differs(pa[p][f], pb[p][f], tol.rel, tol.floor):
                 prop_changed.add(p)
                 row("property", p, "changed", f, pa[p][f], pb[p][f])
-    ma, mb_ = A.materials(), B.materials()
+    ma, mb_ = (A.materials(), B.materials()) if tol.compares("materials") else ({}, {})
     mat_changed = set()
     for m in sorted(set(ma) | set(mb_)):
         if m not in ma or m not in mb_:
@@ -334,14 +380,15 @@ def diff_models(a, b, tol: Tolerances | None = None) -> ModelDiff:
             continue
         for f in MATERIAL_FIELDS:
             va, vb = ma[m][f], mb_[m][f]
-            if (va != vb) if f == "Type" else differs(va, vb, tol.rel):
+            if (va != vb) if f == "Type" else differs(va, vb, tol.rel, tol.floor):
                 mat_changed.add(m)
                 row("material", m, "changed", f, va, vb, name=mb_[m]["Type"])
 
     # elements, per mesh block
     elements, removed = {}, []
     totals_e = dict(A=0, B=0, Same=0, Added=0, Removed=0, Changed=0)
-    for name in dict.fromkeys(list(A.cells) + list(B.cells)):
+    mass_tol = tol.of("mass")
+    for name in dict.fromkeys(list(A.cells) + list(B.cells)) if tol.compares("elements") else ():
         ca, cb = A.cells.get(name), B.cells.get(name)
         if cb is not None:
             n = len(cb["eid"])
@@ -395,7 +442,7 @@ def diff_models(a, b, tol: Tolerances | None = None) -> ModelDiff:
                 for bit in (MOVED, PROPERTY_VALUES, MATERIAL_VALUES):
                     if r & bit:
                         row("element", e, st, REASON_NAMES[bit], name=tname)
-                if differs(ca["mass"][i], cb["mass"][k], tol.rel):
+                if differs(ca["mass"][i], cb["mass"][k], mass_tol, tol.floor):
                     row("element", e, st, "ElementMass", float(ca["mass"][i]), float(cb["mass"][k]), name=tname)
             totals_e["B"] += n
             totals_e["Same"] += int((status == SAME).sum())
@@ -411,26 +458,33 @@ def diff_models(a, b, tol: Tolerances | None = None) -> ModelDiff:
                 for k in gone:
                     row("element", int(ca["eid"][k]), "removed", "ElementMass", float(ca["mass"][k]), None,
                         name=_type_name(ca, ca["etype"][k]))
-    summary.append({"Item": "elements", **totals_e})
+    if tol.compares("elements"):
+        summary.append({"Item": "elements", **totals_e})
+    else:
+        notes.append(skipped_note("elements"))
 
     # concentrated masses
     masses_b, removed_masses = {}, []
-    ea = A.conc["eid"] if A.conc is not None else np.zeros(0, dtype=np.int64)
-    eb = B.conc["eid"] if B.conc is not None else np.zeros(0, dtype=np.int64)
+    compare_conc = tol.compares("masses")
+    if not compare_conc:
+        notes.append(skipped_note("concentrated masses"))
+    ea = A.conc["eid"] if A.conc is not None and compare_conc else np.zeros(0, dtype=np.int64)
+    eb = B.conc["eid"] if B.conc is not None and compare_conc else np.zeros(0, dtype=np.int64)
+    gtol = tol.distance(A.diagonal())
     sa = np.argsort(ea)
     j = vtkutil.match_ids(ea[sa], eb)
     j = np.where(j >= 0, sa[np.maximum(j, 0)] if len(sa) else -1, -1)
     m = j >= 0
     conc_counts = {"Item": "masses", "A": len(ea), "B": len(eb), "Same": 0, "Added": int((~m).sum()),
                    "Removed": 0, "Changed": 0}
-    if B.conc is not None:
+    if B.conc is not None and compare_conc:
         mb_mass, mb_xyz = B.conc["mass"], B.conc["xyz"]
         ma_mass = np.where(m, A.conc["mass"][np.maximum(j, 0)] if A.conc is not None else 0.0, 0.0)
         reason = np.zeros(len(eb), dtype=np.int64)
         if A.conc is not None and m.any():
             jj = j[m]
-            off = np.linalg.norm(mb_xyz[m] - A.conc["xyz"][jj], axis=1) > tol.grid * A.diagonal()
-            reason[m] = np.where(differs(A.conc["mass"][jj], mb_mass[m], tol.rel) | off, MASS, 0)
+            off = (np.linalg.norm(mb_xyz[m] - A.conc["xyz"][jj], axis=1) > gtol) & (not tol.ignore_moves)
+            reason[m] = np.where(differs(A.conc["mass"][jj], mb_mass[m], mass_tol, tol.floor) | off, MASS, 0)
         status = np.where(~m, ADDED, np.where(reason, CHANGED, SAME)).astype(np.int64)
         masses_b = {"status": status, "reason": reason, "delta_mass": mb_mass - ma_mass}
         conc_counts["Same"] = int((status == SAME).sum())
@@ -441,25 +495,34 @@ def diff_models(a, b, tol: Tolerances | None = None) -> ModelDiff:
                 row("mass", int(eb[k]), st, "Mass", None, float(mb_mass[k]))
                 continue
             va = float(A.conc["mass"][j[k]])
-            if differs(va, mb_mass[k], tol.rel):
+            if differs(va, mb_mass[k], mass_tol, tol.floor):
                 row("mass", int(eb[k]), st, "Mass", va, float(mb_mass[k]))
             xa = A.conc["xyz"][j[k]]
-            if np.linalg.norm(mb_xyz[k] - xa) > tol.grid * A.diagonal():  # CG position (grid or offset)
+            if np.linalg.norm(mb_xyz[k] - xa) > gtol and not tol.ignore_moves:  # CG position (grid or offset)
                 for c, axis in enumerate("XYZ"):
                     if mb_xyz[k, c] != xa[c]:
                         row("mass", int(eb[k]), st, axis, float(xa[c]), float(mb_xyz[k, c]))
-    if A.conc is not None:
+    if A.conc is not None and compare_conc:
         gone = np.flatnonzero(vtkutil.match_ids(np.sort(eb), ea) < 0)
         conc_counts["Removed"] = len(gone)
         for k in gone:
             removed_masses.append((int(ea[k]), A.conc["xyz"][k], float(A.conc["mass"][k])))
             row("mass", int(ea[k]), "removed", "Mass", float(A.conc["mass"][k]), None)
-    summary.append(conc_counts)
+    if compare_conc:
+        summary.append(conc_counts)
 
-    summary.append({"Item": "properties", "A": len(pa), "B": len(pb), "Same": len(set(pa) & set(pb) - prop_changed),
-                    "Added": len(set(pb) - set(pa)), "Removed": len(set(pa) - set(pb)), "Changed": len(prop_changed)})
-    summary.append({"Item": "materials", "A": len(ma), "B": len(mb_), "Same": len(set(ma) & set(mb_) - mat_changed),
-                    "Added": len(set(mb_) - set(ma)), "Removed": len(set(ma) - set(mb_)), "Changed": len(mat_changed)})
+    if tol.compares("properties"):
+        summary.append({"Item": "properties", "A": len(pa), "B": len(pb),
+                        "Same": len(set(pa) & set(pb) - prop_changed), "Added": len(set(pb) - set(pa)),
+                        "Removed": len(set(pa) - set(pb)), "Changed": len(prop_changed)})
+    else:
+        notes.append(skipped_note("properties"))
+    if tol.compares("materials"):
+        summary.append({"Item": "materials", "A": len(ma), "B": len(mb_),
+                        "Same": len(set(ma) & set(mb_) - mat_changed), "Added": len(set(mb_) - set(ma)),
+                        "Removed": len(set(ma) - set(mb_)), "Changed": len(mat_changed)})
+    else:
+        notes.append(skipped_note("materials"))
 
     # v2: rigid elements, connectors, bushes, loads, SPCs; coordinate systems last in the summary
     diff_items.compare(A, B, moved_nids, row, tol, v2)
@@ -476,14 +539,14 @@ def diff_models(a, b, tol: Tolerances | None = None) -> ModelDiff:
         for key, va, vb, _, _ in keyed_diff(A.grouped_mass(by), B.grouped_mass(by)):
             masses.append(_mass_row(kind, str(key), va, vb))
     for r in masses:
-        if r["Kind"] == "model" or (r["Delta"] is None or abs(r["Delta"]) > tol.rel * max(abs(r["A"] or 0),
-                                                                                             abs(r["B"] or 0))):
+        if r["Kind"] == "model" or r["Delta"] is None or abs(r["Delta"]) > max(
+                mass_tol * max(abs(r["A"] or 0), abs(r["B"] or 0)), tol.floor):
             rows.append({"Item": f"{r['Kind']}_mass" if r["Kind"] != "model" else "model", "Id": r["Key"],
                          "Name": "", "Status": "", "Field": "mass" if r["Kind"] != "model" else r["Key"],
                          "A": r["A"], "B": r["B"], "Delta": r["Delta"], "Rel": r["Rel"]})
     return ModelDiff(summary, masses, rows, (ta[3], tb[3]), elements,
                      {"status": grid_status, "delta": dxyz, "nid": B.nid}, masses_b, removed, removed_masses,
-                     v2.items, v2.removed_legs, v2.removed_points, v2.load_sets, v2.notes)
+                     v2.items, v2.removed_legs, v2.removed_points, v2.load_sets, notes + v2.notes)
 
 
 def _mass_row(kind, key, va, vb, rel=True):
@@ -633,6 +696,91 @@ def removed_block(a, d: ModelDiff):
     vtkutil.set_field_strings(out, "DiffStatusNames", STATUS_NAMES)
     vtkutil.set_field_strings(out, "ItemTypeNames", ITEM_TYPES)
     return out
+
+
+# ------------------------------------------------------------- display filter
+ALL_STATUSES = frozenset((SAME, ADDED, CHANGED, PROPERTY))
+
+
+def _keep_mask(attr, statuses, reasons):
+    status = get_array(attr, "DiffStatus")
+    if status is None:
+        return None
+    keep = np.isin(status.astype(np.int64), list(statuses))
+    if reasons:
+        reason = get_array(attr, "DiffReason", np.zeros(len(status)))
+        keep &= (reason.astype(np.int64) & int(reasons)) != 0
+    return keep
+
+
+def _take_points(ds, keep):
+    """Polydata of the kept points of a point block (one vertex each), every point array sliced;
+    the cell arrays too when the block is one vertex per point."""
+    xyz = vtkutil.to_numpy(ds.GetPoints().GetData()).reshape(-1, 3)
+    out = vtkutil.polydata(xyz[keep])
+    for src, dst, ok in ((ds.GetPointData(), out.GetPointData(), True),
+                         (ds.GetCellData(), out.GetCellData(), vtkutil.is_vertex_only(ds))):
+        if not ok:
+            continue
+        for i in range(src.GetNumberOfArrays()):
+            a = src.GetArray(i)
+            if a is not None and a.GetName():
+                vtkutil.add_array(dst, a.GetName(), vtkutil.to_numpy(a)[keep])
+    out.GetFieldData().ShallowCopy(ds.GetFieldData())
+    return out
+
+
+def _take_cells(ds, keep):
+    ex = vtkExtractCells()
+    ex.SetInputData(ds)
+    ids = vtkIdList()
+    for i in np.flatnonzero(keep):
+        ids.InsertNextId(int(i))
+    ex.SetCellList(ids)
+    ex.Update()
+    out = vtkUnstructuredGrid()
+    out.ShallowCopy(ex.GetOutput())
+    out.GetFieldData().ShallowCopy(ds.GetFieldData())
+    return out
+
+
+def _filtered(ds, statuses, reasons):
+    """``ds`` without the items the filter drops (``ds`` itself when it keeps them all)."""
+    point_items = ds.GetPointData().GetArray("DiffStatus") is not None and ds.GetPoints() is not None
+    keep = _keep_mask(ds.GetPointData() if point_items else ds.GetCellData(), statuses, reasons)
+    if keep is None or keep.all():
+        return ds
+    return _take_points(ds, keep) if point_items else _take_cells(ds, keep)
+
+
+def show_only(b, statuses=ALL_STATUSES, reasons: int = 0, removed: bool = True):
+    """A copy of a diff output (from :func:`annotate`) that keeps only the items of B whose
+    ``DiffStatus`` is in ``statuses`` and, when ``reasons`` (``DiffReason`` bits) is not 0, whose
+    reason has one of those bits; ``removed=False`` drops the ``Removed`` block, which the status
+    and reason filters leave alone. Blocks keep their place (an emptied block stays, empty), the
+    root tables stay, and ``b`` is returned itself when nothing is dropped."""
+    statuses = frozenset(int(s) for s in statuses)
+    if statuses >= ALL_STATUSES and not reasons and removed:
+        return b
+
+    def visit(mb):
+        out = type(mb)()
+        for i in range(mb.GetNumberOfBlocks()):
+            blk = mb.GetBlock(i)
+            name = mb.GetMetaData(i).Get(mb.NAME()) if mb.HasMetaData(i) else None
+            if name == "Removed" and mb is b:
+                if not removed:
+                    continue
+            elif blk is not None:
+                blk = visit(blk) if blk.IsA("vtkMultiBlockDataSet") else _filtered(blk, statuses, reasons)
+            j = out.GetNumberOfBlocks()
+            out.SetBlock(j, blk)
+            if mb.HasMetaData(i):
+                out.GetMetaData(j).Copy(mb.GetMetaData(i))
+        out.GetFieldData().ShallowCopy(mb.GetFieldData())
+        return out
+
+    return visit(b)
 
 
 # ------------------------------------------------------------------- report

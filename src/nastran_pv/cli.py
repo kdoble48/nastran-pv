@@ -325,9 +325,15 @@ def _load_other(path, args):
 
 
 def diff_tolerances(args):
-    from .diff import Tolerances
+    from .diff import KINDS, Tolerances
 
-    return Tolerances(grid=args.grid_tol, rel=args.rel_tol)
+    skip = {k.strip().lower() for part in (args.skip or []) for k in part.split(",") if k.strip()}
+    unknown = sorted(skip - set(KINDS))
+    if unknown:
+        raise SystemExit(f"nastran-pv: --skip {', '.join(unknown)}: choose from {', '.join(KINDS)}")
+    return Tolerances(grid=args.grid_tol, rel=args.rel_tol, grid_absolute=args.grid_tol_absolute,
+                      load=args.load_tol, stiffness=args.stiffness_tol, mass=args.mass_tol, floor=args.abs_floor,
+                      ignore_moves=args.ignore_grid_moves, kinds=frozenset(KINDS) - skip)
 
 
 def diff_against(mb, args) -> list[str]:
@@ -345,6 +351,18 @@ def add_diff_tolerances(p) -> None:
                    help="a grid moved when it moved more than R x A's bounding-box diagonal (default 1e-6)")
     p.add_argument("--rel-tol", type=float, default=1e-6, metavar="R",
                    help="values differ when |b - a| > R x max(|a|, |b|) (default 1e-6)")
+    p.add_argument("--grid-tol-absolute", action="store_true",
+                   help="--grid-tol is a distance in model units, not a fraction of A's diagonal")
+    p.add_argument("--ignore-grid-moves", action="store_true",
+                   help="moved grids count as same, and nothing is changed only because a grid moved")
+    for flag, what in (("--load-tol", "force/moment values"), ("--stiffness-tol", "bush K values"),
+                       ("--mass-tol", "element, concentrated and model masses")):
+        p.add_argument(flag, type=float, default=None, metavar="R", help=f"--rel-tol for {what} (default: --rel-tol)")
+    p.add_argument("--abs-floor", type=float, default=0.0, metavar="V",
+                   help="values within V of each other are equal, whatever the relative tolerance (default 0)")
+    p.add_argument("--skip", action="append", metavar="KIND[,KIND]",
+                   help="kinds not to compare: elements, masses, properties, materials, rigid, connectors, "
+                        "bushes, loads, spcs, coords (each skipped with a note)")
 
 
 def cmd_diff(args) -> int:
