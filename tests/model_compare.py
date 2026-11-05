@@ -114,7 +114,9 @@ PLUMBING = ("BlockPath", "RootFieldNames", "NPVWholeModel",  # how a model trave
 def digest(data, skip=SKIP):
     """What ``data`` (any dataset or composite) holds, independent of how it is cut into pieces:
     the number of cells and of distinct points, every cell array as sorted values and every point
-    array as the distinct (x, y, z, value) rows (a model tree's pieces repeat their shared grids)."""
+    array as the distinct (x, y, z, value) rows (a model tree's pieces repeat their shared grids).
+    All-NaN arrays are left out: ParaView's own reader shows a VTKHDF series step with the NaN fill
+    of the arrays that step lacks (nastran-pv never writes an all-NaN array otherwise)."""
     cells, xyz = 0, []
     cell_values, point_rows = {}, {}
     for ds in _leaves(data):
@@ -127,6 +129,8 @@ def digest(data, skip=SKIP):
                 if a is None or not a.GetName() or a.GetName() in skip:
                     continue
                 v = vtk_to_numpy(a).astype(float).reshape(-1, a.GetNumberOfComponents())
+                if v.size and np.all(np.isnan(v)):
+                    continue
                 if assoc == "cell":
                     cell_values.setdefault(a.GetName(), []).append(v)
                 else:
