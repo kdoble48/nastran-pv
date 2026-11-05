@@ -46,6 +46,8 @@ you use.
 
 - [Development](development.md): tests, lint, the pvpython smoke test, and the rules for writing
   these docs.
+- [Architecture](architecture.md): the modules, and the known VTK, ParaView, pyNastran and
+  VTKHDF gotchas.
 - [Versioning](versioning.md): the version policy, what counts as public API, and the
   CHANGELOG.
 
@@ -91,5 +93,6 @@ beam-sections
 :caption: Development
 
 development
+architecture
 versioning
 ```

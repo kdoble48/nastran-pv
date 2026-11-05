@@ -9,8 +9,9 @@ description: Use when changing nastran_pv code - supporting a new Nastran card o
 
 One change usually spans the core (`src/nastran_pv`), the plugin (`paraview/`), tests, docs and
 sometimes the gallery. Missing one of them is the common failure. Look the change up in the touch
-map, then run the whole done-gate. The architecture and gotchas are in CLAUDE.md. Read the
-Gotchas section before you touch the builders, VTKHDF or pvpython code.
+map, then run the whole done-gate. The module notes and the full gotchas list are in
+`docs/architecture.md`. Read its Gotchas section before you touch the builders, VTKHDF or
+pvpython code.
 
 ## Touch map
 

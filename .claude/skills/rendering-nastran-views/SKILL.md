@@ -83,7 +83,7 @@ with `cannot read DECK: <error>` and writes no PNG.
 - `python -m nastran_pv view DECK --view masses [--results F]` opens the GUI with the view applied.
   `--dry-run` prints the generated script.
 - Custom pvpython scripts: `import nastran_views as nv; nv.apply("masses", reader=r, view=v)`. Read the
-  pvpython quirks in CLAUDE.md first (proxy-label constructor names, `block_names`, `timesteps`,
+  pvpython quirks in docs/architecture.md#gotchas first (proxy-label constructor names, `block_names`, `timesteps`,
   `solid`, `nv.fetch`). The reader outputs the model tree, so use `nv.Model(reader)` (a gathered
   multiblock) or `nv.fetch` + `nastran_pv.tree.as_multiblock` instead of a bare `Fetch`, and
   `nv.selectors([...])` for `ExtractBlock`.
