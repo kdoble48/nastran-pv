@@ -25,7 +25,7 @@ from pathlib import Path
 import numpy as np
 
 from . import vtkutil
-from .vtkio import read_vtm, write_vtm
+from .vtkio import read_model, write_vtm
 from .fields.common import MESH, field_strings, field_value, get_array, iter_blocks
 
 SCHEMA = """
@@ -198,8 +198,4 @@ class Store:
         vtm = self.con.execute("SELECT vtm FROM runs WHERE id=?", (run_id,)).fetchone()
         if not vtm or not vtm[0]:
             raise KeyError(f"run {run_id} has no saved model file")
-        if vtm[0].endswith((".vtkhdf", ".hdf")):
-            from .vtkhdf import read_vtkhdf
-
-            return read_vtkhdf(vtm[0])
-        return read_vtm(vtm[0])
+        return read_model(vtm[0])

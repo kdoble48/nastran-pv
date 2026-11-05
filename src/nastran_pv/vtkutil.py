@@ -66,6 +66,111 @@ def add_string_array(field_data, name: str, values: Iterable[str]) -> None:
     field_data.AddArray(arr)
 
 
+ROOT_FIELDS = "RootFieldNames"  # on a VTKHDF partition: which of its field arrays are root copies
+FILL_ARRAYS = "FillArrays"  # root of a VTKHDF series step: the arrays the writer NaN-filled
+ROOT_MARKS = ("ModelMass", "DeckPath")  # root fields every nastran-pv model has
+
+
+def _leaves(mb):
+    for i in range(mb.GetNumberOfBlocks()):
+        blk = mb.GetBlock(i)
+        if blk is None:
+            continue
+        if blk.IsA("vtkMultiBlockDataSet"):
+            yield from _leaves(blk)
+        else:
+            yield blk
+
+
+def promote_root_fields(mb) -> None:
+    """Put a VTKHDF model's root field data back on the root of multiblock ``mb``, in place.
+
+    vtkHDFWriter drops a collection's own field data, so ``vtkhdf.to_pdc`` copies the root arrays
+    onto the mesh partitions and lists them in ``RootFieldNames``. Here the listed arrays move to
+    the root (an array the root already has wins: a filter may have changed it) and leave the
+    blocks, so the blocks hold only their own field data, as in the deck's model. Files written
+    before the marker existed: the summary of the first block that has one is copied to the root."""
+    root = mb.GetFieldData()
+    marked = False
+    for blk in list(_leaves(mb)):
+        fd = blk.GetFieldData()
+        names = fd.GetAbstractArray(ROOT_FIELDS)
+        if names is None:
+            continue
+        marked = True
+        for k in range(names.GetNumberOfValues()):
+            name = names.GetValue(k)
+            arr = fd.GetAbstractArray(name)
+            if arr is not None and root.GetAbstractArray(name) is None:
+                root.AddArray(arr)
+            fd.RemoveArray(name)
+        fd.RemoveArray(ROOT_FIELDS)
+    if marked:
+        drop_fill_arrays(mb)
+        _one_step_label(root)
+        return
+    if any(root.GetAbstractArray(m) is not None for m in ROOT_MARKS):
+        return
+    for blk in _leaves(mb):
+        fd = blk.GetFieldData()
+        if any(fd.GetAbstractArray(m) is not None for m in ROOT_MARKS):
+            for i in range(fd.GetNumberOfArrays()):
+                arr = fd.GetAbstractArray(i)
+                if arr is not None and root.GetAbstractArray(arr.GetName()) is None:
+                    root.AddArray(arr)
+            return
+
+
+def _one_step_label(root) -> None:
+    """VTK 9.3's vtkHDFReader (ParaView 5.13) returns a string field array of a temporal file with
+    the values of every step: keep the label of this step (``ResultStep``, the numeric step index,
+    which it slices correctly; a series written by ``convert`` holds every step in order)."""
+    label, step = root.GetAbstractArray("ResultLabel"), root.GetArray("ResultStep")
+    if label is None or step is None or label.GetNumberOfValues() < 2 or step.GetNumberOfTuples() != 1:
+        return
+    k = int(step.GetTuple1(0))
+    if 0 <= k < label.GetNumberOfValues():
+        value = label.GetValue(k)
+        root.RemoveArray("ResultLabel")
+        add_string_array(root, "ResultLabel", [value])
+
+
+def attributes(ds, assoc: str):
+    """``ds``'s point, cell or (any other ``assoc``) field data."""
+    if assoc == "point":
+        return ds.GetPointData()
+    if assoc == "cell":
+        return ds.GetCellData()
+    return ds.GetFieldData()
+
+
+def drop_fill_arrays(mb) -> None:
+    """Remove, in place, the arrays a VTKHDF series writer NaN-filled for this step. A temporal
+    file holds every array at every step (``vtkhdf._fill_missing``), so a step without stresses
+    carries a NaN ``VonMisesMax``; the model of that step has none. The writer lists them in the
+    root ``FillArrays``; an array is dropped only when listed *and* all NaN (VTK 9.3's reader gives
+    that list with every step's entries). Other all-NaN arrays (a ``--calc`` result) stay. Series
+    written before ``FillArrays`` existed keep their fill."""
+    from .fields.common import iter_blocks
+
+    root = mb.GetFieldData()
+    listed = root.GetAbstractArray(FILL_ARRAYS)
+    if listed is None:
+        return
+    entries = {listed.GetValue(k) for k in range(listed.GetNumberOfValues())} - {""}
+    root.RemoveArray(FILL_ARRAYS)
+    blocks = dict(iter_blocks(mb))
+    for entry in entries:
+        path, assoc, name = entry.split("|", 2) if entry.count("|") >= 2 else ("", "", entry)
+        ds = mb if assoc == "field" else blocks.get(path)
+        if ds is None:
+            continue
+        attr = attributes(ds, assoc)
+        a = attr.GetArray(name)
+        if a is not None and a.GetDataType() in (10, 11) and np.all(np.isnan(vtk_to_numpy(a))):
+            attr.RemoveArray(name)
+
+
 def match_ids(sorted_ids: np.ndarray, query: np.ndarray) -> np.ndarray:
     """Index of each ``query`` id in ``sorted_ids`` or -1."""
     sorted_ids, query = np.asarray(sorted_ids), np.asarray(query)

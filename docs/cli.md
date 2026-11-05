@@ -21,7 +21,8 @@ The field options `--derive`, `--map` and `--calc` (for `convert`, `stats` and `
 described in [Fields](fields.md); `--parts`, `--grow` and `--rules` in [Model tools](tools.md);
 `--select` below, in [Selection from an ID file](#selection-from-an-id-file). The `store` commands are described in [Run store](store.md),
 and `diff` and `--diff-against` in [Model diff](diff.md). Wherever a command takes a deck, it also
-takes a `.vtm` or `.vtkhdf` written by `convert` (`--results` and `--random` need the deck).
+takes a `.vtm` or `.vtkhdf` written by `convert`, with the same result; the options that need the deck
+are refused on one ([Deck vs converted file](output-formats.md#deck-vs-converted-file)).
 
 ## Converting
 
@@ -32,7 +33,8 @@ nastran-pv convert run.bdf --no-loads --k-ref 1e5 -o out/model.vtm
 ```
 
 Without `-o`, the output is `<input>.vtm` in the current folder. `--results` attaches one result
-step, `--step N` (0-based, default 0); `--all-steps` writes them all. `--no-nodal-arrays` leaves
+step, `--step N` (0-based, default 0); `--all-steps` writes them all. On a converted series (a temporal
+`.vtkhdf`, or the `.pvd` of a `.vtm` series), `--step N` picks the step to read. `--no-nodal-arrays` leaves
 the `SPC_DOF`/`F_<sid>` point arrays off the mesh blocks, and `--ascii` writes ASCII XML for
 debugging.
 

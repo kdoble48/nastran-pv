@@ -34,4 +34,35 @@ In ParaView, the block names (`Shells`, `Loads/LOAD_1001`, ...) appear in the Mu
 Inspector's **Assembly** view. VTK 9.5's VTKHDF reader shows `Block0, Block1, ...` in the plain
 hierarchy. When selecting blocks from Python, use
 `ExtractBlock(Assembly="Assembly", Selectors=["//Shells"])`. The model summary (masses, CG,
-result label, frequency) is stored in the mesh blocks' field data.
+result label, frequency) is stored in the mesh blocks' field data, because VTKHDF keeps no root
+field data; the list `RootFieldNames` names those arrays, and nastran-pv (the CLI, the views and
+the Nastran filters) moves them back to the root when it reads the file. ParaView's own array
+lists show them on the mesh blocks.
+
+## Deck vs converted file
+
+Every command, view and filter that takes a deck also takes the `.vtkhdf` or `.vtm` that
+`convert` wrote from it, and gives the same result: the same blocks, arrays and root tables, the
+same `stats`, `check`, `sections`, `diff` and `store` output, and the same Nastran filter
+outputs and views in ParaView. The tests check this for every entry point
+(`tests/test_vtkhdf_parity.py`, and `parity_checks` in `tests/pv_smoke.py`). The CLI also prints
+the warnings the file was converted with, and `store add` records the original deck.
+
+A converted file is fixed at conversion time, so these need the deck and are refused on a file
+with a message that names them:
+
+| Needs the deck | On a converted file |
+|---|---|
+| `--results`, `--random`, `--nsm-set`, `--k-ref`, `--no-nodal-arrays`, `--no-<block>` | refused: convert the deck again with them |
+| `--all-steps` | refused; a converted series (temporal `.vtkhdf`, or `.pvd`) is read one step at a time with `--step N` (default 0) |
+| the reader's *OP2 File Name*, *NSMSet* and *Random* properties, the visibility checklists and the Show Only / Hide / Show All macros | not on ParaView's reader of the file ([Converted files](paraview.md#converted-files)) |
+
+Two format details:
+
+* A `.vtm` stores no file for an empty block. A load set with only GRAV keeps its name in the
+  tree but loses its field data (`GravityAcceleration`); VTKHDF keeps it.
+* A temporal `.vtkhdf` holds every array at every step, so a step without stresses carries an
+  all-NaN `VonMisesMax`. The writer lists that fill in `FillArrays`, and nastran-pv drops exactly
+  those arrays when it reads a step (an all-NaN `--calc` result is kept); ParaView's array lists
+  still show them. Series written before nastran-pv recorded `FillArrays` keep the NaN
+  `VonMisesMax` on the steps without stresses.
