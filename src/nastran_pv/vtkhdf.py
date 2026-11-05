@@ -68,7 +68,8 @@ CHUNK_ROWS = 25000  # chunk rows for datasets VTK wrote unchunked
 def _copy_root_field_data(mb, pdc) -> None:
     """vtkHDFWriter does not write a collection's own field data, so the model summary
     (masses, CG, material table, result label/frequency) also goes onto the mesh partitions
-    (or the first partition when there is no mesh)."""
+    (or the first partition when there is no mesh), listed in ``RootFieldNames`` so that
+    :func:`vtkutil.promote_root_fields` moves exactly those back on read."""
     from . import vtkutil
     from .fields.common import MESH
 
@@ -82,10 +83,14 @@ def _copy_root_field_data(mb, pdc) -> None:
         part = pdc.GetPartition(i, 0)
         fd = part.GetFieldData()
         copy = vtkutil.shallow_copy(fd)  # do not touch the source block's field data
+        copied = []
         for j in range(root.GetNumberOfArrays()):
             arr = root.GetAbstractArray(j)
             if arr is not None and arr.GetNumberOfTuples() and copy.GetAbstractArray(arr.GetName()) is None:
                 copy.AddArray(arr)
+                copied.append(arr.GetName())
+        copy.RemoveArray(vtkutil.ROOT_FIELDS)
+        vtkutil.add_string_array(copy, vtkutil.ROOT_FIELDS, copied)
         clone = vtkutil.shallow_copy(part)
         clone.SetFieldData(copy)
         pdc.SetPartition(i, 0, clone)

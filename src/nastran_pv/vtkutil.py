@@ -66,6 +66,56 @@ def add_string_array(field_data, name: str, values: Iterable[str]) -> None:
     field_data.AddArray(arr)
 
 
+ROOT_FIELDS = "RootFieldNames"  # on a VTKHDF partition: which of its field arrays are root copies
+ROOT_MARKS = ("ModelMass", "DeckPath")  # root fields every nastran-pv model has
+
+
+def _leaves(mb):
+    for i in range(mb.GetNumberOfBlocks()):
+        blk = mb.GetBlock(i)
+        if blk is None:
+            continue
+        if blk.IsA("vtkMultiBlockDataSet"):
+            yield from _leaves(blk)
+        else:
+            yield blk
+
+
+def promote_root_fields(mb) -> None:
+    """Put a VTKHDF model's root field data back on the root of multiblock ``mb``, in place.
+
+    vtkHDFWriter drops a collection's own field data, so ``vtkhdf.to_pdc`` copies the root arrays
+    onto the mesh partitions and lists them in ``RootFieldNames``. Here the listed arrays move to
+    the root (an array the root already has wins: a filter may have changed it) and leave the
+    blocks, so the blocks hold only their own field data, as in the deck's model. Files written
+    before the marker existed: the summary of the first block that has one is copied to the root."""
+    root = mb.GetFieldData()
+    marked = False
+    for blk in _leaves(mb):
+        fd = blk.GetFieldData()
+        names = fd.GetAbstractArray(ROOT_FIELDS)
+        if names is None:
+            continue
+        marked = True
+        for k in range(names.GetNumberOfValues()):
+            name = names.GetValue(k)
+            arr = fd.GetAbstractArray(name)
+            if arr is not None and root.GetAbstractArray(name) is None:
+                root.AddArray(arr)
+            fd.RemoveArray(name)
+        fd.RemoveArray(ROOT_FIELDS)
+    if marked or any(root.GetAbstractArray(m) is not None for m in ROOT_MARKS):
+        return
+    for blk in _leaves(mb):
+        fd = blk.GetFieldData()
+        if any(fd.GetAbstractArray(m) is not None for m in ROOT_MARKS):
+            for i in range(fd.GetNumberOfArrays()):
+                arr = fd.GetAbstractArray(i)
+                if arr is not None and root.GetAbstractArray(arr.GetName()) is None:
+                    root.AddArray(arr)
+            return
+
+
 def match_ids(sorted_ids: np.ndarray, query: np.ndarray) -> np.ndarray:
     """Index of each ``query`` id in ``sorted_ids`` or -1."""
     sorted_ids, query = np.asarray(sorted_ids), np.asarray(query)

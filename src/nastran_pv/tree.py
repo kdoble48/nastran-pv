@@ -547,6 +547,7 @@ def gather(pdc) -> tuple[vtkMultiBlockDataSet, dict]:
         outer, name = parent_of(path)
         vtkutil.add_block(outer, name, block)
     mb.GetFieldData().ShallowCopy(pdc.GetFieldData())
+    vtkutil.promote_root_fields(mb)  # a VTKHDF file keeps the root summary on its mesh partitions
     return mb, layout
 
 

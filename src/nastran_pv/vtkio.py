@@ -52,28 +52,19 @@ MODEL_SUFFIXES = (".vtm", ".vtkhdf", ".hdf")
 def read_model(path):
     """A ``.vtm`` or VTKHDF file written by nastran-pv as a plain multiblock with its root field
     data. VTKHDF holds a partitioned collection, gathered back into named blocks here; its root
-    summary lives on the mesh partitions (vtkHDFWriter drops a collection's own field data), so it
-    is copied back to the root."""
+    summary lives on the mesh partitions (vtkHDFWriter drops a collection's own field data) and
+    goes back to the root (``vtkutil.promote_root_fields``)."""
     path = Path(path)
-    if path.suffix.lower() == ".vtm":
-        return read_vtm(path)
     if path.suffix.lower() not in MODEL_SUFFIXES:
         raise ValueError(f"{path.name}: not a .vtm or .vtkhdf model file")
-    from .fields.common import MESH, iter_blocks
+    if not path.is_file():
+        raise FileNotFoundError(f"model file not found: {path.resolve()}")
+    if path.suffix.lower() == ".vtm":
+        return read_vtm(path)
     from .tree import as_multiblock
     from .vtkhdf import read_vtkhdf
 
     mb = as_multiblock(read_vtkhdf(path))
     if not mb.IsA("vtkMultiBlockDataSet"):
         raise ValueError(f"{path.name}: not a nastran-pv model (no blocks)")
-    root = mb.GetFieldData()
-    if root.GetAbstractArray("ModelMass") is None:
-        for name, ds in iter_blocks(mb):
-            fd = ds.GetFieldData()
-            if name in MESH and fd.GetAbstractArray("ModelMass") is not None:
-                for i in range(fd.GetNumberOfArrays()):
-                    arr = fd.GetAbstractArray(i)
-                    if root.GetAbstractArray(arr.GetName()) is None:
-                        root.AddArray(arr)
-                break
     return mb

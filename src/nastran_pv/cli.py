@@ -56,15 +56,29 @@ def progress_for(args) -> Progress:
     return args._progress
 
 
+DECK_ONLY = (("results", "--results"), ("random", "--random"), ("nsm_set", "--nsm-set"), ("k_ref", "--k-ref"),
+             ("no_nodal_arrays", "--no-nodal-arrays"))
+
+
+def deck_only_flags(args) -> list[str]:
+    """The given options that rebuild the model from the deck (a converted file cannot honour them)."""
+    flags = [flag for attr, flag in DECK_ONLY if getattr(args, attr, None) not in (None, False)]
+    return flags + [f"--no-{b}" for b in BLOCK_FLAGS if getattr(args, f"no_{b}", False)]
+
+
 def load_model(args, verbose=False):
     """Deck, .vtm or VTKHDF -> (multiblock, deck or None, results or None)."""
     from .deck import load_deck
 
     progress = progress_for(args)
     src = Path(args.input)
+    if not src.is_file():
+        raise SystemExit(f"nastran-pv: model not found: {src.resolve()}")
     if src.suffix.lower() in MODEL_SUFFIXES:
-        if getattr(args, "results", None):
-            raise SystemExit(f"--results needs a deck input (a {src.suffix} has no deck to rotate CD systems)")
+        flags = deck_only_flags(args)
+        if flags:
+            raise SystemExit(f"nastran-pv: {' '.join(flags)} need the deck; {src.name} is already converted "
+                             "(convert the deck with them)")
         with progress.stage(f"reading {src.name}"):
             mb = read_model(src)
         if getattr(args, "beam_sections", False):
@@ -262,6 +276,11 @@ def cmd_convert(args) -> int:
         notes += diff_against(mb, args)
     mb, selected = apply_select_options(mb, args)
     notes += selected
+    if deck is not None:  # with those from the results, so the file reports what convert printed
+        from .vtkutil import add_string_array
+
+        mb.GetFieldData().RemoveArray("Warnings")
+        add_string_array(mb.GetFieldData(), "Warnings", deck.warnings)
     with progress.stage(f"writing {output_format(args)}"):
         path = write_output(mb, args, deck, results)
     progress.done()
@@ -276,7 +295,7 @@ def cmd_convert(args) -> int:
     print("\n".join(summarize(mb)))
     for n in notes:
         print(n)
-    print_warnings(deck)
+    print_warnings(model_warnings(mb, deck))
     return 0
 
 
@@ -284,8 +303,6 @@ def _load_other(path, args):
     """The other model of a diff (deck, .vtm or VTKHDF), built with the same block/NSM options."""
     other = argparse.Namespace(**{k: v for k, v in vars(args).items() if k not in ("results", "random")})
     other.input = path
-    if not Path(path).is_file():
-        raise SystemExit(f"nastran-pv: model not found: {Path(path).resolve()}")
     mb, deck, _ = load_model(other, getattr(args, "verbose", False))
     return mb, deck
 
@@ -336,19 +353,27 @@ def cmd_diff(args) -> int:
             _print_rows([{k: v for k, v in r.items() if k != "Item"} for r in part], args.limit)
     if args.csv:
         print(f"wrote {write_csv(d.rows, args.csv)}")
-    for label, deck in (("A", deck_a), ("B", deck_b)):
-        if deck is not None and deck.warnings:
+    for label, model, deck in (("A", a, deck_a), ("B", b, deck_b)):
+        warnings = model_warnings(model, deck)
+        if warnings:
             print(f"{label}: ", end="", file=sys.stderr)
-            print_warnings(deck, file=sys.stderr, limit=3)
+            print_warnings(warnings, file=sys.stderr, limit=3)
     return 0
 
 
-def print_warnings(deck, file=None, limit=10) -> None:
-    """The deck's first warnings (mass ones come first, see ``Deck.warn``)."""
-    if deck is None or not deck.warnings:
+def model_warnings(mb, deck) -> list[str]:
+    """The deck's warnings, or for a converted file the ones it was written with (root ``Warnings``)."""
+    from .fields.common import field_strings
+
+    return list(deck.warnings) if deck is not None else field_strings(mb, "Warnings")
+
+
+def print_warnings(warnings, file=None, limit=10) -> None:
+    """The first ``warnings`` (mass ones come first, see ``Deck.warn``)."""
+    if not warnings:
         return
-    print(f"{len(deck.warnings)} warning(s); first few:", file=file)
-    for w in deck.warnings[:limit]:
+    print(f"{len(warnings)} warning(s); first few:", file=file)
+    for w in warnings[:limit]:
         print(f"  {w}", file=file)
 
 
@@ -359,7 +384,7 @@ def cmd_stats(args) -> int:
     mb, deck, _ = load_model(args, args.verbose)
     apply_field_options(mb, args)
     mb, selected = apply_select_options(mb, args)
-    print_warnings(deck, file=sys.stderr)  # stderr: the table (or --csv) stays clean
+    print_warnings(model_warnings(mb, deck), file=sys.stderr)  # stderr: the table (or --csv) stays clean
     for n in selected:
         print(n, file=sys.stderr)
     rows = group_stats(mb, args.by, args.field, broadcast=False)
@@ -375,7 +400,7 @@ def cmd_check(args) -> int:
     from .topology import CHECKS, Rules, check
 
     mb, deck, _ = load_model(args, args.verbose)
-    print_warnings(deck, file=sys.stderr)
+    print_warnings(model_warnings(mb, deck), file=sys.stderr)
     try:
         res = check(mb, Rules.parse(args.rules), tol=args.tol, checks=args.only or CHECKS)
     except ValueError as exc:
@@ -410,10 +435,9 @@ def cmd_sections(args) -> int:
     _print_rows(rows, args.limit)
     if args.csv:
         print(f"wrote {write_csv(rows, args.csv)}")
-    if deck is not None:
-        for w in deck.warnings:  # missing sections, and CBAR/CBEAM frames with a fallback
-            if w.startswith(("beam section", "CBAR ", "CBEAM ")):
-                print(f"  {w}")
+    for w in model_warnings(mb, deck):  # missing sections, and CBAR/CBEAM frames with a fallback
+        if w.startswith(("beam section", "CBAR ", "CBEAM ")):
+            print(f"  {w}")
     flagged = sum(r["Check"] == "MISMATCH" for r in rows)
     if flagged:
         print(f"{flagged} station(s) differ from the reference by more than {MISMATCH:.0%}")
@@ -425,11 +449,16 @@ def cmd_store(args) -> int:
 
     with Store(args.db) as st:
         if args.store_cmd == "add":
-            mb, _, _ = load_model(args, args.verbose)
+            mb, deck, _ = load_model(args, args.verbose)
             notes = apply_field_options(mb, args)
             mb, selected = apply_select_options(mb, args)
             notes += selected
-            rid = st.add_run(mb, Path(args.input).resolve(), name=args.name,
+            deck_path = Path(args.input).resolve()
+            if deck is None:  # a converted file: the run's deck is the one it was converted from
+                from .fields.common import field_strings
+
+                deck_path = Path((field_strings(mb, "DeckPath") or [deck_path])[0])
+            rid = st.add_run(mb, deck_path, name=args.name,
                              results=Path(args.results).resolve() if args.results else None,
                              save_vtm=not args.no_vtm, only=args.only, fmt=args.format)
             print(f"run {rid} added to {args.db}")
