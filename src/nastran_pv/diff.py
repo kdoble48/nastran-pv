@@ -1,5 +1,6 @@
 """What changed between two models: grids, elements, concentrated masses, properties, materials,
-mass and CG.
+mass and CG, plus (v2, :mod:`nastran_pv.diff_items`) rigid elements, connectors, bushes, loads, SPCs
+and coordinate systems.
 
 Both sides are built multiblocks (a deck through ``build_multiblock``, a ``.vtm``/VTKHDF through
 ``vtkio.read_model``, or the plugin's gathered model tree), so the diff needs no deck.
@@ -8,8 +9,8 @@ Both sides are built multiblocks (a deck through ``build_multiblock``, a ``.vtm`
   the summary table, the mass table (model totals, per PID, per family) and every difference as a
   long row (``Item Id Name Status Field A B Delta Rel``).
 * :func:`annotate` also writes the result onto B: ``DiffStatus``/``DiffReason`` and the deltas on
-  the mesh and Masses blocks, a ``Removed`` block (A's removed elements) and the ``DIFF_*``,
-  ``DIFFMASS_*`` root tables. See docs/diff.md.
+  the mesh, Masses, connection, constraint and load blocks, a ``Removed`` block (A's removed items)
+  and the ``DIFF_*``, ``DIFFMASS_*``, ``DIFFLOAD_*`` root tables. See docs/diff.md.
 """
 from __future__ import annotations
 
@@ -32,11 +33,13 @@ from .materials import COLUMNS as MAT_COLUMNS
 
 STATUS_NAMES = ("same", "added", "changed", "property", "removed")
 SAME, ADDED, CHANGED, PROPERTY, REMOVED = range(5)
-GRID_STATUS_NAMES = ("same", "added", "moved")
+GRID_STATUS_NAMES = ("same", "added", "moved", "system")  # system: CP/CD id or system changed
 # DiffReason bits
-TYPE, CONNECTIVITY, PID, MID, MOVED, PROPERTY_VALUES, MATERIAL_VALUES, MASS = (1 << i for i in range(8))
+(TYPE, CONNECTIVITY, PID, MID, MOVED, PROPERTY_VALUES, MATERIAL_VALUES, MASS, DOF, STIFFNESS, ORIENTATION, VALUE,
+ FRAME) = (1 << i for i in range(13))
 REASON_NAMES = {TYPE: "type", CONNECTIVITY: "connectivity", PID: "PID", MID: "MID", MOVED: "grid moved",
-                PROPERTY_VALUES: "property", MATERIAL_VALUES: "material", MASS: "mass"}
+                PROPERTY_VALUES: "property", MATERIAL_VALUES: "material", MASS: "mass", DOF: "DOF",
+                STIFFNESS: "stiffness", ORIENTATION: "orientation", VALUE: "value", FRAME: "system"}
 CARD_REASONS = TYPE | CONNECTIVITY | PID | MOVED  # the element itself changed -> CHANGED, else PROPERTY
 # property values per mesh block. Only property-card inputs: Density and MassPerArea follow the
 # material (reported there), and `--derive size` writes the cell area as Area on Shells.
@@ -44,9 +47,9 @@ BLOCK_PROPERTY_FIELDS = {"Shells": ("Thickness", "MID", "NSMPerArea"), "Lines": 
                          "Solids": ("MID",)}
 PROPERTY_FIELDS = tuple(dict.fromkeys(f for fs in BLOCK_PROPERTY_FIELDS.values() for f in fs))
 # blocks whose points sit on grids (Masses and MassOffsets points are CGs, Bushes points CBUSH locations)
-GRID_BLOCKS = MESH + ("Connectors", "BushLines", "Constraints")
+GRID_BLOCKS = MESH + ("Rigid", "Connectors", "BushLines", "Constraints")
 MATERIAL_FIELDS = ("Type",) + MAT_COLUMNS
-IDS = ("PID", "MID")  # fields compared as ids: no delta
+IDS = ("PID", "MID", "DOF", "CP", "CD", "CP system", "CD system", "GA", "GB")  # compared as ids: no delta
 DELTA_ARRAYS = {"Shells": ("Thickness", "DeltaThickness"), "Lines": ("Area", "DeltaArea")}
 
 
@@ -67,6 +70,11 @@ class ModelDiff:
     masses_b: dict = field(default_factory=dict, repr=False)
     removed: list = field(default_factory=list, repr=False)  # (A block, A cell ids, delta masses)
     removed_masses: list = field(default_factory=list, repr=False)  # (EID, xyz, mass)
+    items: dict = field(default_factory=dict, repr=False)  # B block -> v2 status/reason arrays
+    removed_legs: list = field(default_factory=list, repr=False)  # (A block, A cell ids, item type)
+    removed_points: list = field(default_factory=list, repr=False)  # (item type, EID, SID, NID, xyz, mass)
+    load_sets: list = field(default_factory=list)  # DIFFLOAD_ rows
+    notes: list = field(default_factory=list)  # kinds that could not be compared, and why
 
     def counts(self, item: str) -> dict:
         return next(r for r in self.summary if r["Item"] == item)
@@ -267,6 +275,7 @@ def _type_name(cells, code):
 # --------------------------------------------------------------------- diff
 def diff_models(a, b, tol: Tolerances | None = None) -> ModelDiff:
     """Compare model ``a`` (reference) with model ``b`` (modified); neither is changed."""
+    from . import diff_items
     from .store import keyed_diff
 
     tol = tol or Tolerances()
@@ -288,7 +297,10 @@ def diff_models(a, b, tol: Tolerances | None = None) -> ModelDiff:
     dxyz = np.zeros_like(B.xyz)
     dxyz[in_a] = B.xyz[in_a] - A.xyz[ia[in_a]]
     moved = in_a & (np.linalg.norm(dxyz, axis=1) > tol.grid * A.diagonal())
-    grid_status = np.where(~in_a, 1, np.where(moved, 2, 0)).astype(np.int64)
+    v2 = diff_items.Result()
+    diff_items.compare_coords(A, B, row, tol, v2)  # coordinate systems and the grids' CP/CD
+    system = v2.grid_system if v2.grid_system is not None else np.zeros(len(B.nid), dtype=bool)
+    grid_status = np.where(~in_a, 1, np.where(moved, 2, np.where(system & in_a, 3, 0))).astype(np.int64)
     removed_grids = A.nid[vtkutil.match_ids(B.nid, A.nid) < 0]
     for n in B.nid[~in_a]:
         row("grid", int(n), "added")
@@ -299,7 +311,8 @@ def diff_models(a, b, tol: Tolerances | None = None) -> ModelDiff:
             if dxyz[k, c] != 0:
                 row("grid", int(B.nid[k]), "moved", axis, float(A.xyz[ia[k], c]), float(B.xyz[k, c]))
     summary.append({"Item": "grids", "A": len(A.nid), "B": len(B.nid), "Same": int((grid_status == 0).sum()),
-                    "Added": int((~in_a).sum()), "Removed": len(removed_grids), "Changed": int(moved.sum())})
+                    "Added": int((~in_a).sum()), "Removed": len(removed_grids),
+                    "Changed": int((grid_status >= 2).sum())})
     moved_nids = B.nid[moved]
 
     # properties and materials (seen through the elements)
@@ -448,6 +461,10 @@ def diff_models(a, b, tol: Tolerances | None = None) -> ModelDiff:
     summary.append({"Item": "materials", "A": len(ma), "B": len(mb_), "Same": len(set(ma) & set(mb_) - mat_changed),
                     "Added": len(set(mb_) - set(ma)), "Removed": len(set(ma) - set(mb_)), "Changed": len(mat_changed)})
 
+    # v2: rigid elements, connectors, bushes, loads, SPCs; coordinate systems last in the summary
+    diff_items.compare(A, B, moved_nids, row, tol, v2)
+    summary += [r for r in v2.summary if r["Item"] != "coords"] + [r for r in v2.summary if r["Item"] == "coords"]
+
     # mass and CG
     ta, tb = A.mass_totals(), B.mass_totals()
     masses = []
@@ -465,7 +482,8 @@ def diff_models(a, b, tol: Tolerances | None = None) -> ModelDiff:
                          "Name": "", "Status": "", "Field": "mass" if r["Kind"] != "model" else r["Key"],
                          "A": r["A"], "B": r["B"], "Delta": r["Delta"], "Rel": r["Rel"]})
     return ModelDiff(summary, masses, rows, (ta[3], tb[3]), elements,
-                     {"status": grid_status, "delta": dxyz, "nid": B.nid}, masses_b, removed, removed_masses)
+                     {"status": grid_status, "delta": dxyz, "nid": B.nid}, masses_b, removed, removed_masses,
+                     v2.items, v2.removed_legs, v2.removed_points, v2.load_sets, v2.notes)
 
 
 def _mass_row(kind, key, va, vb, rel=True):
@@ -505,6 +523,19 @@ def annotate(b, a, tol: Tolerances | None = None, against: str | None = None) ->
         if vtkutil.is_vertex_only(blocks["Masses"]):  # one vertex per point: color it with the mesh
             _put(blocks["Masses"].GetCellData(), "DiffStatus", d.masses_b["status"])
         vtkutil.set_field_strings(blocks["Masses"], "DiffStatusNames", STATUS_NAMES)
+    for name, arrays in d.items.items():  # v2: connections, bushes, constraints, loads
+        ds = blocks.get(name)
+        if ds is None:
+            continue
+        attrs = [ds.GetCellData()] if arrays["assoc"] == "cell" else [ds.GetPointData()]
+        if arrays["assoc"] == "point" and vtkutil.is_vertex_only(ds):  # color the points with the cells
+            attrs.append(ds.GetCellData())
+        for attr in attrs:
+            _put(attr, "DiffStatus", arrays["status"])
+            _put(attr, "DiffReason", arrays["reason"])
+        for key, values in arrays["extra"].items():
+            _put(attrs[0], key, values)
+        vtkutil.set_field_strings(ds, "DiffStatusNames", STATUS_NAMES)
     _remove_block(b, "Removed")
     vtkutil.add_block(b, "Removed", removed_block(a, d))
     fd = b.GetFieldData()
@@ -513,6 +544,7 @@ def annotate(b, a, tol: Tolerances | None = None, against: str | None = None) ->
     vtkutil.write_field_table(b, "DIFF_", d.summary)
     vtkutil.write_field_table(b, "DIFFMASS_", [{k: (np.nan if v is None else v) for k, v in r.items()}
                                                for r in d.masses])
+    vtkutil.write_field_table(b, "DIFFLOAD_", d.load_sets)
     fd.RemoveArray("DiffCG")
     vtkutil.add_array(fd, "DiffCG", (d.cg[1] - d.cg[0])[None, :], skip_all_nan=True)
     return d
@@ -532,16 +564,23 @@ def _remove_block(mb, name):
 
 
 def removed_block(a, d: ModelDiff):
-    """A's removed elements (and a vertex per removed concentrated mass) as one unstructured grid in
-    A's coordinates, or None."""
+    """A's removed items as one unstructured grid in A's coordinates, or None: elements and
+    connection legs as cells, a vertex per removed concentrated mass, bush, load point and SPC point.
+    ``ItemType`` (``diff_items.ITEM_TYPES``) says which kind each cell is."""
+    from .diff_items import ELEMENT_ITEM, ITEM_TYPES, MASS_ITEM
+
     blocks = dict(iter_blocks(a))
     pieces = []
-    for name, ids, delta in d.removed:
+    legs = [(name, ids, delta, ELEMENT_ITEM) for name, ids, delta in d.removed]
+    legs += [(name, ids, np.zeros(len(ids)), item) for name, ids, item in d.removed_legs if name in blocks]
+    for name, ids, delta, item in legs:
         src = blocks[name]
         cd = src.GetCellData()
         n = src.GetNumberOfCells()
         keep = {k: get_array(cd, k, np.full(n, -1 if k != "ElementMass" else np.nan))[ids]
                 for k in ("EID", "PID", "ElementType", "ElementMass")}
+        keep["ItemType"] = np.full(len(ids), item)
+        keep["SID"] = np.full(len(ids), -1)
         ex = vtkExtractCells()
         ex.SetInputData(src)
         idl = vtkIdList()
@@ -559,10 +598,11 @@ def removed_block(a, d: ModelDiff):
         if nid is not None:
             vtkutil.add_array(out.GetPointData(), "NID", nid)
         pieces.append((out, keep, delta))
-    if d.removed_masses:
-        eids = np.array([e for e, _, _ in d.removed_masses], dtype=np.int64)
-        xyz = np.array([x for _, x, _ in d.removed_masses], dtype=float)
-        mass = np.array([m for _, _, m in d.removed_masses])
+    points = [(MASS_ITEM, e, -1, -1, x, m) for e, x, m in d.removed_masses] + list(d.removed_points)
+    if points:
+        eids = np.array([p[1] for p in points], dtype=np.int64)
+        xyz = np.array([p[4] for p in points], dtype=float).reshape(-1, 3)
+        mass = np.array([p[5] for p in points], dtype=float)
         ug = vtkUnstructuredGrid()
         ug.SetPoints(vtkutil.make_points(xyz))
         ug.Allocate(len(eids))
@@ -571,10 +611,11 @@ def removed_block(a, d: ModelDiff):
             one.Reset()
             one.InsertNextId(i)
             ug.InsertNextCell(VTK_VERTEX, one)
-        vtkutil.add_array(ug.GetPointData(), "NID", np.full(len(eids), -1, dtype=np.int64))
+        vtkutil.add_array(ug.GetPointData(), "NID", np.array([p[3] for p in points], dtype=np.int64))
         keep = {"EID": eids, "PID": np.full(len(eids), -1), "ElementType": np.full(len(eids), -1),
-                "ElementMass": mass}
-        pieces.append((ug, keep, -mass))
+                "ElementMass": mass, "ItemType": np.array([p[0] for p in points]),
+                "SID": np.array([p[2] for p in points])}
+        pieces.append((ug, keep, -np.nan_to_num(mass)))
     if not pieces:
         return None
     app = vtkAppendFilter()
@@ -590,6 +631,7 @@ def removed_block(a, d: ModelDiff):
     out = vtkUnstructuredGrid()
     out.ShallowCopy(app.GetOutput())
     vtkutil.set_field_strings(out, "DiffStatusNames", STATUS_NAMES)
+    vtkutil.set_field_strings(out, "ItemTypeNames", ITEM_TYPES)
     return out
 
 
@@ -621,5 +663,6 @@ def report_lines(d: ModelDiff, name_a="A", name_b="B") -> list[str]:
         f"{br['property']} via property/material; {br['removed']} removed",
         f"model mass {total['A']:.6g} -> {total['B']:.6g}: {total['Delta']:+.6g}{rel}; "
         f"CG moved {cg_shift:.6g}",
-        "not compared: rigid elements, connectors, bushes, loads, SPCs, coordinate systems",
+        *d.notes,
+        "not compared: pressure and thermal loads (PLOAD*, TEMP), spring/damper values, MPC coefficients",
     ]

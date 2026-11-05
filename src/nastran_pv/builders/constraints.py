@@ -62,7 +62,35 @@ def spc_sets(deck: Deck) -> dict[int, dict[int, np.ndarray]]:
     return out
 
 
-def build_constraints(deck: Deck, sets: dict[int, dict[int, np.ndarray]]):
+def spc_enforced(deck: Deck) -> dict[int, dict[int, np.ndarray]]:
+    """{set id: {nid: (6,) enforced values}} from SPC cards (SPCADD resolved); only nonzero entries."""
+    model = deck.model
+    direct: dict[int, dict[int, np.ndarray]] = defaultdict(dict)
+    for sid, cards in model.spcs.items():
+        for card in cards:
+            if card.type != "SPC":
+                continue
+            for nid, comp, value in zip(card.node_ids, card.components, getattr(card, "enforced", []) or []):
+                if not value:
+                    continue
+                vals = direct[sid].setdefault(nid, np.zeros(6))
+                vals[dof_mask(comp).astype(bool)] = float(value)
+    out = dict(direct)
+    for sid, cards in model.spcadds.items():
+        combined: dict[int, np.ndarray] = {}
+        for card in cards:
+            for sub in card.sets:
+                for nid, vals in direct.get(int(sub), {}).items():
+                    prev = combined.setdefault(nid, np.zeros(6))
+                    prev[vals != 0] = vals[vals != 0]
+        if combined:
+            out[sid] = combined
+    return out
+
+
+def build_constraints(deck: Deck, sets: dict[int, dict[int, np.ndarray]], enforced=None):
+    """Points per (set, grid). ``enforced`` ({set: {nid: (6,)}}, :func:`spc_enforced`) adds
+    ``SPCEnforced`` when any value is not 0."""
     rows = [(sid, nid, mask) for sid in sorted(sets) for nid, mask in sorted(sets[sid].items())]
     if not rows:
         return None
@@ -79,6 +107,10 @@ def build_constraints(deck: Deck, sets: dict[int, dict[int, np.ndarray]]):
     vtkutil.add_array(a, "SPC_DOF", masks)
     vtkutil.add_array(a, "DOFCode", np.array([mask_to_code(m) for m in masks], dtype=np.int32))
     vtkutil.add_array(a, "CD", deck.cd[gidx[ok]])
+    if enforced:
+        values = np.array([enforced.get(r[0], {}).get(r[1], np.zeros(6)) for r in rows]).reshape(-1, 6)[ok]
+        if values.any():
+            vtkutil.add_array(a, "SPCEnforced", values)
     return pd
 
 

@@ -1521,8 +1521,9 @@ class NastranPVDiff(_Settable, VTKPythonAlgorithmBase):
     """What changed from the Reference model (A) to the Input model (B): two readers, or .vtm/VTKHDF
     files written by nastran-pv.
 
-    Output 0: B's blocks (a multiblock) with ``DiffStatus``, ``DiffReason`` and the deltas, plus a
-    ``Removed`` block of A's removed elements; output 1: every difference as a table.
+    Output 0: B's blocks (a multiblock) with ``DiffStatus``, ``DiffReason`` and the deltas on the
+    mesh, masses, rigid elements, connectors, bushes, SPCs and loads, plus a ``Removed`` block of A's
+    removed items; output 1: every difference as a table (coordinate systems included).
     """
 
     def __init__(self):
@@ -1568,6 +1569,8 @@ class NastranPVDiff(_Settable, VTKPythonAlgorithmBase):
         try:
             d = annotate(b, a, Tolerances(self._grid_tol, self._rel_tol))
             _fill_table(vtkTable.GetData(outInfo, 1), table_rows(d))
+            for note in d.notes:  # kinds one input cannot provide (an older file)
+                _message(f"nastran-pv Diff: {note}")
         except Exception as exc:  # report, pass B through unchanged
             _message(f"nastran-pv Diff: {exc}", error=True)
         vtkMultiBlockDataSet.GetData(outInfo, 0).ShallowCopy(b)

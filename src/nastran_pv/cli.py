@@ -337,7 +337,7 @@ def diff_against(mb, args) -> list[str]:
     with progress_for(args).stage(f"diff against {Path(args.diff_against).name}"):
         ref, _ = _load_other(args.diff_against, args)
         d = annotate(mb, ref, diff_tolerances(args), against=Path(args.diff_against).resolve())
-    return report_lines(d, args.diff_against, args.input)[2:4]
+    return report_lines(d, args.diff_against, args.input)[2:4] + list(d.notes)
 
 
 def add_diff_tolerances(p) -> None:
@@ -362,7 +362,9 @@ def cmd_diff(args) -> int:
     shown = [r for r in d.masses if r["Kind"] == "model" or (r["Delta"] or 0) != 0]
     _print_rows(shown, None)
     for item, title in (("property", "properties"), ("material", "materials"), ("element", "elements"),
-                        ("mass", "concentrated masses"), ("grid", "grids")):
+                        ("mass", "concentrated masses"), ("grid", "grids"), ("rigid", "rigid elements"),
+                        ("connector", "connectors"), ("bush", "bushes"), ("load_set", "load sets"),
+                        ("load", "loads"), ("spc", "SPCs"), ("coord", "coordinate systems")):
         part = [r for r in d.rows if r["Item"] == item]
         if part:
             print()
