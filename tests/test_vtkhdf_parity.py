@@ -5,6 +5,19 @@ Parametrized over the test decks and the entry points; the comparison covers blo
 and cell counts, coordinates, every point/cell/field array (name, dtype, values) and the root
 field data, plus the printed tables of ``stats``/``check``/``sections``/``diff`` and the rows of
 ``store add``.
+
+Extending it (new cards, item types, root tables, options):
+
+* a new test deck: add its name to ``DECKS`` (and a ``tests/data/<name>.bdf``); every round-trip,
+  option and table test then runs on it;
+* a new ``convert`` option: an entry in ``_options`` plus its name in ``OPTIONS``;
+* a new printing command: an entry in ``TABLES``;
+* a new diff case (e.g. rigid elements, connectors, loads, SPCs, coordinate systems): a deck
+  pair in ``DIFF_PAIRS`` (both decks also in ``DECKS``);
+* new arrays and root tables (e.g. ``CORD_*``) need nothing: every array of every block and every
+  root field is compared, and the VTKHDF round trip carries all root fields (``RootFieldNames``).
+
+The plugin side is ``parity_checks`` in ``tests/pv_smoke.py`` (``cases`` and ``PARITY_FILTERS``).
 """
 import contextlib
 import io
@@ -111,7 +124,7 @@ def test_vtm_drops_empty_blocks(files):
 
 # ------------------------------------------------------------------ convert options
 def _options(name, tmp_path, files):
-    other = "diff_a" if name == "diff_b" else "diff_b"
+    other = next((x for pair in DIFF_PAIRS for x in pair if name in pair and x != name), DIFF_PAIRS[0][1])
     table = tmp_path / "pid.csv"
     table.write_text("PID,Allow\n1,10\n2,20\n3,30\n")
     ids = tmp_path / "ids.csv"
@@ -252,13 +265,17 @@ def test_table_commands(files, name, command, fmt):
     assert normalized(text_a, files[name]["deck"]) == normalized(text_b, files[name][fmt])
 
 
+DIFF_PAIRS = (("diff_a", "diff_b"),)  # (A, B) deck names, both in DECKS
+
+
 @pytest.mark.parametrize("kinds", [("deck", "vtkhdf"), ("vtkhdf", "deck"), ("vtkhdf", "vtkhdf"), ("vtm", "vtkhdf")])
-def test_diff_command(files, kinds):
-    ref = run(["diff", files["diff_a"]["deck"], files["diff_b"]["deck"]])
-    got = run(["diff", files["diff_a"][kinds[0]], files["diff_b"][kinds[1]]])
+@pytest.mark.parametrize("pair", DIFF_PAIRS)
+def test_diff_command(files, pair, kinds):
+    a, b = files[pair[0]], files[pair[1]]
+    ref = run(["diff", a["deck"], b["deck"]])
+    got = run(["diff", a[kinds[0]], b[kinds[1]]])
     assert ref[0] == got[0] == 0
-    norm = lambda t: normalized(t, files["diff_a"]["deck"], files["diff_b"]["deck"],  # noqa: E731
-                                files["diff_a"][kinds[0]], files["diff_b"][kinds[1]])
+    norm = lambda t: normalized(t, a["deck"], b["deck"], a[kinds[0]], b[kinds[1]])  # noqa: E731
     assert norm(ref[1]) == norm(got[1])
 
 
