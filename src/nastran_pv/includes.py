@@ -6,7 +6,8 @@ wraps ``add_card``/``add_card_lax`` for one read and keeps ``(card name, first f
 for the element, mass and rigid-element cards. :func:`read_tree` turns that into an
 :class:`IncludeTree` (files in read order, each with its parent, and ``EID -> file``).
 
-:func:`write_arrays` puts it on a built multiblock, only when the deck read more than one file:
+:func:`write_arrays` puts it on a built multiblock, only when the element, mass and rigid cards
+come from more than one file (a run deck whose bulk data is all in one INCLUDE groups nothing):
 
 - ``FileId`` (cell array, point array on vertex-only blocks such as Masses) on every block with
   an ``EID``; -1 where the card's file is unknown;
@@ -40,14 +41,38 @@ FILE_PARENTS = "FileParents"
 TABLE = "FILE_"
 
 
+SLOTS = {"elements": "elements", "masses": "masses", "rigid_elements": "rigid"}  # pyNastran slot -> key
+MASS_BLOCKS, RIGID_BLOCKS = ("Masses", "MassOffsets"), ("Rigid",)
+
+
 @dataclass
 class IncludeTree:
     files: list  # absolute paths, in read order (index = FileId)
     parents: list  # parent FileId per file, -1 for the main file
-    eid_file: dict = field(default_factory=dict)  # element/mass/rigid EID -> FileId
+    # {"elements" | "masses" | "rigid": {EID: FileId}}: one map per id space, since an element, a
+    # mass and a rigid element may share an EID (pyNastran accepts it; Nastran does not)
+    slot_file: dict = field(default_factory=dict)
 
     def __len__(self):
         return len(self.files)
+
+    @property
+    def eid_file(self) -> dict:
+        """All the maps in one ``{EID: FileId}`` (masses and rigid elements over elements)."""
+        out = {}
+        for key in ("elements", "masses", "rigid"):
+            out.update(self.slot_file.get(key, {}))
+        return out
+
+    def spans_files(self) -> bool:
+        """True when the recorded cards come from two or more files: a run deck with one bulk
+        INCLUDE (Case Control in the main file, every card in the include) groups nothing."""
+        return len({f for ids in self.slot_file.values() for f in ids.values()}) > 1
+
+    def for_block(self, path: str) -> dict:
+        top = path.split("/", 1)[0]
+        key = "masses" if top in MASS_BLOCKS else "rigid" if top in RIGID_BLOCKS else "elements"
+        return self.slot_file.get(key, {})
 
 
 def _recorded(name: str) -> bool:
@@ -99,14 +124,16 @@ def read_tree(model, seen: dict, main) -> IncludeTree:
             i = index.get(_norm(child))
             if i is not None and i != int(parent) and parents[i] == -1 and i > 0:
                 parents[i] = int(parent)
-    types = set()
-    for slot in ("elements", "masses", "rigid_elements", "plotels"):
-        types.update(getattr(c, "type", "") for c in (getattr(model, slot, None) or {}).values())
-    eid_file = {}
-    for name, ids in seen.items():
-        if name in types:
-            eid_file.update(ids)
-    return IncludeTree(files, parents, eid_file)
+    slot_file = {}
+    for slot, key in SLOTS.items():
+        objs = getattr(model, slot, None) or {}
+        types = {getattr(c, "type", "") for c in objs.values()}
+        ids = {}
+        for name, by_eid in seen.items():
+            if name in types:
+                ids.update({e: f for e, f in by_eid.items() if e in objs})
+        slot_file[key] = ids
+    return IncludeTree(files, parents, slot_file)
 
 
 def labels(files, main) -> tuple[list[str], list[str]]:
@@ -137,20 +164,24 @@ def _label(text: str) -> str:
 def write_arrays(mb, tree: IncludeTree | None, main) -> None:
     """``FileId``/``FileNames``/``FileParents`` on the blocks with an ``EID`` and the root
     ``FILE_`` table."""
-    if tree is None or len(tree) < 2:
+    if tree is None or len(tree) < 2 or not tree.spans_files():
         return
     names, rel = labels(tree.files, main)
     vtkutil.write_field_table(mb, TABLE, [{"Name": n, "Path": p, "Parent": int(par)}
                                           for n, p, par in zip(names, rel, tree.parents)])
-    eids = np.fromiter(tree.eid_file.keys(), dtype=np.int64, count=len(tree.eid_file))
-    fids = np.fromiter(tree.eid_file.values(), dtype=np.int32, count=len(tree.eid_file))
-    order = np.argsort(eids)
-    eids, fids = eids[order], fids[order]
-    for _, ds in iter_blocks(mb):
+    sorted_maps = {}
+    for path, ds in iter_blocks(mb):
         attr = ds.GetPointData() if vtkutil.is_vertex_only(ds) else ds.GetCellData()
         eid = get_array(attr, "EID")
         if eid is None:
             continue
+        ids = tree.for_block(path)
+        if id(ids) not in sorted_maps:
+            e = np.fromiter(ids.keys(), dtype=np.int64, count=len(ids))
+            f = np.fromiter(ids.values(), dtype=np.int32, count=len(ids))
+            order = np.argsort(e)
+            sorted_maps[id(ids)] = (e[order], f[order])
+        eids, fids = sorted_maps[id(ids)]
         idx = vtkutil.match_ids(eids, np.asarray(eid, dtype=np.int64)) if len(eids) else np.full(len(eid), -1)
         values = np.where(idx >= 0, fids[np.maximum(idx, 0)] if len(fids) else -1, -1).astype(np.int32)
         ctype = get_array(attr, "ConnectorType")

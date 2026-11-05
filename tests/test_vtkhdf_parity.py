@@ -37,7 +37,7 @@ from conftest import DATA
 from model_compare import differences, snapshot
 from op2_fixture import make_op2
 
-DECKS = ("tiny_run", "tiny_bulk", "beams", "nsm", "topology", "diff_a", "diff_b", "diff2_a", "diff2_b")
+DECKS = ("tiny_run", "tiny_bulk", "beams", "nsm", "topology", "diff_a", "diff_b", "diff2_a", "diff2_b", "inc_main")
 FORMATS = ("vtkhdf", "vtm")
 
 

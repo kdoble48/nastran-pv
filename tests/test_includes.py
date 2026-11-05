@@ -128,3 +128,38 @@ def test_round_trip_keeps_the_include_tree(mb, tmp_path, suffix):
     assert by_eid(get_block(back, "Lines"), "cell") == {20: 2, 21: 3}
     nodes = node_paths(tree.build_tree(back).output(back))
     assert "Files/inc_main_bdf/inc_wing_bdf/inc_ribs_bdf" in nodes
+
+
+def test_element_mass_and_rigid_ids_are_separate(tmp_path):
+    """CROD 10 in the main file and CONM2 10 / RBE2 10 in an include keep their own files."""
+    (tmp_path / "m.bdf").write_text("CONM2,10,3,,1.\nRBE2,10,1,123456,2\n", encoding="latin-1")
+    (tmp_path / "main.bdf").write_text(
+        "SOL 101\nCEND\nBEGIN BULK\nGRID,1,,0.,0.,0.\nGRID,2,,1.,0.,0.\nGRID,3,,2.,0.,0.\n"
+        "CROD,10,1,1,2\nPROD,1,1,1.\nMAT1,1,7e10,,0.3,2700.\nINCLUDE 'm.bdf'\nENDDATA\n",
+        encoding="latin-1")
+    mb = build_multiblock(load_deck(tmp_path / "main.bdf", echo=False))
+    assert by_eid(get_block(mb, "Lines"), "cell") == {10: 0}
+    assert by_eid(get_block(mb, "Masses"), "point") == {10: 1}
+    assert by_eid(get_block(mb, "Rigid"), "cell") == {10: 1}
+
+
+def test_one_bulk_include_groups_nothing():
+    """tiny_run.bdf is Case Control plus one INCLUDE of all the bulk data: no file groups."""
+    mb = build_multiblock(load_deck(DATA / "tiny_run.bdf", echo=False))
+    assert get_block(mb, "Shells").GetCellData().GetArray("FileId") is None
+    assert not read_field_table(mb, "FILE_")
+
+
+def test_store_keeps_file_id_out_of_the_values(tmp_path):
+    import sqlite3
+
+    from nastran_pv.cli import main
+
+    db = tmp_path / "s.db"
+    assert main(["store", "add", str(DATA / "inc_main.bdf"), "--db", str(db), "--no-vtm", "-q"]) == 0
+    con = sqlite3.connect(db)
+    try:
+        names = {r[0] for r in con.execute("SELECT DISTINCT field FROM element_values")}
+    finally:
+        con.close()
+    assert "FileId" not in names

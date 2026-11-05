@@ -103,7 +103,8 @@ Messages; the checklists still work.
 When the deck is split into INCLUDE files, for example one file per component, the files become a
 group of their own:
 
-* **Visible Files** on the reader lists every file the deck read, in read order, by its
+* **Visible Files** on the reader lists every file that holds elements, masses, rigid elements or
+  connectors, in read order, by its
   [label](model.md#include-files) (`wing_bdf`). Unchecking a file hides the elements, masses,
   rigid elements and connectors whose cards are in that file. The files it includes keep their own
   entries and stay visible. Grids, SPCs and loads have no file and stay.

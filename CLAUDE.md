@@ -136,7 +136,7 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   displacement). Sections sit with their shear center on the beam line (MSC/NX). `BeamSections`
   (opt-in) is in none of the mesh-block lists.
 - `tree.py`: the plugin's model tree. `build_tree` cuts the multiblock into pieces per
-  property/material/element type/family/group (AND `Visibility` from the reader's checklists and
+  property/material/element type/family/group/include file (AND `Visibility` from the reader's checklists and
   EID lists) and `Tree.output` gives a `vtkPartitionedDataSetCollection` whose assembly has `Model/`
   (today's blocks) plus `Properties/ Materials/ ElementTypes/ Families/ Groups/ Files/` (`Files/` nested
   as included, from `includes.parent_labels`; a file node's subtree holds its includes). Time steps only

@@ -474,7 +474,7 @@ def tree_checks(pv, nv, reader):
     check(data.IsA("vtkPartitionedDataSetCollection"), "reader outputs the model tree")
     asm = data.GetDataAssembly()
     top = [asm.GetNodeName(n) for n in asm.GetChildNodes(asm.GetRootNode(), False)]
-    check(top == ["Model", "Properties", "Materials", "ElementTypes", "Families", "Groups", "Files"],
+    check(top == ["Model", "Properties", "Materials", "ElementTypes", "Families", "Groups"],  # one bulk include: no Files
           f"tree branches {top}")
     reader.UpdatePipelineInformation()
     props = nv._listed(reader, "VisibleProperties")

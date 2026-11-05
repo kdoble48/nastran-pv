@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS node_values (run_id INTEGER, nid INTEGER, field TEXT,
     PRIMARY KEY (run_id, nid, field));
 CREATE INDEX IF NOT EXISTS ev_idx ON element_values (run_id, field, eid);
 """
-ID_ARRAYS = {"EID", "PID", "MID", "ElementType", "FamilyId", "GroupId", "NID", "vtkOriginalCellIds"}
+ID_ARRAYS = {"EID", "PID", "MID", "ElementType", "FamilyId", "GroupId", "FileId", "NID", "vtkOriginalCellIds"}
 GROUP_COLUMN = {"EID": "e.eid", "PID": "e.pid", "MID": "e.mid", "FAMILY": "e.family", "ETYPE": "e.etype",
                 "BLOCK": "e.block"}
 
