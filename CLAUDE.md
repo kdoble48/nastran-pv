@@ -77,7 +77,7 @@ the model into the reader's model tree; plugin filters `gather` it, run the same
 | `builders/*`, `categories.py`, `assemble.py`, `nsm.py`, `massprops.py`, `materials.py`, `coords.py` | the blocks, root tables and masses |
 | `results.py`, `results_h5.py`, `randvib.py`, `deform.py` | results, random vibration, deformation |
 | `fields/`, `topology/`, `sections/`, `selection.py`, `diff.py`, `diff_items.py` | derived data, topology tools, beam sections, ID-file selection, model diff |
-| `vtkio.py`, `vtkhdf.py`, `store.py`, `tree.py`, `glyphs.py` | output formats, run store, model tree, glyph geometry |
+| `vtkio.py`, `vtkhdf.py`, `store.py`, `tree.py`, `glyphs.py`, `scene.py` | output formats, run store, model tree, glyph geometry, view scene layers |
 | `cli.py`, `launch.py`, `locate.py`, `progress.py` | commands, ParaView launcher, progress |
 | `paraview/nastran_bdf_reader.py`, `paraview/nastran_views.py` | the plugin (reader, filters, shared-property decorators) and the views/macros |
 

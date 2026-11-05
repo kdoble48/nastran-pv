@@ -82,8 +82,12 @@ with `cannot read DECK: <error>` and writes no PNG.
 
 - `python -m nastran_pv view DECK --view masses [--results F]` opens the GUI with the view applied.
   `--dry-run` prints the generated script.
-- Custom pvpython scripts: `import nastran_views as nv; nv.apply("masses", reader=r, view=v)`. Read the
-  pvpython quirks in docs/architecture.md#gotchas first (proxy-label constructor names, `block_names`, `timesteps`,
+- Custom pvpython scripts: `import nastran_views as nv; nv.apply("masses", reader=r, view=v)`.
+  Views edit the view's scene: a coloring (pid, thickness, results, ...) replaces the coloring, but
+  overlays (masses, bushes, beams, loads, spc, rigid) accumulate in one view, so use a fresh view
+  per picture (`nv.white_view(size)`, as `render_model.render` does) or `nv.clear(view)` between
+  pictures (`docs/paraview.md#how-views-combine`). Read the pvpython quirks in
+  docs/architecture.md#gotchas first (proxy-label constructor names, `block_names`, `timesteps`,
   `solid`, `nv.fetch`). The reader outputs the model tree, so use `nv.Model(reader)` (a gathered
   multiblock) or `nv.fetch` + `nastran_pv.tree.as_multiblock` instead of a bare `Fetch`, and
   `nv.selectors([...])` for `ExtractBlock`.
