@@ -94,7 +94,9 @@ of that group. The rules, in Nastran terms:
 The overlays draw through the *Nastran Scope* filter (`NPV scope`, after `NPV deform`). It reads
 the reader's whole model and its visibility settings, so it updates when you change a checklist
 or an ID list, without clicking the macro again. It also gives the glyph filters the whole model's
-diagonal (`ModelDiagonal`), so glyph sizes stay the same when the scope changes. When a scope leaves an overlay with nothing to
+diagonal (`ModelDiagonal`), so the size scale stays the same when the scope changes. In the
+*Relative* (and *Auto*, when it picks Relative) mass sizing the radii are still normalised by the
+heaviest mass in scope, so mass spheres can grow when the scope drops the heaviest one. When a scope leaves an overlay with nothing to
 draw, its text says *No ... in the reader's scope (NPV Show All shows the whole model).*
 
 The reader's own output and the MultiBlock Inspector keep the Femap cut described above: a hidden
@@ -158,8 +160,9 @@ Restart ParaView, open a deck, select the reader (or anything downstream of it) 
 A button edits what the view shows instead of starting over
 ([How views combine](#how-views-combine)): a coloring (PID, Thickness, Results, ...) replaces the
 coloring, and an overlay (Masses, Loads, SPC, ...) adds itself to it, with its glyphs, lookup table,
-legend and a short summary; clicking an overlay's button again removes it. Nothing else resets the
-view: *NPV Clear* is the only reset. Running a view again reuses its pipeline objects, which are named `NPV ...`, and keeps
+legend and a short summary; clicking an overlay's button again removes it. Apart from *NPV Side by
+Side*, which still resets its two views (comparisons follow the scene in a later release), nothing
+else resets the view: *NPV Clear* is the reset. Running a view again reuses its pipeline objects, which are named `NPV ...`, and keeps
 what you changed on them. A macro ends with the filter it is about selected (*NPV mass glyphs*,
 *NPV load glyphs*, *NPV beam sections*, *NPV grow*, the Nastran Diff, *NPV deform* for Results and
 the animation macros), so its Properties panel is open with the settings that tune that view
@@ -234,8 +237,12 @@ What a render view shows is a *scene* made of layers, and each macro edits one l
   or a coloring clicked on a deformed view keeps it.
 - A macro for **another model** (a second reader selected) starts a new scene in that view: the first
   model's layers are hidden.
-- **NPV Clear** is the only reset: it hides every layer and puts the deformation back to 0, and
-  deletes nothing.
+- **NPV Clear** is the reset: it hides every layer and puts the deformation back to 0, and
+  deletes nothing. (*NPV Side by Side* also resets its two views, until comparisons follow the
+  scene.)
+- The first macro in a view with **no scene yet** (a new view, another model, a reopened state)
+  hides the model sources and `NPV ...` objects shown there, since no layer holds them. The reader's
+  own surface is never a layer, so a macro always hides it (also after *NPV Highlight File*).
 
 ## Filter properties
 

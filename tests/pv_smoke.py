@@ -538,6 +538,56 @@ def scene_checks(pv, nv, reader):
     pv.SetActiveSource(reader)
 
 
+def stray_checks(pv, nv, reader):
+    """What no layer holds is hidden: the reader's own surface always, and in a fresh scene every model
+    source and NPV object left by another model or a reopened state. One overlay's toggle-off hides the
+    info text only when that overlay wrote it."""
+    view = pv.CreateRenderView()
+
+    def vis(src):
+        return src in nv.shown_sources(view)
+
+    pv.Show(reader, view)
+    m = nv.apply("masses", reader=reader, view=view)
+    check(not vis(reader) and vis(pv.FindSource(nv._name(m, "mass glyphs"))),
+          "Masses hides the reader's own surface (shown before) over the ghost")
+    nv.apply("loads", reader=reader, view=view)
+    info = pv.FindSource(nv._name(m, "info"))
+    text = info.Text
+    nv.apply("masses", reader=reader, view=view, toggle=True)
+    check(vis(info) and info.Text == text, "Masses off keeps the Loads summary (Loads wrote the text)")
+    nv.apply("loads", reader=reader, view=view, toggle=True)
+    check(not vis(info), "Loads off hides the text it wrote")
+    nv.apply("loads", reader=reader, view=view)
+    pv.Show(reader, view)                           # as Highlight File does
+    nv.apply("pid", reader=reader, view=view)
+    check(not vis(reader), "a coloring hides the reader Highlight File showed")
+    twin = rm.load_reader(DECK)
+    check(vis(info) and not vis(reader), "PID over Loads keeps the Loads summary")
+    nv.apply("pid", reader=twin, view=view)
+    check(not vis(reader) and not vis(info) and nv.scene_of(view).model is twin,
+          "another model's PID hides A's reader and A's NPV info")
+    nv.clear(view)
+    tag = nv._name(nv.Model(twin), "")[len("NPV "):].strip()
+    for src in sorted((v for k, v in pv.GetSources().items() if k[0].endswith(tag)),
+                      key=lambda v: -int(v.GetGlobalIDAsString())):
+        pv.Delete(src)
+    pv.Delete(twin)
+    state = pv.CreateRenderView()                   # a reopened .pvsm: shown objects, no scene
+    glyphs = pv.FindSource(nv._name(m, "mass glyphs"))
+    for src in (reader, glyphs, info):
+        pv.Show(src, state)
+    nv.apply("pid", reader=reader, view=state)
+    shown = nv.shown_sources(state)
+    check(reader not in shown and glyphs not in shown and info not in shown
+          and pv.FindSource(nv._name(m, "mesh")) in shown,
+          "the first command in a view with no scene hides the unrecorded NPV objects and the reader")
+    for v in (view, state):
+        nv.clear(v)
+        pv.Delete(v)
+    pv.SetActiveSource(reader)
+
+
 def overlay_scope_checks(pv, nv, reader):
     """R2: overlays draw through NPV scope, so the reader's scope limits the masses, bushes, SPCs
     and rigid elements to what hangs off the kept elements (named EIDs win)."""
@@ -1590,6 +1640,7 @@ def main():
 
     tree_checks(pv, nv, reader)
     scene_checks(pv, nv, reader)
+    stray_checks(pv, nv, reader)
     overlay_scope_checks(pv, nv, reader)
     group_scope_checks(pv, nv)
     pv.SetActiveSource(reader)

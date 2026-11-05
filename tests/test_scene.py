@@ -36,6 +36,20 @@ def test_shared_objects_stay():
     assert s.clear() == ["mesh", "rotation glyphs", "BushLines"] and s.empty and s.model is None
 
 
+def test_info_writer_forgotten_with_its_layer():
+    s = Scene(coloring=Layer("ghost", ["mesh"]))
+    s.add_overlay(Layer("loads", ["load glyphs"]))
+    s.info = "loads"
+    s.add_overlay(Layer("masses", ["mass glyphs"]))
+    s.remove_overlay("masses")
+    assert s.info == "loads"
+    s.remove_overlay("loads")
+    assert s.info is None
+    s.info = "pid"
+    s.clear()
+    assert s.info is None
+
+
 def test_clear_macro_installed():
     import importlib.util, pathlib
     path = pathlib.Path(__file__).parents[1] / "paraview" / "install_macros.py"

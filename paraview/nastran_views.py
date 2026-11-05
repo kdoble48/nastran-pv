@@ -26,8 +26,9 @@ Femap-style visibility commands: they set the reader's visibility checklists and
 so they need the deck (:func:`deck_reader`). ``show_only_file``, ``hide_file`` and
 ``highlight_file`` do the same from a CSV/text file of IDs (the reader's ``SelectionFile``);
 highlight makes a real ParaView selection.
-``clear`` (NPV Clear) is the only reset: it empties the view of every layer, sets the deformation
-back to 0 and deletes nothing.
+``clear`` (NPV Clear) is the reset: it empties the view of every layer, sets the deformation
+back to 0 and deletes nothing (``side_by_side`` still resets its two views until comparisons follow
+the scene).
 ``diff`` compares the active model (B) with a second open model (A) through the Nastran Diff filter,
 and :func:`side_by_side` shows A and B in two linked views with one color range.
 Plus :func:`index_colors`, which turns whatever integer array the active representation is
@@ -524,6 +525,7 @@ def shown_sources(view):
 # ------------------------------------------------------------ scene layers
 _SCENES = {}  # view.GetGlobalIDAsString() -> nastran_pv.scene.Scene
 _RECORDING = None  # the list _show appends to inside _recorded, else None
+_INFO_WRITES = 0  # info_text calls so far: apply tells from it which layer wrote the info text
 
 
 def scene_of(view):
@@ -584,6 +586,19 @@ def _hide(objects, view):
         pv.HideScalarBarIfNotNeeded(lut, view)
 
 
+def _hide_strays(view, reader, fresh):
+    """Hide what no layer holds: ``reader``'s own representation always (the model source is never a
+    layer; Highlight File shows it), and in a ``fresh`` (empty) scene every model source and every
+    ``NPV ...`` object shown in ``view``: left by another model's scene, a reopened state or a
+    pre-scene nastran-pv. An empty scene has no layers, so this resets nothing."""
+    names = {v.GetGlobalIDAsString(): k[0] for k, v in pv.GetSources().items()} if fresh else {}
+    out = [s for s in shown_sources(view)
+           if s == reader or fresh and (names.get(s.GetGlobalIDAsString(), "").startswith("NPV ")
+                                        or _is_model_source(s))]
+    if out:
+        _hide(out, view)
+
+
 def _clear_view(view):
     """Hide everything shown in ``view``, forget its scene and turn the orientation axes back on."""
     _hide(shown_sources(view), view)
@@ -627,6 +642,8 @@ def ghost_mesh(model, view, opacity=0.2):
 
 
 def info_text(model, view, text, where="Upper Left Corner"):
+    global _INFO_WRITES
+    _INFO_WRITES += 1
     t = _named(model, "info", lambda: pv.Text())
     t.Text = text
     d = pv.Show(t, view)
@@ -2122,15 +2139,17 @@ def apply(name, reader=None, view=None, model=None, reset_camera=None, toggle=Fa
         _hide(scene.clear(), view)
     pv.SetActiveView(view)
     fresh = scene.empty
+    _hide_strays(view, reader, fresh)
     if fresh and name != "results":  # a new scene is undeformed; later only results changes the scale
         set_deformation(model, 0.0)
     scene.model = reader
     if kind(name) == "overlay":
         if toggle and name in scene.overlays:
             layer = scene.overlays[name]
+            wrote = scene.info == name
             _hide(scene.remove_overlay(name), view)
-            info = pv.FindSource(_name(model, "info"))
-            if info is not None:
+            info = pv.FindSource(_name(model, "info")) if wrote else None
+            if info is not None:  # only the text this overlay wrote: another one's summary stays
                 pv.Hide(info, view)
             pv.Render(view)
             _finish(layer.selected or reader)
@@ -2138,11 +2157,14 @@ def apply(name, reader=None, view=None, model=None, reset_camera=None, toggle=Fa
         if scene.coloring is None:
             objects, _ = _recorded(lambda: ghost_mesh(model, view, GHOST_OPACITY.get(name, 0.2)))
             _hide(scene.set_coloring(Layer(GHOST, objects)), view)
-        objects, selected = _recorded(lambda: VIEWS[name](model, view, **kwargs))
+    writes = _INFO_WRITES
+    objects, selected = _recorded(lambda: VIEWS[name](model, view, **kwargs))
+    if kind(name) == "overlay":
         _hide(scene.add_overlay(Layer(name, objects, selected)), view)
     else:
-        objects, selected = _recorded(lambda: VIEWS[name](model, view, **kwargs))
         _hide(scene.set_coloring(Layer(name, objects, selected)), view)
+    if _INFO_WRITES != writes:
+        scene.info = name
     if reset_camera or (reset_camera is None and fresh):
         view.ResetCamera(False)
     pv.Render(view)

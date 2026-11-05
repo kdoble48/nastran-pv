@@ -415,7 +415,7 @@ def scope_masks(mb, vis, names=None):
        grids then carry the chain on over grids no mesh element uses (rigid -> free grid -> bush -> ...).
     3. Masses, SPCs and loads stay when their grid belongs to a kept mesh cell or a kept connector; a
        mass offset line follows its mass. An item's own checklists (property, type, ...) still apply.
-    4. A block that holds an element named in Show Only / the selection keeps just the named ones (named
+    4. Any other block that holds an element named in Show Only / the selection keeps just the named ones (named
        EIDs win over the grid join).
     5. EIDs in Hide / a hiding selection always go.
     """
@@ -471,9 +471,9 @@ def scope_masks(mb, vis, names=None):
             masks[path] = own[path] & (np.isin(np.asarray(nid).astype(np.int64), kept_grids)
                                        if nid is not None else True)
 
-    for path, ds, kind, n, eid in blocks:  # named EIDs win; hidden EIDs go
+    for path, ds, kind, n, eid in blocks:  # named EIDs win; hidden EIDs go (mesh blocks: done above)
         masks.setdefault(path, own[path])
-        if eid is None or path == "MassOffsets":
+        if eid is None or path == "MassOffsets" or path in MESH:
             continue
         if keep_ids is not None and np.isin(eid, list(keep_ids)).any():
             masks[path] = own[path] & np.isin(eid, list(keep_ids))

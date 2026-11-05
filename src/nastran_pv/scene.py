@@ -45,6 +45,7 @@ class Scene:
     model: object = None
     coloring: Layer | None = None
     overlays: dict = field(default_factory=dict)
+    info: str | None = None   # the layer that last wrote the shared info text
 
     @property
     def empty(self) -> bool:
@@ -72,11 +73,13 @@ class Scene:
         old = self.overlays.pop(name, None)
         if old is None:
             return []
+        if self.info == name:
+            self.info = None
         return _orphans(old.objects, self._layers())
 
     def clear(self) -> list:
         out = []
         for layer in self._layers():
             out += [o for o in layer.objects if o not in out]
-        self.model, self.coloring, self.overlays = None, None, {}
+        self.model, self.coloring, self.overlays, self.info = None, None, {}, None
         return out

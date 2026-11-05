@@ -329,6 +329,20 @@ def test_scope_named_eids_win(run_mb):
     assert kept(run_mb, m, "Constraints", "point", "NID") == []
 
 
+def test_scope_show_only_and_pid_file_keep_the_readers_mesh(run_mb):
+    """Show Only 1 2 with a PID 2 selection file: the reader keeps shell 2 (both apply), so the
+    overlays hang only off its grids 2 3 6 5 (not shell 1's grid 1 or 4 through CBUSH 503)."""
+    vis = tree.Visibility(show_only=frozenset({1, 2}), select=selection.IdList("PID", frozenset({2})))
+    m = selection.scope_masks(run_mb, vis)
+    shells = dict(iter_blocks(run_mb))["Shells"]
+    reader = vis.mask(selection.item_labels("Shells", shells, None), arr(shells, "EID", "cell"),
+                      shells.GetNumberOfCells()) & vis.selection_masks(run_mb)[0]["Shells"]
+    assert kept(run_mb, m, "Shells") == [2] and list(m["Shells"]) == list(reader)
+    assert kept(run_mb, m, "Solids") == []
+    assert kept(run_mb, m, "Bushes", "point") == [501, 502]          # 503 (4-12) is on shell 1 and 3 only
+    assert kept(run_mb, m, "Constraints", "point", "NID") == [2, 3, 4]  # 4 through RBE3 401; not grid 1
+
+
 CHAIN = """SOL 101
 CEND
 BEGIN BULK
