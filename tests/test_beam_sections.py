@@ -273,3 +273,13 @@ def test_skewed_offset_axis_keeps_the_orientation_vector(tmp_path):
     np.testing.assert_allclose(_cell(lines, "Axis1", 1), np.array([10, 0, 1]) / np.sqrt(101))
     np.testing.assert_allclose(_cell(lines, "Axis3", 1), np.array([-1, 1, 10]) / np.sqrt(102))
     np.testing.assert_allclose(_cell(lines, "OffsetB", 1), [0, 0, 1])
+
+
+def test_max_triads(mb):
+    """Triads only up to max_triads beams: beams.bdf has 12 CBAR/CBEAM with a frame."""
+    lines = get_block(mb, "Lines")
+    tables = section_tables(mb)
+    capped = sweep(lines, tables, surfaces=False, axes=True, triads=True, max_triads=11)
+    assert set(arr(capped, "BeamPart", "cell")) == {1, 2} and arr(capped, "TriadsDrawn", "field")[0] == 0
+    enough = sweep(lines, tables, surfaces=False, axes=True, triads=True, max_triads=12)
+    assert set(arr(enough, "BeamPart", "cell")) == {1, 2, 3, 4, 5} and arr(enough, "TriadsDrawn", "field")[0] == 1

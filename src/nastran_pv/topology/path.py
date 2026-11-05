@@ -7,7 +7,7 @@ import numpy as np
 from scipy.sparse import csgraph
 
 from ..fields.common import replace_array
-from .common import write_cells, write_points
+from .common import extract_reached, write_cells, write_points
 from .graph import Graph, Rules
 
 
@@ -15,10 +15,13 @@ from .graph import Graph, Rules
 class PathResult:
     length: int                      # elements on the path, -1 when unreachable
     warnings: list = field(default_factory=list)
+    extracted: object = None         # vtkMultiBlockDataSet of the path cells (extract=True)
 
 
-def path(mb, grid_a: int, grid_b: int, rules: Rules | None = None, graph: Graph | None = None) -> PathResult:
-    """Write ``OnPath`` cell/point arrays and root ``PathLength`` for the shortest path a -> b."""
+def path(mb, grid_a: int, grid_b: int, rules: Rules | None = None, graph: Graph | None = None,
+         extract: bool = False) -> PathResult:
+    """Write ``OnPath`` cell/point arrays and root ``PathLength`` for the shortest path a -> b.
+    ``extract`` also returns a copy of ``mb`` with only the path's cells."""
     rules = rules or Rules()
     graph = graph or Graph.from_multiblock(mb)
     ends = graph.grid_index([grid_a, grid_b])
@@ -50,7 +53,7 @@ def path(mb, grid_a: int, grid_b: int, rules: Rules | None = None, graph: Graph 
     write_cells(mb, graph, "OnPath", on_cell)
     write_points(mb, graph, "OnPath", on_grid, fill=0)
     replace_array(mb.GetFieldData(), "PathLength", np.array([length]))
-    return PathResult(length, warnings)
+    return PathResult(length, warnings, extract_reached(mb, "OnPath", 1) if extract else None)
 
 
 def _walk_back(adjacency, dist, end, graph):

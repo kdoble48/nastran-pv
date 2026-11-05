@@ -509,3 +509,21 @@ def test_rules_within_parse():
     assert Rules.parse("within=material").within == "mid"
     with pytest.raises(ValueError, match="expected"):
         Rules.parse("within=foo")
+
+
+def test_path_extract_keeps_only_the_path(topo_mb):
+    res = path(topo_mb, 4, 42, extract=True)
+    out = res.extracted
+    assert sorted(arr(get_block(out, "Shells"), "EID", "cell").tolist()) == [1, 2, 11, 12, 21]
+    assert arr(get_block(out, "Lines"), "EID", "cell").tolist() == [41]
+    assert arr(get_block(out, "Connectors"), "EID", "cell").tolist() == [300]
+    assert vtkutil.to_numpy(out.GetFieldData().GetArray("PathLength")).tolist() == [9]
+    assert path(topo_mb, 4, 42).extracted is None
+
+
+def test_check_findings_of_one_severity(topo_mb):
+    res = check(topo_mb)
+    errors = res.only("error")
+    assert block_names(errors) == ["CoincidentGrids", "DuplicateElements", "DanglingConnectors"]
+    assert strings(errors, "CHECK_Name") == list(CHECKS)  # the summary table stays whole
+    assert res.only(None) is res.findings
