@@ -46,7 +46,15 @@ def write_series(mb, results, out, binary: bool = True, deck=None) -> Path:
     return pvd
 
 
-MODEL_SUFFIXES = (".vtm", ".vtkhdf", ".hdf")
+MODEL_SUFFIXES = (".vtm", ".vtkhdf", ".hdf", ".pvd")
+
+
+def pvd_files(path) -> list[Path]:
+    """The per-step ``.vtm`` files of a ``.pvd`` written by :func:`write_series`, in step order."""
+    import xml.etree.ElementTree as ET
+
+    path = Path(path)
+    return [path.parent / ds.get("file") for ds in ET.parse(path).getroot().iter("DataSet") if ds.get("file")]
 
 
 def read_model(path, step: int | None = None):
@@ -54,16 +62,21 @@ def read_model(path, step: int | None = None):
     data. VTKHDF holds a partitioned collection, gathered back into named blocks here; its root
     summary lives on the mesh partitions (vtkHDFWriter drops a collection's own field data) and
     goes back to the root (``vtkutil.promote_root_fields``). ``step``: the 0-based time step of a
-    temporal VTKHDF (default the first); a file without time steps has only step 0."""
+    temporal VTKHDF or a ``.pvd`` series (default the first); other files have only step 0."""
     path = Path(path)
     if path.suffix.lower() not in MODEL_SUFFIXES:
-        raise ValueError(f"{path.name}: not a .vtm or .vtkhdf model file")
+        raise ValueError(f"{path.name}: not a .vtm, .pvd or .vtkhdf model file")
     if not path.is_file():
         raise FileNotFoundError(f"model file not found: {path.resolve()}")
     if path.suffix.lower() == ".vtm":
         if step:
             raise ValueError(f"{path.name} has no time steps (a .vtm series is one file per step)")
         return read_vtm(path)
+    if path.suffix.lower() == ".pvd":
+        files = pvd_files(path)
+        if not 0 <= (step or 0) < len(files):
+            raise ValueError(f"{path.name} has {len(files)} step(s); --step {step} is out of range")
+        return read_model(files[step or 0])
     from .tree import as_multiblock
     from .vtkhdf import read_vtkhdf, time_values
 

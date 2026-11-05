@@ -33,8 +33,8 @@ nastran-pv convert run.bdf --no-loads --k-ref 1e5 -o out/model.vtm
 ```
 
 Without `-o`, the output is `<input>.vtm` in the current folder. `--results` attaches one result
-step, `--step N` (0-based, default 0); `--all-steps` writes them all. On a temporal `.vtkhdf`,
-`--step N` picks the step to read. `--no-nodal-arrays` leaves
+step, `--step N` (0-based, default 0); `--all-steps` writes them all. On a converted series (a temporal
+`.vtkhdf`, or the `.pvd` of a `.vtm` series), `--step N` picks the step to read. `--no-nodal-arrays` leaves
 the `SPC_DOF`/`F_<sid>` point arrays off the mesh blocks, and `--ascii` writes ASCII XML for
 debugging.
 

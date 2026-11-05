@@ -200,6 +200,13 @@ def test_results_series_steps(files, tmp_path):
         assert run(["convert", files["tiny_run"]["deck"], "--results", files["op2"], "--step", step, "-o", a])[0] == 0
         assert run(["convert", path, "--step", step, "-o", b])[0] == 0
         assert_same_model(read_model(a), read_model(b), "vtm")
+        pvd = tmp_path / "p" / "s.pvd"  # the .vtm series: --step picks the step's file
+        if step == 0:
+            assert run(["convert", files["tiny_run"]["deck"], "--results", files["op2"], "--all-steps",
+                        "-o", tmp_path / "p" / "s.vtm"])[0] == 0
+        c = tmp_path / f"c{step}.vtm"
+        assert run(["convert", pvd, "--step", step, "-o", c])[0] == 0
+        assert_same_model(read_model(a), read_model(c), "vtm")
     assert "VonMisesMax" in snapshot(read_model(path, 0))["Shells"]["cell"]
     assert "VonMisesMax" not in snapshot(read_model(path, 1))["Shells"]["cell"]  # modes: no stress
     code, _ = run(["convert", path, "--step", 3, "-o", tmp_path / "x.vtm"])
