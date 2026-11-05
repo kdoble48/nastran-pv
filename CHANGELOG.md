@@ -8,6 +8,11 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Added
 
+- Include-file groups: a deck read from two or more files gets `FileId` (and `FileNames`,
+  `FileParents`, root `FILE_Name FILE_Path FILE_Parent`), so each element, mass, rigid element and
+  connector belongs to the INCLUDE file that holds its card. The reader gains a *Visible Files*
+  checklist and the model tree a nested `Files/` branch; the new *Nastran Files* filter gives a
+  converted `.vtm`/VTKHDF the same checklist.
 - Filter properties: every NPV macro's filter holds the settings of its view, in shared *Glyph
   Size*, *Show Only* and *Traversal* groups, and a rerun keeps them. New *Nastran Load Glyphs*
   (load sets, forces/moments, arrow length, every Nth point) and *Nastran SPC Glyphs* (SPC sets,

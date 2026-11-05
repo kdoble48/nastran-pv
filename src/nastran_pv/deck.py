@@ -20,6 +20,7 @@ import numpy as np
 from cpylog import SimpleLogger
 from pyNastran.bdf.bdf import BDF
 
+from .includes import IncludeTree, read_tree, recording
 from .progress import NULL, Progress
 from .vtkutil import match_ids
 
@@ -37,6 +38,7 @@ class Deck:
     xyz: np.ndarray  # (n, 3) basic coordinates, aligned with ``nids``
     cd: np.ndarray  # (n,) displacement coordinate system id per node
     warnings: list[str] = field(default_factory=list)
+    includes: IncludeTree | None = None  # files read and the file of each element (includes.py)
     _n_mass: int = field(default=0, repr=False)  # where the next mass warning goes (see warn)
     _n_pinned: int = field(default=0, repr=False)  # leading load errors kept first (xref failure)
 
@@ -279,8 +281,9 @@ def load_deck(path, punch: bool | None = None, encoding: str = "latin-1", echo: 
     with warnings.catch_warnings(record=True) as caught:  # pyNastran 1.5 also uses warnings.warn
         warnings.simplefilter("always")
         progress.note(f"reading {path.name}")
-        with _read_progress(model, progress):
+        with recording(model) as seen, _read_progress(model, progress):
             _read(model, path, punch, encoding)
+        includes = read_tree(model, seen, path)
         xref_error = None
         with progress.stage("cross-referencing"):
             try:
@@ -297,7 +300,7 @@ def load_deck(path, punch: bool | None = None, encoding: str = "latin-1", echo: 
 
     with progress.stage(f"grid coordinates ({len(model.nodes):,} grids)"):
         nids, xyz, cd = _grid_arrays(model)
-    return Deck(path=path, model=model, nids=nids, xyz=xyz, cd=cd, warnings=messages,
+    return Deck(path=path, model=model, nids=nids, xyz=xyz, cd=cd, warnings=messages, includes=includes,
                 _n_mass=pinned, _n_pinned=pinned)
 
 

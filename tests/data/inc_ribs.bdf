@@ -1,0 +1,4 @@
+$ ribs, nested in inc_wing.bdf
+CROD,20,2,1,2
+RBE2,30,4,123456,6
+CONM2,51,6,,3.0

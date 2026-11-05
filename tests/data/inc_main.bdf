@@ -1,0 +1,17 @@
+$ include-file groups: main -> inc_wing -> inc_ribs, main -> inc_fuse
+SOL 101
+CEND
+BEGIN BULK
+GRID,1,,0.,0.,0.
+GRID,2,,1.,0.,0.
+GRID,3,,1.,1.,0.
+GRID,4,,0.,1.,0.
+GRID,5,,2.,0.,0.
+GRID,6,,2.,1.,0.
+MAT1,1,1.e7,,0.3,0.1
+PSHELL,1,1,0.1
+PROD,2,1,0.5
+CONM2,50,5,,2.0
+INCLUDE 'inc_wing.bdf'
+INCLUDE 'inc_fuse.bdf'
+ENDDATA

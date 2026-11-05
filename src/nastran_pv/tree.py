@@ -7,6 +7,7 @@ gives a ``vtkPartitionedDataSetCollection`` whose ``vtkDataAssembly`` looks like
     Root/Model/{Shells,Solids,...,Loads/LOAD_1001}   today's blocks
     Root/Properties/PSHELL_101   Root/Materials/MAT1_1   Root/ElementTypes/CQUAD4
     Root/Families/<family>       Root/Groups/<group>
+    Root/Files/main_bdf/wing_bdf/ribs_bdf                      (decks with INCLUDEs: nested as included)
 
 Category nodes point at the same pieces as the ``Model`` nodes. :class:`Visibility` keeps only the
 items (cells, or points of vertex-only blocks) whose categories are all checked (Femap's AND
@@ -31,11 +32,11 @@ from vtkmodules.vtkCommonDataModel import (
 )
 from vtkmodules.vtkFiltersCore import vtkAppendFilter, vtkAppendPolyData
 
-from . import vtkutil
+from . import includes, vtkutil
 from .fields.common import field_strings, get_array, iter_blocks
 
-CATEGORIES = ("Properties", "Materials", "ElementTypes", "Families", "Groups")
-DROP_ORDER = ("Families", "Groups", "ElementTypes", "Materials", "Properties")  # when over MAX_PIECES
+CATEGORIES = ("Properties", "Materials", "ElementTypes", "Families", "Groups", "Files")
+DROP_ORDER = ("Families", "Groups", "Files", "ElementTypes", "Materials", "Properties")  # when over MAX_PIECES
 MAX_PIECES = 1000
 TYPE_ARRAYS = (("ElementType", "ElementTypeNames"), ("RigidType", "RigidTypeNames"),
                ("ConnectorType", "ConnectorTypeNames"))
@@ -106,7 +107,8 @@ def item_labels(path: str, ds, names=None) -> dict[str, np.ndarray]:
                 table = field_strings(ds, table_name)
                 out["ElementTypes"] = _map(codes, lambda c, t=table: t[c] if 0 <= c < len(t) else str(c))
                 break
-    for cat, code_name, table_name in (("Families", "FamilyId", "FamilyNames"), ("Groups", "GroupId", "GroupNames")):
+    for cat, code_name, table_name in (("Families", "FamilyId", "FamilyNames"), ("Groups", "GroupId", "GroupNames"),
+                                       ("Files", includes.FILE_ID, includes.FILE_NAMES)):
         codes = get_array(attr, code_name)
         if codes is not None:
             table = field_strings(ds, table_name)
@@ -115,12 +117,16 @@ def item_labels(path: str, ds, names=None) -> dict[str, np.ndarray]:
 
 
 def category_values(mb, names=None) -> dict[str, list[str]]:
-    """Every label of every category in ``mb`` (naturally sorted), for the reader's checklists."""
+    """Every label of every category in ``mb`` (naturally sorted; files in read order), for the
+    reader's checklists."""
     found = {c: set() for c in CATEGORIES}
     for path, ds in iter_blocks(mb):
         for cat, labels in item_labels(path, ds, names).items():
             found[cat].update(x for x in np.unique(labels) if x)
-    return {c: sorted(v, key=natural_key) for c, v in found.items()}
+    out = {c: sorted(v, key=natural_key) for c, v in found.items()}
+    read_order = [valid_name(n) for n in includes.parent_labels(mb)]
+    out["Files"] = [n for n in read_order if n in found["Files"]] + [n for n in out["Files"] if n not in read_order]
+    return out
 
 
 # -------------------------------------------------------------- visibility
@@ -419,11 +425,15 @@ def build_tree(mb, vis: Visibility | None = None, names=None, max_pieces: int = 
             pieces.append(_Piece(path, name, keys[g], piece, cell_ids, point_ids))
 
     paths = [b[0] for b in blocks]
-    return Tree(pieces, paths, _assembly(pieces, paths, cats),
+    nesting = {valid_name(k): valid_name(v) if v else "" for k, v in includes.parent_labels(mb).items()}
+    return Tree(pieces, paths, _assembly(pieces, paths, cats, {"Files": nesting}),
                 {p: _pointers(ds) for p, ds, *_ in blocks}, warnings)
 
 
-def _assembly(pieces, paths, cats) -> vtkDataAssembly:
+def _assembly(pieces, paths, cats, nesting=None) -> vtkDataAssembly:
+    """``nesting`` maps a category to ``{label: parent label}``: those labels are nested under
+    their parents (the include tree), every other category is flat."""
+    nesting = nesting or {}
     asm = vtkDataAssembly()
     asm.SetRootNodeName("Root")
     model = asm.AddNode("Model")
@@ -447,8 +457,19 @@ def _assembly(pieces, paths, cats) -> vtkDataAssembly:
         if not members:
             continue
         cat_node = asm.AddNode(cat)
-        for label in sorted(members, key=natural_key):
-            node = asm.AddNode(label, cat_node)
+        parent_of = nesting.get(cat, {})
+        label_nodes = {}
+
+        def label_node(label, seen=()):
+            if label not in label_nodes:
+                up = parent_of.get(label, "")
+                outer = label_node(up, (*seen, label)) if up and up not in seen else cat_node
+                label_nodes[label] = asm.AddNode(label, outer)
+            return label_nodes[label]
+
+        rank = {x: k for k, x in enumerate(parent_of)}  # read order (main file first)
+        for label in sorted(members, key=lambda x: (rank.get(x, len(rank)), natural_key(x))):
+            node = label_node(label)
             for i in members[label]:
                 asm.AddDataSetIndex(node, i)
     return asm

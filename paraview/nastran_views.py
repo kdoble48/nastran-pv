@@ -521,6 +521,10 @@ def labels_for(model, array, values):
     if array in tables:
         names = model.field_strings(*tables[array])
         return [names[v] if 0 <= v < len(names) else str(v) for v in values]
+    if array == "FileId":  # the same FileNames list on every block that has a FileId
+        names = next((n for b in (*MESH, "Masses", "Rigid") if model.has(b)
+                      for n in [model.field_strings(b, "FileNames")] if n), [])
+        return [names[v] if 0 <= v < len(names) else str(v) for v in values]
     if array == "ElementType":
         names = next((model.field_strings(b, "ElementTypeNames") for b in MESH if model.has(b)), [])
         return [names[v] if 0 <= v < len(names) else str(v) for v in values]
@@ -1376,7 +1380,7 @@ def path_from_selection():
 
 # ------------------------------------------------------ Femap-style visibility
 VISIBILITY_PROPS = ("VisibleProperties", "VisibleMaterials", "VisibleElementTypes", "VisibleFamilies",
-                    "VisibleGroups")
+                    "VisibleGroups", "VisibleFiles")
 
 
 def _selected_elements():
@@ -1425,7 +1429,7 @@ def hide_selected():
 
 
 def show_all(reader=None):
-    """Clear the element ID lists and check every property, material, type, family and group."""
+    """Clear the element ID lists and check every property, material, type, family, group and file."""
     reader = deck_reader(reader or find_reader(), "Show All")
     reader.ShowOnlyElements = ""
     reader.HiddenElements = ""
@@ -1644,7 +1648,7 @@ NO_REFERENCE = ("The diff compares two models: open the reference model (A) too,
 # blocks drawn with the mesh in the diff view, colored by the same DiffStatus (lines and points)
 DIFF_ITEM_BLOCKS = ("Masses", "Rigid", "Connectors", "BushLines", "Bushes", "Constraints", "Loads")
 SIDE_LINK = "NPV side-by-side"
-CATEGORICAL = ("PID", "MID", "ElementType", "FamilyId", "GroupId", "DiffStatus", "PartId", "NSMSource")
+CATEGORICAL = ("PID", "MID", "ElementType", "FamilyId", "GroupId", "FileId", "DiffStatus", "PartId", "NSMSource")
 _SIDE_VIEWS = {}  # left view id -> its right view
 
 

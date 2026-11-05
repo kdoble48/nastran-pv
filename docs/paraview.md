@@ -39,7 +39,8 @@ A converted file is fixed at conversion time, so a few things still need the dec
 * *OP2 File Name*, *NSMSet* and the *Random* properties: convert again with `--results`,
   `--nsm-set` or `--random` instead.
 * The visibility checklists and the Show Only / Hide / Show All macros. On a converted file,
-  use ParaView's Extract Selection or Threshold.
+  use ParaView's Extract Selection or Threshold, or, for include files,
+  [Nastran Files](#include-files).
 
 ## Model tree and visibility
 
@@ -52,6 +53,7 @@ Properties/    PSHELL_101  PCOMP_7  PBUSH_3 …        (PID_<n> when the card is
 Materials/     MAT1_1  MAT8_2 …                      (MID_<n> when the card is missing)
 ElementTypes/  CQUAD4  CTRIA3  CHEXA  RBE2  CBUSH …
 Families/  Groups/                                   (decks with ICEM/TACS family comments)
+Files/         run_bdf/wing_bdf/wing_ribs_bdf …      (decks with INCLUDEs, nested as included)
 ```
 
 Each node can be shown or hidden and given its own color and opacity. A category node points at the
@@ -61,7 +63,7 @@ MultiBlock Inspector a piece shows when *any* ticked node contains it.
 
 For Femap's AND visibility, use these lists in the reader's Properties panel:
 
-* **Visible Properties / Materials / Element Types / Families / Groups**: an element stays only if
+* **Visible Properties / Materials / Element Types / Families / Groups / Files**: an element stays only if
   every category it has is checked. An element without a category passes that test; for example,
   CBUSH elements have no material, so the Materials list never hides them. Loads and SPCs are
   switched by their block toggles only.
@@ -92,9 +94,30 @@ real ParaView selection (masses and bushes included), so *NPV Grow from Selectio
 commands work on it. From Python: `nv.show_only_file("failing.csv")`, `nv.hide_file(...)`,
 `nv.highlight_file("grids.txt", key="NID")`.
 
-On a large model the tree is capped at 1,000 pieces. Above that, Families, Groups, Element types,
-Materials and finally Properties leave the tree, in that order, with a message in Output Messages;
-the checklists still work.
+On a large model the tree is capped at 1,000 pieces. Above that, Families, Groups, Files, Element
+types, Materials and finally Properties leave the tree, in that order, with a message in Output
+Messages; the checklists still work.
+
+### Include files
+
+When the deck is split into INCLUDE files, for example one file per component, the files become a
+group of their own:
+
+* **Visible Files** on the reader lists every file that holds elements, masses, rigid elements or
+  connectors, in read order, by its
+  [label](model.md#include-files) (`wing_bdf`). Unchecking a file hides the elements, masses,
+  rigid elements and connectors whose cards are in that file. The files it includes keep their own
+  entries and stay visible. Grids, SPCs and loads have no file and stay.
+* The **Files/** branch of the tree nests the files as the deck includes them:
+  `Files/run_bdf/wing_bdf/wing_ribs_bdf`. A file node also contains the files under it, so ticking
+  `wing_bdf` in the MultiBlock Inspector, or `ExtractBlock` with
+  `/Root/Files/run_bdf/wing_bdf`, shows the wing with its ribs.
+* **Nastran Files** (*Filters > Nastran*) does the same on any nastran-pv model, including a
+  converted `.vtm` or `.vtkhdf` opened with ParaView's own reader, which keeps `FileId` and the
+  include tree. Its *Visible Files* checklist works like the reader's, and its output is a model
+  tree with the nested `Files/` branch.
+
+Color by `FileId` (then *NPV Index Colors*) to see the files side by side.
 
 ## One-click views (toolbar macros)
 
@@ -184,7 +207,8 @@ the selection commands make no filter of their own.
 
 ## Glyph filters
 
-*Filters > Nastran* adds these filters you can apply to the reader by hand:
+*Filters > Nastran* adds these filters you can apply to the reader by hand (plus
+[Nastran Files](#include-files)):
 
 * **Nastran Deform** moves the whole model by *Scale Factor* × `Displacement`. Blocks without
   one (load sets, ...) follow their grids by NID. The NPV views draw through it (*NPV deform*),
