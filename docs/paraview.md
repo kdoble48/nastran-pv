@@ -106,7 +106,11 @@ python paraview/install_macros.py --remove
 Restart ParaView, open a deck, select the reader (or anything downstream of it) and click a button.
 Each view hides what is currently shown and builds a ready-to-read state: the mesh drawn as a
 translucent ghost, the relevant glyphs, an indexed or continuous lookup table, a legend and a short
-summary. Running a view again reuses its pipeline objects, which are named `NPV ...`.
+summary. Running a view again reuses its pipeline objects, which are named `NPV ...`. A macro
+ends with the filter it is about selected (*NPV mass glyphs*, *NPV beam sections*, *NPV grow*, the
+Nastran Diff, *NPV deform* for Results and the animation macros), so its Properties panel is open.
+Views that only color the model, and the visibility macros, end on the reader. Any macro run with
+an `NPV ...` filter selected finds the model upstream of it.
 
 | Macro | Shows |
 |---|---|
