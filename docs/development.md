@@ -7,6 +7,11 @@ pvpython --force-offscreen-rendering tests/pv_smoke.py   # the plugin, views and
 python -m pyflakes src paraview/*.py tests  # lint (skip paraview/_vendor)
 ```
 
+Test decks are files in `tests/data` with hand-computed expected values. Two inputs are generated
+instead: OP2 results (`tests/op2_fixture.py`) and the performance deck (`tests/perf_deck.py`,
+shared by `tests/benchmark.py` and the [CI check](performance.md#ci-check)), whose counts test
+derives its expected values by hand from the layout's parameters.
+
 Every push to `main` and every pull request runs the tests and lint on Linux, Windows and macOS
 with Python 3.10 to 3.12 (`.github/workflows/tests.yml`), and builds this site
 (`.github/workflows/docs.yml`). Tests that need ParaView, MYSTRAN or the real datasets skip there.
@@ -16,6 +21,8 @@ against a headless ParaView 6.0.1 and 5.13.1 unpacked in the home folder, and ru
 `tests/pv_smoke.py` on both; the downloads are cached. The *wheel* job builds the sdist and the wheel from it, checks that the wheel carries the plugin
 and no `_vendor`, installs it into a fresh venv outside the checkout, and checks that
 `nastran-pv setup --dry-run` finds the plugin there.
+A separate job holds the [performance budget](performance.md#ci-check) (`python -m pytest -m perf`;
+the default run deselects those timing tests).
 
 ## Packaging
 
@@ -96,6 +103,7 @@ The docs describe behavior that lives in code. Update them in the same change wh
 | `selection.py`, the reader's *Selection* properties, the NPV *File* macros | [cli.md](cli.md#selection-from-an-id-file), [paraview.md](paraview.md#selection-from-an-id-file) |
 | `vtkio.py`, `vtkhdf.py`, `store.py` | [output-formats.md](output-formats.md), [store.md](store.md) |
 | Dependencies, extras, environment variables, `locate.py`, `setup.py`, `MANIFEST.in` | [install.md](install.md), [development.md](#packaging) |
+| A speedup or slowdown of a timed stage; `tests/benchmark.py`, `tests/perf_deck.py`, `tests/test_performance.py` `RECORDED` | [performance.md](performance.md) |
 | Any user-facing change; a public name or default (see [Versioning](versioning.md#public-api)) | `CHANGELOG.md` (*Unreleased*), [versioning.md](versioning.md) when the policy changes |
 
 ## Regenerating the gallery
