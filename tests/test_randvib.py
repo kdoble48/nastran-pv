@@ -68,7 +68,8 @@ def test_asd_interpolation_and_input_rms():
     assert input_rms(np.array([20.0, 2000.0]), np.array([0.01, 0.01])) == pytest.approx(np.sqrt(0.01 * 1980))
     # dense trapezoid of the log-log input agrees with the exact segment integral
     ff = np.geomspace(20, 2000, 200001)
-    assert input_rms(f, a) == pytest.approx(np.sqrt(np.trapz(asd_at(ff, f, a), ff)), rel=1e-6)
+    trapezoid = getattr(np, "trapezoid", None) or np.trapz   # recent numpy 2 lacks trapz, 1.x trapezoid
+    assert input_rms(f, a) == pytest.approx(np.sqrt(trapezoid(asd_at(ff, f, a), ff)), rel=1e-6)
 
 
 def test_lumped_mass_splits_elements_and_keeps_points(tmp_path):

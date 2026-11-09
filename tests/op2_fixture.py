@@ -20,10 +20,12 @@ def make_op2() -> OP2:
     eig[1, :, 1] = NIDS
     op2.eigenvectors[2] = RealEigenvectorArray.add_modal_case(
         "BOUGV1", ng, eig, 2, [1, 2], [100.0, 400.0], [1.59, 3.18])
-    element_node = np.array([[2, 0], [2, 0], [1, 0], [1, 0]], dtype=np.int32)  # int32 as read from an OP2
-    fiber = np.array([-0.01, 0.01, -0.005, 0.005])
+    # int32 as read from an OP2, in ascending element id as Nastran writes SORT1 tables: pyNastran
+    # main's self-checks (pyNastran.IS_CI, on under GitHub Actions) slice by searchsorted on that order
+    element_node = np.array([[1, 0], [1, 0], [2, 0], [2, 0]], dtype=np.int32)
+    fiber = np.array([-0.005, 0.005, -0.01, 0.01])
     stress = np.zeros((1, 4, 8), dtype="float32")
-    stress[0, :, 7] = [5.0, 7.0, 3.0, 2.0]
+    stress[0, :, 7] = [3.0, 2.0, 5.0, 7.0]   # EID 1: 3 and 2, EID 2: 5 and 7
     plate = RealPlateStressArray.add_static_case("OES1X1", "CQUAD4", 1, element_node, fiber, stress, 1)
     plate.s_code = plate.data_code["s_code"] = 1  # von Mises (not max shear), fibre distance
     plate.stress_bits = plate.data_code["stress_bits"] = [0, 0, 0, 0, 1]

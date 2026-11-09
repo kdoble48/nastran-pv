@@ -1,0 +1,112 @@
+name: publish
+
+# Publishes nastran-pv with PyPI trusted publishing (OIDC: no API token anywhere). The sdist and the
+# wheel are built and checked once, in `build`; each publish job uploads those same files:
+#   - a tag vX.Y.ZrcN -> TestPyPI, through the `testpypi` environment;
+#   - a tag vX.Y.Z    -> PyPI, through the `pypi` environment;
+#   - a manual run    -> TestPyPI only (the branch's version; TestPyPI takes each version once).
+# The tag must be v + nastran_pv.__version__, or nothing is published (tests/check_dists.py).
+# Every pull request builds and checks the dists in tests.yml's wheel job; only one that changes
+# this workflow or check_dists.py also runs `build` here (never a publish job), so a change to the
+# release path is proven before a tag. Release steps: docs/versioning.md#releasing.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - "tests/check_dists.py"
+      - ".github/workflows/publish.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}   # never cancel an upload
+
+jobs:
+  build:
+    name: build and check the dists
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      target: ${{ steps.check.outputs.target }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Build the sdist, and the wheel from it
+        run: |
+          # readme-renderer[md] renders the Markdown README as PyPI does (plain twine skips it)
+          python -m pip install build twine "readme-renderer[md]"
+          python -m build --outdir dist
+          ls -l dist
+      - name: twine check --strict
+        run: python -m twine check --strict dist/*
+      - name: Check the dists and the tag, and pick the index
+        id: check
+        run: >-
+          python tests/check_dists.py dist/*
+          --event "$GITHUB_EVENT_NAME" --ref "$GITHUB_REF" --github-output "$GITHUB_OUTPUT"
+      - name: Install the wheel into a fresh venv; the CLI runs and finds the plugin in it
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install dist/*.whl
+          cd "$RUNNER_TEMP"   # outside the checkout
+          unset NASTRAN_PV_PARAVIEW_DIR NASTRAN_PV_VENDOR_DIR
+          "$RUNNER_TEMP/venv/bin/nastran-pv" --help
+          "$RUNNER_TEMP/venv/bin/nastran-pv" setup --dry-run | tee setup.txt
+          grep -E "^plugin: .*site-packages.nastran_pv.paraview.nastran_bdf_reader\.py" setup.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dists
+          path: dist/
+          if-no-files-found: error
+
+  testpypi:
+    name: publish to TestPyPI
+    needs: build
+    if: >-
+      needs.build.outputs.target == 'testpypi' &&
+      (github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')))
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/project/nastran-pv/${{ needs.build.outputs.version }}/
+    permissions:
+      id-token: write   # trusted publishing
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dists
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  pypi:
+    name: publish to PyPI
+    needs: build
+    if: >-
+      needs.build.outputs.target == 'pypi' &&
+      github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/nastran-pv/${{ needs.build.outputs.version }}/
+    permissions:
+      id-token: write   # trusted publishing
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dists
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

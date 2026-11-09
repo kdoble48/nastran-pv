@@ -7,26 +7,64 @@ pvpython --force-offscreen-rendering tests/pv_smoke.py   # the plugin, views and
 python -m pyflakes src paraview/*.py tests  # lint (skip paraview/_vendor)
 ```
 
+Test decks are files in `tests/data` with hand-computed expected values. Two inputs are generated
+instead: OP2 results (`tests/op2_fixture.py`) and the performance deck (`tests/perf_deck.py`,
+shared by `tests/benchmark.py` and the [CI check](performance.md#ci-check)), whose counts test
+derives its expected values by hand from the layout's parameters.
+
 Every push to `main` and every pull request runs the tests and lint on Linux, Windows and macOS
-with Python 3.10 to 3.12 (`.github/workflows/tests.yml`), and builds this site
-(`.github/workflows/docs.yml`). Tests that need ParaView, MYSTRAN or the real datasets skip there.
+with Python 3.10 to 3.14 (`.github/workflows/tests.yml`; 3.13 and 3.14 with pyNastran `main`,
+see below), and builds this site (`.github/workflows/docs.yml`). Tests that need ParaView,
+MYSTRAN or the real datasets skip there.
 The *paraview* workflow (`.github/workflows/paraview.yml`, on pull requests that touch
 `paraview/`, `src/` or `tests/`, or by hand) installs the wheel on Linux, runs `nastran-pv setup`
 against a headless ParaView 6.0.1 and 5.13.1 unpacked in the home folder, and runs
-`tests/pv_smoke.py` on both; the downloads are cached. The *wheel* job builds the sdist and the wheel from it, checks that the wheel carries the plugin
-and no `_vendor`, installs it into a fresh venv outside the checkout, and checks that
-`nastran-pv setup --dry-run` finds the plugin there.
+`tests/pv_smoke.py` on both; the downloads are cached. The *wheel* job builds the sdist and the
+wheel from it, checks them with `twine check --strict` and `tests/check_dists.py`, installs the
+wheel into a fresh venv outside the checkout, and checks that `nastran-pv setup --dry-run` finds
+the plugin there. The *publish* workflow (`.github/workflows/publish.yml`) publishes releases
+([Releasing](versioning.md#releasing)); a pull request that changes it or `check_dists.py` runs
+its build job alone.
+A separate job holds the [performance budget](performance.md#ci-check) (`python -m pytest -m perf`;
+the default run deselects those timing tests).
+
+## pyNastran main in CI
+
+pyNastran 1.4.1 needs numpy < 2, which has no wheels past Python 3.12, so the 3.13 and 3.14 jobs
+install pyNastran's `main` branch at the commit pinned in `.github/pynastran-main.txt`. A moving
+`main` cannot then break an unrelated pull request. Under GitHub Actions pyNastran also runs its
+own self-checks on every OP2 the tests read (`pyNastran.IS_CI`, see
+[Architecture](architecture.md#gotchas)), as it would in a user's workflow.
+
+To bump the pin, put a newer commit of
+[pyNastran main](https://github.com/SteveDoyle2/pyNastran/commits/main) in that file and open a
+pull request; the 3.13 and 3.14 jobs test it. To try it locally first:
+
+```bash
+python3.13 -m venv out/py313                       # Windows: py -3.13, then out/py313/Scripts/python
+out/py313/bin/python -m pip install -r .github/pynastran-main.txt -e ".[test]"
+GITHUB_ACTOR=local out/py313/bin/python -m pytest -q   # GITHUB_ACTOR: pyNastran's self-checks too
+```
+
+The ParaView job vendors pyNastran `main` through `nastran-pv setup`, unpinned, as a user's
+setup does.
 
 ## Packaging
 
 The wheel carries `paraview/*.py` and `paraview/*.json` as `nastran_pv/paraview/`. A `build_py`
 hook in `setup.py` copies them at build time (the metadata stays in `pyproject.toml`), and
 `MANIFEST.in` puts them in the sdist. An editable install copies nothing and uses `paraview/`.
-A new kind of file in `paraview/` needs a pattern in both. Build and check locally with:
+A new kind of file in `paraview/` needs a pattern in `setup.py`, `MANIFEST.in` and
+`tests/check_dists.py` (`PLUGIN_PATTERNS`): the check compares the dists with what git tracks,
+so a tracked file no pattern ships fails it. The sdist holds the package, the plugin, the project
+files and `CHANGELOG.md`, but not the tests (they need `tests/data` and `docs/`). The version is
+`__version__` in `src/nastran_pv/__init__.py`, which `pyproject.toml` reads. Build and check
+locally with:
 
 ```bash
-python -m build --outdir out/dist       # pip install build; the wheel is built from the sdist
-python -m zipfile -l out/dist/nastran_pv-*.whl
+python -m build --outdir out/dist       # pip install build twine "readme-renderer[md]"; the wheel is built from the sdist
+python -m twine check --strict out/dist/*   # twine expands the *, in PowerShell too
+python tests/check_dists.py out/dist    # the folder's sdist and wheel of the current version
 ```
 
 The design and the lookup order are in `docs/design/2026-11-08-wheel-plugin.md`.
@@ -46,7 +84,9 @@ gallery) are project skills in
 ### Structure
 
 - `README.md` is the front page: what nastran-pv is, install, a short quickstart, and a link to
-  [the index](index.md). It holds no reference material.
+  [the index](index.md). It holds no reference material. PyPI shows it too, so its links are
+  absolute: the site's pages (`https://kdoble48.github.io/nastran-pv/<page>.html`) and GitHub
+  for repository files (`tests/test_release.py` checks).
 - Every page lives directly in `docs/` and is linked from [`docs/index.md`](index.md) exactly once,
   under one of these sections:
 
@@ -73,7 +113,7 @@ gallery) are project skills in
 - Start with a `# Title` that matches the index entry, then one or two sentences on what the page
   covers. Use `##` for sections, since other pages link to them by anchor (`paraview.md#indexed-colors`).
   Renaming a heading breaks those links, so search for the anchor first.
-- Use relative links between pages and to repo files.
+- Use relative links between pages and to repo files (not in `README.md`, see above).
 - Show commands in their installed form (`nastran-pv ...`), as runnable examples with a short
   comment, and list options in tables.
 - Images go in `docs/images/` and are named `<page>-<what>.png`, for example
@@ -96,6 +136,9 @@ The docs describe behavior that lives in code. Update them in the same change wh
 | `selection.py`, the reader's *Selection* properties, the NPV *File* macros | [cli.md](cli.md#selection-from-an-id-file), [paraview.md](paraview.md#selection-from-an-id-file) |
 | `vtkio.py`, `vtkhdf.py`, `store.py` | [output-formats.md](output-formats.md), [store.md](store.md) |
 | Dependencies, extras, environment variables, `locate.py`, `setup.py`, `MANIFEST.in` | [install.md](install.md), [development.md](#packaging) |
+| `publish.yml`, `tests/check_dists.py`, `__version__` | [versioning.md](versioning.md#releasing), `README.md` (PyPI shows it) |
+| `tests.yml`, `.github/pynastran-main.txt` | [development.md](#pynastran-main-in-ci) |
+| A speedup or slowdown of a timed stage; `tests/benchmark.py`, `tests/perf_deck.py`, `tests/test_performance.py` `RECORDED` | [performance.md](performance.md) |
 | Any user-facing change; a public name or default (see [Versioning](versioning.md#public-api)) | `CHANGELOG.md` (*Unreleased*), [versioning.md](versioning.md) when the policy changes |
 
 ## Regenerating the gallery

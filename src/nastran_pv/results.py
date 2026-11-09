@@ -602,11 +602,10 @@ def to_basic(deck, nids: np.ndarray, data: np.ndarray) -> np.ndarray:
             R = deck.basis(int(c))
             data[rows, :3] = data[rows, :3] @ R
             data[rows, 3:6] = data[rows, 3:6] @ R
-        else:
-            for r in rows:
-                R = deck.basis(int(c), deck.xyz[gidx[r]])
-                data[r, :3] = data[r, :3] @ R
-                data[r, 3:6] = data[r, 3:6] @ R
+        else:  # axes per grid; one (1, 3) @ (3, 3) product per row, as a loop over the rows would
+            R = deck.bases(int(c), deck.xyz[gidx[rows]])
+            for cols in (slice(0, 3), slice(3, 6)):
+                data[rows, cols] = (np.ascontiguousarray(data[rows, cols]).reshape(-1, 1, 3) @ R)[:, 0]
     return data
 
 
