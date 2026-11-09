@@ -296,11 +296,13 @@ class _StepSource(VTKPythonAlgorithmBase):
         self._filled, self._padded = [], []  # the arrays added (and padded) for the last step written
         # a temporal VTKHDF file needs the same arrays at every step (e.g. VonMisesMax only
         # exists for stress steps, Frequency only for modes), each field array of one size:
-        # collect the union and the sizes first
+        # collect the union and the sizes first (results with step helpers attach their arrays'
+        # shapes there without doing their work twice: post.StepHelpers.attach_signature)
         self.union: dict = {}
         signatures, shapes = [], []
+        attach = getattr(self.results, "attach_signature", self.results.attach)
         for step in self.steps:
-            self.results.attach(self.mb, int(step), self.deck)
+            attach(self.mb, int(step), self.deck)
             signatures.append(_array_signature(self.mb))
             shapes.append(_field_shapes(self.mb))
             for key, arrays in signatures[-1].items():

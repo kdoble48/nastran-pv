@@ -20,6 +20,12 @@ Field options (convert, stats, store add):
     --parts / --grow SEEDS        PartId / Hops from "EID 1; GRID 5; PID 7",
                                   under --rules "exclude=rigid max_hops=5"
     --select FILE                 keep (or --select-mode mark) the IDs a CSV/text/Excel file lists
+    --envelope [max min absmax]   <array>_Max/_MaxStep ... of every result array over the --results steps
+
+Results helpers (convert; each step of an --all-steps series too):
+    --average [ARRAY ...]         an Averaged block: cell arrays averaged to the grids within each PID
+    --free-body SEEDS             the load the body grown from SEEDS (under --rules) transmits through
+                                  its cut, about --free-body-point (default: the cut centroid)
 """
 from __future__ import annotations
 
@@ -58,6 +64,7 @@ def progress_for(args) -> Progress:
 
 
 DECK_ONLY = (("results", "--results"), ("result_types", "--result-types"), ("random", "--random"),
+             ("envelope", "--envelope"), ("envelope_steps", "--envelope-steps"),
              ("random_output", "--random-output"), ("phase", "--phase"), ("phase_sweep", "--phase-sweep"),
              ("nsm_set", "--nsm-set"), ("k_ref", "--k-ref"), ("no_nodal_arrays", "--no-nodal-arrays"))
 
@@ -96,6 +103,7 @@ def load_model(args, verbose=False):
         progress.done()
         return mb, None, None
     types = result_types_given(args)  # checked before the (long) deck read
+    envelope_given(args)
     deck = load_deck(src, echo=verbose, progress=progress)
     opts = Options(k_ref=getattr(args, "k_ref", None), nodal_arrays=not getattr(args, "no_nodal_arrays", False),
                    nsm_set=getattr(args, "nsm_set", None), beam_sections=getattr(args, "beam_sections", False))
@@ -114,7 +122,9 @@ def load_model(args, verbose=False):
         from .results import attach_op2
 
         with progress.stage(f"results {Path(args.results).name}"):
-            results = attach_op2(mb, deck, args.results, args.step, types, phase=getattr(args, "phase", None) or 0.0)
+            also = ("GridPointForce",) if getattr(args, "free_body", None) else ()  # the free body's source
+            results = attach_op2(mb, deck, args.results, args.step, types, phase=getattr(args, "phase", None) or 0.0,
+                                 also=also)
         if random or random_output:
             from .randvib import random_response, solver_random
 
@@ -162,6 +172,48 @@ def result_types_given(args):
     return spec
 
 
+def envelope_given(args):
+    """The --envelope kinds, None when not given; checked before the deck read: the flag needs
+    --results and no --random, --envelope-steps needs --envelope, and the kinds must be known."""
+    kinds, steps = getattr(args, "envelope", None), getattr(args, "envelope_steps", None)
+    if kinds is None:
+        if steps:
+            raise SystemExit("nastran-pv: --envelope-steps needs --envelope")
+        return None
+    from .post.envelope import parse_kinds
+
+    if not getattr(args, "results", None):
+        raise SystemExit("nastran-pv: --envelope needs --results")
+    if getattr(args, "random", None) or getattr(args, "random_output", None):
+        raise SystemExit("nastran-pv: --envelope and --random cannot be combined (the random response replaces "
+                         "the result arrays)")
+    try:
+        return parse_kinds(kinds)
+    except ValueError as exc:
+        raise SystemExit(f"nastran-pv: --envelope: {exc}") from None
+
+
+def apply_envelope(mb, args, deck, results) -> list[str]:
+    """``--envelope``: every step of ``results`` (or ``--envelope-steps``) folded into the envelope
+    arrays on ``mb``, which is left at ``--step`` again; returns the summary line."""
+    kinds = envelope_given(args)
+    if kinds is None or results is None:
+        return []
+    from .post.envelope import chosen_steps, envelope_over
+
+    try:
+        steps = chosen_steps(len(results.steps), args.envelope_steps)
+    except ValueError as exc:
+        raise SystemExit(f"nastran-pv: --envelope-steps: {exc}") from None
+    with progress_for(args).stage(f"envelope over {len(steps)} step(s)"):
+        env = envelope_over(results, mb, deck, kinds, steps)
+        results.attach(mb, args.step, deck)
+        env.write(mb)
+    for w in env.warnings:
+        deck.warn(w)
+    return [env.summary()]
+
+
 def apply_field_options(mb, args) -> list[str]:
     from .fields.calc import calculate
     from .fields.derived import GROUPS, add_derived
@@ -195,10 +247,79 @@ def apply_field_options(mb, args) -> list[str]:
         except ValueError as exc:
             raise SystemExit(f"nastran-pv: {exc}") from None
     elif getattr(args, "rules", None):
-        raise SystemExit("nastran-pv: --rules needs --parts or --grow")
+        raise SystemExit("nastran-pv: --rules needs --parts or --grow (a free body takes --free-body-rules)")
     for expr in args.calc or []:
         notes.append(f"calc {expr!r} on {', '.join(calculate(mb, expr))}")
     return notes
+
+
+def add_step_helper_arguments(g) -> None:
+    from .post.average import WITHIN
+
+    g.add_argument("--average", nargs="*", metavar="ARRAY",
+                   help="cell arrays averaged to the grids without crossing PIDs, on an Averaged block "
+                        "(none given = every result cell array)")
+    g.add_argument("--average-within", choices=tuple(WITHIN), default=None,
+                   help="what the averaging does not cross (default pid; none = the whole block)")
+    g.add_argument("--free-body", metavar="SEEDS",
+                   help='the load a free body transmits through its cut: "PID 7" (property 7) or "EID 1 2" '
+                        '(those elements); turns on the GridPointForce result type')
+    g.add_argument("--free-body-rules", metavar="TEXT",
+                   help='how the body grows from its seeds, as --rules (default: within=pid for PID or GRID '
+                        'seeds, max_hops=0 for EID seeds)')
+    g.add_argument("--free-body-point", metavar="POINT",
+                   help='summation point: "X Y Z" (basic) or "GRID n" (default: the centroid of the cut grids)')
+
+
+def free_body_lines(res, label) -> list[str]:
+    """The ``--free-body`` report: a heading and the table."""
+    from .vtkutil import vector_text
+
+    how = "from GPFORCE" if res.method == "gpforce" else "from equilibrium (no GPFORCE, so no check)"
+    head = (f"free body ({label}): {res.cells} element(s), {res.grids} grid(s), {res.cut} on the cut; {how}; "
+            f"about {vector_text(res.point, 6)} ({res.about})")
+    rows = [{k: (v + 0.0 if isinstance(v, float) else v) for k, v in r.items()} for r in res.rows]
+    return [head] + _table_lines(rows, indent="  ") + [f"warning: {w}" for w in res.warnings]
+
+
+def apply_step_helpers(mb, args, deck, results):
+    """``--average`` and ``--free-body``: run on ``mb`` now and, when there are results, after
+    every step a series writes (``post.StepHelpers``). Returns (the results to write, notes).
+    After ``--select``: the helpers see what the selection keeps, at every step alike."""
+    names, within = getattr(args, "average", None), getattr(args, "average_within", None)
+    seeds, point = getattr(args, "free_body", None), getattr(args, "free_body_point", None)
+    rules = getattr(args, "free_body_rules", None)
+    if names is None and within:
+        raise SystemExit("nastran-pv: --average-within needs --average")
+    if seeds is None and (point or rules):
+        raise SystemExit("nastran-pv: --free-body-point and --free-body-rules need --free-body")
+    helpers, notes = [], []
+    if names is not None:
+        from .post.average import Averager
+
+        averager = Averager(names or None, within or "pid")
+        res = averager(mb)
+        notes += [res.summary(averager.within)] + [f"warning: {w}" for w in res.warnings]
+        helpers.append(averager)
+    if seeds is not None:
+        from .post import step_label
+        from .post.freebody import FreeBodySteps, parse_point, select_body, sum_free_body, write_free_body
+        from .topology import Rules
+
+        try:
+            where = parse_point(point)
+            body = select_body(mb, seeds, Rules.parse(rules) if rules else None)
+            res = sum_free_body(mb, body, where)
+        except ValueError as exc:
+            raise SystemExit(f"nastran-pv: --free-body: {exc}") from None
+        write_free_body(mb, body, res)
+        notes += free_body_lines(res, step_label(mb))
+        helpers.append(FreeBodySteps(body, where))
+    if helpers and results is not None:
+        from .post import StepHelpers
+
+        results = StepHelpers(results, helpers)
+    return results, notes
 
 
 def apply_select_options(mb, args):
@@ -228,6 +349,11 @@ def add_model_arguments(p, results=True):
         p.add_argument("--result-types", nargs="+", metavar="TYPE",
                        help=f"result types to attach, by name: {' '.join(t.name for t in REGISTRY)}, or all "
                             f"(default: {' '.join(parse(None))})")
+        env = p.add_argument_group("envelopes over the --results steps")
+        env.add_argument("--envelope", nargs="*", metavar="KIND",
+                         help="max min absmax (none given = all): <array>_Max, <array>_MaxStep, ... of every "
+                              "result array over the steps")
+        env.add_argument("--envelope-steps", metavar="IDS", help='the steps to cover, e.g. "0-2 5" (default: all)')
         p.add_argument("--phase", type=float, default=None, metavar="DEG",
                        help="complex steps (frequency response, complex modes): the arrays are the response at "
                             "this phase angle, Re(U e^(i DEG)); default 0, the real part")
@@ -350,14 +476,17 @@ def cmd_convert(args) -> int:
         from .results import resultant_lines
 
         resultants = resultant_lines(mb, results.registry)
+    notes = apply_envelope(mb, args, deck, results)
     t1 = time.perf_counter()
     progress = progress_for(args)
     with progress.stage("fields"):
-        notes = apply_field_options(mb, args)
+        notes += apply_field_options(mb, args)
     if args.diff_against:
         notes += diff_against(mb, args)
     mb, selected = apply_select_options(mb, args)
     notes += selected
+    results, helped = apply_step_helpers(mb, args, deck, results)
+    notes += helped
     if deck is not None:  # with those from the results, so the file reports what convert printed
         from .vtkutil import add_string_array
 
@@ -394,7 +523,7 @@ def _load_other(path, args):
     Options that do not change what a diff compares (results, display scaling, nodal arrays) are
     not passed on, so a deck can be compared with a converted reference."""
     unused = ("results", "result_types", "random", "random_output", "phase", "phase_sweep", "step", "all_steps",
-              "k_ref", "no_nodal_arrays")
+              "k_ref", "no_nodal_arrays", "envelope", "envelope_steps")
     other = argparse.Namespace(**{k: v for k, v in vars(args).items() if k not in unused})
     other.input = path
     if Path(path).suffix.lower() in MODEL_SUFFIXES:
@@ -519,7 +648,8 @@ def cmd_stats(args) -> int:
     from .fields.calc import group_stats
     from .fields.tables import write_csv
 
-    mb, deck, _ = load_model(args, args.verbose)
+    mb, deck, results = load_model(args, args.verbose)
+    apply_envelope(mb, args, deck, results)
     apply_field_options(mb, args)
     mb, selected = apply_select_options(mb, args)
     print_skipped(mb, file=sys.stderr)  # stderr: the table (or --csv) stays clean
@@ -591,8 +721,9 @@ def cmd_store(args) -> int:
 
     with Store(args.db) as st:
         if args.store_cmd == "add":
-            mb, deck, _ = load_model(args, args.verbose)
-            notes = apply_field_options(mb, args)
+            mb, deck, results = load_model(args, args.verbose)
+            notes = apply_envelope(mb, args, deck, results)
+            notes += apply_field_options(mb, args)
             mb, selected = apply_select_options(mb, args)
             notes += selected
             deck_path = Path(args.input).resolve()
@@ -656,6 +787,7 @@ def main(argv=None) -> int:
     c.add_argument("--diff-against", metavar="A", help="reference model (deck, .vtm or .vtkhdf): add the diff "
                                                       "arrays, a Removed block and the DIFF_* tables")
     add_diff_tolerances(c)
+    add_step_helper_arguments(c.add_argument_group("results helpers (each step of a series too)"))
     c.set_defaults(func=cmd_convert)
 
     df = sub.add_parser("diff", help="what changed from model A to model B: grids, elements, properties, "

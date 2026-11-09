@@ -1787,6 +1787,33 @@ def turn_on_result_types(reader, names) -> list[str]:
     return add
 
 
+def free_body(seeds, reader=None, **props):
+    """A *Nastran Free Body* on the deck reader (or a converted file) for ``seeds`` (``"PID 7"``),
+    with *GridPointForce* checked in the deck reader's *Result Types*: it is off by default, and
+    without it the filter takes the cut load from equilibrium (no check). PID or GRID seeds stay
+    within their properties (*Stay Within* seed properties) and EID seeds are exactly those
+    elements (*Limit Hops*, *Max Hops* 0), as the CLI's ``--free-body``, unless ``props`` set the
+    filter's properties themselves (``SumAbout="Grid", Grid=55``, ...). Returns the filter."""
+    reader = reader or find_reader(pv.GetActiveSource())
+    if reader is None:
+        raise RuntimeError("free_body: no Nastran reader or converted model to sum")
+    if _xml_name(reader) == READER_XML and reader.GetProperty("ResultTypes") is not None:
+        reader.UpdatePropertyInformation()
+        info = list(reader.GetProperty("ResultTypesInfo"))
+        on = [n for n, state in zip(info[0::2], info[1::2]) if int(state)]
+        if "GridPointForce" in info[0::2] and "GridPointForce" not in on:
+            reader.ResultTypes = on + ["GridPointForce"]
+    from nastran_pv.post.freebody import default_rules
+    from nastran_pv.topology import Seeds
+
+    rules = default_rules(Seeds.parse(seeds))
+    defaults = {"StayWithin": "seed properties"} if rules.within == "pid" else {"LimitHops": 1, "MaxHops": 0}
+    fb = pv.NastranFreeBody(Input=reader, SeedIDs=seeds)
+    for key, value in {**defaults, **props}.items():
+        setattr(fb, key, value)
+    return fb
+
+
 def _step_label(model, view):
     """The step's label (``mode_label``: with the frequency of a mode)."""
     step = current_step(model.reader, view)

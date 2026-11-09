@@ -439,7 +439,9 @@ the selection commands make no filter of their own.
 The field filters (*Nastran Derived Fields*, *Nastran Map Table*, *Nastran Group Stats*) are
 described in [Fields](fields.md#paraview-filters).
 The topology filters (*Nastran Grow*, *Nastran Parts*, *Nastran Path*, *Nastran Model Check*) are
-described in [Model tools](tools.md#paraview).
+described in [Model tools](tools.md#paraview). The results helpers (*Nastran Envelope* over the time steps, *Nastran
+Nodal Average* within properties, and *Nastran Free Body* with its table and its arrows at the
+summation point) are described in [Results helpers](results-helpers.md#paraview).
 *Nastran Diff* (two inputs: the model and its reference) is described in
 [Model diff](diff.md#paraview).
 

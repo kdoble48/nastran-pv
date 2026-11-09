@@ -38,7 +38,8 @@ LOAD_TYPES = ("SPCForce", "MPCForce", "AppliedLoad")
 FORCE_TYPES = ("ShellForce", "LineForce", "BushForce", "SpringForce")
 STRESS_TYPES = ("ShellStress", "SolidStress", "LineStress", "ShellStrain", "SolidStrain", "LineStrain")
 MOTION_TYPES = ("Velocity", "Acceleration")
-ALL_TYPES = ("Displacement", "VonMisesMax") + LOAD_TYPES + FORCE_TYPES + STRESS_TYPES + MOTION_TYPES
+GPF_TYPES = ("GridPointForce",)  # roadmap task 12: the grid point force balance, a root table (opt-in)
+ALL_TYPES = ("Displacement", "VonMisesMax") + LOAD_TYPES + FORCE_TYPES + STRESS_TYPES + MOTION_TYPES + GPF_TYPES
 DEFAULTS = ("Displacement", "VonMisesMax") + LOAD_TYPES + FORCE_TYPES + MOTION_TYPES
 
 
