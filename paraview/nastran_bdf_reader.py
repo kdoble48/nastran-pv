@@ -859,11 +859,6 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
             results_key = (self._results_key, tuple(messages))
             new_results = results_key != self._reported_results
             self._reported_results = results_key
-            if rebuilt or new_results:  # as convert: the root Warnings has the results' messages too
-                from nastran_pv.vtkutil import add_string_array
-
-                mb.GetFieldData().RemoveArray("Warnings")
-                add_string_array(mb.GetFieldData(), "Warnings", list(deck.warnings) + messages)
             vis = self._visibility()
             key = (self._mb_key, vis.key())
             if key != self._tree_key:
@@ -872,6 +867,11 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
                 for w in self._tree.warnings:
                     _message(f"nastran-pv: {w}")
             pdc = self._tree.output(mb)
+            if messages:  # as convert, the root Warnings has the results' messages too: on this output
+                from nastran_pv.vtkutil import add_string_array  # only (the cached model's arrays stay as built)
+
+                pdc.GetFieldData().RemoveArray("Warnings")
+                add_string_array(pdc.GetFieldData(), "Warnings", list(deck.warnings) + messages)
         except Exception as exc:
             import traceback
 
