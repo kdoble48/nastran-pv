@@ -17,7 +17,7 @@ All notable changes to nastran-pv are listed here. The format follows
   model's content changes, not on a scope change or a time step (uCRM-9 coarse: a scope change after
   NPV Diff 2.1 s -> 0.75 s, NPV Masses 0.9 s -> 0.14 s). The mass, bush, load and SPC glyphs and beam
   sections carry `DiffStatus`, and the diff's Removed block knows the grid of a removed mass or bush.
-  `tests/data/same_name/` holds a same-named pair (#PR).
+  `tests/data/same_name/` holds a same-named pair (#67).
 - Card report: every card no block draws is counted per card type and reason (not drawn, scalar
   points, grounded, patch form, heat transfer, matrix input, superelement, not read), with its
   first ids. `convert` prints it, `stats` and `check` on stderr, the reader in Output Messages,
