@@ -46,11 +46,18 @@ class Op2Source:
     ``fnmatch`` patterns over ``OP2.get_table_types()`` (``stress.*``). List the pyNastran 1.4.1
     and main spellings when they differ: a name a version lacks is skipped. ``columns``: the
     ``get_headers()`` names to take, in order; empty takes every column of ``data``. A table that
-    lacks one of them, or has no ids, is left out (complex tables too, for now).
+    lacks one of them, or has no ids, is left out (complex tables too, for now). ``kinds``: for a
+    step-defining type, the ``Step.kind`` each entry of ``tables`` gives (``eigenvector`` steps
+    are modes), in the same order.
     """
 
     tables: tuple[str, ...]
     columns: tuple[str, ...] = ()
+    kinds: tuple[str, ...] = ()
+
+    def kind(self, entry: str) -> str:
+        """The step kind of the ``tables`` entry (name or pattern) a table came from."""
+        return self.kinds[self.tables.index(entry)]
 
 
 @dataclass(frozen=True)
@@ -60,12 +67,16 @@ class H5Source:
     ``datasets``: paths of compound tables with ``ID`` (point) or ``EID`` (cell) and
     ``DOMAIN_ID``; ``GROUP/*`` takes every table of a group. The values are ``fields`` (float
     columns, in order) or ``compute(rows)`` (per-row values, or None when it does not know the
-    layout: that table is left out).
+    layout: that table is left out). ``kinds``: as for :class:`Op2Source`, per ``datasets`` entry.
     """
 
     datasets: tuple[str, ...]
     fields: tuple[str, ...] = ()
     compute: Callable | None = None
+    kinds: tuple[str, ...] = ()
+
+    def kind(self, entry: str) -> str:
+        return self.kinds[self.datasets.index(entry)]
 
 
 @dataclass(frozen=True)
@@ -80,8 +91,9 @@ class ResultType:
       id's rows: layers, fibres, corner nodes, several tables).
     * ``frame``: ``grid_cd`` rotates T1-T3/R1-R3 (columns 0-5) from each grid's CD system into
       basic when the deck is known; ``none`` leaves the values as they are.
-    * ``steps``: its tables define the result steps (one per subcase, load step or mode); the
-      other types are paired with those steps by subcase and time value.
+    * ``steps``: its tables define the result steps (one per subcase, load step or mode; each
+      source's ``kinds`` names the kind of step of each table); the other types are paired with
+      those steps by subcase and time value.
     * ``default``: attached when nothing is selected.
     """
 
@@ -101,6 +113,10 @@ class ResultType:
         for value, allowed in ((self.location, LOCATIONS), (self.reduce, REDUCTIONS), (self.frame, FRAMES)):
             if value not in allowed:
                 raise ValueError(f"result type {self.name}: {value!r} is not one of {allowed}")
+        if self.steps and (len(self.op2.kinds) != len(self.op2.tables)
+                           or len(self.h5.kinds) != len(self.h5.datasets)):
+            raise ValueError(f"result type {self.name} defines steps: give one step kind per OP2 table "
+                             "and per H5 dataset (Op2Source.kinds, H5Source.kinds)")
 
     @property
     def id_array(self) -> str:
@@ -146,8 +162,9 @@ DISPLACEMENT = ResultType(
     "Displacement", "point", RESULT_BLOCKS,
     (ArraySpec("Displacement", (0, 1, 2)), ArraySpec("Rotation", (3, 4, 5)),
      ArraySpec("DisplacementMagnitude", (0, 1, 2), magnitude=True)),
-    op2=Op2Source(("displacements", "eigenvectors")),
-    h5=H5Source(("NODAL/DISPLACEMENT", "NODAL/EIGENVECTOR"), fields=("X", "Y", "Z", "RX", "RY", "RZ")),
+    op2=Op2Source(("displacements", "eigenvectors"), kinds=("displacement", "eigenvector")),
+    h5=H5Source(("NODAL/DISPLACEMENT", "NODAL/EIGENVECTOR"), fields=("X", "Y", "Z", "RX", "RY", "RZ"),
+                kinds=("displacement", "eigenvector")),
     frame="grid_cd", fill=0.0, steps=True)
 
 VON_MISES_MAX = ResultType(
@@ -157,10 +174,6 @@ VON_MISES_MAX = ResultType(
     reduce="max")
 
 REGISTRY: tuple[ResultType, ...] = (DISPLACEMENT, VON_MISES_MAX)
-
-# the step-defining tables and the kind of step each one gives (results.Step.kind)
-STEP_KINDS = {"displacements": "displacement", "eigenvectors": "eigenvector",
-              "NODAL/DISPLACEMENT": "displacement", "NODAL/EIGENVECTOR": "eigenvector"}
 
 
 # ------------------------------------------------------------------ selection
@@ -183,11 +196,14 @@ def says_all(spec) -> bool:
 
 def parse(spec, registry=REGISTRY) -> tuple[str, ...]:
     """Type names in registry order from ``spec``: None (the defaults), a string or a list of
-    strings, each holding names separated by commas or spaces; ``all`` is every type."""
+    strings, each holding names separated by commas or spaces; ``all`` is every type. Every other
+    word must name a type, and a spec without any word is an error (select ``[]`` for none)."""
     if spec is None:
         return tuple(t.name for t in registry if t.default)
+    words = _words(spec)
+    if not words:
+        raise ValueError(f"no result type given (known: {', '.join(t.name for t in registry)}, or all)")
+    chosen = {by_name(w, registry).name for w in words if w.lower() != "all"}
     if says_all(spec):
         return tuple(t.name for t in registry)
-    words = _words(spec)
-    chosen = {by_name(w, registry).name for w in words}
     return tuple(t.name for t in registry if t.name in chosen)

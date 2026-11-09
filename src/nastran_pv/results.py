@@ -70,7 +70,11 @@ class _Results:
 
     def select(self, names=None):
         """Attach only the types ``names`` from now on (``result_types.parse``: a list or a
-        comma-separated string, ``all``); None restores the defaults. Returns ``self``."""
+        comma-separated string, ``all``); an empty list attaches none, None restores the defaults.
+        Returns ``self``."""
+        if names is not None and not isinstance(names, str) and len(names) == 0:
+            self.selected = self.named = ()
+            return self
         self.selected = None if names is None else result_types.parse(names, self.registry)
         self.named = () if names is None or result_types.says_all(names) else self.selected
         return self
@@ -137,7 +141,8 @@ def _get_result(op2, name):
 
 
 def _op2_results(op2, patterns):
-    """(name, {key: table}) of each pyNastran result the names or fnmatch patterns give, in order."""
+    """(pattern, name, {key: table}) of each pyNastran result the names or fnmatch patterns give,
+    in order."""
     seen = []
     for pat in patterns:
         names = [t for t in op2.get_table_types() if fnmatch.fnmatchcase(t, pat)] \
@@ -148,7 +153,7 @@ def _op2_results(op2, patterns):
             seen.append(name)
             result = _get_result(op2, name)
             if isinstance(result, dict):
-                yield name, result
+                yield pat, name, result
 
 
 def _header_columns(obj, columns):
@@ -192,14 +197,15 @@ class Op2Results(_Results):
 
     # ------------------------------------------------------------ discovery
     def _find_tables(self, rtype) -> list:
-        """(result name, subcase key, table, column indices or None) of every usable table."""
+        """(result name, subcase key, table, column indices or None, step kind) of every usable
+        table; the kind is None for a type that does not define steps."""
         found = []
-        for name, result in _op2_results(self.op2, rtype.op2.tables):
+        for pat, name, result in _op2_results(self.op2, rtype.op2.tables):
+            kind = rtype.op2.kind(pat) if rtype.steps else None
             for key, obj in result.items():
                 if getattr(obj, "is_complex", False):
                     if rtype.steps:
                         sc = int(key) if np.isscalar(key) else key[0]
-                        kind = result_types.STEP_KINDS.get(name, name)
                         self.skipped.append(f"{kind} subcase {sc}: complex results are not supported")
                     continue
                 if not rtype.steps and _ids(obj, rtype) is None:
@@ -209,7 +215,7 @@ class Op2Results(_Results):
                     cols = _header_columns(obj, rtype.op2.columns)
                     if cols is None:
                         continue
-                found.append((name, key, obj, cols))
+                found.append((name, key, obj, cols, kind))
         return found
 
     def _collect_steps(self) -> list[Step]:
@@ -217,8 +223,7 @@ class Op2Results(_Results):
         for rtype in self.registry:
             if not rtype.steps:
                 continue
-            for name, key, res, _ in self.tables[rtype.name]:
-                kind = result_types.STEP_KINDS.get(name, "displacement")
+            for name, key, res, _, kind in self.tables[rtype.name]:
                 sc = int(key) if np.isscalar(key) else key[0]
                 ntimes = res.data.shape[0]
                 times = np.asarray(getattr(res, "_times", []), dtype=float)
@@ -241,7 +246,7 @@ class Op2Results(_Results):
     def _rows(self, rtype, step):
         """A step-defining type reads the step's own table at its index; the others every table
         of the step's subcase, at the row whose time value matches the step's."""
-        for name, key, obj, cols in self.tables[rtype.name]:
+        for name, key, obj, cols, _ in self.tables[rtype.name]:
             if key != step.key:
                 continue
             if rtype.steps:
@@ -265,17 +270,19 @@ def _columns(columns):
 
 def _write(mb, names, targets, rtype, got) -> None:
     """Write ``rtype``'s arrays from ``got`` (sorted ids, values) on its blocks, and drop them
-    from the other ``targets`` and everywhere when ``got`` is None. A step-defining type exists
-    at every step, so its arrays are replaced in place; the others are removed and added again,
-    so they come after it."""
+    from the other ``targets`` and everywhere when ``got`` is None. A step-defining type with a
+    numeric fill writes every block at every step, so its arrays are replaced in place; the others
+    (and a NaN fill, which may write nothing on a block) are removed and added again, so they come
+    after it and never keep a previous step's values."""
     write_blocks = rtype.blocks if got is not None else ()
+    in_place = rtype.steps and not np.isnan(rtype.fill)
     for name in targets:
         if name not in names:
             continue
         block = get_block(mb, name)
         attrs = rtype.attributes(block)
         write = name in write_blocks
-        if not write or not rtype.steps:
+        if not write or not in_place:
             for spec in rtype.arrays:
                 attrs.RemoveArray(spec.name)
         ids = attrs.GetArray(rtype.id_array)
@@ -294,9 +301,16 @@ def _write(mb, names, targets, rtype, got) -> None:
             vtkutil.add_array(attrs, spec.name, v, skip_all_nan=bool(np.isnan(rtype.fill)))
 
 
+def _attach_sections(mb, names) -> None:
+    """``BeamSections`` follow ``Lines``: the rigid-section displacement, or none when the lines
+    have no ``Displacement``."""
+    if "BeamSections" in names and "Lines" in names:
+        sweep.attach_displacement(get_block(mb, "BeamSections"), get_block(mb, "Lines"))
+
+
 def remove_result_arrays(mb, registry=result_types.REGISTRY) -> None:
-    """Drop every array the registry's types write from their blocks of ``mb`` (a random response
-    replaces them)."""
+    """Drop every array the registry's types write from their blocks of ``mb``, and the beam
+    sections' displacement (a random response replaces them)."""
     names = block_names(mb)
     for rtype in registry:
         for name in rtype.blocks:
@@ -304,6 +318,7 @@ def remove_result_arrays(mb, registry=result_types.REGISTRY) -> None:
                 attrs = rtype.attributes(get_block(mb, name))
                 for spec in rtype.arrays:
                     attrs.RemoveArray(spec.name)
+    _attach_sections(mb, names)
 
 
 def attach_step(results, mb, step_index: int, deck=None) -> None:
@@ -322,13 +337,7 @@ def attach_step(results, mb, step_index: int, deck=None) -> None:
             got = (got[0], to_basic(deck, got[0], got[1]))
         _write(mb, names, targets, rtype, got)
 
-    if "BeamSections" in names and "Lines" in names:
-        sections, lines = get_block(mb, "BeamSections"), get_block(mb, "Lines")
-        if lines.GetPointData().GetArray("Displacement") is None:  # Displacement not attached
-            for arr_name in ("Displacement", "DisplacementMagnitude"):
-                sections.GetPointData().RemoveArray(arr_name)
-        else:
-            sweep.attach_displacement(sections, lines)
+    _attach_sections(mb, names)
 
     fd = mb.GetFieldData()
     for arr_name in ("ResultLabel", "Frequency", "ResultStep"):

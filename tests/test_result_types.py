@@ -61,7 +61,7 @@ def test_array_names_are_unique_across_types():
     (["VONMISESMAX,displacement"], ("Displacement", "VonMisesMax")),  # registry order
     (["Displacement", "Displacement"], ("Displacement",)),
     (["all"], ("Displacement", "VonMisesMax")),
-    ([], ()),
+    ("all,vonmisesmax", ("Displacement", "VonMisesMax")),
 ])
 def test_parse(spec, names):
     assert rt.parse(spec) == names
@@ -70,6 +70,31 @@ def test_parse(spec, names):
 def test_parse_unknown_names_the_known_types():
     with pytest.raises(ValueError, match="unknown result type 'Stress'.*Displacement, VonMisesMax"):
         rt.parse(["Displacement", "Stress"])
+    with pytest.raises(ValueError, match="unknown result type 'Strss'"):
+        rt.parse("all,Strss")  # every word is checked, also next to all
+
+
+@pytest.mark.parametrize("spec", [[], "", [""], ",", [" , "]])
+def test_parse_rejects_an_empty_spec(spec):
+    with pytest.raises(ValueError, match="no result type"):
+        rt.parse(spec)
+
+
+def test_select_nothing_is_an_empty_list(mb):
+    res = Op2Results(make_op2()).select([])  # the reader with every entry unchecked
+    assert res.attached() == [] and res.missing() == []
+    res.attach(mb, 0)
+    shells = get_block(mb, "Shells")
+    assert _point(shells, "Displacement") is None and _cell(shells, "VonMisesMax") is None
+    assert strings(mb, "ResultLabel") == ["Subcase 1"]
+
+
+def test_step_kinds_are_declared_with_the_tables():
+    assert rt.DISPLACEMENT.op2.kinds == ("displacement", "eigenvector")
+    assert rt.DISPLACEMENT.h5.kinds == ("displacement", "eigenvector")
+    with pytest.raises(ValueError, match="kind"):
+        rt.ResultType("Velocity", "point", rt.RESULT_BLOCKS, (rt.ArraySpec("Velocity", (0, 1, 2)),),
+                      op2=rt.Op2Source(("velocities",)), h5=rt.H5Source(("NODAL/VELOCITY",)), steps=True)
 
 
 # ------------------------------------------------------------------ the readers
@@ -215,11 +240,82 @@ def test_a_new_point_type_is_declared_not_coded(tmp_path):
         Op2Results(_spc_op2()).select(["SPCForce"])  # not in the default registry
 
 
+def test_a_step_type_with_nan_fill_drops_a_stale_array():
+    """A step-defining type is replaced in place; with a NaN fill a step whose rows miss a block
+    writes nothing there, so the previous step's array must go first."""
+    from pyNastran.op2.op2 import OP2
+    from pyNastran.op2.tables.oug.oug_displacements import RealDisplacementArray
+
+    step_type = rt.ResultType(
+        "Probe", "point", rt.RESULT_BLOCKS, (rt.ArraySpec("Probe", (0, 1, 2)),),
+        op2=rt.Op2Source(("displacements",), kinds=("displacement",)),
+        h5=rt.H5Source(("NODAL/DISPLACEMENT",), fields=("X", "Y", "Z", "RX", "RY", "RZ"), kinds=("displacement",)),
+        steps=True)
+    op2 = OP2(debug=None)
+    op2.set_mode("msc")
+    for sc, nids in ((1, [1, 2, 3, 4]), (2, [999])):  # subcase 2: a grid the model does not have
+        ng = np.column_stack([nids, np.ones(len(nids), dtype=int)])
+        op2.displacements[sc] = RealDisplacementArray.add_static_case(
+            "OUGV1", ng, np.ones((1, len(nids), 6), "float32"), sc)
+    mb = build_multiblock(load_deck(DATA / "tiny_run.bdf", echo=False))
+    res = Op2Results(op2, registry=(step_type,))
+    res.attach(mb, 0)
+    shells = get_block(mb, "Shells")
+    assert _point(shells, "Probe") is not None
+    res.attach(mb, 1)
+    assert _point(shells, "Probe") is None  # no row for these grids at step 2: no stale step-1 values
+
+
+def test_h5_pairs_domains_without_rescanning(tmp_path, mb):
+    """The domain signatures are built once: attaching a step does not scan DOMAINS again."""
+    res = open_results(write_msc_h5(tmp_path / "r.h5"))
+
+    def scan(_did):
+        raise AssertionError("DOMAINS scanned during attach")
+
+    res._domain = scan
+    for i in range(len(res.steps)):
+        res.attach(mb, i)
+    res.attach(mb, 0)
+    assert _cell(get_block(mb, "Solids"), "VonMisesMax") is not None
+
+
+def test_random_response_clears_the_beam_sections_displacement(op2_modes_file, tmp_path):
+    """--random --beam-sections: the random arrays replace the modes, on BeamSections too."""
+    from nastran_pv.vtkio import read_model
+
+    out = tmp_path / "rv.vtm"
+    code, _ = run_cli(["convert", DATA / "beams.bdf", "--results", op2_modes_file, "--beam-sections",
+                       "--random", "20:0.01,2000:0.01", "--random-frames", "2", "-o", out])
+    assert code == 0, code
+    sections = get_block(read_model(out), "BeamSections")
+    assert _point(sections, "Displacement") is None and _point(sections, "DisplacementMagnitude") is None
+
+
+def test_sweep_clears_its_displacement_when_the_lines_have_none():
+    from nastran_pv.sections.sweep import attach_displacement
+
+    mb = build_multiblock(load_deck(DATA / "beams.bdf", echo=False), Options(beam_sections=True))
+    Op2Results(make_op2()).attach(mb, 0)
+    sections, lines = get_block(mb, "BeamSections"), get_block(mb, "Lines")
+    assert _point(sections, "Displacement") is not None
+    lines.GetPointData().RemoveArray("Displacement")
+    attach_displacement(sections, lines)
+    assert _point(sections, "Displacement") is None and _point(sections, "DisplacementMagnitude") is None
+
+
 # ------------------------------------------------------------------ the CLI
 @pytest.fixture(scope="module")
 def op2_file(tmp_path_factory):
     path = tmp_path_factory.mktemp("rt") / "full.op2"
     make_op2().write_op2(str(path))
+    return path
+
+
+@pytest.fixture(scope="module")
+def op2_modes_file(tmp_path_factory):
+    path = tmp_path_factory.mktemp("rt") / "modes.op2"
+    make_modes_op2().write_op2(str(path))
     return path
 
 
@@ -243,9 +339,29 @@ def test_convert_result_types(op2_file, tmp_path):
     assert code == 0 and "VonMisesMax" in text
 
 
-def test_convert_result_types_errors(op2_file, tmp_path):
+def test_convert_result_types_errors_come_before_the_deck_is_read(op2_file, tmp_path, monkeypatch):
+    def read(*args, **kwargs):
+        raise AssertionError("the deck was read before the arguments were checked")
+
+    monkeypatch.setattr("nastran_pv.deck.load_deck", read)
     deck = DATA / "tiny_run.bdf"
-    code, _ = run_cli(["convert", deck, "--results", op2_file, "--result-types", "Stress", "-o", tmp_path / "x.vtm"])
-    assert isinstance(code, str) and "--result-types: unknown result type 'Stress'" in code
+    for types, message in ((["Stress"], "--result-types: unknown result type 'Stress'"),
+                           (["all,Strss"], "--result-types: unknown result type 'Strss'"),
+                           ([","], "--result-types: no result type")):
+        code, _ = run_cli(["convert", deck, "--results", op2_file, "--result-types", *types,
+                           "-o", tmp_path / "x.vtm"])
+        assert isinstance(code, str) and message in code, (types, code)
     code, _ = run_cli(["convert", deck, "--result-types", "VonMisesMax", "-o", tmp_path / "x.vtm"])
     assert isinstance(code, str) and "--result-types needs --results" in code
+
+
+def test_convert_result_types_all_does_not_warn(op2_modes_file, tmp_path):
+    """all is every type the file has: no 'no VonMisesMax results' for modes without stress;
+    naming VonMisesMax does warn."""
+    deck = DATA / "tiny_run.bdf"
+    code, text = run_cli(["convert", deck, "--results", op2_modes_file, "--result-types", "all",
+                          "-o", tmp_path / "a.vtm"])
+    assert code == 0 and "no VonMisesMax results" not in text, text
+    code, text = run_cli(["convert", deck, "--results", op2_modes_file, "--result-types", "Displacement,VonMisesMax",
+                          "-o", tmp_path / "b.vtm"])
+    assert code == 0 and "no VonMisesMax results" in text, text

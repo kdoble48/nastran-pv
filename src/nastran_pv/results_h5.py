@@ -32,15 +32,15 @@ ID_FIELDS = {"point": "ID", "cell": "EID"}
 
 
 def _paths(res, patterns):
-    """Dataset paths under ``res`` for paths and ``GROUP/*`` patterns, in order."""
+    """(pattern, dataset path) under ``res`` for paths and ``GROUP/*`` patterns, in order."""
     for pat in patterns:
         if pat.endswith("/*"):
             group = pat[:-2]
             if group in res and hasattr(res[group], "keys"):  # a group, not a dataset
                 for name in res[group]:
-                    yield f"{group}/{name}"
+                    yield pat, f"{group}/{name}"
         elif pat in res:
-            yield pat
+            yield pat, pat
 
 
 class H5Results(_Results):
@@ -56,6 +56,7 @@ class H5Results(_Results):
             res = h5[ROOT]
             self.domains = res["DOMAINS"][()] if "DOMAINS" in res else None
             self.tables = {t.name: self._read_tables(res, t) for t in self.registry}
+        self._same_domain = self._domains_by_signature()
         self.steps = self._collect_steps()
         self.available = tuple(t.name for t in self.registry if self.tables[t.name])
 
@@ -63,7 +64,7 @@ class H5Results(_Results):
         """(dataset path, ids, domain ids, values) of every table of ``rtype`` the file has."""
         found = []
         id_field = ID_FIELDS[rtype.location]
-        for path in _paths(res, rtype.h5.datasets):
+        for pat, path in _paths(res, rtype.h5.datasets):
             ds = res[path]
             if not hasattr(ds, "dtype") or ds.dtype.names is None:
                 continue
@@ -80,7 +81,7 @@ class H5Results(_Results):
             else:
                 continue
             found.append((path, rows[id_field].astype(np.int64), rows["DOMAIN_ID"].astype(np.int64),
-                          np.asarray(vals, dtype=float)))
+                          np.asarray(vals, dtype=float), rtype.h5.kind(pat) if rtype.steps else None))
         if rtype.steps:
             for path in rtype.h5.datasets:
                 if f"{path}_CPLX" in res:
@@ -101,13 +102,26 @@ class H5Results(_Results):
         names = d.dtype.names
         return tuple(d[n].item() for n in ("SUBCASE", "STEP", "MODE", "TIME_FREQ_EIGR") if n in names)
 
+    def _domains_by_signature(self) -> dict:
+        """{domain id: the ids of every domain with its signature}, built once (DOMAINS and the
+        tables' domain ids), so pairing a step with the tables does not scan DOMAINS again."""
+        dids = set() if self.domains is None else {int(d) for d in self.domains["ID"]}
+        for tables in self.tables.values():
+            for entry in tables:
+                dids.update(int(d) for d in np.unique(entry[2]))
+        groups = {}
+        signature = {}
+        for did in sorted(dids):
+            signature[did] = self._domain_signature(did)
+            groups.setdefault(signature[did], set()).add(did)
+        return {did: groups[sig] for did, sig in signature.items()}
+
     def _collect_steps(self) -> list[Step]:
         steps = []
         for rtype in self.registry:
             if not rtype.steps:
                 continue
-            for path, _, domain_ids, _ in self.tables[rtype.name]:
-                kind = result_types.STEP_KINDS.get(path, "displacement")
+            for path, _, domain_ids, _, kind in self.tables[rtype.name]:
                 dids, first = np.unique(domain_ids, return_index=True)
                 for did in dids[np.argsort(first)]:
                     d = self._domain(int(did))
@@ -131,14 +145,14 @@ class H5Results(_Results):
         of the same subcase/step/mode/time (``_domain_signature``)."""
         tables = self.tables[rtype.name]
         if rtype.steps:
-            for path, ids, did, vals in tables:
+            for path, ids, did, vals, _ in tables:
                 if path == step.table:
                     m = did == step.key
                     yield ids[m], vals[m]
             return
-        sig = self._domain_signature(step.key)
-        for _, ids, did, vals in tables:
+        same = self._same_domain.get(int(step.key), set()) | {int(step.key)}
+        for _, ids, did, vals, _ in tables:
             for d in np.unique(did):
-                if d == step.key or self._domain_signature(int(d)) == sig:
+                if int(d) in same:
                     m = did == d
                     yield ids[m], vals[m]

@@ -655,15 +655,12 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
             self._listing = False
 
     def _select_result_types(self, res):
-        """Attach the checked ResultTypes (the OP2/HDF5 results; a random response has its own arrays)."""
-        if not hasattr(res, "select"):
-            return
-        from nastran_pv.result_types import by_name
-
-        self._list_result_types()
-        sel = self._result_types
-        res.select([n for n in res.available
-                    if (sel.ArrayIsEnabled(n) if sel.ArrayExists(n) else by_name(n, res.registry).default)])
+        """Attach the checked ResultTypes (the OP2/HDF5 results; a random response has its own
+        arrays). Listed again first: a time step can re-read a results file that changed on disk
+        without a RequestInformation, and then its new types must be listed (at their default)."""
+        if hasattr(res, "select"):
+            self._list_result_types()
+            res.select([n for n in res.available if self._result_types.ArrayIsEnabled(n)])
 
     def _list_categories(self, mb, deck):
         """Checklist entries for the current multiblock; settings of labels that stay are kept."""

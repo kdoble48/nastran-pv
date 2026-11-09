@@ -93,15 +93,13 @@ def load_model(args, verbose=False):
             add_beam_sections(mb)
         progress.done()
         return mb, None, None
+    types = result_types_given(args)  # checked before the (long) deck read
     deck = load_deck(src, echo=verbose, progress=progress)
     opts = Options(k_ref=getattr(args, "k_ref", None), nodal_arrays=not getattr(args, "no_nodal_arrays", False),
                    nsm_set=getattr(args, "nsm_set", None), beam_sections=getattr(args, "beam_sections", False))
     for flag in BLOCK_FLAGS:
         if getattr(args, f"no_{flag}", False):
             setattr(opts, flag, False)
-    types = result_types_given(args)
-    if types is not None and not getattr(args, "results", None):
-        raise SystemExit("nastran-pv: --result-types needs --results")
     mb = build_multiblock(deck, opts, progress=progress)
     results = None
     if getattr(args, "results", None):
@@ -126,15 +124,21 @@ def load_model(args, verbose=False):
 
 
 def result_types_given(args):
-    """The --result-types names (registry order), None when not given; unknown names exit."""
-    if getattr(args, "result_types", None) is None:
+    """The --result-types words as given (``results.select`` takes them, so ``all`` stays
+    "what the file has"), None when not given. Unknown names, an empty list and the flag without
+    --results exit."""
+    spec = getattr(args, "result_types", None)
+    if spec is None:
         return None
     from .result_types import parse
 
     try:
-        return parse(args.result_types)
+        parse(spec)
     except ValueError as exc:
         raise SystemExit(f"nastran-pv: --result-types: {exc}") from None
+    if not getattr(args, "results", None):
+        raise SystemExit("nastran-pv: --result-types needs --results")
+    return spec
 
 
 def apply_field_options(mb, args) -> list[str]:

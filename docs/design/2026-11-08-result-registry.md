@@ -25,15 +25,16 @@ chooses the types, in Python, the CLI and the ParaView reader.
 | Type names | CamelCase, after the main array: `Displacement`, `VonMisesMax` | The arrays already use these names; the reader's checklist shows them like array names; the CLI matches them case-insensitively |
 | Reader split | Readers implement `_rows(rtype, step)` only; `_Results.values` joins, sorts and reduces; `attach_step` rotates and writes | The reduction and the writing are the same for every format |
 | Steps | Steps still come from the step-defining type (`steps=True`: `Displacement`'s `displacements`/`eigenvectors` tables); the other types pair with a step by subcase and time value (OP2) or domain signature (HDF5) | The pairing rules of today's von Mises, made general; no output change |
-| Array order | A step-defining type's arrays are replaced in place (they exist at every step); the other types' arrays are removed and added again at each step | Exactly today's order (`Displacement` in place, `VonMisesMax` moved to the end), which also keeps optional arrays after the per-step ones |
+| Array order | A step-defining type with a numeric fill has its arrays replaced in place (it writes every block at every step); every other type (and a step-defining one with a NaN fill, which may write nothing on a block) is removed and added again at each step | Exactly today's order (`Displacement` in place, `VonMisesMax` moved to the end), optional arrays after the per-step ones, and no array keeps a previous step's values |
+| Step kinds | Each source of a step-defining type declares the `Step.kind` of each of its tables (`Op2Source.kinds`, `H5Source.kinds`, checked in `__post_init__`) | A new step-defining type is one declaration; no side table for the readers to disagree on |
 | Missing rows | `fill` per type: 0 for `Displacement` (Warp By Vector stays usable), NaN otherwise; an all-NaN array is not written | Today's behaviour, now declared |
 | Selection state | On the results object: `results.select(names)`, `results.attached()` | Every consumer (`attach_op2`, the `.pvd` and VTKHDF series writers, the plugin) calls `results.attach`, so the selection holds for every step without new arguments |
 | Default | Types with `default=True` (both today's types) | No output change; a later expensive type (all stress components, every ply) can ship off by default |
-| CLI flag | `--result-types TYPE [TYPE ...]` (also comma-separated, `all`), on every command with `--results` | Reads as the plural of `--results`; `nargs="+"` like `--only`, commas like `--skip` |
+| CLI flag | `--result-types TYPE [TYPE ...]` (also comma-separated, `all`), on every command with `--results`; every word is checked, an empty list is an error, and both checks run before the deck is read | Reads as the plural of `--results`; `nargs="+"` like `--only`, commas like `--skip`; a typo should not cost a uCRM-9 load |
 | Deck-only | `--result-types` on a converted file is refused like `--results`; without `--results` it is an error | A converted file holds the arrays it was written with |
-| Absent type | Selecting a type the file lacks warns (`<file>: no VonMisesMax results to attach`) | The user asked for it; silence would look like a bug |
+| Absent type | Selecting a type **by name** that the file lacks warns (`<file>: no VonMisesMax results to attach`); `all` means every type the file has and does not warn | The user asked for it; silence would look like a bug |
 | Reader property | *Result Types* (`ResultTypes`), a checklist like *Visible Properties*: the types the file has, new entries at their default | The same widget as the other checklists; unchecking re-attaches without rebuilding the model |
-| Random response | Ignores the selection: it reads the modes through `values(DISPLACEMENT, step)` and removes every registry array | A random response replaces the result arrays by its own |
+| Random response | Ignores the selection: it reads the modes through `values(DISPLACEMENT, step)` and removes every registry array, and the beam sections' displacement with them | A random response replaces the result arrays by its own |
 
 ## The registry
 
@@ -49,15 +50,16 @@ class ResultType:
     reduce: str = "none"           # "none" | "max" (largest per column over an id's rows)
     frame: str = "none"            # "none" | "grid_cd" (T1-T3/R1-R3 from each grid's CD into basic)
     fill: float = nan              # value for ids without a row
-    steps: bool = False            # its tables define the result steps
+    steps: bool = False            # its tables define the result steps (sources declare kinds=)
     default: bool = True           # attached when nothing is selected
 
 DISPLACEMENT = ResultType(
     "Displacement", "point", RESULT_BLOCKS,
     (ArraySpec("Displacement", (0, 1, 2)), ArraySpec("Rotation", (3, 4, 5)),
      ArraySpec("DisplacementMagnitude", (0, 1, 2), magnitude=True)),
-    op2=Op2Source(("displacements", "eigenvectors")),
-    h5=H5Source(("NODAL/DISPLACEMENT", "NODAL/EIGENVECTOR"), fields=("X", "Y", "Z", "RX", "RY", "RZ")),
+    op2=Op2Source(("displacements", "eigenvectors"), kinds=("displacement", "eigenvector")),
+    h5=H5Source(("NODAL/DISPLACEMENT", "NODAL/EIGENVECTOR"), fields=("X", "Y", "Z", "RX", "RY", "RZ"),
+                kinds=("displacement", "eigenvector")),
     frame="grid_cd", fill=0.0, steps=True)
 
 VON_MISES_MAX = ResultType(
@@ -96,8 +98,9 @@ For each type of `results.registry`, in order:
    are matched by `NID`/`EID`, ids without a row get `fill`, and each `ArraySpec` becomes one
    array (a single column as a scalar array, `magnitude` as the norm).
 
-Then `BeamSections` gets the rigid-section displacement from `Lines` (or loses it when
-`Displacement` is not attached), and the root gets `ResultLabel ResultStep Frequency`.
+Then `BeamSections` gets the rigid-section displacement from `Lines`
+(`sweep.attach_displacement`, which clears it when the lines have none; the random response calls
+it too after dropping the arrays), and the root gets `ResultLabel ResultStep Frequency`.
 
 ## The selector
 
@@ -135,7 +138,8 @@ are identical).
    datasets with their fields (or a `compute(rows)` that returns None for a layout it does not
    know).
 3. Choose `location`, `blocks`, `reduce`, `frame` and `fill`; set `default=False` when the arrays
-   are large or rarely wanted.
+   are large or rarely wanted. A step-defining type also names the step kind of each table
+   (`kinds=`, one per `tables`/`datasets` entry).
 4. Test it from `tests/op2_fixture.py` and an H5 written in the MSC layout, like
    `test_a_new_point_type_is_declared_not_coded` in `tests/test_result_types.py` (SPC forces
    declared in the test, attached by both readers with no reader code). Add its arrays to
@@ -146,6 +150,12 @@ When the declaration cannot say it (a new reduction, a new frame, complex values
 vocabulary in `result_types.py` and the shared code in `results.py`, not one reader.
 
 ## Sketches for later (not built)
+
+- **Displacement on every grid-bearing block.** The review of PR #56 asked that `Displacement`
+  also go onto every block with a `NID` point array (`Connectors`, `BushLines`, ...), so any cut
+  of the model deforms. That is now a change of `DISPLACEMENT.blocks` (and of the deform code
+  that moves those blocks by their grids today); it changes outputs, so it was left out of this
+  change.
 
 - **Complex results (task 11).** pyNastran marks complex tables `is_complex`; MSC writes `*_CPLX`
   datasets. Today they are skipped (with a message for the step tables). A type gains
