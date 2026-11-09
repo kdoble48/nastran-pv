@@ -54,7 +54,8 @@ All notable changes to nastran-pv are listed here. The format follows
 ### Changed
 
 - `nastran-pv render` and `docs/build_gallery.py` run pvpython with `--force-offscreen-rendering`,
-  so batch screenshots and gallery exports no longer open a ParaView window (#62).
+  so batch screenshots and gallery exports no longer open a ParaView window; `render --onscreen`
+  opts out, and `--dry-run` quotes the command it prints (#62).
 - Views combine instead of redrawing (#54): a coloring (PID, Thickness, Results, ...) replaces the
   coloring and keeps the overlays, an overlay (Masses, Loads, SPC, ...) adds itself and a second
   toolbar click removes it, and only NPV Clear (and Side by Side) resets the view. Overlays follow

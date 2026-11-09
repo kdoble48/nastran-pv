@@ -188,7 +188,9 @@ nastran-pv render out/modes.vtkhdf --step 3 --preset results   # a converted ser
 `--step` is 0-based. The presets are the views from the toolbar macros: `masses`, `bushes`, `bushrotations`, `beams`, `loads`, `spc`, `rigid`,
 `family`, `group`, `pid`, `mid`, `elementtype`, `thickness`, `nsm`, `results`, `random`, `randomsweep`,
 `parts`, `check` and `diff`. The two random views need `--random` (or a converted random series),
-and `diff` needs `--against A`.
+and `diff` needs `--against A`. Rendering is offscreen, so no ParaView window opens; `--onscreen`
+renders in a visible window instead, for a ParaView build whose offscreen PNGs come out blank.
+`--dry-run` prints the pvpython command, quoted so it can be pasted into a shell.
 
 If the deck cannot be read, `render` writes no screenshots and exits with status 1 after printing
 `cannot read DECK: <error>`. The toolbar macros show the same message in Output Messages.

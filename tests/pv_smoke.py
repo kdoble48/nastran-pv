@@ -1,6 +1,6 @@
 """Smoke test for the ParaView reader plugin; run with pvpython (not pytest):
 
-    pvpython tests/pv_smoke.py
+    pvpython --force-offscreen-rendering tests/pv_smoke.py
 
 Loads the plugin, opens the synthetic deck, checks the block layout, toggles a
 block, attaches a generated OP2 (time steps), renders one screenshot, runs the

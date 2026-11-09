@@ -1,6 +1,6 @@
 """Export nastran-pv views as web gallery assets (run with pvpython).
 
-    pvpython paraview/export_site.py MODELS.json OUT_DIR
+    pvpython --force-offscreen-rendering paraview/export_site.py MODELS.json OUT_DIR
 
 MODELS.json is a list of {"id", "title", "deck", "results" (OP2/H5 or null), "views", "credit"}.
 For each model and view it writes <id>-<view>.png (with overlays), <id>-<view>-thumb-raw.png

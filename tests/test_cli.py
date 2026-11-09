@@ -73,7 +73,16 @@ def test_launchers_dry_run(capsys):
     assert "--script=" in out and "nv.apply('masses'" in out and "render_model.py" in out \
         and "--views showcase" in out
     render = next(line for line in out.splitlines() if "render_model.py" in line)
-    assert "--force-offscreen-rendering" in render  # batch screenshots open no window
+    # batch screenshots open no window; pvpython reads its own options only before the script
+    assert -1 < render.find("--force-offscreen-rendering") < render.find("render_model.py")
+
+
+def test_render_dry_run_quotes_and_onscreen(capsys, tmp_path):
+    exe = tmp_path / "Para View" / "pvpython.exe"  # a path with a space must come out quoted
+    assert main(["render", DECK, "--pvpython", str(exe), "--onscreen", "--dry-run"]) == 0
+    line = capsys.readouterr().out.strip()
+    assert "--force-offscreen-rendering" not in line
+    assert line.startswith(('"', "'")) and str(exe) in line
 
 
 def test_launchers_open_converted_models(tmp_path, capsys):
