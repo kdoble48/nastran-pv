@@ -1,4 +1,5 @@
-"""Static nodal loads (FORCE*, MOMENT*, LOAD combinations, GRAV) -> vectors."""
+"""Static loads (FORCE*, MOMENT*, GRAV, pressures PLOAD/PLOAD2/PLOAD4, LOAD combinations) per set:
+nodal vectors here, the loaded faces in :mod:`.pressures`."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -8,9 +9,10 @@ import numpy as np
 from .. import vtkutil
 from ..deck import Deck
 from .common import unit
+from .pressures import PRESSURE_TYPES, Unsupported, merge, pressure_faces
 
 NODAL_TYPES = ("FORCE", "FORCE1", "FORCE2", "MOMENT", "MOMENT1", "MOMENT2")
-LOAD_TYPES = NODAL_TYPES + ("GRAV",)  # the rest (PLOAD*, TEMP, SPCD, ...): the card report
+LOAD_TYPES = NODAL_TYPES + ("GRAV",) + PRESSURE_TYPES  # the rest (PLOAD1, TEMP, SPCD, ...): the card report
 COMBINATION_TYPES = ("LOAD",)  # LSEQ, CLOAD: the card report
 
 
@@ -20,6 +22,7 @@ class LoadSet:
     force: dict[int, np.ndarray] = field(default_factory=dict)  # nid -> F (basic)
     moment: dict[int, np.ndarray] = field(default_factory=dict)  # nid -> M (basic)
     grav: list[np.ndarray] = field(default_factory=list)  # acceleration vectors (basic)
+    pressure: dict = field(default_factory=dict)  # face key -> pressures.Face (one per face)
     combined: bool = False
 
     def add(self, other: "LoadSet", scale: float) -> None:
@@ -27,10 +30,17 @@ class LoadSet:
             for nid, v in src.items():
                 dst[nid] = dst.get(nid, np.zeros(3)) + scale * v
         self.grav.extend(scale * g for g in other.grav)
+        for face in other.pressure.values():
+            merge(self.pressure, face.scaled(scale))
+
+    @property
+    def name(self) -> str:
+        """Its block name: ``SID_<sid>``, or ``LOAD_<sid>`` for a LOAD combination."""
+        return f"{'LOAD' if self.combined else 'SID'}_{self.sid}"
 
     @property
     def empty(self) -> bool:
-        return not (self.force or self.moment or self.grav)
+        return not (self.force or self.moment or self.grav or self.pressure)
 
 
 def _xyz(deck: Deck, nid: int) -> np.ndarray:
@@ -53,7 +63,8 @@ def _direction(deck: Deck, card) -> np.ndarray:
 
 
 def direct_load_set(deck: Deck, sid: int) -> LoadSet:
-    """The FORCE*/MOMENT* and GRAV cards of set ``sid``; the other load cards are in the card report."""
+    """The FORCE*/MOMENT*, GRAV and PLOAD/PLOAD2/PLOAD4 cards of set ``sid``; the other load cards
+    are in the card report. A card that cannot be drawn is skipped with a warning."""
     ls = LoadSet(sid)
     for card in deck.model.loads.get(sid, []):
         t = card.type
@@ -66,6 +77,11 @@ def direct_load_set(deck: Deck, sid: int) -> LoadSet:
             elif t == "GRAV":
                 n = np.asarray(card.N, dtype=float)
                 ls.grav.append(float(card.scale) * deck.vector_to_basic(card.Cid(), n, np.zeros(3)))
+            elif t in PRESSURE_TYPES:
+                for face in pressure_faces(deck, card):
+                    merge(ls.pressure, face)
+        except Unsupported as exc:  # a form nothing draws: the card report
+            deck.skip(t, exc.reason, sid)
         except (KeyError, ValueError, TypeError) as exc:
             deck.warn(f"{t} in load set {sid}: skipped ({exc})")
     return ls

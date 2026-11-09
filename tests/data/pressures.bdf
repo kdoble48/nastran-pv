@@ -1,0 +1,82 @@
+$ Synthetic pressure-load deck for nastran-pv tests (tests/test_pressures.py has the hand-computed
+$ face forces and set resultants).
+SOL 101
+CEND
+TITLE = nastran-pv pressure loads
+SPC = 1
+LOAD = 100
+DISP = ALL
+OLOAD = ALL
+BEGIN BULK
+$
+$ ---- two CQUAD4 (2 x 1 in z = 0, normal +Z) and a CTRIA3 in x = 3 (normal +X, area 0.5)
+GRID,1,,0.,0.,0.
+GRID,2,,1.,0.,0.
+GRID,3,,2.,0.,0.
+GRID,4,,0.,1.,0.
+GRID,5,,1.,1.,0.
+GRID,6,,2.,1.,0.
+GRID,7,,3.,0.,0.
+GRID,8,,3.,1.,0.
+GRID,9,,3.,0.,1.
+CQUAD4,1,1,1,2,5,4
+CQUAD4,2,1,2,3,6,5
+CTRIA3,3,1,7,8,9
+PSHELL,1,1,0.1,1
+MAT1,1,7.0e10,,0.3,0.
+$
+$ ---- a unit CHEXA at z = 10..11 (top face 105-106-107-108, outward +Z)
+GRID,101,,0.,0.,10.
+GRID,102,,1.,0.,10.
+GRID,103,,1.,1.,10.
+GRID,104,,0.,1.,10.
+GRID,105,,0.,0.,11.
+GRID,106,,1.,0.,11.
+GRID,107,,1.,1.,11.
+GRID,108,,0.,1.,11.
+CHEXA,11,2,101,102,103,104,105,106,
+,107,108
+$ ---- a CTETRA: face 201-202-203 in z = 0 (outward -Z), 204 above it
+GRID,201,,5.,0.,0.
+GRID,202,,6.,0.,0.
+GRID,203,,5.,1.,0.
+GRID,204,,5.,0.,1.
+CTETRA,21,2,201,202,203,204
+PSOLID,2,1
+$
+$ ---- three free grids for PLOAD: (2,0,0) x (0,3,0) / 2 = area 3, normal +Z
+GRID,301,,0.,0.,20.
+GRID,302,,2.,0.,20.
+GRID,303,,0.,3.,20.
+$
+$ ---- a mass for the model CG (the elements have no density): CG = grid 5 (1, 1, 0)
+CONM2,501,5,,2.0
+$
+$ ---- constraints (for a solver run)
+SPC1,1,123456,1,2,3,4,5,6
+SPC1,1,123456,7,8,9
+SPC1,1,123456,101,THRU,108
+SPC1,1,123456,201,THRU,204
+SPC1,1,123456,301,302,303
+$
+$ ---- loads
+$ SID 10: PLOAD2 10 on both quads -> (0, 0, 10) each
+PLOAD2,10,10.,1,2
+$ SID 20: hex top face P1-P4 = 1 2 3 4 (inward -Z) -> (0, 0, -2.5); tetra base 6 (inward +Z) -> (0, 0, 3);
+$         CTRIA3 corners 3 6 9 -> mean 6 x 0.5 x +X = (3, 0, 0)
+PLOAD4,20,11,1.,2.,3.,4.,105,107
+PLOAD4,20,21,6.,,,,201,204
+PLOAD4,20,3,3.,6.,9.
+$ SID 30: PLOAD -2 on 301-303 -> (0, 0, -6); PLOAD4 5 on quad 1 along N = +X -> (5, 0, 0); a FORCE
+PLOAD,30,-2.,301,302,303
+PLOAD4,30,1,5.,,,,,
+,0,1.,0.,0.
+FORCE,30,6,,1.,0.,0.,1.
+$ SID 40: PLOAD4 1 on quads 1 THRU 2 and PLOAD2 2 on quad 1 (one face, p 3) -> (0, 0, 3) + (0, 0, 1)
+PLOAD4,40,1,1.,,,,THRU,2
+PLOAD2,40,2.,1
+$ SID 50: gravity only
+GRAV,50,,9.81,0.,0.,-1.
+$ LOAD 100 = 2.0 x SID 10 + 0.5 x SID 20 + 1.0 x SID 40
+LOAD,100,1.0,2.0,10,0.5,20,1.0,40
+ENDDATA

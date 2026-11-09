@@ -41,6 +41,11 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   270k-hex model slow ([Performance](performance.md)). Lines go through `common.CellTable` →
   `compact_mesh`. `categories.py` holds the *global* ElementType and RigidType
   code tables; codes must be consistent across blocks for indexed LUTs.
+- `builders/loads.py` and `builders/pressures.py`: a `LoadSet` per SID (nodal FORCE*/MOMENT*,
+  GRAV, and the faces PLOAD/PLOAD2/PLOAD4 load, keyed by element, face grids and direction so a
+  face loaded twice sums), LOAD combinations scaling all three. `pressures.face_force` integrates
+  the interpolated corner pressures (2 × 2 Gauss on quads); solid faces are found from PLOAD4 G1 and
+  G3/G4 and oriented from the geometry (inward), so an element's own winding does not matter.
 - `assemble.py`: runs the builders according to `Options` and copies nodal SPC/load arrays onto the
   mesh blocks. It adds root field data: masses from `massprops.py` (numpy volumes when every solid is linear, else VTK cell sizes for the block; never
   pyNastran's slow `mass_properties`) and a `MAT_*` material table from `materials.py`. Derived

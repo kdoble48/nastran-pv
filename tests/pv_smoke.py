@@ -1054,6 +1054,53 @@ def result_load_checks(pv, nv, main_reader):
     pv.Delete(src)
 
 
+def pressure_checks(pv, nv):
+    """PLOAD/PLOAD2/PLOAD4 faces and GRAV on tests/data/pressures.bdf (the hand-computed values are
+    in test_pressures.py): the Pressures block, the arrows and their switches, the view's text, the
+    scope, and a converted .vtm."""
+    path = os.path.join(HERE, "data", "pressures.bdf")
+    reader = rm.load_reader(path)
+    model = rm.Model(reader)
+    sets = nv.block_names(model.block("Pressures")) if model.has("Pressures") else []
+    check(sets == ["SID_10", "SID_20", "SID_30", "SID_40", "LOAD_100"], f"Pressures block per load set: {sets}")
+    view = pv.CreateRenderView()
+    view.ViewSize = [400, 300]
+    m = nv.apply("loads", reader=reader, view=view)
+    lg = pv.FindSource(nv._name(m, "load glyphs"))
+    text = _info(nv, m)
+    check(list(lg.LoadSets) == ["LOAD_100"] and _root(lg, "ArrowCount") == [5] and _point_values(lg, "LoadKind") == {2}
+          and "LOAD_100: 5 pressure faces, resultant force (1.5, 0, 44.25)" in text,
+          f"the Case Control LOAD: an arrow per pressure face, the resultant: {text!r}")
+    lg.ShowPressures = 0
+    nv.apply("loads", reader=reader, view=view)
+    check(_root(lg, "ArrowCount") == [0] and "Show Pressures" in _info(nv, m), "Show Pressures off: nothing, and why")
+    lg.ShowPressures = 1
+    nv.apply("loads", reader=reader, view=view, sets=["SID_50"])
+    text = _info(nv, m)
+    check(_point_values(lg, "LoadKind") == {3} and _root(lg, "ArrowCount") == [1]
+          and "SID_50: GRAV (0, 0, -9.81) at the CG, WTMASS x mass x a = (0, 0, -19.62)" in text,
+          f"GRAV: one arrow at the CG and its inertial force: {text!r}")
+    reader.HiddenElements = "2"
+    nv.apply("loads", reader=reader, view=view, sets=["LOAD_100"])
+    check(_root(lg, "PressureFaces") == [4], "the faces follow the reader's scope (quad 2 hidden)")
+    reader.HiddenElements = ""
+    nv.clear(view)
+    tag = nv._name(m, "x").split(" ", 2)[2]
+    for src in [x for k, x in pv.GetSources().items() if k[0].startswith("NPV ") and k[0].endswith(tag)]:
+        pv.Delete(src)
+    pv.Delete(reader)
+    pv.Delete(view)
+    tmp = tempfile.mkdtemp()
+    out = os.path.join(tmp, "pressures.vtm")
+    convert(["convert", path, "-o", out, "-q"])
+    src = nv.load_reader(out)
+    g = pv.NastranLoadGlyphs(Input=src)
+    g.UpdatePipeline()
+    check(list(g.LoadSets) == ["LOAD_100"] and _root(g, "ArrowCount") == [5], "Load Glyphs on a converted .vtm")
+    pv.Delete(g)
+    pv.Delete(src)
+
+
 def random_checks(pv, nv):
     """Random response from synthesized modes: reader properties, both views, a converted series."""
     from op2_fixture import make_modes_op2
@@ -1442,10 +1489,11 @@ def card_report_checks(pv, nv):
             vtkOutputWindow.SetInstance(previous)
         with open(log, encoding="utf-8", errors="replace") as f:
             text = f.read()
-    check(model.names == ["Shells", "Connectors", "Plotels", "Constraints", "Loads"], f"cards: blocks {model.names}")
-    check(model.field("SkippedCardCount").tolist() == [24] and "CTRIAX6" in model.field_strings(None, "SKIPPED_Card"),
+    check(model.names == ["Shells", "Connectors", "Plotels", "Constraints", "Loads", "Pressures"],
+          f"cards: blocks {model.names}")
+    check(model.field("SkippedCardCount").tolist() == [22] and "CTRIAX6" in model.field_strings(None, "SKIPPED_Card"),
           "cards: the SKIPPED_ table on the reader's output")
-    check("24 card(s) of 20 type(s) not drawn: 2 CTRIAX6" in text, "cards: the card report in the reader's messages")
+    check("22 card(s) of 19 type(s) not drawn: 2 CTRIAX6" in text, "cards: the card report in the reader's messages")
     shells = model.block("Shells")
     check(sorted(shells.GetCellType(i) for i in range(shells.GetNumberOfCells())) == [23, 28],
           "cards: CQUAD drawn biquadratic (9 grids) and quadratic (no G9)")
@@ -1758,7 +1806,12 @@ def filter_property_checks(pv, nv, reader, view):
     lg.UpdatePipeline()
     check(_root(lg, "ArrowCount") == [4], "Show forces and moments: 3 forces + 1 moment")
     nv.apply("loads", reader=reader, view=view, sets=["LOAD_1001"], show="Forces")
-    check(list(lg.LoadSets) == ["LOAD_1001"] and _root(lg, "ArrowCount") == [2], "loads view sets=/show= win")
+    check(list(lg.LoadSets) == ["LOAD_1001"] and _root(lg, "ArrowCount") == [3]  # 2 forces + its GRAV
+          and "LOAD_1001: GRAV (0, 0, -19.62) at the CG" in _info(nv, model), "loads view sets=/show= win")
+    lg.ShowGravity = 0
+    lg.UpdatePipeline()
+    check(_root(lg, "ArrowCount") == [2], "Show Gravity off: the two forces")
+    lg.ShowGravity = 1
     x0 = lg.GetDataInformation().GetBounds()
     lg.ArrowLength = "Fixed"
     lg.UpdatePipeline()
@@ -1772,6 +1825,9 @@ def filter_property_checks(pv, nv, reader, view):
             f.write(GRAV_MOMENT_DECK)
         gr = rm.load_reader(path)
         gm = nv.apply("loads", reader=gr, view=view)
+        text = _info(nv, gm)
+        check("SID_5: GRAV (0, 0, -9.81) at the CG" in text, f"the Case Control GRAV set is drawn first: {text!r}")
+        nv.apply("loads", reader=gr, view=view, sets=["SID_6"])
         text = _info(nv, gm)
         check("SID_6: no forces to draw" in text and "Show on 'NPV load glyphs'" in text,
               f"loads view on a moment-only set with Show Forces says so: {text!r}")
@@ -2407,6 +2463,7 @@ def main():
     calc_nan_checks(pv, nv)
     random_checks(pv, nv)
     result_load_checks(pv, nv, reader)
+    pressure_checks(pv, nv)
     topology_checks(pv, nv)
     diff_checks(pv, nv)
     clear_checks(pv, nv, reader)

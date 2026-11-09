@@ -112,5 +112,5 @@ with `cannot read DECK: <error>` and writes no PNG.
 ## Report back with
 
 Paths to the PNGs you checked, which deck and load set were used (`ActiveLoadSets`), and any caveat
-the picture hides. For example, **GRAV is not drawn as arrows**, so a `LOAD` that combines aero
-forces with GRAV shows the aero forces only. Pressure (PLOAD*) is not drawn either (`docs/model.md#not-visualized-yet`).
+the picture hides. For example, GRAV is one arrow at the CG (not a force per mass), and PLOAD*
+pressures are one arrow per face, on their own scale; PLOAD1 is not drawn (`docs/model.md#not-visualized-yet`).
