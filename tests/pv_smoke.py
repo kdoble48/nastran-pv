@@ -235,6 +235,10 @@ def topology_checks(pv, nv):
     check(rm.nv.fetch(parts_src, 1).GetNumberOfRows() == 3, "parts view exclude=['rigid'] -> 3 parts")
     nv.apply("grow", reader=topo, view=view, seeds="PID 6")
     check(grow_src.SeedIDs == "PID 6", "grow view seeds= sets Seed IDs")
+    grow_src.SeedIDs, grow_src.ExcludePIDs = "EID 31", "1"  # reaches MPC set 1's leg, not CQUAD4 1
+    _, eids = nv.reached_eids(topo)
+    check(eids == {31}, f"reached EIDs leave out the MPC leg (EID: its set id 1): {sorted(eids)}")
+    grow_src.ExcludePIDs = ""
     nv.apply("check", reader=topo, view=view)
     check(es.has_content(view), "check view counts as content for the gallery exporter")
     return topo

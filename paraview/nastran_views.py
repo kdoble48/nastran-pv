@@ -1567,7 +1567,7 @@ def _mpc_legs(ds):
     if codes is None:
         return None
     names = field_strings(ds, "ConnectorTypeNames") or CONNECTOR_TYPES
-    return np.array([0 <= c < len(names) and names[c] == "MPC" for c in vtk_to_numpy(codes)], bool)
+    return np.isin(vtk_to_numpy(codes), [i for i, n in enumerate(names) if n == "MPC"])
 
 
 def _cell_eids(data):
