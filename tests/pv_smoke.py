@@ -616,15 +616,43 @@ def ply_view_checks(pv, nv):
               and int(nv._glyph_field(axes, "AxisCount")) == 4,
               "a PCOMPG global ply: PlyAngle, both axes of EIDs 4 and 5 (Both Axes kept on the rerun)")
         model = nv.apply("plies", reader=reader, view=view, quantity="stress", component=1)
-        lut = pv.GetColorTransferFunction("PlyStress")
+        disp = pv.GetDisplayProperties(pv.FindSource(nv._name(model, "Shells")), view)
+        lut = pv.GetColorTransferFunction("PlyStress", disp, separate=True)
         check(nv.enum_text(lut, "VectorMode") == "Component" and int(lut.VectorComponent) == 1,
               "quantity=stress component=1: PlyStress S22")
-        for bad in ({"quantity": "tsai"}, {"ply": "first"}, {"quantity": "stress", "component": 3}):
+        # a bad argument is refused before the reader changes (its Ply, its Result Types)
+        types, ply_before = list(reader.ResultTypes), int(reader.Ply)
+        for bad in ({"ply": 3, "quantity": "tsai"}, {"ply": "first"}, {"ply": 3, "quantity": "stress", "component": 3}):
             try:
                 nv.apply("plies", reader=reader, view=view, **bad)
                 check(False, f"plies {bad} should be refused")
             except ValueError as exc:
-                check(True, f"plies {bad} refused: {exc}")
+                check(int(reader.Ply) == ply_before and list(reader.ResultTypes) == types,
+                      f"plies {bad} refused before the reader changes: {exc}")
+        axes.Ply = 1  # the user's own setting on the filter: an explicit ply= wins over it
+        nv.apply("plies", reader=reader, view=view, ply=2)
+        check(int(axes.Ply) == 2 and int(reader.Ply) == 2, "an explicit ply= sets the axes filter's Ply too")
+        reader.ResultTypes = ["Displacement"]
+        model = nv.apply("plies", reader=reader, view=view, quantity="angle")
+        check(list(reader.ResultTypes) == ["Displacement"] and not nv._TURNED_ON.get("plies"),
+              "quantity=angle (the layup) turns no result type on")
+        disp = pv.GetDisplayProperties(pv.FindSource(nv._name(model, "Shells")), view)
+        own = pv.GetColorTransferFunction("PlyAngle", disp, separate=True)
+        shared = pv.GetColorTransferFunction("PlyAngle")
+        check(list(own.NanColor) == list(nv.PLY_NAN_RGB) and list(shared.NanColor) != list(nv.PLY_NAN_RGB),
+              "the grey of elements without the ply is on the display's own color map, not the shared one")
+        reader.Ply = 0
+        model = nv.apply("plies", reader=reader, view=view, quantity="Angle")
+        check("No angle to show: a ply id (the reader's Ply) lays that ply's layup" in _info(nv, model),
+              f"a layup quantity without a laid ply says how to lay one: {_info(nv, model)!r}")
+        plain = nv.load_reader(DECK)
+        no_layup = pv.NastranPlyAxes(Input=plain)
+        no_layup.Ply = 2
+        out = _messages(no_layup.UpdatePipeline)
+        check(no_layup.GetDataInformation().GetNumberOfCells() == 0 and "no composite layup" in out,
+              f"Nastran Ply Axes on a deck without PCOMP draws nothing and says why: {out.strip()[:120]!r}")
+        pv.Delete(no_layup)
+        pv.Delete(plain)
         out = _messages(lambda: (setattr(reader, "Ply", 9), reader.UpdatePipeline()))
         check("Ply: ply 9: no composite shell property has it (ply ids: 1-4, 101-104)" in out
               and reader.GetDataInformation().GetNumberOfPoints() > 0,

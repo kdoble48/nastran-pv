@@ -10,7 +10,7 @@ from nastran_pv import plies
 from nastran_pv.assemble import build_multiblock, get_block
 from nastran_pv.deck import load_deck
 from nastran_pv.glyphs import ply_axes
-from conftest import DATA, arr
+from conftest import DATA, arr, strings
 
 NAN = float("nan")
 SQUARE = 2 * math.sqrt(0.5)  # a unit square's size: twice the centre-to-corner distance
@@ -83,3 +83,16 @@ def test_ply_zero_draws_the_laid_ply_or_the_material_axes(shells, deck):
 def test_a_ply_no_property_has_draws_nothing(shells):
     pd = ply_axes(shells, 9)
     assert pd.GetNumberOfCells() == 0 and arr(pd, "AxisCount", "field").tolist() == [0]
+    assert strings(pd, "AxesNote") == ["no shell has ply 9"]
+
+
+def test_nothing_to_draw_says_why(shells):
+    """No axis array to draw from gives an empty output and the reason, not an error."""
+    plain = get_block(build_multiblock(load_deck(DATA / "diff_a.bdf", echo=False)), "Shells")
+    pd = ply_axes(plain, 2)  # a deck without PCOMP (a TypeError before)
+    assert pd.GetNumberOfCells() == 0 and strings(pd, "AxesNote") == ["no composite layup (PCOMP, PCOMPG) on these shells"]
+    shells.GetCellData().RemoveArray("MaterialAxis")
+    pd = ply_axes(shells, 0)  # no laid ply and no material axes
+    assert pd.GetNumberOfCells() == 0 and strings(pd, "AxesNote") == ["the shells have no MaterialAxis"]
+    pd = ply_axes(shells, 2)  # a layup, but no material axis to turn by the ply angle
+    assert pd.GetNumberOfCells() == 0 and strings(pd, "AxesNote") == ["the shells have no MaterialAxis and Normal"]

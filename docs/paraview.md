@@ -16,7 +16,8 @@ one-click views on the Macros toolbar. For step-by-step walkthroughs, see
    a frequency response or time of a transient) becomes a time step, and *Result Types* lists the [result types](model.md#result-types) the file has
    (each at its default: displacements, `VonMisesMax` and forces checked, the stress and strain
    components not; check or uncheck one to add or leave off its arrays). *Ply* is `convert --ply`
-   for a composite deck: a ply id (the PCOMP ply number or a PCOMPG global ply id) lays that ply's
+   for a composite deck: a ply id (the PCOMP ply number or a PCOMPG global ply id; -N the mirrored
+   copy of a symmetric PCOMPG ply N) lays that ply's
    layup on the shells (`PlyAngle`, `PlyAxis`, ...) and gives the ply result types at that ply; 0
    gives each element's critical ply ([Composites](model.md#composites)). *NSMSet* picks the bulk nonstructural mass set
    ([Nonstructural mass](model.md#nonstructural-mass)), *BushStiffnessReference* is `convert --k-ref`
@@ -439,7 +440,8 @@ the selection commands make no filter of their own.
   works on a converted file too); 0 draws the model's `PlyAxis` (the reader's *Ply*, or
   `convert --ply`) or, without one, the element material axes (THETA/MCID). An element without the
   ply gets no line. Cell arrays `EID`, `Direction` (1, 2) and `PlyAngle`; field `AxesPly`,
-  `AxisCount`.
+  `AxisCount`. With nothing to draw (no composite layup, no shell with that ply, no material axes)
+  the output is empty, its field `AxesNote` and Output Messages say why. The view's `ply=` sets *Ply*.
 * **Nastran Beam Sections** sweeps each CBAR/CBEAM's cross section along it (see
   [Beam sections](beam-sections.md)). *ShowSections*, *ShowAxes* (shear-center and neutral axes) and
   *ShowTriads* (x/y/z arrows, *TriadSize* × model diagonal) pick the parts; the `BeamPart` cell array

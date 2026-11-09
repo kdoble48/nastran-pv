@@ -1421,8 +1421,9 @@ _PLY_AXIS_SIZE = 0.5  # copy of nastran_pv.glyphs.PLY_AXIS_SIZE (test_plugin_con
 class NastranPVPlyAxes(_GlyphFilter):
     """A composite ply's material axes as lines through each shell's centre: its 1-direction (the
     fibre) and, with Both Axes, its 2-direction. Ply: a ply id (the PCOMP ply number or a PCOMPG
-    global ply id); 0 draws the model's PlyAxis (the reader's Ply) or, without one, the element
-    material axes (THETA/MCID). Size: a line's length over its element's size."""
+    global ply id; -N the mirrored copy of a symmetric PCOMPG's ply N); 0 draws the model's PlyAxis
+    (the reader's Ply) or, without one, the element material axes (THETA/MCID). Size: a line's
+    length over its element's size. Nothing to draw is reported in Output Messages, with why."""
 
     BLOCK, REQUIRED = "Shells", "NID"
 
@@ -1431,11 +1432,11 @@ class NastranPVPlyAxes(_GlyphFilter):
         self._ply = 0
         self._size = _PLY_AXIS_SIZE
         self._both = 0
+        self._note = None  # the last reason reported (once per change)
 
     @smproperty.intvector(name="Ply", default_values=0)
-    @smdomain.intrange(min=0)
     def SetPly(self, v):
-        self._set("_ply", max(int(v), 0))
+        self._set("_ply", int(v))
 
     @smproperty.doublevector(name="Size", default_values=_PLY_AXIS_SIZE)
     @smdomain.doublerange(min=0.05, max=2.0)
@@ -1448,14 +1449,16 @@ class NastranPVPlyAxes(_GlyphFilter):
         """Also the 2-direction (normal x 1-direction)."""
         self._set("_both", int(v))
 
-    def _block(self, data):
-        block = _GlyphFilter._block(self, data)  # Shells, whose points are what the glyphs need
-        return block if block is not None and block.GetCellData().GetArray("Normal") is not None else None
-
     def _glyphs(self, block, diag, model):
+        from nastran_pv.fields.common import field_strings
         from nastran_pv.glyphs import ply_axes
 
-        return ply_axes(block, self._ply, self._size, bool(self._both))
+        out = ply_axes(block, self._ply, self._size, bool(self._both))
+        note = (field_strings(out, "AxesNote") or [None])[0]
+        if note is not None and note != self._note:
+            _message(f"nastran-pv: Nastran Ply Axes: nothing drawn: {note}")
+        self._note = note
+        return out
 
 
 def _spc_set_ids(data):

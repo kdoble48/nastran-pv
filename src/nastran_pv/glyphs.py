@@ -871,7 +871,8 @@ def ply_axes(shells, ply: int = 0, size: float = PLY_AXIS_SIZE, both: bool = Fal
     the element material axes (``MaterialAxis``). A bar is ``size`` x the element's size (twice its
     mean centre-to-grid distance) long; elements without the ply get none. Cell data ``EID``,
     ``Direction`` (1 or 2) and ``PlyAngle`` (degrees from the material axis); field ``AxesPly`` (the
-    ply drawn, 0 for the material axes) and ``AxisCount``."""
+    ply drawn, 0 for the material axes), ``AxisCount`` and, when nothing is drawn, ``AxesNote``
+    (why: no composite layup, no such ply, no material axes)."""
     from . import plies
     from .selection import _cell_points
 
@@ -883,40 +884,42 @@ def ply_axes(shells, ply: int = 0, size: float = PLY_AXIS_SIZE, both: bool = Fal
 
     layup = shells.GetFieldData().GetArray(plies.LAYUP_PLY)
     if ply:
-        arrays = plies.ply_arrays(shells, ply) or {}
-        axis, angle, drawn = arrays.get("PlyAxis"), arrays.get("PlyAngle"), int(ply)
+        arrays = plies.ply_arrays(shells, ply)
+        axis, angle, drawn = (arrays or {}).get("PlyAxis"), (arrays or {}).get("PlyAngle"), int(ply)
+        why = ("no composite layup (PCOMP, PCOMPG) on these shells" if arrays is None
+               else "the shells have no MaterialAxis and Normal" if axis is None else f"no shell has ply {ply}")
     elif cells("PlyAxis") is not None:
         axis, angle = cells("PlyAxis"), cells("PlyAngle")
-        drawn = int(layup.GetValue(0)) if layup is not None else 0
+        drawn, why = (int(layup.GetValue(0)) if layup is not None else 0), "no shell has the laid ply"
     else:
-        axis, angle, drawn = cells("MaterialAxis"), np.zeros(n), 0
+        axis, angle, drawn, why = cells("MaterialAxis"), np.zeros(n), 0, "the shells have no MaterialAxis"
     normal, eid = cells("Normal"), cells("EID")
-    xyz = vtkutil.to_numpy(shells.GetPoints().GetData()).reshape(-1, 3).astype(float) if n else np.zeros((0, 3))
     sizes, conn = _cell_points(shells)
-    centre = _face_centroids(shells) if n else np.zeros((0, 3))
-    owner = np.repeat(np.arange(n), sizes)
+    owner = np.repeat(np.arange(len(sizes)), sizes)
+    xyz = vtkutil.to_numpy(shells.GetPoints().GetData()).reshape(-1, 3).astype(float)[conn] if n else np.zeros((0, 3))
+    centre = np.zeros((n, 3))
+    np.add.at(centre, owner, xyz)
+    centre /= np.maximum(sizes, 1)[:, None]
     reach = np.zeros(n)
-    np.add.at(reach, owner, np.linalg.norm(xyz[conn] - centre[owner], axis=1))
+    np.add.at(reach, owner, np.linalg.norm(xyz - centre[owner], axis=1))
     length = size * 2.0 * reach / np.maximum(sizes, 1)
     ok = np.zeros(n, dtype=bool) if axis is None else np.isfinite(axis).all(axis=1) & (length > 0)
-    dirs = [(1, axis)] + ([(2, np.cross(normal, axis))] if both and axis is not None and normal is not None else [])
-    starts, ends, rows, kinds = [], [], [], []
-    for k, d in dirs:
-        half = 0.5 * length[ok, None] * d[ok]
-        starts.append(centre[ok] - half)
-        ends.append(centre[ok] + half)
-        rows.append(np.flatnonzero(ok))
-        kinds.append(np.full(int(ok.sum()), k, dtype=np.int8))
-    m = int(sum(len(r) for r in rows))
+    rows = np.flatnonzero(ok)
+    dirs = [] if axis is None else [(1, axis)] + ([(2, np.cross(normal, axis))] if both and normal is not None else [])
+    starts = [centre[rows] - 0.5 * length[rows, None] * d[rows] for _, d in dirs]
+    ends = [centre[rows] + 0.5 * length[rows, None] * d[rows] for _, d in dirs]
+    m = len(rows) * len(dirs)
     pts = np.empty((2 * m, 3))
     if m:
         pts[0::2], pts[1::2] = np.concatenate(starts), np.concatenate(ends)
     pd = vtkutil.polydata(pts, verts=False, lines=np.arange(2 * m).reshape(-1, 2))
-    rows = np.concatenate(rows) if m else np.zeros(0, dtype=np.int64)
+    cells_of = np.tile(rows, len(dirs))
     out = pd.GetCellData()
-    vtkutil.add_array(out, "EID", (eid[rows] if eid is not None else rows).astype(np.int64))
-    vtkutil.add_array(out, "Direction", np.concatenate(kinds) if m else np.zeros(0, dtype=np.int8))
-    vtkutil.add_array(out, "PlyAngle", angle[rows] if angle is not None else np.full(m, np.nan))
+    vtkutil.add_array(out, "EID", (eid[cells_of] if eid is not None else cells_of).astype(np.int64))
+    vtkutil.add_array(out, "Direction", np.repeat([k for k, _ in dirs], len(rows)).astype(np.int8))
+    vtkutil.add_array(out, "PlyAngle", angle[cells_of] if angle is not None else np.full(m, np.nan))
     vtkutil.add_array(pd.GetFieldData(), "AxesPly", np.array([drawn], dtype=np.int64))
     vtkutil.add_array(pd.GetFieldData(), "AxisCount", np.array([m], dtype=np.int64))
+    if not m:
+        vtkutil.set_field_strings(pd, "AxesNote", [why])
     return pd
