@@ -95,6 +95,9 @@ All notable changes to nastran-pv are listed here. The format follows
   aarch64 gets aarch64 wheels, and `install_deps.py` uses the CLI's pvpython search and shows
   pvpython's own error (a missing system library, ...) when it fails to start. An empty
   `XDG_CONFIG_HOME` put the macros in the current folder (#59).
+- ParaView 6.0 on Linux could crash after a Nastran filter was deleted (a VTK bug in how it frees a
+  deleted Python filter's state); the plugin's filters now release their cached data when ParaView
+  deletes them (#59).
 
 ## [0.1.0]
 

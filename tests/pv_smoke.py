@@ -1624,6 +1624,22 @@ def scope_filter_checks(pv, nv, reader, view, deform, full):
     pv.Delete(s)
 
 
+def deleted_filter_checks(pv, reader):
+    """A deleted Nastran filter lets go of its cached data at once. ParaView 6.0's VTK would release
+    it later, inside vtkPythonUtil::FindObject, and corrupt its ghost map: a crash on Linux after
+    pv.Delete (nastran_bdf_reader._drop_state_on_delete)."""
+    import gc
+
+    f = pv.NastranDeform(Input=reader, ScaleFactor=2.0)
+    f.UpdatePipeline()
+    state = f.GetClientSideObject().__dict__
+    check(state.get("_deformer") is not None, "Nastran Deform caches its deformer")
+    pv.Delete(f)
+    del f
+    gc.collect()
+    check(not state, f"a deleted Nastran Deform drops its cached state (left: {sorted(state)})")
+
+
 def main():
     reader = rm.load_reader(DECK)
     model = rm.Model(reader)
@@ -2016,6 +2032,7 @@ def main():
     pv.Delete(twin)
     converted_checks(pv, nv, reader)
     file_group_checks(pv, nv)
+    deleted_filter_checks(pv, reader)
     parity_checks(pv, nv)
     calc_nan_checks(pv, nv)
     random_checks(pv, nv)

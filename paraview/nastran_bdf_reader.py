@@ -186,9 +186,35 @@ def _whole_model(data):
     return as_multiblock(data), first is not None and first.GetFieldData().GetAbstractArray(BLOCK_PATH) is not None
 
 
+def _drop_state_on_delete(algorithm):
+    """Empty the algorithm's ``__dict__`` (its cached models, deformers, ...) when ParaView deletes it.
+
+    VTK 9.4/9.5 (ParaView 6.0) keeps a deleted Python algorithm's dict in a stale "ghost" and
+    releases it later, inside ``vtkPythonUtil::FindObject`` when a new object takes the address. The
+    data objects released then are ``data_model`` subclasses that leave ghosts of their own, and
+    adding a ghost sweeps the stale ones, so FindObject erases its map entry twice and corrupts
+    the heap (a crash on Linux; VTK master erases before the release). Released here, during the
+    deletion, the dict is empty by the time the ghost goes stale."""
+    state = algorithm.__dict__
+    if "_npv_on_delete" not in state:
+        state["_npv_on_delete"] = algorithm.AddObserver("DeleteEvent", lambda obj, event: state.clear())
+
+
 class _Settable:
     """Property setters that re-execute only on a change. Plain methods (no ``_pvsm`` tags), so
-    the proxies' XML is unchanged."""
+    the proxies' XML is unchanged. Every algorithm here derives from it, and each ``__init__``
+    ends with :func:`_drop_state_on_delete`."""
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        init = cls.__dict__.get("__init__")
+        if init is not None:
+            def __init__(self, *args, **kw):
+                init(self, *args, **kw)
+                _drop_state_on_delete(self)
+
+            __init__.__doc__ = init.__doc__
+            cls.__init__ = __init__
 
     def _set(self, attr, value):
         if getattr(self, attr) != value:

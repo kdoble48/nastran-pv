@@ -233,6 +233,13 @@ Every gotcha found so far, by area. The few that bite on any change are also in 
   `vtkMultiBlockDataSet` serializer is also registered for it (`_init_serializers` does this).
   trame-vtk is vendored only with `install_deps.py --site`. An open ParaView GUI locks the `.pyd`
   files in `paraview/_vendor`, so re-vendoring then fails partway and can leave scipy broken.
+- ParaView 6.0 (VTK 9.4/9.5) on Linux: a deleted Python algorithm keeps its `__dict__` in a stale
+  "ghost" that `vtkPythonUtil::FindObject` releases when a new object takes its address. Releasing
+  cached data objects there (they are `data_model` subclasses, so they leave ghosts too) makes it
+  erase its ghost-map entry twice and corrupts the heap; pv_smoke crashed in the parity checks.
+  Every plugin algorithm derives from `_Settable`, whose `__init_subclass__` makes each `__init__`
+  end with `_drop_state_on_delete`: a `DeleteEvent` observer that empties the dict during the
+  deletion. VTK master releases the ghost only after erasing it.
 - pyNastran quirks:
   - pyNastran main turns on its developer self-checks when `GITHUB_ACTOR` (or `TRAVIS`, `APPVEYOR`)
     is set (`pyNastran.IS_CI`). One of them, `_check_result_slice`, fails on the synthetic OP2
