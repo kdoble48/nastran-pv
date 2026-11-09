@@ -32,6 +32,9 @@ from ..deck import Deck
 from .common import element_axes, orientation_vector, perpendicular, unit
 
 
+BUSH_TYPES = ("CBUSH",)
+
+
 def _grid(deck: Deck, nid):
     """Basic xyz of a grid, None when blank or undefined."""
     if not nid:
@@ -114,7 +117,7 @@ def build_bushes(deck: Deck, k_ref: float | None = None):
     model = deck.model
     rows = []
     for eid, elem in model.elements.items():
-        if elem.type != "CBUSH":
+        if elem.type not in BUSH_TYPES:
             continue
         try:
             R = bush_frame(deck, elem)

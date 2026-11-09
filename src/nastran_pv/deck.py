@@ -39,6 +39,8 @@ class Deck:
     cd: np.ndarray  # (n,) displacement coordinate system id per node
     warnings: list[str] = field(default_factory=list)
     includes: IncludeTree | None = None  # files read and the file of each element (includes.py)
+    # {(card, reason): [id, ...]}: cards of a drawn type in a form no block draws (cards.py)
+    skipped: dict = field(default_factory=dict)
     _n_mass: int = field(default=0, repr=False)  # where the next mass warning goes (see warn)
     _n_pinned: int = field(default=0, repr=False)  # leading load errors kept first (xref failure)
 
@@ -115,6 +117,11 @@ class Deck:
             self._n_mass += 1
         else:
             self.warnings.append(msg)
+
+    def skip(self, card: str, reason: str, ident=None) -> None:
+        """Count one card that its builder cannot draw for ``reason`` (``cards.PATCH`` ...), for the
+        card report instead of a warning per card. ``build_multiblock`` starts each build empty."""
+        self.skipped.setdefault((card, reason), []).append(ident)
 
     def reset_warnings(self, base) -> None:
         """Back to ``base`` (the load warnings) before building the model again."""
@@ -276,7 +283,7 @@ def load_deck(path, punch: bool | None = None, encoding: str = "latin-1", echo: 
     log = SimpleLogger(level="warning", log_func=log_func)
     model = BDF(debug=None, log=log)
     # pyNastran 1.4 skips CWELD; 1.5 parses it but aborts the whole read on the ALIGN and
-    # GRIDID forms. nastran-pv does not draw welds, so keep them out (they are still counted).
+    # GRIDID forms. nastran-pv does not draw welds, so keep them out (the card report counts them).
     model.disable_cards(["CWELD"])
     with warnings.catch_warnings(record=True) as caught:  # pyNastran 1.5 also uses warnings.warn
         warnings.simplefilter("always")

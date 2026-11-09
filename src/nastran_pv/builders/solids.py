@@ -24,7 +24,7 @@ from vtkmodules.vtkCommonDataModel import (
 )
 
 from ..deck import Deck
-from .common import CellTable, add_mid_density, compact_mesh, property_info
+from .common import CellTable, add_mid_density, compact_mesh, property_info, warn_midside
 
 # Nastran -> VTK node permutation for the full (quadratic) element.
 _HEX20 = list(range(8)) + list(range(8, 12)) + list(range(16, 20)) + list(range(12, 16))
@@ -84,6 +84,7 @@ def build_solids(deck: Deck):
     model = deck.model
     table = CellTable()
     grids = model.nodes
+    midside: dict[str, list[int]] = {}  # given midside grids that do not exist
     for eid, elem in model.elements.items():
         spec = SOLIDS.get(elem.type)
         if spec is None:
@@ -95,10 +96,13 @@ def build_solids(deck: Deck):
             deck.warn(f"{elem.type} {eid}: missing grid(s), skipped")
             continue
         full = nids[:nfull]
+        if any(n and n not in grids for n in full[ncorner:]):
+            midside.setdefault(elem.type, []).append(eid)
         if len(full) == nfull and all(n in grids for n in full):
             table.add(eid, elem.Pid(), elem.type, quad_type, [full[i] for i in perm])
         else:
             table.add(eid, elem.Pid(), elem.type, lin_type, corner)
+    warn_midside(deck, midside)
 
     if not len(table):
         return None

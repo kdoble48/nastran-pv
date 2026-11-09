@@ -65,7 +65,7 @@ _HELP = (
     "version as ParaView's Python that has pyNastran installed. Original error: {err}"
 )
 
-_FLAGS = ("shells", "lines", "solids", "masses", "rigid", "connectors", "bushes", "constraints", "loads")
+_FLAGS = ("shells", "lines", "solids", "masses", "rigid", "connectors", "plotels", "bushes", "constraints", "loads")
 # model tree checklists (reader property -> nastran_pv.tree category)
 _VISIBILITY = {"VisibleProperties": "Properties", "VisibleMaterials": "Materials",
                "VisibleElementTypes": "ElementTypes", "VisibleFamilies": "Families", "VisibleGroups": "Groups",
@@ -407,6 +407,11 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
     def SetConnectors(self, v):
         self._set_flag("connectors", v)
 
+    @smproperty.intvector(name="Plotels", default_values=1)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetPlotels(self, v):
+        self._set_flag("plotels", v)
+
     @smproperty.intvector(name="Bushes", default_values=1)
     @smdomain.xml('<BooleanDomain name="bool"/>')
     def SetBushes(self, v):
@@ -739,6 +744,21 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         self._sel_error = None
         return self._sel_ids
 
+    def _report_messages(self, deck, mb):
+        """The deck's warnings, then the card report (what no block draws), in one Output Messages entry."""
+        from nastran_pv import cards
+
+        lines = deck.warnings[:25]
+        if len(deck.warnings) > 25:
+            lines.append(f"... {len(deck.warnings) - 25} more")
+        skipped = cards.read(mb)
+        if skipped:
+            lines.append(cards.summary(skipped))
+        if lines:
+            shown = "\n  ".join(lines)
+            count = len(deck.warnings) + bool(skipped)
+            _message(f"nastran-pv: {os.path.basename(self._filename)}: {count} message(s)\n  {shown}")
+
     def RequestData(self, request, inInfo, outInfo):
         if not self._filename:
             return 1
@@ -784,10 +804,8 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
             _message(f"nastran-pv: failed to read {self._filename}:\n{traceback.format_exc()}", error=True)
             return 0
         self._load_error = ""
-        if rebuilt and deck.warnings:
-            shown = "\n  ".join(deck.warnings[:25])
-            more = f"\n  ... {len(deck.warnings) - 25} more" if len(deck.warnings) > 25 else ""
-            _message(f"nastran-pv: {os.path.basename(self._filename)}: {len(deck.warnings)} message(s)\n  {shown}{more}")
+        if rebuilt:
+            self._report_messages(deck, mb)
         output = vtkPartitionedDataSetCollection.GetData(outInfo, 0)
         output.ShallowCopy(pdc)
         if time_value is not None:

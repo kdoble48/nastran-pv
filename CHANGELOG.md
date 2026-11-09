@@ -8,6 +8,18 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Added
 
+- Card report: every card no block draws is counted per card type and reason (not drawn, scalar
+  points, grounded, patch form, heat transfer, matrix input, superelement, not read), with its
+  first ids. `convert` prints it, `stats` and `check` on stderr, the reader in Output Messages,
+  and the root table `SKIPPED_Card SKIPPED_Count SKIPPED_Reason SKIPPED_IDs` plus
+  `SkippedCardCount` keep it in `.vtm`/VTKHDF. It replaces the scattered CMASS3/4, CWELD, CFAST
+  patch, SPC and load-type warnings, and covers what was dropped without a word (CTRIAX6, CQUADX,
+  CBUSH1D/2D, CHBDY*, CDAMP5, GENEL, DMIG, superelements, grounded springs, springs, masses, MPC
+  terms and PLOTELs on scalar points, cards pyNastran rejected). New `Plotels` block (PLOTEL
+  lines, `--no-plotels`, reader *Plotels*, not traversed by the model tools); CQUAD with nine
+  grids is a biquadratic cell (quadratic without G9), and a missing midside grid of a shell or
+  solid now warns; MPCADD is resolved into the root `MPCADD_ID MPCADD_Set` table, with
+  `ActiveMPCSets` from Case Control (#61).
 - Result types: what results attach is declared per type in `result_types.py` (`Displacement`,
   `VonMisesMax`, outputs unchanged), so new results are added by declaration. Choose them with
   `--result-types` (`convert`, `stats`, `store add`) or the reader's *Result Types* checklist (#60).
