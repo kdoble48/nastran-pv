@@ -48,7 +48,7 @@ All notable changes to nastran-pv are listed here. The format follows
   file name are labelled by folder (`a/model.bdf`, `b/model.bdf`, `labels.unique_labels`) in texts
   and `NPV ...` names, which are renamed with a label. NPV Highlight File no longer shows the reader:
   it draws the selection as *NPV highlight* (in each view of a pair); NPV Index Colors with a hidden
-  source selected colors the view's coloring instead of showing that source (#PR).
+  source selected colors the view's coloring instead of showing that source (#75).
 - Pressure loads and GRAV drawn: PLOAD, PLOAD2 and PLOAD4 (shells, THRU ranges, solid faces, corner
   pressures, N1-N3 directions) become the `Pressures/SID_n`/`LOAD_n` blocks, a polygon per loaded
   face with `Pressure CornerPressure PressureDirection PressureForce` and the set's
