@@ -287,8 +287,10 @@ Nastran Diff's *Input*), and **A**, the reference (its *Reference*). The compari
   update the kept comparison (uCRM-9: 1.3 s to compare, then 0.2 s for NPV Masses and 0.9 s for a
   scope change).
 
-Results and mode animation in a comparison move B's side only, and the per-view summary lists only
-the last layer's text; both are to come.
+NPV Results deforms B's diff layers by B's displacement (A's removed items follow B's grids), and
+in a pair A's side by A's own. The animation macros and the play button vibrate the model of the
+view they are run in; vibrating both sides of a pair, and a summary per view that lists every
+layer, are to come.
 
 ## Filter properties
 

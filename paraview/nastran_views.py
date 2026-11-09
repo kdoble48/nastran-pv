@@ -783,10 +783,25 @@ def clear(view=None):
     return _finish(first)
 
 
-def solid(disp, rgb):
+def _old_lut(disp):
+    """The lookup table ``disp`` is colored with now, or None (a plain color, a text)."""
+    color = getattr(disp, "ColorArrayName", None)
+    return getattr(disp, "LookupTable", None) if color and color[1] else None
+
+
+def _drop_bar(lut, view):
+    """Hide the legend of ``lut`` (a representation's previous coloring) when nothing shown uses it: one
+    object can carry two colorings in turn (the mesh by PID, then by DiffStatus or as a ghost)."""
+    if lut is not None:
+        pv.HideScalarBarIfNotNeeded(lut, view or pv.GetActiveView())
+
+
+def solid(disp, rgb, view=None):
     """Switch a representation to a plain colour."""
+    old = _old_lut(disp)
     disp.ColorArrayName = ["POINTS", ""]
     disp.AmbientColor = disp.DiffuseColor = rgb
+    _drop_bar(old, view)
 
 
 def ghost_mesh(model, view, opacity=0.2):
@@ -833,6 +848,7 @@ def categorical(disp, array, values, labels=None, colors=None, legend_max=40, as
                 separate=False):
     """Indexed lookup table: one colour and one annotation per integer value. ``separate``: a color
     map of this representation's own, so the shared one (the mesh's PID legend) is left alone."""
+    old = _old_lut(disp)
     if separate:
         disp.UseSeparateColorMap = 1
         pv.ColorBy(disp, (association, array), separate=True)  # ColorBy's default resets UseSeparateColorMap
@@ -844,10 +860,13 @@ def categorical(disp, array, values, labels=None, colors=None, legend_max=40, as
     lut.Annotations = [x for i, v in enumerate(values) for x in (str(v), labels[i] if labels else str(v))]
     lut.IndexedColors = [c for rgb in (colors or palette(len(values))) for c in rgb]
     disp.SetScalarBarVisibility(view or pv.GetActiveView(), len(values) <= legend_max)
+    if old is not None and old != lut:
+        _drop_bar(old, view)
     return lut
 
 
 def continuous(disp, association, array, preset="Viridis (matplotlib)", view=None):
+    old = _old_lut(disp)
     pv.ColorBy(disp, (association, array))
     lut = pv.GetColorTransferFunction(array)
     lut.InterpretValuesAsCategories = 0
@@ -857,6 +876,8 @@ def continuous(disp, association, array, preset="Viridis (matplotlib)", view=Non
         pass
     disp.RescaleTransferFunctionToDataRange(True, False)
     disp.SetScalarBarVisibility(view or pv.GetActiveView(), True)
+    if old is not None and old != lut:
+        _drop_bar(old, view)
     return lut
 
 

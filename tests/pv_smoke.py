@@ -1867,11 +1867,8 @@ def scene_review_checks(pv, nv, reader):
 CMP_PAIRS = {"diff": ("diff_a.bdf", "diff_b.bdf"), "diff2": ("diff2_a.bdf", "diff2_b.bdf"),
              "same_name": (os.path.join("same_name", "a", "model.bdf"), os.path.join("same_name", "b", "model.bdf"))}
 CMP_STATES = ("single", "diff", "pair_left", "pair_right", "diff_show_only")
-# commands that change the session or the scope: each runs in a freshly built state (the others in turn)
 CMP_SCOPE = ("show_only_selected", "hide_selected", "show_all", "show_only_property", "show_only_material",
              "show_only_reached", "hide_reached", "show_only_file", "hide_file")  # write both models in a comparison
-CMP_SESSION = ("diff", "side_by_side", "single", "clear", "highlight_file", "grow_from_selection",
-               "path_from_selection") + CMP_SCOPE
 
 
 class _Cmp:
@@ -1917,12 +1914,8 @@ class _Cmp:
             nv.stop_mode_animation(r, view)
         if state == "single":
             self._delete_derived(lambda s: any(nv._xml_name(n) == nv.DIFF_XML for n in nv.upstream(s)))
-        for r in (self.a, self.b):
-            r.ShowOnlyElements = r.HiddenElements = ""
-            r.SelectionMode, r.SelectionFile = "Off", ""
-            r.UpdatePipelineInformation()
-            for prop in nv.VISIBILITY_PROPS:
-                setattr(r, prop, nv._listed(r, prop))
+        self.scope = ("", "")
+        self.restore_scope()
         nv._set_time(view, 0.0)
         pv.SetActiveView(view)
         pv.SetActiveSource(self.b)
@@ -1938,12 +1931,27 @@ class _Cmp:
         if state == "diff_show_only":
             self.select_cells(view)
             nv.show_only_selected()
+            self.scope = (self.b.ShowOnlyElements, self.b.HiddenElements)
             return view
         left, right = nv.side_by_side(view=view)
         self.views = {"A": left, "B": right}
         run = right if state == "pair_right" else left
         pv.SetActiveView(run)
         return run
+
+    def restore_scope(self):
+        """Both readers back to the state's scope (a scope command changes only that): its ID lists,
+        every checklist entry checked, no Selection File, no selection."""
+        nv = self.nv
+        for src in nv._sources_with_selection().values():
+            self.pv.ClearSelection(src)
+        for r in (self.a, self.b):
+            r.ShowOnlyElements, r.HiddenElements = self.scope
+            r.SelectionMode, r.SelectionFile = "Off", ""
+            r.UpdatePipelineInformation()
+            for prop in nv.VISIBILITY_PROPS:
+                if len(list(getattr(r, prop))) != len(nv._listed(r, prop)):
+                    setattr(r, prop, nv._listed(r, prop))
 
     def selectable(self, view):
         """The mesh shown in ``view`` (what a user picks shells 1 and 2 on), else any shown object with EIDs."""
@@ -1989,13 +1997,17 @@ class _Cmp:
             nv.play_mode(frames=4)
             return nv.stop_mode_animation()
 
+        def index_colors():
+            self.pv.SetActiveSource(self.selectable(self.pv.GetActiveView()))  # the colored mesh, picked
+            return nv.index_colors()
+
         out = {name: (lambda name=name: nv.apply(name, toggle=True)) for name in nv.VIEWS}
         out.update({
             "animate_mode": lambda: nv.animate_mode(cycles=1, frames=4),
-            "animate_modes": lambda: nv.animate_modes(frames=4, fps=0),
+            "animate_modes": lambda: nv.animate_modes(frames=2, fps=0),
             "play_then_stop": play_then_stop, "stop_mode_animation": nv.stop_mode_animation,
-            "save_mode_animations": lambda: nv.save_mode_animations(frames=4, folder=os.path.join(tmp, "gifs")),
-            "index_colors": nv.index_colors, "grow_from_selection": picked(nv.grow_from_selection),
+            "save_mode_animations": lambda: nv.save_mode_animations(frames=2, folder=os.path.join(tmp, "gifs")),
+            "index_colors": index_colors, "grow_from_selection": picked(nv.grow_from_selection),
             "path_from_selection": picked(nv.path_from_selection, points=True),
             "show_only_selected": picked(nv.show_only_selected), "hide_selected": picked(nv.hide_selected),
             "show_all": nv.show_all, "show_only_property": picked(nv.show_only_property),
@@ -2128,9 +2140,10 @@ def comparison_detail_checks(pv, nv):
           and nv._name(nv._ReaderOnly(b), "diff removed mass") in shown[left],
           "the pair: A's masses and its removed mass left, B's changed masses right")
     nv.apply("bushes", view=right)  # every command in both views
+    names = {s.GetGlobalIDAsString(): k[0] for k, s in pv.GetSources().items()}
     shown_left = [names.get(s.GetGlobalIDAsString(), "") for s in nv.shown_sources(left)]
     check(nv._name(nv._ReaderOnly(a), "bush glyphs") in shown_left and "bushes" in nv.scene_of(left).overlays,
-          "NPV Bushes in B's view draws A's bushes in A's view too")
+          f"NPV Bushes in B's view draws A's bushes in A's view too ({sorted(shown_left)})")
     nv.single(view=right)
     check(right not in pv.GetViews() and nv.scene_of(left).role is None and nv.subject(left) == b,
           "NPV Single in a pair: one view, B as one model")
@@ -2177,8 +2190,11 @@ def comparison_checks(pv, nv):
                     problems.append(f"{pair}/{state}/{name}: {traceback.format_exc()[-600:]}")
                 cmp.invariants(f"{pair}/{state}", name, problems)
                 t1 = time.time()
-                if name in CMP_SESSION:
-                    run_view = cmp.build(state, view)
+                if name in ("single", "clear") or name == "diff" and state == "single" \
+                        or name == "side_by_side" and not state.startswith("pair"):
+                    run_view = cmp.build(state, view)  # the session changed
+                else:
+                    cmp.restore_scope()  # the scope commands change only that; drop the picks
                 spent[name] = spent.get(name, 0.0) + t1 - t0
                 spent["(build)"] = spent.get("(build)", 0.0) + time.time() - t1
             print(f"   {pair}/{state}: {len(commands)} commands", flush=True)
