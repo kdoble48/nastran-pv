@@ -14,10 +14,14 @@ nastran-pv diff   A B [--csv diff.csv] [--grid-tol R] [--rel-tol R] [--skip KIND
 nastran-pv convert B --diff-against A -o diff.vtm                   # B with the diff on its mesh
 nastran-pv store  add|list|fields|query|compare|open --db runs.sqlite ...
 nastran-pv setup  [--pvpython PATH] [--no-macros] [--dry-run]
+nastran-pv --version                                                # versions, for a bug report
 ```
 
 `python -m nastran_pv ...` works without installing; add `src` to `PYTHONPATH`. Run any command
-with `--help` for the full option list.
+with `--help` for the full option list. `nastran-pv --version` prints the versions of nastran-pv,
+Python, pyNastran, numpy, VTK and h5py, the `pvpython` it finds and the OS: the lines the
+[bug report form](https://github.com/kdoble48/nastran-pv/issues/new?template=bug_report.yml) asks
+for.
 
 The field options `--derive`, `--map` and `--calc` (for `convert`, `stats` and `store add`) are
 described in [Fields](fields.md); `--parts`, `--grow` and `--rules` in [Model tools](tools.md);

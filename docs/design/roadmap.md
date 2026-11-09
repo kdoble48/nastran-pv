@@ -1,6 +1,6 @@
 # Roadmap to 1.0
 
-Date: 2026-11-08. This replaces the 2026-10-09 version. Status: the 15 tasks below were agreed
+Date: 2026-11-08 (status: 2026-11-09). This replaces the 2026-10-09 version. Status: the 15 tasks below were agreed
 with the user. Each task that adds behaviour gets its own spec before it is built (see Process).
 
 ## Goal
@@ -26,6 +26,50 @@ and CI proves all of this on every push.
 | Milestone order | 0.2 release foundation, 0.3 composable views and model coverage, 0.4 static results, 0.5 dynamics and results helpers, 0.6 composites, 1.0 hardening | Views and coverage need no results, so every beta user benefits; static results define the result registry that dynamics, the helpers and composites build on |
 | Process | Each task is one PR or a short PR stack, with its own spec → plan → build cycle when it adds behaviour | This document fixes scope and order only, not designs |
 | ParaView | 6.0 and 5.13.1 | 5.13 support shipped in #25. `tests/pv_smoke.py` runs on both before a plugin or view change merges |
+
+## Status on 2026-11-09
+
+| Task | State | Pull requests |
+|---|---|---|
+| 1. Plugin in the wheel | Done | #58 |
+| 2. ParaView in CI, setup on Linux and macOS | Done | #59 |
+| 3. 0.2.0 on PyPI | The release infrastructure is merged; the release waits on the user: the PyPI and TestPyPI pending publishers and the GitHub environments (`docs/versioning.md#releasing`), then `0.2.0rc1` and `0.2.0` | #69, #70 (draft) |
+| 4. Scene layers PR 2: comparison | Done | #67 |
+| 5. Scene layers PR 3: time and annotations | In progress | #75 |
+| 6. Known-issue sweep | Done | #56 (part A), #57 (part B) |
+| 7. Unsupported-card report, cheap coverage | Done | #61 |
+| 8. Result-type registry and selector | Done | #60 |
+| 9. Element forces, full stress and strain | Done | #64, #65 |
+| 10. Constraint forces, applied loads, deck pressures | Done | #63, #66 |
+| 11. Complex, frequency and transient results | Done | #72 |
+| 12. Results helpers as filters | Done | #73 |
+| 13. Composites | Done | #71, #74 |
+| 14. Performance budget | Done | #68 |
+| 15. 1.0 release | In progress: the Python API page and the deprecation policy (#76), the bug-report form, `--version` and this status (#GALLERY_NEXT), the gallery's result scenes (#GALLERY) | |
+
+### Left for the 1.0.0 tag
+
+1. Task 3: register the publishers and environments, publish `0.2.0rc1` to TestPyPI, check it on
+   a clean Windows and Linux machine, publish `0.2.0` (#70).
+2. Task 5 merged (#75).
+3. Task 15's pull requests merged, then the gallery assets uploaded with the user's go-ahead
+   (`python docs/build_gallery.py --ucrm9 ... --mystran ... --upload`, the exact command is in
+   #GALLERY), so the site shows the result scenes. Frequency response, transient and complex
+   results have no gallery scene: MYSTRAN solves none of them.
+4. The betas: the 0.3 to 0.6 milestones are all merged, so decide whether to tag them one by one
+   (each with a CHANGELOG section of its own) or to go from 0.2.0 straight to `1.0.0rc1`.
+5. A last look at the public API before the policy hardens at 1.0: the names on `docs/api.md`,
+   the CLI flags, the view names and the arrays. Anything to rename is renamed in a 0.x release
+   with a deprecated alias (`docs/versioning.md#deprecation`), not after 1.0. Known candidate:
+   `Rules(within_pids=True)` and the `within_pids` token, an undeprecated old spelling of
+   `within=pid`.
+6. The Goal's check on clean Windows, Linux and macOS machines: `pip install nastran-pv`,
+   `nastran-pv setup`, a deck opened in ParaView and converted from the CLI, and an OP2 and an
+   HDF5 run of each kind (static, frequency response, transient, composite) shown with the
+   one-click views. CI runs `pv_smoke.py` against ParaView on Linux only (`paraview.yml`), so
+   Windows and macOS rest on this manual check unless a ParaView job is added for them.
+7. `1.0.0rc1` to TestPyPI, the check from TestPyPI, then `1.0.0` to PyPI
+   (`docs/versioning.md#releasing`).
 
 ## Shipped since 2026-10-09
 
@@ -262,6 +306,10 @@ so the fixes ship in 0.2.0.
   - An issue template for bug reports that asks for a deck.
   - A gallery entry for each result type, then the 1.0.0 tag.
 - Exit: the success criteria in Goal hold, and the API and deprecation policy are published.
+- Done in its pull requests (see Status above): `docs/api.md` (autodoc, the public names in each
+  module's `__all__`), the deprecation policy and `nastran_pv.deprecation`, the bug-report form
+  and `nastran-pv --version`, and a gallery scene for every result type MYSTRAN solves (static
+  uCRM-9, the demo tray's static run, a composite plate). Left: the list above.
 - Depends on: all of the above.
 
 ## Parked

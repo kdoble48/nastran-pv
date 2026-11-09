@@ -8,6 +8,12 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Added
 
+- `nastran-pv --version`: the versions of nastran-pv, Python, pyNastran, numpy, VTK and h5py, the
+  `pvpython` it finds and the OS, a dependency that does not import named as such. A bug-report
+  issue form (`.github/ISSUE_TEMPLATE/bug_report.yml`) asks for them, for a deck that shows the
+  problem (a cut-down one for a confidential model), the results file when results are involved,
+  what was expected and seen, and the card report and warnings; the README links it (#TBD).
+
 - Composite plies in ParaView: the reader's *Ply* (`convert --ply`: a ply id, or 0 for each
   element's critical ply), the *Nastran Ply Axes* filter (a ply's fibre and 2-directions as lines
   through each shell, from the layup table, so on converted files too; ply 0 draws the reader's ply

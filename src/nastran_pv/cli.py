@@ -792,11 +792,56 @@ def cmd_store(args) -> int:
     return 0
 
 
+def version_report() -> str:
+    """``nastran-pv --version``: nastran-pv and what it runs on, the first lines of a bug report.
+    A dependency that does not import is reported, not raised: a broken install is a bug report."""
+    import importlib
+    import platform
+
+    from . import __version__
+    from .locate import find_executable
+
+    def version(module):
+        try:
+            if module == "vtkmodules":
+                from vtkmodules.vtkCommonCore import vtkVersion
+
+                return vtkVersion.GetVTKVersion()
+            return importlib.import_module(module).__version__
+        except Exception as exc:
+            return f"not importable ({type(exc).__name__}: {exc})"
+
+    try:
+        pvpython = str(find_executable("pvpython"))
+    except FileNotFoundError:
+        pvpython = "not found"
+    return "\n".join([f"nastran-pv {__version__}",
+                      f"Python {platform.python_version()} ({sys.executable})",
+                      f"pyNastran {version('pyNastran')}", f"numpy {version('numpy')}",
+                      f"VTK {version('vtkmodules')}", f"h5py {version('h5py')}",
+                      f"pvpython {pvpython}", f"OS {platform.platform()}"])
+
+
+class _VersionAction(argparse.Action):
+    """``--version``: print :func:`version_report` and exit (computed only when asked: it imports
+    pyNastran)."""
+
+    def __init__(self, option_strings, dest=argparse.SUPPRESS, default=argparse.SUPPRESS, help=None):
+        super().__init__(option_strings, dest=dest, default=default, nargs=0, help=help)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        print(version_report())
+        parser.exit()
+
+
 def main(argv=None) -> int:
     from .launch import nsm_set_id
 
     p = argparse.ArgumentParser(prog="nastran-pv", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--version", action=_VersionAction,
+                   help="print the versions of nastran-pv, Python, pyNastran, numpy, VTK and h5py, the pvpython "
+                        "it finds and the OS, and exit (paste them into a bug report)")
     sub = p.add_subparsers(dest="command", required=True)
 
     c = sub.add_parser("convert", help="deck (or .vtm) -> VTK multiblock (.vtm), with optional extra fields")

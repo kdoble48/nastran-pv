@@ -1,0 +1,84 @@
+name: Bug report
+description: A deck, results file or command that nastran-pv reads, draws or converts wrong
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. A deck that shows the problem is what makes a bug fixable, so please attach one.
+
+        **Confidential model?** Don't attach it. Cut it down to a minimal deck that still shows the problem
+        (the few elements, properties, materials and grids involved, with made-up values and ids if you need to),
+        check that the cut-down deck still shows it, and attach that. If even that can't be shared, describe the
+        cards involved (card names and field layout, e.g. a CBUSH with a CID and a PBUSH with K1-K6) as exactly as
+        you can.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected to see and what you saw instead.
+      placeholder: |
+        Opened model.bdf in ParaView and clicked NPV Masses.
+        Expected: a mass ellipsoid at the CONM2 on grid 1001.
+        Saw: no masses, and "ElementMass (partial)" in the array list.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to reproduce
+      description: The exact command, or the ParaView steps (reader properties you changed, the view or filter you used).
+      placeholder: |
+        nastran-pv convert model.bdf --results model.op2 -o out/model.vtm
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: deck
+    attributes:
+      label: Deck
+      description: >
+        Attach the deck (.bdf/.dat, with its INCLUDE files) or a minimal deck that shows the problem: drag the
+        files in here (zip them if GitHub refuses the extension). For a confidential model, see the note above.
+    validations:
+      required: true
+  - type: textarea
+    id: results
+    attributes:
+      label: Results file
+      description: >
+        If results are involved, attach the OP2 or MSC/NX HDF5 (.h5) file, or a small run that shows the
+        problem, and say which solver and version wrote it (MSC Nastran 2024.1, Simcenter Nastran 2306, MYSTRAN 19, ...).
+  - type: textarea
+    id: report
+    attributes:
+      label: Card report and warnings
+      description: >
+        What `nastran-pv convert` prints after the blocks (the card report: the cards no block draws, and the
+        warnings), or, in ParaView, the Output Messages window (View > Output Messages), which lists the deck's
+        warnings and the card report when the reader opens it. Paste the text.
+      render: text
+  - type: textarea
+    id: versions
+    attributes:
+      label: Versions
+      description: >
+        Paste the output of `nastran-pv --version` (nastran-pv, Python, pyNastran, numpy, VTK, h5py, the
+        pvpython it finds, the OS). For a ParaView problem add the ParaView version (Help > About) and the
+        output of `nastran-pv setup --dry-run`, which shows the plugin and the ParaView it sets up. With an
+        older nastran-pv that has no `--version`, give `pip show nastran-pv pyNastran vtk` and your OS.
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: frontend
+    attributes:
+      label: Where
+      multiple: true
+      options:
+        - ParaView plugin (GUI)
+        - pvpython / ParaView Python shell
+        - nastran-pv CLI
+        - Python API (import nastran_pv)
+    validations:
+      required: true
