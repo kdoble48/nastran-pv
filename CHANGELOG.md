@@ -18,7 +18,7 @@ All notable changes to nastran-pv are listed here. The format follows
   `--ply N` (a ply id) for ply N, which also lays its layup on the shells (`PlyThickness PlyAngle
   PlyMID PlySOUT PlyZ PlyAxis`, the ply's fibre direction), or `--ply max` (the default) for each
   element's critical ply, with its id in `PlyStressPly` and the like. Those tables leave the
-  "not attached" report (#PR).
+  "not attached" report (#71).
 - NPV Forces and NPV Stress views (`view`/`render --preset forces stress`): each block colored by its
   element forces (shells `MembraneForce`, lines `AxialForce`, bushes, springs) or by von Mises stress
   (shells at the top fibre, solids, lines `MaxStress`); `nv.apply("stress", quantity=, fibre=,
