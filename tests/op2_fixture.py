@@ -257,3 +257,96 @@ def make_element_op2() -> OP2:
     stress.celas1_stress[1] = _oes(RealSpringStressArray, "CELAS1", 2, set_element_case, np.array([41]),
                                    _f32([[SPRING_STRESS]]))
     return op2
+
+
+# ------------------------------------------------------------------ composite plies
+# For tests/data/composites.bdf (tests/test_composites.py, pv_smoke); tests/h5_fixture.py writes the
+# same values in the MSC HDF5 layout. Rows per (element, ply id) as Nastran writes them: plies with
+# SOUT=NO (PCOMP 10 ply 2, PCOMPG 21 ply 104) have none. The by-hand critical plies: EID 1 ply 1
+# (von Mises 100 > 50 sqrt 3), 2 ply 3 (20 sqrt 3 > 10), 3 ply 4 (40), 4 ply 103 (3), 5 ply 102.
+COMPOSITE_NIDS = np.arange(1, 13)
+PLY_STRESS = {  # (EID, ply): S11 S22 S12 S1Z S2Z
+    (1, 1): (100, 0, 0, 1, 2), (1, 3): (0, 0, 50, 3, 4),
+    (2, 1): (10, 0, 0, 0, 0), (2, 3): (0, 0, 20, 0, 0),
+    (3, 1): (10, 0, 0, 0, 0), (3, 2): (20, 0, 0, 0, 0), (3, 3): (30, 0, 0, 0, 0), (3, 4): (40, 0, 0, 0, 0),
+    (4, 101): (1, 0, 0, 0, 0), (4, 102): (0, 2, 0, 0, 0), (4, 103): (3, 0, 0, 0, 0),
+    (5, 102): (0, 0, 5, 0, 0),
+}
+PLY_STRAIN = {(1, 1): (1e-3, 0, 2e-3, 1e-4, 2e-4), (1, 3): (0, 0, 0, 0, 0)}  # engineering shear
+# FP, FB (-1: no bonding index); critical by the larger: EID 1 ply 1 (0.5), EID 4 ply 101 (FB 0.9)
+PLY_FAILURE = {(1, 1): (0.5, 0.2), (1, 3): (0.3, -1.0), (4, 101): (0.1, 0.9), (4, 102): (0.4, 0.1),
+               (4, 103): (0.2, -1.0)}
+
+
+def _ply_rows(values: dict, eids) -> tuple:
+    """(element_layer int32, rows) of the plies of ``eids``, in table order (by element, then ply)."""
+    keys = [k for k in values if k[0] in eids]
+    return np.array(keys, dtype=np.int32), [values[k] for k in keys]
+
+
+def _composite(cls, table, card, values, eids, s_code):
+    """A real static composite stress (OES1C) or strain (OSTR1C) table: the five components, no
+    angle or principals, von Mises in the last column (s_code bit 4)."""
+    layers, rows = _ply_rows(values, eids)
+    data = np.zeros((len(rows), 9))
+    data[:, :5] = rows
+    x, y, t = data[:, 0], data[:, 1], data[:, 2]
+    data[:, 8] = np.sqrt(x * x - x * y + y * y + 3 * t * t)
+    obj = cls.add_static_case(table, layers, _f32(data), 1, card)
+    obj.s_code = obj.data_code["s_code"] = s_code
+    obj.stress_bits = obj.data_code["stress_bits"] = [int(b) for b in f"{s_code:05b}"]
+    return obj
+
+
+def _failure_indices(card, element_type, eids):
+    """A real static failure-index table (OEFIT) as pyNastran reads one: per (element, ply) FP, FB
+    and the element's largest index on its last row (NaN on the others). pyNastran cannot write
+    these tables, so they exist in the OP2 object only."""
+    from pyNastran.op2.tables.oef_forces.oef_force_objects import FailureIndicesArray, oef_data_code
+    from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import set_static_case
+
+    layers, rows = _ply_rows(PLY_FAILURE, eids)
+    data = np.full((len(rows), 3), np.nan)
+    data[:, :2] = rows
+    for e in eids:
+        mine = np.flatnonzero(layers[:, 0] == e)
+        data[mine[-1], 2] = np.nanmax(np.where(data[mine, :2] < 0, np.nan, data[mine, :2]))
+
+    def case(cls, data_code, is_sort1, isubcase, element_layer, values, times):
+        obj = cls(data_code, is_sort1, isubcase, times[0])
+        obj.element_layer, obj.data, obj._times = element_layer, values, times
+        obj.failure_theory = np.full(len(element_layer), "HILL", dtype="U8")
+        obj.ntimes, obj.ntotal = values.shape[:2]
+        obj.nelements = obj.ntotal
+        return obj
+
+    dc = oef_data_code("OEF1X", is_sort1=True, is_random=False, random_code=0, title="", subtitle="", label="",
+                       is_msc=True)  # pyNastran has no OEFIT entry here: table code 25 is set by hand
+    dc.update(loadIDs=[0], data_names=[], element_name=card, element_type=element_type, num_wide=9,
+              table_name="OEFIT", table_code=25)
+    return set_static_case(FailureIndicesArray, True, 1, dc, case, (layers, _f32(data)))
+
+
+def make_composite_op2(failure: bool = True) -> OP2:
+    """Subcase 1 of tests/data/composites.bdf: grid z displacements 0.001 * NID, the ply stresses of
+    every composite shell (a CQUAD4 and a CTRIA3 table), the ply strains of CQUAD4 1 and, with
+    ``failure``, the failure indices of CQUAD4 1 and 4 (in memory only: pyNastran writes none)."""
+    from pyNastran.op2.tables.oes_stressStrain.real.oes_composite_plates import (
+        RealCompositePlateStrainArray, RealCompositePlateStressArray)
+
+    op2 = OP2(debug=None)
+    op2.set_mode("msc")
+    ng = np.column_stack([COMPOSITE_NIDS, np.ones(len(COMPOSITE_NIDS), dtype=int)]).astype(np.int32)
+    disp = np.zeros((1, len(COMPOSITE_NIDS), 6), dtype="float32")
+    disp[0, :, 2] = COMPOSITE_NIDS * 0.001
+    op2.displacements[1] = RealDisplacementArray.add_static_case("OUGV1", ng, disp, 1)
+    stress, strain = op2.op2_results.stress, op2.op2_results.strain
+    stress.cquad4_composite_stress[1] = _composite(RealCompositePlateStressArray, "OES1C", "CQUAD4", PLY_STRESS,
+                                                   (1, 2, 4, 5), 1)
+    stress.ctria3_composite_stress[1] = _composite(RealCompositePlateStressArray, "OES1C", "CTRIA3", PLY_STRESS,
+                                                   (3,), 1)
+    strain.cquad4_composite_strain[1] = _composite(RealCompositePlateStrainArray, "OSTR1C", "CQUAD4", PLY_STRAIN,
+                                                   (1,), 15)
+    if failure:
+        op2.op2_results.failure_indices.cquad4_composite_force[1] = _failure_indices("CQUAD4", 95, (1, 4))
+    return op2

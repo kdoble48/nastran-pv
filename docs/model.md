@@ -9,7 +9,7 @@ out when the deck has nothing for it.
 
 | Block | Data | Main arrays |
 |---|---|---|
-| `Shells` | CTRIA3/6, CTRIAR, CQUAD4/8, CQUAD (9 grids: biquadratic, no G9: 8-node quadratic), CQUADR, CSHEAR | cell: `EID PID MID ElementType Thickness Density MassPerArea ElementMass FamilyId GroupId Normal ElementXAxis MaterialAxis`, with NSM also `NSMPerArea NSMMass NSMSource`; point: `NID SPC_DOF F_<sid> M_<sid>` |
+| `Shells` | CTRIA3/6, CTRIAR, CQUAD4/8, CQUAD (9 grids: biquadratic, no G9: 8-node quadratic), CQUADR, CSHEAR | cell: `EID PID MID ElementType Thickness Density MassPerArea ElementMass FamilyId GroupId Normal ElementXAxis MaterialAxis`, with NSM also `NSMPerArea NSMMass NSMSource`, with PCOMP/PCOMPG also `PlyCount` and the field table `PLY_*` (see [Composites](#composites)); point: `NID SPC_DOF F_<sid> M_<sid>` |
 | `Solids` | CHEXA/CPENTA/CTETRA/CPYRAM, linear and quadratic | cell: `EID PID MID ElementType Density ElementMass`; point: as for shells |
 | `Lines` | CBAR, CBEAM, CROD, CONROD, CTUBE, CVISC, CBEND | cell: `EID PID MID ElementType Density Area ElementMass Axis1-3 OffsetA OffsetB` (frame and offsets of CBAR/CBEAM, NaN for the others), with NSM also `NSMPerLength NSMMass NSMSource` |
 | `Masses` | CONM2, CONM1, CMASS1/2 (one point at the CG) | point: `EID NID CID Mass MassScale Inertia InertiaEllipsoid EquivalentRadius Offset HasInertia`; field: `TotalMass` |
@@ -100,11 +100,15 @@ The [field options](fields.md) add further arrays on top of these.
 | `SolidStress` | Solids, at the centre: `Stress` (XX YY ZZ XY YZ ZX, a symmetric tensor), `PrincipalStress` (3, largest first), `MaxShearStress`, `VonMises` | `stress.c{tetra,penta,hexa,pyram}_stress` / `STRESS/*` with `X Y Z TXY TYZ TZX` |
 | `LineStress` | Lines: `AxialStress` (bars, rods), `TorsionalStress` (rods), `MaxStress`/`MinStress` (the largest S-MAX and smallest S-MIN of a bar's or beam's two ends; a rod's axial stress) | `stress.cbar_stress`, `stress.cbeam_stress`, `stress.c{rod,onrod,tube}_stress` / `STRESS/{BAR,BEAM,ROD,CONROD,TUBE}` |
 | `ShellStrain`, `SolidStrain`, `LineStrain` | as the stresses, with `Strain` for `Stress` (`StrainTop`, `PrincipalStrain`, `MaxShearStrainBottom`, `AxialStrain`, `MaxStrain`, ...) and no von Mises | the `strain.*` tables / `ELEMENTAL/STRAIN/*` |
+| `PlyStress` | Shells, one ply per element (`--ply`, see [Composites](#composites)), in the ply's material system (1 = fibre): `PlyStress` (S11 S22 S12), `PlyInterlaminarStress` (S1Z S2Z), `PlyPrincipalStress` (major, minor), `PlyMaxShearStress`, `PlyVonMises`, `PlyStressPly` (the ply id) | `stress.c{tria3,tria6,triar,quad4,quad8,quadr}_composite_stress` / `STRESS/{QUAD4,TRIA3,QUADR,TRIAR,QUAD8,TRIA6}_COMP` with `PLY X1 Y1 T1 L1 L2` |
+| `PlyStrain` | as `PlyStress`: `PlyStrain` (E11 E22 E12, engineering shear), `PlyInterlaminarStrain` (E1Z E2Z), `PlyPrincipalStrain`, `PlyMaxShearStrain`, `PlyStrainPly` | the `strain.*_composite_strain` tables / `STRAIN/*_COMP` |
+| `PlyFailureIndex` | Shells, one ply per element: `PlyFailureIndex` (FP, direct stresses or strains), `PlyBondIndex` (FB, interlaminar; NaN where Nastran computed none), `PlyFailureIndexMax` (the larger of the two), `PlyFailureIndexPly` | `failure_indices.c..._composite_force` (OEFIT: a PCOMP with FT and SB); the HDF5 `ELEMENTAL/FAILURE_INDEX/*` datasets are not read (reported) |
 
 
-`Displacement`, `VonMisesMax`, `SPCForce`, `MPCForce`, `AppliedLoad` and the forces are attached by
-default (a file without a type's tables gets none of its arrays), the stresses and strains when
-chosen (`--result-types ShellStress,SolidStress` or `all`; `convert` prints the types it left out).
+`Displacement`, `VonMisesMax`, `SPCForce`, `MPCForce`, `AppliedLoad`, the forces and
+`PlyFailureIndex` are attached by default (a file without a type's tables gets none of its
+arrays), the stresses and strains when chosen (`--result-types ShellStress,SolidStress` or `all`;
+`convert` prints the types it left out).
 The types are declared in `src/nastran_pv/result_types.py`.
 
 The resultants are per step, named like the Loads blocks' `ResultantForce`: `Resultant<array>`
@@ -134,11 +138,47 @@ the MPC forces, else the applied loads (static steps, one per subcase). [Nastran
   the shear components of `Strain` before treating it as a tensor.
 * **Reported, not attached.** Every force, stress and strain table no type reads is named in the
   results' messages (the CLI's warnings, the reader's Output Messages), once per table with its
-  subcases: complex tables, composite plies (roadmap task 13; `VonMisesMax` still takes an OP2 ply
-  table's von Mises), plate strains written as mid-plane strain and curvature (`STRAIN(STRCUR)`: the
+  subcases: complex tables, composite plies no ply type reads (solid composites, `chexa_composite_stress`;
+  `VonMisesMax` still takes an OP2 ply table's von Mises), plate strains written as mid-plane strain and curvature (`STRAIN(STRCUR)`: the
   OP2's `fiber_curvature` header, or HDF5 fibre distances 0 and -1 on every row;
   ask for `STRAIN(FIBER)`), and the families no type covers yet (CSHEAR, CBUSH and CELAS stresses,
   CGAP, CBEND, CFAST, CWELD and damper forces, ...).
+
+## Composites
+
+A deck whose shells use a PCOMP or PCOMPG gets the layup on the `Shells` block (other decks get
+none of this):
+
+* cell `PlyCount`: the plies of each element's property, `LAM=SYM` expanded (0 for a PSHELL or
+  PSHEAR). `Thickness` stays the total, `MID` the first ply's material and `MassPerArea` all plies.
+* field data `PLY_PID PLY_Index PLY_ID PLY_MID PLY_Thickness PLY_Angle PLY_Z PLY_SOUT PLY_FT`: one
+  row per ply of each composite property the shells use, by PID and from the bottom ply
+  (`PLY_Index` 1). `PLY_ID` is the ply id the results use: the ply number of a PCOMP, the global
+  ply id of a PCOMPG (a ply shared by several properties, at any position in each). `PLY_Angle` is
+  in degrees from the element's material axis, `PLY_Z` the ply's mid-plane from the reference
+  plane (`Z0`, default -T/2), `PLY_SOUT` 1 for SOUT=YES, `PLY_FT` the property's failure theory
+  (empty when blank). With `LAM=SYM` the plies given are the bottom half, mirrored above them (ply
+  n+1 is ply n, ..., 2n is ply 1; a PCOMPG's mirrored plies keep their global ids).
+
+The layup is a table per property rather than one array per ply: cells x plies arrays would be
+large on a big laminate, could not hold NaN for the integer columns and colour badly in ParaView.
+It is block field data, so it travels with `Shells` into `.vtm`, VTKHDF and every piece of the
+reader's model tree.
+
+**One ply.** `convert --ply N` (the reader's *Ply*) lays ply id `N`'s layup on the elements:
+`PlyThickness PlyAngle PlyMID PlySOUT PlyZ PlyAxis` (NaN, or -1 for `PlyMID`/`PlySOUT`, where an
+element's property has no ply `N`) and the field `LayupPly` = N. `PlyAxis` is the ply's
+1-direction: `MaterialAxis` turned by the ply angle about `Normal`, as the PCOMP measures it. A ply
+id no property has writes nothing and warns, listing the ply ids there are.
+
+**Ply results.** The `PlyStress`, `PlyStrain` and `PlyFailureIndex` [result types](#result-types)
+are read per element and ply and reduced to one ply per element: ply `N` with `--ply N` (an
+element without it, or whose ply has SOUT=NO, gets NaN), or, with `--ply max` (the default), each
+element's critical ply: the ply with the largest `PlyVonMises`, `PlyMaxShearStrain` or
+`PlyFailureIndexMax` (with `PlyFailureIndex`, Nastran's failure index of the element). Every array
+of a type then holds that one ply, and `<type>Ply` (`PlyStressPly`, ...) its ply id. Principals,
+max shear and von Mises are computed from the components, for OP2 and HDF5 alike; strains have
+engineering shear, as for shells. `convert` says which ply it attached (`ply results: ply 3`).
 
 ## Derived quantities
 
@@ -169,7 +209,8 @@ the MPC forces, else the applied loads (static steps, one per subcase). [Nastran
   mass, but its NSM still counts (the warning gives the amount). WTMASS is not applied. CONM2, CONM1 and CMASS1/2 count as
   concentrated masses.
 * **Material axis.** THETA is measured from the projected G1→G2 edge. MCID projects that coordinate
-  system's x-axis onto the element plane.
+  system's x-axis onto the element plane. A composite ply's axis (`PlyAxis`) is turned from it by
+  the ply angle (see [Composites](#composites)).
 * **Results.** OP2 and HDF5 displacements, eigenvectors, SPC and MPC forces and applied loads are
   rotated from each grid's CD system into basic. Complex results (SOL 107/108/110/111) are skipped with a message.
 * **Random vibration.** Computed by nastran-pv from the normal modes and an input ASD, by modal

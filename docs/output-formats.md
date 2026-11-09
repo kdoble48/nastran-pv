@@ -54,7 +54,7 @@ with a message that names them:
 
 | Needs the deck | On a converted file |
 |---|---|
-| `--results`, `--result-types`, `--random`, `--nsm-set`, `--k-ref`, `--no-nodal-arrays`, `--no-<block>` | refused: convert the deck again with them |
+| `--results`, `--result-types`, `--ply`, `--random`, `--nsm-set`, `--k-ref`, `--no-nodal-arrays`, `--no-<block>` | refused: convert the deck again with them |
 | `--all-steps` | refused; a converted series (temporal `.vtkhdf`, or `.pvd`) is read one step at a time with `--step N` (default 0) |
 | the reader's *OP2 File Name*, *Result Types*, *NSMSet* and *Random* properties, the visibility checklists and the Show Only / Hide / Show All macros | not on ParaView's reader of the file ([Converted files](paraview.md#converted-files)) |
 

@@ -57,8 +57,9 @@ def progress_for(args) -> Progress:
     return args._progress
 
 
-DECK_ONLY = (("results", "--results"), ("result_types", "--result-types"), ("random", "--random"),
-             ("nsm_set", "--nsm-set"), ("k_ref", "--k-ref"), ("no_nodal_arrays", "--no-nodal-arrays"))
+DECK_ONLY = (("results", "--results"), ("result_types", "--result-types"), ("ply", "--ply"),
+             ("random", "--random"), ("nsm_set", "--nsm-set"), ("k_ref", "--k-ref"),
+             ("no_nodal_arrays", "--no-nodal-arrays"))
 
 
 def deck_only_flags(args) -> list[str]:
@@ -102,12 +103,18 @@ def load_model(args, verbose=False):
         if getattr(args, f"no_{flag}", False):
             setattr(opts, flag, False)
     mb = build_multiblock(deck, opts, progress=progress)
+    ply = getattr(args, "ply", None) or 0
+    if ply:  # that ply's layup on the shells (the ply types attach it too)
+        from .plies import attach_ply
+
+        for msg in attach_ply(mb, ply):
+            deck.warn(msg)
     results = None
     if getattr(args, "results", None):
         from .results import attach_op2
 
         with progress.stage(f"results {Path(args.results).name}"):
-            results = attach_op2(mb, deck, args.results, args.step, types)
+            results = attach_op2(mb, deck, args.results, args.step, types, ply)
         if getattr(args, "random", None):
             from .randvib import random_response
 
@@ -208,6 +215,10 @@ def add_model_arguments(p, results=True):
         p.add_argument("--result-types", nargs="+", metavar="TYPE",
                        help=f"result types to attach, by name: {' '.join(t.name for t in REGISTRY)}, or all "
                             f"(default: {' '.join(parse(None))})")
+        p.add_argument("--ply", type=ply_choice, default=None, metavar="PLY",
+                       help="composite ply: a ply id (the PCOMP ply number or a PCOMPG global ply id) lays that "
+                            "ply's layup on Shells and gives the ply result types at that ply; max (the default) "
+                            "gives each element's critical ply")
         add_random_arguments(p.add_argument_group("random vibration (from the --results modes)"))
     p.add_argument("--k-ref", type=float, default=None, help="bush stiffness reference for log scaling")
     p.add_argument("--nsm-set", type=nsm_set_id, default=None, metavar="ID",
@@ -227,6 +238,16 @@ def add_model_arguments(p, results=True):
     p.add_argument("--rules", metavar="TEXT", help='traversal rules, e.g. "exclude=rigid,CBUSH max_hops=5"')
     add_select_arguments(p.add_argument_group("selection from an ID file"))
     add_common_arguments(p)
+
+
+def ply_choice(text) -> int:
+    """argparse type for ``--ply``: a ply id, or ``max`` (0)."""
+    from .result_types import parse_ply
+
+    try:
+        return parse_ply(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
 
 
 def _select_key(text):
@@ -341,6 +362,9 @@ def cmd_convert(args) -> int:
         others = [n for n in results.available if n not in attached]
         if others:
             print(f"result types not attached: {', '.join(others)} (--result-types to choose)")
+        if any(t.reduce == "ply" for t in results.attached()):
+            print(f"ply results: ply {results.ply} (--ply max: each element's critical ply)" if results.ply else
+                  "ply results: each element's critical ply, its id in <type>Ply (--ply N for ply N)")
         for line in resultants:
             print(line)
     print("\n".join(summarize(mb)))
@@ -355,7 +379,7 @@ def _load_other(path, args):
     """The other model of a diff (deck, .vtm or VTKHDF), built with the same block/NSM options.
     Options that do not change what a diff compares (results, display scaling, nodal arrays) are
     not passed on, so a deck can be compared with a converted reference."""
-    unused = ("results", "result_types", "random", "step", "all_steps", "k_ref", "no_nodal_arrays")
+    unused = ("results", "result_types", "ply", "random", "step", "all_steps", "k_ref", "no_nodal_arrays")
     other = argparse.Namespace(**{k: v for k, v in vars(args).items() if k not in unused})
     other.input = path
     if Path(path).suffix.lower() in MODEL_SUFFIXES:

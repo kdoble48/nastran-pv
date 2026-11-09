@@ -50,6 +50,12 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   mesh blocks. It adds root field data: masses from `massprops.py` (numpy volumes when every solid is linear, else VTK cell sizes for the block; never
   pyNastran's slow `mass_properties`) and a `MAT_*` material table from `materials.py`. Derived
   fields therefore need no deck.
+- `plies.py`: composite layups. `build_shells` calls `add_layup` (Shells `PlyCount` and the
+  `PLY_*` field table, one row per ply of each PCOMP/PCOMPG the shells use, `LAM=SYM` mirrored
+  here: pyNastran's global-ply getter fails on a symmetric PCOMPG); `attach_ply(mb, ply)` lays one
+  ply's layup on the cells (`PlyAngle PlyAxis ...`, from the table, `MaterialAxis` and `Normal`:
+  no deck needed), for `--ply` and the reader's *Ply*. Design:
+  `docs/design/2026-11-09-composites.md`.
 - `nsm.py`: property NSM plus the NSM/NSM1/NSML/NSML1/NSMADD set selected by `--nsm-set`/`NSM=` →
   `NSMPerArea|NSMPerLength NSMMass NSMSource` and the `NSM_*` root tables. It runs in
   `build_multiblock` before the masses; its warnings use `deck.warn(..., mass=True)`, which lists
@@ -63,7 +69,10 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   fibre rows, a beam's ends; column names through `result_types.resolve` in both readers; OP2 rows
   through a `PickPlan` made once per table, HDF5 array slots through `results_h5.pick_fields`, read
   when a step first needs the type), and principals, max shear and von Mises from
-  `ArraySpec.derive` in `_write`. Table entries are `Op2Table`/`H5Table` named tuples. A cell type
+  `ArraySpec.derive` in `_write`. Composite ply types (`reduce="ply"`) get (EID, ply id) rows from
+  both readers (OP2 `element_layer`, HDF5 `EID`/`PLY`) and `values` keeps one ply per element
+  (`result_types.reduce_plies`: the selection's `ply`, or the row where `ply_by` is largest, its id
+  in a last column); `missing` turns marker values (FB = -1) into NaN first. Table entries are `Op2Table`/`H5Table` named tuples. A cell type
   keyed by EID matches blocks through `ResultType.block_ids` (MPC legs, whose EID is a set id, get
   -1). Each reader also reports every force/stress/strain table no type reads (`_unread`, with
   the shared `result_types.unread_reason`); the deck reader keeps those messages in its root

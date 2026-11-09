@@ -14,6 +14,11 @@ Forces, stresses and strains (``docs/design/2026-11-08-forces-stress.md``) take 
 element through ``picks`` (the centre of a shell or solid, both fibres of a shell, the two ends of
 a beam), compute principals, maximum shear and von Mises from the components (``ArraySpec.derive``)
 and keep the components in the frame Nastran writes them in.
+
+Composite plies (``docs/design/2026-11-09-composites.md``) are read per (element, ply) and reduced
+to one ply per element (``reduce="ply"``, :func:`reduce_plies`): the ply chosen with the selection
+(``results.select(names, ply=3)``), or each element's critical ply (``ply_by``), whose id goes in
+the type's last array ``<name>Ply``.
 """
 from __future__ import annotations
 
@@ -31,7 +36,8 @@ RESULT_BLOCKS = MESH_BLOCKS + ("Masses", "Rigid", "Constraints")
 
 LOCATIONS = ("point", "cell")  # point or cell data of the blocks
 KEYS = ("", "NID", "EID")  # the id the rows are keyed by ("": NID for point, EID for cell types)
-REDUCTIONS = ("none", "max")
+REDUCTIONS = ("none", "max", "ply")
+PLY_FIELD = "PLY"  # the ply id field of an MSC/NX HDF5 composite table (OP2: element_layer[:, 1])
 FRAMES = ("none", "grid_cd")
 DERIVES = ("", "principal", "max_shear", "von_mises", "max", "min")
 
@@ -150,8 +156,13 @@ class ResultType:
       written by ``EID``).
     * ``blocks``: the blocks that get the arrays; ids without a row get ``fill`` (0 keeps
       ``Warp By Vector`` usable, NaN marks "no output", and an all-NaN array is not written).
-    * ``reduce``: ``none`` (one row per id) or ``max`` (the largest value of each column over an
-      id's rows: layers, fibres, corner nodes, several tables).
+    * ``reduce``: ``none`` (one row per id), ``max`` (the largest value of each column over an
+      id's rows: layers, fibres, corner nodes, several tables) or ``ply`` (rows keyed by element
+      and ply id, (n, 2) ids from the readers; one ply per element, :func:`reduce_plies`: the
+      selection's ply, or the row where the array ``ply_by`` is largest; the last array,
+      ``<name>Ply``, takes the ply id, the column after the source's).
+    * ``missing``: ``((column, value), ...)``: a column holding that value has no output (NaN),
+      before the reduction (Nastran's -1 for a bonding index it did not compute).
     * ``frame``: ``grid_cd`` rotates T1-T3/R1-R3 (columns 0-5) from each grid's CD system into
       basic when the deck is known; ``none`` leaves the values as they are.
     * ``steps``: its tables define the result steps (one per subcase, load step or mode; each
@@ -185,6 +196,8 @@ class ResultType:
     default: bool = True
     resultant: bool = False
     key: str = ""
+    ply_by: str = ""
+    missing: tuple = ()
 
     def __post_init__(self):
         for value, allowed in ((self.location, LOCATIONS), (self.reduce, REDUCTIONS), (self.frame, FRAMES),
@@ -204,6 +217,13 @@ class ResultType:
         widths = {_check_picks(self.name, s.picks, ()) for s in sources if s.picks}
         if len(widths) > 1:
             raise ValueError(f"result type {self.name}: its sources pick different numbers of columns {widths}")
+        names = [a.name for a in self.arrays]
+        if self.reduce == "ply" and (self.ply_by not in names or names[-1] != f"{self.name}Ply"
+                                     or self.location != "cell"):
+            raise ValueError(f"result type {self.name}: a ply type is a cell type whose ply_by names one of its "
+                             f"arrays and whose last array is {self.name}Ply (the ply id)")
+        if self.ply_by and self.reduce != "ply":
+            raise ValueError(f"result type {self.name}: ply_by needs reduce='ply'")
 
     @property
     def op2_sources(self) -> tuple:
@@ -405,6 +425,50 @@ def derive(spec: ArraySpec, v) -> np.ndarray:
     raise ValueError(f"array {spec.name}: nothing to derive")
 
 
+# ------------------------------------------------------------------ plies
+def parse_ply(value) -> int:
+    """A ply choice as an int: a ply id (1 or more: the PCOMP ply number, a PCOMPG global ply id),
+    or 0 for each element's critical ply (also None, ``max``)."""
+    if value is None or (isinstance(value, str) and value.strip().lower() in ("max", "")):
+        return 0
+    if isinstance(value, bool) or isinstance(value, float):
+        raise ValueError(f"ply {value!r}: give a ply id (1, 2, ...) or max")
+    try:
+        ply = int(str(value).strip())
+    except ValueError:
+        raise ValueError(f"ply {value!r}: give a ply id (1, 2, ...) or max") from None
+    if ply < 0:
+        raise ValueError(f"ply {value!r}: give a ply id (1, 2, ...) or max")
+    return ply
+
+
+def ply_criterion(rtype: ResultType, values) -> np.ndarray:
+    """Per row, the value of ``rtype.ply_by`` (a column or a derived scalar) from its columns."""
+    spec = next(a for a in rtype.arrays if a.name == rtype.ply_by)
+    v = np.asarray(values, dtype=float)[:, list(spec.columns)]
+    return derive(spec, v) if spec.derive else v[:, 0]
+
+
+def reduce_plies(rtype: ResultType, ids, values, ply: int = 0):
+    """(sorted EIDs, values + a ply id column) with one row per element from rows keyed by (n, 2)
+    ``ids`` (EID, ply id): with ``ply`` its row of that ply (the first one, when a ply id repeats),
+    else its critical ply, the row whose ``ply_by`` value is largest (NaN never wins; the first
+    such row on a tie). None when no element has the ply."""
+    ids, values = np.asarray(ids, dtype=np.int64).reshape(-1, 2), np.asarray(values, dtype=float)
+    eid, plies = ids[:, 0], ids[:, 1]
+    if ply:
+        rows = np.flatnonzero(plies == ply)
+    else:
+        crit = ply_criterion(rtype, values)
+        crit = np.where(np.isnan(crit), -np.inf, crit)
+        rows = np.lexsort((np.arange(len(eid)), -crit, eid))  # by EID, largest first, then row order
+    if not len(rows):
+        return None
+    uniq, first = np.unique(eid[rows], return_index=True)
+    rows = rows[first]
+    return uniq, np.column_stack([values[rows], plies[rows].astype(float)])
+
+
 # ------------------------------------------------------------------ the registry
 _GRID_VECTOR = ("X", "Y", "Z", "RX", "RY", "RZ")  # MSC/NX HDF5 fields of a nodal table
 
@@ -559,18 +623,56 @@ SHELL_STRAIN = _shell("Strain", 0.5, ("exx", "eyy", "exy"))  # engineering shear
 SOLID_STRAIN = _solid("Strain", 0.5, ("exx", "eyy", "ezz", "exy", "eyz", "exz"))
 LINE_STRAIN = _line("Strain", "e")
 
+# ------------------------------------------------------------------ composite plies
+# Shell ply stress, strain and failure indices, per (element, ply), reduced to one ply per element:
+# the selection's ply or the critical one (reduce="ply"); components in the ply's material system.
+COMPOSITE_H5 = ("QUAD4_COMP", "TRIA3_COMP", "QUADR_COMP", "TRIAR_COMP", "QUAD8_COMP", "TRIA6_COMP")
+FAILURE_COLUMNS = ("failure_index_for_ply (direct stress/strain)",  # pyNastran's FailureIndicesArray headers
+                   "failure_index_for_bonding (interlaminar stresss)")
+
+
+def _ply_arrays(kind: str, shear: float) -> tuple[ArraySpec, ...]:
+    """Columns 0-2: the in-plane components (1 = fibre, 2 = matrix), 3-4: the interlaminar shears;
+    then principals, max shear, von Mises (stress) and the ply id (column 5)."""
+    out = [ArraySpec(f"Ply{kind}", (0, 1, 2)), ArraySpec(f"PlyInterlaminar{kind}", (3, 4)),
+           ArraySpec(f"PlyPrincipal{kind}", (0, 1, 2), derive="principal", shear=shear),
+           ArraySpec(f"PlyMaxShear{kind}", (0, 1, 2), derive="max_shear", shear=shear)]
+    if kind == "Stress":
+        out.append(ArraySpec("PlyVonMises", (0, 1, 2), derive="von_mises"))
+    return tuple(out) + (ArraySpec(f"Ply{kind}Ply", (5,)),)
+
+
+def _plies(kind: str, shear: float, comps: tuple, by: str) -> ResultType:
+    word = kind.lower()
+    return ResultType(
+        f"Ply{kind}", "cell", ("Shells",), _ply_arrays(kind, shear),
+        op2=Op2Source(tuple(f"{word}.{c}_composite_{word}" for c in SHELL_CARDS), columns=comps),
+        h5=H5Source(_h5(f"ELEMENTAL/{kind.upper()}", *COMPOSITE_H5), picks=((0, ("X1", "Y1", "T1", "L1", "L2")),)),
+        reduce="ply", ply_by=by, default=False)
+
+
+PLY_STRESS = _plies("Stress", 1.0, ("o11", "o22", "t12", "t1z", "t2z"), "PlyVonMises")
+PLY_STRAIN = _plies("Strain", 0.5, ("e11", "e22", "e12", "e1z", "e2z"), "PlyMaxShearStrain")  # engineering shear
+PLY_FAILURE_INDEX = ResultType(  # FP, FB (-1: none) and the larger of the two; HDF5: not read (reported)
+    "PlyFailureIndex", "cell", ("Shells",),
+    (ArraySpec("PlyFailureIndex", (0,)), ArraySpec("PlyBondIndex", (1,)),
+     ArraySpec("PlyFailureIndexMax", (0, 1), derive="max"), ArraySpec("PlyFailureIndexPly", (2,))),
+    op2=Op2Source(tuple(f"failure_indices.{c}_composite_force" for c in SHELL_CARDS), columns=FAILURE_COLUMNS),
+    h5=H5Source(()), reduce="ply", ply_by="PlyFailureIndexMax", missing=((1, -1.0),))
+
 REGISTRY: tuple[ResultType, ...] = (
     DISPLACEMENT, VON_MISES_MAX, SPC_FORCE, MPC_FORCE, APPLIED_LOAD,
     SHELL_FORCE, LINE_FORCE, BUSH_FORCE, SPRING_FORCE,
     SHELL_STRESS, SOLID_STRESS, LINE_STRESS, SHELL_STRAIN, SOLID_STRAIN, LINE_STRAIN,
+    PLY_STRESS, PLY_STRAIN, PLY_FAILURE_INDEX,
 )
 
 # ------------------------------------------------------------------ tables no type reads
 # Every table of these families that no type of the registry reads is reported in the results'
 # ``skipped`` messages, once per table: nothing is dropped silently.
-REPORTED_OP2 = ("force.*", "stress.*", "strain.*")
-REPORTED_H5 = (f"{FORCES}/*", "ELEMENTAL/STRESS/*", "ELEMENTAL/STRAIN/*")
-PLY_TABLES = ("*composite*", "*_COMP", "*_COMP_*")  # reported even when VonMisesMax reads their von Mises
+REPORTED_OP2 = ("force.*", "stress.*", "strain.*", "failure_indices.*")
+REPORTED_H5 = (f"{FORCES}/*", "ELEMENTAL/STRESS/*", "ELEMENTAL/STRAIN/*", "ELEMENTAL/FAILURE_INDEX/*")
+PLY_TABLES = ("*composite*", "*_COMP", "*_COMP_*")  # reported unless a ply type reads them
 NOT_READ = "no result type reads this table"
 COMPLEX = "complex results are not supported"
 PLIES = "composite ply results are not attached"
@@ -579,13 +681,17 @@ CURVATURE = ("plate strains as mid-plane strain and curvature (STRAIN(STRCUR)) a
              "STRAIN(FIBER) writes them per fibre")
 
 
-def unread_reason(name: str, read: bool, complex_: bool = False, curvature: bool = False) -> str | None:
+def unread_reason(name: str, read: bool, complex_: bool = False, curvature: bool = False,
+                  plies: bool = False) -> str | None:
     """Why the force, stress or strain table ``name`` (an OP2 result name or HDF5 dataset name) is
-    reported, or None when it is not: complex, composite plies (also when ``read``: VonMisesMax
-    takes their von Mises), plate curvature, or no type reading it. Both readers' ``_unread``."""
+    reported, or None when it is not: complex, composite plies no ply type reads (``plies``: one
+    does; also when ``read``: VonMisesMax takes their von Mises), plate curvature, or no type
+    reading it. Both readers' ``_unread``."""
     if complex_:
         return COMPLEX
     if any(fnmatch.fnmatchcase(name, p) for p in PLY_TABLES):
+        if plies:
+            return None
         return PLIES_READ if read else PLIES
     if read:
         return None

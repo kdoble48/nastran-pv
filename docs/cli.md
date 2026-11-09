@@ -38,9 +38,14 @@ step, `--step N` (0-based, default 0); `--all-steps` writes them all. On a conve
 chooses what the steps carry, by [result type](model.md#result-types): `--result-types VonMisesMax`
 attaches the stresses without the displacements, `--result-types ShellStress,SolidStress` the
 stress components (names are case-insensitive and may be comma-separated; `all` is every type;
-the default is `Displacement VonMisesMax SPCForce MPCForce AppliedLoad` and the element forces).
+the default is `Displacement VonMisesMax SPCForce MPCForce AppliedLoad`, the element forces and
+`PlyFailureIndex`).
 `convert` prints the types the file has that it left out, and a type named that the results
-file lacks gives a warning. With SPC forces, MPC forces or applied loads attached, `convert`
+file lacks gives a warning. `--ply N` picks a composite ply by its id (the PCOMP ply number or a
+PCOMPG global ply id): the ply result types (`PlyStress`, `PlyStrain`, `PlyFailureIndex`) attach
+that ply, and Shells get its layup (`PlyAngle`, `PlyAxis`, ...); `--ply max`, the default, gives
+each element's critical ply instead, with its id in `PlyStressPly` and the like (see
+[Composites](model.md#composites)). Without `--results`, `--ply N` lays the layup only. With SPC forces, MPC forces or applied loads attached, `convert`
 prints their resultant at the attached step (`--step`, also with `--all-steps`), e.g.
 `SPCForce resultant (Subcase 1): force (0, -100, -50), moment (-2, 100, -200) about the
 basic origin`; `stats` and `store add` take the flag too. `--no-nodal-arrays` leaves
