@@ -158,7 +158,8 @@ the `.vtm` and VTKHDF files read back, and the stdout and stderr of `convert`, `
 plus `diff_models` rows and the `diff` CLI output for three pairs. 32 cases: every `tests/data` deck,
 the demo, two synthetic layouts, the curvilinear-CD deck, three robustness decks, uCRM-9 coarse,
 medium (modal) and fine, three Linderholt models and the A/B pair. Run on the origin/main snapshot
-and on the branch, compared with exact equality (NaN equals NaN): **identical**. Every `.vtm` file is
+and on the branch, compared with exact equality (NaN equals NaN): **identical**, at `41fe0ec` and
+again after merging #63 and #58 (origin/main `8dcb72e` against the merged branch). Every `.vtm` file is
 byte-identical; VTKHDF files differ in bytes between any two writes of the same model (HDF5
 timestamps its objects), so they are compared read back.
 
@@ -185,3 +186,9 @@ and `RECORDED` in the CI check is the enforced proxy.
 Checked locally: on the origin/main code the CI check fails `to_basic` (ratio 5.3 against a limit
 of 0.33) and passes the rest, so it catches the per-grid loop coming back; a 1.5x slower build stays
 inside the factor, as intended.
+
+The first CI run (PR #68, `ubuntu-latest`, Python 3.12) took 1.5x longer in seconds than the
+reference machine (calibration 95 ms against 62 ms), and its ratios were within 20% of the recorded
+ones: load 14.4 (recorded 13.2), build 3.09 (3.55), vtm 1.01 (1.25), vtkhdf 4.70 (5.15), check 0.75
+(0.89), to_basic 0.09 (0.11), diff 3.99 (3.68), tree 0.32 (0.32), tree with Show Only 0.20 (0.20).
+The normalization carries across machines, and the factor of 3 leaves a wide margin for noise.
