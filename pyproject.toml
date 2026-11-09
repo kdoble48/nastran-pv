@@ -35,3 +35,6 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+# the timing checks run in CI's own perf job (pytest -m perf); a later -m on the command line wins
+addopts = ["-m", "not perf"]
+markers = ["perf: performance budget timings (tests/test_performance.py, docs/performance.md)"]
