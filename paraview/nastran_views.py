@@ -14,7 +14,10 @@ it only recolours the model or changes the reader's visibility; the model is fou
 again. Available views::
 
     masses  bushes  bushrotations  beams  loads  spc  rigid  family  group  pid  mid  thickness
-    nsm  elementtype  results  random  randomsweep  parts  grow  path  check  diff
+    nsm  elementtype  results  random  randomsweep  parts  grow  path  check  diff  forces  stress
+
+``forces`` and ``stress`` color each block by its element forces or stresses (``stress`` takes
+``quantity``, ``fibre``, ``strain`` and ``component``) and check those result types in the reader.
 
 ``grow_from_selection`` and ``path_from_selection`` seed the grow and path
 views from the current selection. ``animate_mode`` vibrates the current mode and leaves the play
@@ -1341,6 +1344,138 @@ def view_randomsweep(model, view):
                            "to sweep frequency", "Upper Left Corner")
 
 
+# ----------------------------------------------------------------- element forces and stress
+FORCE_TYPES = ("ShellForce", "LineForce", "BushForce", "SpringForce")
+SHELL_FORCES = {"membrane": "MembraneForce", "bending": "BendingMoment", "shear": "TransverseShear"}
+LINE_FORCES = ("AxialForce", "Torque", "ShearForce", "BendingMomentA", "BendingMomentB")
+STRESS_TYPES = {False: ("ShellStress", "SolidStress", "LineStress"), True: ("ShellStrain", "SolidStrain", "LineStrain")}
+# quantity: (shell array, solid array, line array or None, component of the vector arrays), with
+# {k} Stress or Strain and {f} Top or Bottom
+STRESS_ARRAYS = {
+    "vonmises": ("VonMises{f}", "VonMises", "Max{k}", None),
+    "principal": ("Principal{k}{f}", "Principal{k}", "Max{k}", 0),
+    "maxshear": ("MaxShear{k}{f}", "MaxShear{k}", None, None),
+    "components": ("{k}{f}", "{k}", "Axial{k}", None),
+}
+FIBRES = ("top", "bottom")
+
+
+def check_result_types(model, names):
+    """Check ``names`` in the deck reader's *Result Types* where the file has them unchecked (the
+    stresses are off by default), so a view can show them; returns the model, read again when
+    something was checked. A converted file carries the types it was written with."""
+    reader = model.reader
+    if _xml_name(reader) != READER_XML or reader.GetProperty("ResultTypes") is None:
+        return model
+    listed = _listed(reader, "ResultTypes")
+    states = [int(s) for s in list(reader.GetProperty("ResultTypesInfo"))[1::2]]
+    on = [n for n, s in zip(listed, states) if s]
+    add = [n for n in names if n in listed and n not in on]
+    if not add:
+        return model
+    reader.ResultTypes = on + add
+    return Model(reader, model.time)
+
+
+def _color_blocks(model, view, picks, component=None):
+    """Show each block of ``picks`` ((block, array, default component), ...) whose array has a
+    value, colored by it: a vector array by ``component`` (else the pick's default; None: its
+    magnitude). Returns a "block: array" line per block shown."""
+    shown = []
+    for block, array, default in picks:
+        where = "point" if block == "Bushes" else "cell"
+        values = model.array(block, array, where) if array else None
+        if values is None or not np.isfinite(values).any():
+            continue
+        d = _show(_extract(model, block), view)
+        d.Opacity = 1.0
+        lut = continuous(d, "POINTS" if where == "point" else "CELLS", array, preset="Turbo", view=view)
+        comp = None
+        if values.ndim == 2:
+            comp = component if component is not None else default
+            comp = None if comp is None or int(comp) >= values.shape[1] else int(comp)
+            lut.VectorMode = "Magnitude" if comp is None else "Component"
+            if comp is not None:
+                lut.VectorComponent = comp
+            d.RescaleTransferFunctionToDataRange(True, False)
+        if block == "Bushes":
+            d.Representation = "Points"
+            d.PointSize = 12.0
+            d.RenderPointsAsSpheres = 1
+        else:
+            d.Representation = "Surface"
+            if block in ("Lines", "Connectors"):
+                d.LineWidth = 4.0
+        part = "" if values.ndim == 1 else (" (magnitude)" if comp is None else f" (component {comp})")
+        shown.append(f"{block}: {array}{part}")
+    return shown
+
+
+def _step_label(model):
+    label = model.field_strings(None, "ResultLabel")
+    return label[0] if label else ""
+
+
+def view_forces(model, view, shell=None, line=None, component=None):
+    """Element forces of the step, each block by its own array over a ghost of the rest: shells by
+    ``MembraneForce`` (``shell``: membrane, bending or shear), lines by ``AxialForce`` (``line``:
+    any LineForce array), bushes by ``BushForce`` and springs by ``SpringForce``; ``component``
+    (0, 1, 2) picks a component of the vector arrays, else their magnitude. The forces are in the
+    element frame (docs/model.md#result-types). Checks the force types in the reader's Result Types."""
+    shell_array = SHELL_FORCES.get(str(shell or "membrane").lower())
+    if shell_array is None:
+        raise ValueError(f"forces view: shell={shell!r} is not one of {tuple(SHELL_FORCES)}")
+    if line is not None and line not in LINE_FORCES:
+        raise ValueError(f"forces view: line={line!r} is not one of {LINE_FORCES}")
+    model = check_result_types(model, FORCE_TYPES)
+    ghost_mesh(model, view)
+    shown = _color_blocks(model, view, (("Shells", shell_array, None), ("Lines", line or "AxialForce", None),
+                                        ("Bushes", "BushForce", None), ("Connectors", "SpringForce", None)), component)
+    if not shown:
+        info_text(model, view, "No element forces at this step: FORCE = ALL in the case control writes them "
+                               "(the reader's Result Types: ShellForce, LineForce, BushForce, SpringForce).")
+        return
+    t = info_text(model, view, f"{_step_label(model)} element forces, in the element frame\n" + "\n".join(shown)
+                  + "\nOther arrays and components: Color By")
+    pv.GetDisplayProperties(t, view).Justification = "Left"
+
+
+def view_stress(model, view, quantity=None, fibre=None, strain=False, component=None):
+    """Stress (or ``strain``) of the step over a ghost of the rest: shells at a fibre (``fibre``:
+    top = Z2, the default, or bottom), solids at their centre, bars, beams and rods by their
+    largest longitudinal value. ``quantity``: vonmises (the default for stress), principal (the
+    major one unless ``component`` says; the default for strain), maxshear or components. Checks
+    the stress or strain types in the reader's Result Types; a file without any shows the
+    VonMisesMax envelope."""
+    kind = "Strain" if strain else "Stress"
+    quantity = str(quantity or ("principal" if strain else "vonmises")).lower().replace(" ", "").replace("_", "")
+    if quantity not in STRESS_ARRAYS:
+        raise ValueError(f"stress view: quantity={quantity!r} is not one of {tuple(STRESS_ARRAYS)}")
+    if strain and quantity == "vonmises":
+        raise ValueError("stress view: no von Mises strain is attached (quantity principal, maxshear or components)")
+    fibre = str(fibre or "top").lower()
+    if fibre not in FIBRES:
+        raise ValueError(f"stress view: fibre={fibre!r} is not one of {FIBRES}")
+    model = check_result_types(model, STRESS_TYPES[bool(strain)])
+    shell, solid, line, default = (a.format(k=kind, f=fibre.capitalize()) if isinstance(a, str) else a
+                                   for a in STRESS_ARRAYS[quantity])
+    ghost_mesh(model, view)
+    picks = (("Shells", shell, default), ("Solids", solid, default), ("Lines", line, None))
+    shown = _color_blocks(model, view, picks, component)
+    named = {"vonmises": "von Mises", "principal": "principal", "maxshear": "max shear", "components": ""}[quantity]
+    what = f"{named} {kind.lower()}".strip() + f", shells at the {fibre} fibre"
+    if not shown and not strain:
+        shown = _color_blocks(model, view, [(b, "VonMisesMax", None) for b in MESH])
+        what = "VonMisesMax, the envelope over fibres and corners (no stress components at this step)"
+    if not shown:
+        info_text(model, view, f"No {kind.lower()} results at this step: {kind.upper()} = ALL in the case "
+                               "control writes them.")
+        return
+    t = info_text(model, view, f"{_step_label(model)} {what}\n" + "\n".join(shown)
+                  + "\nOther arrays, fibres and components: Color By")
+    pv.GetDisplayProperties(t, view).Justification = "Left"
+
+
 # ----------------------------------------------------------------- topology
 TOPOLOGY_BLOCKS =("Shells", "Solids", "Lines", "Rigid", "Connectors", "BushLines", "Masses")
 
@@ -2119,7 +2254,7 @@ VIEWS = {
     "rigid": view_rigid, "family": view_family, "group": view_group, "pid": view_pid,
     "mid": view_mid, "elementtype": view_elementtype, "thickness": view_thickness, "nsm": view_nsm,
     "results": view_results, "random": view_random, "randomsweep": view_randomsweep, "parts": view_parts, "grow": view_grow, "path": view_path, "check": view_check,
-    "diff": view_diff,
+    "diff": view_diff, "forces": view_forces, "stress": view_stress,
 }
 
 

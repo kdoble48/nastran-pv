@@ -446,6 +446,75 @@ def element_result_checks(pv, nv):
             pv.Delete(s)
 
 
+def _delete_models(pv, *labels):
+    """Delete the readers named ``labels`` and every NPV object of theirs, consumers first."""
+    doomed = [s for (name, _), s in pv.GetSources().items()
+              if name in labels or any(name.endswith(f"[{label}]") for label in labels)]
+    for s in sorted(doomed, key=lambda s: -int(s.GetGlobalIDAsString())):
+        pv.Delete(s)
+
+
+def force_stress_view_checks(pv, nv):
+    """NPV Forces and NPV Stress (roadmap task 9) on tests/data/elements.bdf with the synthesized
+    OP2: the array each block is colored by, the views' arguments, the Result Types they check,
+    and a converted file without stress components (the VonMisesMax fallback)."""
+    from op2_fixture import make_element_op2
+
+    deck = os.path.join(HERE, "data", "elements.bdf")
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        op2 = os.path.join(tmp, "elements.op2")
+        make_element_op2().write_op2(op2)
+        reader = nv.load_reader(deck, op2)
+        view = pv.CreateRenderView()
+
+        def colored(model, block):
+            disp = pv.GetDisplayProperties(pv.FindSource(nv._name(model, block)), view)
+            lut = pv.GetColorTransferFunction(disp.ColorArrayName[1])
+            return disp.ColorArrayName[1], (nv.enum_text(lut, "VectorMode"), int(lut.VectorComponent))
+
+        model = nv.apply("forces", reader=reader, view=view)
+        text = _info(nv, model)
+        check(colored(model, "Lines")[0] == "AxialForce" and colored(model, "Shells") == ("MembraneForce", ("Magnitude", 0))
+              and colored(model, "Bushes")[0] == "BushForce" and colored(model, "Connectors")[0] == "SpringForce",
+              "NPV Forces: shells by MembraneForce, lines by AxialForce, bushes and springs by their force")
+        check("Lines: AxialForce" in text and "element frame" in text, f"forces info: {text!r}")
+        model = nv.apply("forces", reader=reader, view=view, shell="bending", line="BendingMomentB", component=1)
+        check(colored(model, "Shells") == ("BendingMoment", ("Component", 1))
+              and colored(model, "Lines")[0] == "BendingMomentB",
+              "forces shell=/line=/component= choose the arrays and the component")
+        check("ShellStress" not in list(reader.ResultTypes), "the stresses start unchecked")
+        model = nv.apply("stress", reader=reader, view=view)
+        check({"ShellStress", "SolidStress", "LineStress"} <= set(reader.ResultTypes),
+              f"NPV Stress checks the stress types: {list(reader.ResultTypes)}")
+        check(colored(model, "Shells")[0] == "VonMisesTop" and colored(model, "Solids")[0] == "VonMises"
+              and colored(model, "Lines")[0] == "MaxStress", "NPV Stress: von Mises at the top fibre, lines MaxStress")
+        model = nv.apply("stress", reader=reader, view=view, quantity="principal", fibre="bottom")
+        check(colored(model, "Shells") == ("PrincipalStressBottom", ("Component", 0))
+              and colored(model, "Solids") == ("PrincipalStress", ("Component", 0)),
+              "stress quantity=principal fibre=bottom: the major principal stress")
+        model = nv.apply("stress", reader=reader, view=view, strain=True)
+        check(colored(model, "Shells") == ("PrincipalStrainTop", ("Component", 0))
+              and "ShellStrain" in list(reader.ResultTypes), "stress strain=True: the major principal strain")
+        for bad in ({"quantity": "vonmises", "strain": True}, {"fibre": "middle"}, {"quantity": "tresca"}):
+            try:
+                nv.apply("stress", reader=reader, view=view, **bad)
+                check(False, f"stress {bad} should be refused")
+            except ValueError as exc:
+                check(True, f"stress {bad} refused: {exc}")
+        pv.Delete(view)
+        vtm = os.path.join(tmp, "forces.vtm")
+        convert(["convert", deck, "--results", op2, "-o", vtm, "-q"])  # the default types: no stress components
+        src = nv.load_reader(vtm)
+        view = pv.CreateRenderView()
+        model = nv.apply("stress", reader=src, view=view)
+        check(colored(model, "Shells")[0] == "VonMisesMax" and "envelope" in _info(nv, model),
+              "stress on a file without components shows the VonMisesMax envelope")
+        model = nv.apply("forces", reader=src, view=view)
+        check(colored(model, "Lines")[0] == "AxialForce", "forces on a converted file")
+        pv.Delete(view)
+        _delete_models(pv, "elements.bdf", "forces.vtm")
+
+
 def beam_checks(pv, nv, view, tmp):
     """Nastran Beam Sections filter on tests/data/beams.bdf: sweep, tree visibility, deformation, view."""
     from vtkmodules.util.numpy_support import vtk_to_numpy
@@ -2036,6 +2105,7 @@ def main():
               f"VonMisesMax at step 1 only, not carried to step {len(full)} by the tree")
         result_type_checks(rm, nv, reader, full)
         element_result_checks(pv, nv)
+        force_stress_view_checks(pv, nv)
         anim = pv.CreateRenderView()
         model = nv.apply("results", reader=reader, view=anim)  # the results view: peak deflection
         deform = pv.FindSource(nv._name(model, "deform"))
