@@ -72,7 +72,9 @@ A [selection file](cli.md#selection-from-an-id-file) (`--select`) adds the root 
 With an OP2 or HDF5 file loaded, the mesh blocks, `Masses`, `Rigid` and `Constraints` get point
 `Displacement Rotation DisplacementMagnitude`, the mesh blocks cell `VonMisesMax` (when the results
 have stresses), `BeamSections` gets the rigid-section `Displacement` of its points, and the root
-gets `ResultLabel ResultStep` and `Frequency` (modes only). Each comes from a
+gets `ResultLabel ResultStep` and `Frequency` (modes only). Runs that wrote SPC forces, MPC forces
+or applied loads also give point `SPCForce SPCMoment`, `MPCForce MPCMoment` and
+`AppliedForce AppliedMoment` on the same blocks and their resultants on the root. Each comes from a
 [result type](#result-types), which `--result-types` and the reader's *Result Types* choose.
 
 The [field options](fields.md) add further arrays on top of these.
@@ -83,8 +85,25 @@ The [field options](fields.md) add further arrays on top of these.
 |---|---|---|
 | `Displacement` | point `Displacement` (T1-T3), `Rotation` (R1-R3), `DisplacementMagnitude`, rotated from each grid's CD into basic; 0 on grids without output | `displacements`, `eigenvectors` / `NODAL/DISPLACEMENT`, `NODAL/EIGENVECTOR`; these define the result steps |
 | `VonMisesMax` | cell `VonMisesMax` on the mesh blocks: the largest value over the element's layers, fibres and nodes; NaN without output | every stress table with a von Mises column / `ELEMENTAL/STRESS/*`, computed from the components |
+| `SPCForce` | point `SPCForce` (F1-F3), `SPCMoment` (M1-M3), rotated from each grid's CD into basic; NaN on grids without output; root `ResultantSPCForce ResultantSPCMoment` | `spc_forces` / `NODAL/SPC_FORCE` (Case Control `SPCFORCES=`) |
+| `MPCForce` | point `MPCForce`, `MPCMoment`, as for `SPCForce`; root `ResultantMPCForce ResultantMPCMoment` | `mpc_forces` / `NODAL/MPC_FORCE` (`MPCFORCES=`) |
+| `AppliedLoad` | point `AppliedForce`, `AppliedMoment` (OLOAD: the load Nastran applied, GRAV and pressures included), as for `SPCForce`; root `ResultantAppliedForce ResultantAppliedMoment` | `load_vectors` / `NODAL/APPLIED_LOAD` (`OLOAD=`) |
 
-Both are attached by default. The types are declared in `src/nastran_pv/result_types.py`.
+All are attached by default; a file without a type's tables gets none of its arrays. The types are
+declared in `src/nastran_pv/result_types.py`.
+
+The resultants are per step, named like the Loads blocks' `ResultantForce`: `Resultant<array>`
+is the sum of the forces, and the moment one the sum of M + r × F about the origin of the basic
+system (what the `.f06` prints as the SPCFORCE and OLOAD RESULTANT without `PARAM,GRDPNT`), each
+grid once, in basic. Rows of grids the model does not place (scalar points, grids the deck lacks)
+are left out; without the deck (the Python API's `attach` with no `deck`) the rows stay in each
+grid's CD system, so the resultant is written only when none of those grids has one. `convert`
+prints them for the attached `--step`, and in a static run `ResultantSPCForce` +
+`ResultantAppliedForce` is zero (and the moments too) when there are no other reactions.
+
+A run without displacement output (`DISP=NONE`) takes its result steps from the SPC forces, else
+the MPC forces, else the applied loads (static steps, one per subcase). [Nastran Load Glyphs](paraview.md#filter-properties) draws all three as arrows
+(*Source*).
 
 ## Derived quantities
 
@@ -116,12 +135,12 @@ Both are attached by default. The types are declared in `src/nastran_pv/result_t
   concentrated masses.
 * **Material axis.** THETA is measured from the projected G1→G2 edge. MCID projects that coordinate
   system's x-axis onto the element plane.
-* **Results.** OP2 and HDF5 displacements and eigenvectors are rotated from each grid's CD system
-  into basic. Complex results (SOL 107/108/110/111) are skipped with a message.
+* **Results.** OP2 and HDF5 displacements, eigenvectors, SPC and MPC forces and applied loads are
+  rotated from each grid's CD system into basic. Complex results (SOL 107/108/110/111) are skipped with a message.
 * **Random vibration.** Computed by nastran-pv from the normal modes and an input ASD, by modal
   superposition on a lumped mass (see [Random vibration](random-vibration.md#method)).
 * **MSC/NX HDF5.** The reader handles `/NASTRAN/RESULT/{DOMAINS, NODAL/DISPLACEMENT,
-  NODAL/EIGENVECTOR, ELEMENTAL/STRESS/*}`. Von Mises is computed from the components: plates use
+  NODAL/EIGENVECTOR, NODAL/SPC_FORCE, NODAL/MPC_FORCE, NODAL/APPLIED_LOAD, ELEMENTAL/STRESS/*}`. Von Mises is computed from the components: plates use
   `X1 Y1 XY1`/`X2 Y2 XY2` on both fibres, and solids use `X Y Z TXY TYZ TZX`, taking the maximum
   over corner and centre points. It is tested against files written in that layout; please report
   any real files it misreads.

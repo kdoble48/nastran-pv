@@ -162,13 +162,16 @@ def drop_fill_arrays(mb) -> None:
     blocks = dict(iter_blocks(mb))
     for entry in entries:
         path, assoc, name = entry.split("|", 2) if entry.count("|") >= 2 else ("", "", entry)
-        ds = mb if assoc == "field" else blocks.get(path)
+        ds = mb if assoc == "field" and not path else blocks.get(path)
         if ds is None:
             continue
         attr = attributes(ds, assoc)
         a = attr.GetArray(name)
         if a is not None and a.GetDataType() in (10, 11) and np.all(np.isnan(vtk_to_numpy(a))):
             attr.RemoveArray(name)
+        s = attr.GetAbstractArray(name)
+        if s is not None and s.IsA("vtkStringArray") and not any(s.GetValue(k) for k in range(s.GetNumberOfValues())):
+            attr.RemoveArray(name)  # a string field array filled with "" where a step lacks it
 
 
 def match_ids(sorted_ids: np.ndarray, query: np.ndarray) -> np.ndarray:
@@ -178,6 +181,31 @@ def match_ids(sorted_ids: np.ndarray, query: np.ndarray) -> np.ndarray:
         return np.full(query.shape, -1, dtype=np.int64)
     i = np.minimum(np.searchsorted(sorted_ids, query), len(sorted_ids) - 1)
     return np.where(sorted_ids[i] == query, i, -1).astype(np.int64, copy=False)
+
+
+def first_per_id(ids: list, *columns: list) -> tuple:
+    """Sorted unique ids over the per-block id arrays ``ids`` and, for each of ``columns`` (lists of
+    per-block arrays aligned with ``ids``), the row of each id's first occurrence: the first block
+    that has an id places it (put the blocks in that order, e.g. Masses last: a mass's point is its
+    CG). No blocks: empty ids and (0, 3) columns."""
+    if not ids:
+        return (np.zeros(0, dtype=np.int64),) + tuple(np.zeros((0, 3)) for _ in columns)
+    uniq, first = np.unique(np.concatenate([np.asarray(i, dtype=np.int64) for i in ids]), return_index=True)
+    return (uniq,) + tuple(np.concatenate(c)[first] for c in columns)
+
+
+def resultant(xyz, force, moment=None) -> tuple[np.ndarray, np.ndarray]:
+    """(sum of the forces, sum of M + r x F about the origin) of rows at ``xyz`` (n, 3)."""
+    xyz, force = np.asarray(xyz, dtype=float).reshape(-1, 3), np.asarray(force, dtype=float).reshape(-1, 3)
+    m = np.cross(xyz, force).sum(axis=0)
+    if moment is not None:
+        m = m + np.asarray(moment, dtype=float).reshape(-1, 3).sum(axis=0)
+    return force.sum(axis=0), m
+
+
+def vector_text(v, digits: int = 4) -> str:
+    """``(x, y, z)`` with ``digits`` significant digits, -0 shown as 0."""
+    return "(" + ", ".join(f"{float(x) + 0.0:.{digits}g}" for x in np.asarray(v, dtype=float).reshape(-1)) + ")"
 
 
 def write_field_table(obj, prefix, rows) -> None:
