@@ -84,7 +84,9 @@ def _close(res, source, want):
 
 # ------------------------------------------------------------------ the GridPointForce table
 def test_the_type_is_appended_to_the_registry_and_opt_in():
-    assert rt.REGISTRY[-1] is rt.GRID_POINT_FORCE and not rt.GRID_POINT_FORCE.default
+    # appended after the task 11 types (the composite plies of task 13 come after it)
+    assert rt.REGISTRY.index(rt.GRID_POINT_FORCE) == rt.REGISTRY.index(rt.ACCELERATION) + 1
+    assert not rt.GRID_POINT_FORCE.default
     assert "GridPointForce" not in rt.parse(None)
     assert rt.GRID_POINT_FORCE.table_names == ("GridPointForceNID", "GridPointForce", "GridPointMoment",
                                                "GridPointForceEID")

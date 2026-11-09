@@ -93,6 +93,34 @@ def write_element_h5(path):
     return path
 
 
+def write_composite_h5(path):
+    """``op2_fixture.make_composite_op2`` in the MSC HDF5 layout: DOMAINS (subcase 1),
+    NODAL/DISPLACEMENT, the ply stresses as STRESS/QUAD4_COMP and TRIA3_COMP and the ply strains as
+    STRAIN/QUAD4_COMP (``EID PLY X1 Y1 T1 L1 L2``, one row per element and ply, element 4's rows
+    unsorted on purpose), plus a FAILURE_INDEX dataset, which no type reads (reported)."""
+    nod = [("ID", ())] + [(c, ()) for c in ("X", "Y", "Z", "RX", "RY", "RZ")] + [("DOMAIN_ID", ())]
+    comp = [(n, ()) for n in ("EID", "PLY", "X1", "Y1", "T1", "L1", "L2", "DOMAIN_ID")]
+
+    def plies(values, eids):
+        keys = [k for k in values if k[0] in eids]
+        if 4 in eids:  # element 4's plies in reverse: rows are matched by PLY, not by position
+            keys = [k for k in keys if k[0] != 4] + [k for k in reversed(keys) if k[0] == 4]
+        return _table(comp, [(*k, *values[k], 1) for k in keys])
+
+    with h5py.File(path, "w") as h5:
+        r = h5.create_group("/NASTRAN/RESULT")
+        r["DOMAINS"] = np.array([(1, 1, 0, 1, 0.0, 0.0, 0)],
+                                dtype=[("ID", INT), ("SUBCASE", INT), ("STEP", INT), ("ANALYSIS", INT),
+                                       ("TIME_FREQ_EIGR", FLOAT), ("EIGI", FLOAT), ("MODE", INT)])
+        r["NODAL/DISPLACEMENT"] = _table(nod, [(n, 0, 0, 0.001 * n, 0, 0, 0, 1) for n in F.COMPOSITE_NIDS])
+        r["ELEMENTAL/STRESS/QUAD4_COMP"] = plies(F.PLY_STRESS, (1, 2, 4, 5))
+        r["ELEMENTAL/STRESS/TRIA3_COMP"] = plies(F.PLY_STRESS, (3,))
+        r["ELEMENTAL/STRAIN/QUAD4_COMP"] = plies(F.PLY_STRAIN, (1,))
+        r["ELEMENTAL/FAILURE_INDEX/QUAD4"] = _table([(n, ()) for n in ("EID", "PLY", "FP", "FB", "DOMAIN_ID")],
+                                                    [(*k, *v, 1) for k, v in F.PLY_FAILURE.items()])
+    return path
+
+
 # ------------------------------------------------------------------ complex, frequency and transient
 DOMAIN = [("ID", INT), ("SUBCASE", INT), ("STEP", INT), ("ANALYSIS", INT), ("TIME_FREQ_EIGR", FLOAT),
           ("EIGI", FLOAT), ("MODE", INT)]

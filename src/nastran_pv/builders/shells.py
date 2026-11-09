@@ -13,6 +13,7 @@ from vtkmodules.vtkCommonDataModel import (
 from .. import vtkutil
 from ..deck import RECTANGULAR, Deck
 from ..families import Families
+from ..plies import add_layup
 from .common import (CellRows, add_mid_density, elements_of, factorize, grid_checks, known_grids, node_matrix,
                      points_of, property_info, rows_mesh, shell_mass_per_area, unit, warn_skipped)
 
@@ -93,6 +94,7 @@ def build_shells(deck: Deck, families: Families):
     vtkutil.add_array(cd, "ElementXAxis", xaxis)
     vtkutil.add_array(cd, "MaterialAxis", material_axes(deck, normal, xaxis, p.mean(axis=1), theta_mcid,
                                                      p[:, 1] - p[:, 0]))
+    add_layup(ug, model, pids)  # PCOMP/PCOMPG: PlyCount and the PLY_* table (nothing for other decks)
     return ug
 
 

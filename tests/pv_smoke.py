@@ -406,8 +406,10 @@ def element_result_checks(pv, nv):
             reader.ResultTypes = [t.name for t in REGISTRY if t.default]  # a new file: back to the defaults
             t0 = rm.timesteps(reader)[0]
             text += _messages(lambda: reader.UpdatePipeline(t0))
-            absent = ("SPCForce", "MPCForce", "AppliedLoad", "Velocity", "Acceleration",
-                      "GridPointForce")  # not in the fixture
+            # not in the fixture: nodal loads, velocities, accelerations, grid point forces, ply
+            # strains and failure indices (its CQUAD4 3 ply stresses give PlyStress)
+            absent = ("SPCForce", "MPCForce", "AppliedLoad", "Velocity", "Acceleration", "GridPointForce",
+                      "PlyStrain", "PlyFailureIndex")
             listed = [t.name for t in REGISTRY if t.name not in absent]
             check(nv._listed(reader, "ResultTypes") == listed, f"{kind}: every type the fixture has is listed")
             check(_by_eid(reader, "Lines", "AxialForce") == {21: 7.0, 22: 15.0, 23: 31.0},

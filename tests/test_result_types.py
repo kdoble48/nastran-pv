@@ -39,14 +39,17 @@ FORCE_TYPES = ("ShellForce", "LineForce", "BushForce", "SpringForce")
 STRESS_TYPES = ("ShellStress", "SolidStress", "LineStress", "ShellStrain", "SolidStrain", "LineStrain")
 MOTION_TYPES = ("Velocity", "Acceleration")
 GPF_TYPES = ("GridPointForce",)  # roadmap task 12: the grid point force balance, a root table (opt-in)
-ALL_TYPES = ("Displacement", "VonMisesMax") + LOAD_TYPES + FORCE_TYPES + STRESS_TYPES + MOTION_TYPES + GPF_TYPES
-DEFAULTS = ("Displacement", "VonMisesMax") + LOAD_TYPES + FORCE_TYPES + MOTION_TYPES
+PLY_TYPES = ("PlyStress", "PlyStrain", "PlyFailureIndex")
+ALL_TYPES = (("Displacement", "VonMisesMax") + LOAD_TYPES + FORCE_TYPES + STRESS_TYPES + MOTION_TYPES + GPF_TYPES
+             + PLY_TYPES)
+DEFAULTS = ("Displacement", "VonMisesMax") + LOAD_TYPES + FORCE_TYPES + MOTION_TYPES + ("PlyFailureIndex",)
 
 
 def test_registry_starts_with_the_first_types():
     """Appended to, never reordered: the first types and their declarations are pinned; forces,
     stresses and strains (roadmap task 9) come after the loads, forces on by default; velocities
-    and accelerations (task 11) last."""
+    and accelerations (task 11) and the composite plies (task 13) after them, the failure indices
+    on by default."""
     assert [t.name for t in rt.REGISTRY] == list(ALL_TYPES)
     disp, vm = rt.REGISTRY[:2]
     assert disp is rt.DISPLACEMENT and vm is rt.VON_MISES_MAX

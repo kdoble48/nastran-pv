@@ -93,7 +93,8 @@ def test_part_names_are_only_for_copying_arrays():
     assert rt.part_names(disp[2]) == ()  # DisplacementMagnitude: a magnitude
     assert rt.part_names(rt.ArraySpec("VonMises", (0, 1, 2, 3, 4, 5), derive="von_mises")) == ()
     assert rt.VON_MISES_MAX.complex == ()  # an envelope has no phase
-    assert all(t.complex == rt.COMPLEX_PARTS for t in rt.REGISTRY if t is not rt.VON_MISES_MAX)
+    assert all(t.complex == () for t in rt.REGISTRY if t.reduce == "ply")  # nor a chosen or critical ply
+    assert all(t.complex == rt.COMPLEX_PARTS for t in rt.REGISTRY if t.reduce == "none")
     with pytest.raises(ValueError, match="form"):
         rt.Op2Source(("displacements",), form="imaginary")
 

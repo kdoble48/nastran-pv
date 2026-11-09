@@ -91,11 +91,13 @@ def test_forces_are_attached_by_default(results, deck):
 
 
 def test_every_type_is_available(results):
-    """Every type but the nodal SPC/MPC forces, applied loads, velocities, accelerations and grid
-    point forces, which the fixture lacks."""
-    loads = (rt.SPC_FORCE, rt.MPC_FORCE, rt.APPLIED_LOAD, rt.VELOCITY, rt.ACCELERATION, rt.GRID_POINT_FORCE)
-    assert results.available == tuple(t.name for t in rt.REGISTRY if t not in loads)
-    assert [t.name for t in results.attached()] == [t.name for t in rt.REGISTRY if t.default and t not in loads]
+    """Every type but the nodal SPC/MPC forces, applied loads, velocities, accelerations, grid point
+    forces, ply strains and failure indices, which the fixture lacks (its one composite table, CQUAD4
+    3's stresses, gives PlyStress)."""
+    lacks = (rt.SPC_FORCE, rt.MPC_FORCE, rt.APPLIED_LOAD, rt.VELOCITY, rt.ACCELERATION, rt.GRID_POINT_FORCE,
+             rt.PLY_STRAIN, rt.PLY_FAILURE_INDEX)
+    assert results.available == tuple(t.name for t in rt.REGISTRY if t not in lacks)
+    assert [t.name for t in results.attached()] == [t.name for t in rt.REGISTRY if t.default and t not in lacks]
 
 
 # ------------------------------------------------------------------ stress and strain (selected)
@@ -160,9 +162,9 @@ def test_von_mises_max_takes_the_composite_plies_from_the_op2(files, deck):
 
 # ------------------------------------------------------------------ nothing dropped silently
 def test_op2_reports_every_table_no_type_reads(files):
+    """The composite stress table is read by PlyStress (tests/test_composites.py), so not reported."""
     res = open_results(files["op2"])
     assert sorted(res.skipped) == sorted([
-        f"stress.cquad4_composite_stress, subcase 1: {rt.PLIES} (VonMisesMax has their largest von Mises)",
         f"strain.ctria3_strain, subcase 1: {rt.CURVATURE}",
         f"stress.celas1_stress, subcase 1: {rt.NOT_READ}",
     ])
@@ -170,9 +172,8 @@ def test_op2_reports_every_table_no_type_reads(files):
 
 def test_h5_reports_every_dataset_no_type_reads(files):
     res = open_results(files["h5"])
-    assert sorted(res.skipped) == sorted([
+    assert sorted(res.skipped) == sorted([  # QUAD4_COMP: read by PlyStress
         f"ELEMENTAL/ELEMENT_FORCE/BAR_CPLX: {rt.COMPLEX}",
-        f"ELEMENTAL/STRESS/QUAD4_COMP: {rt.PLIES}",
         f"ELEMENTAL/STRESS/ELAS1: {rt.NOT_READ}",
         f"ELEMENTAL/STRAIN/TRIA3: {rt.CURVATURE}",
     ])
@@ -214,6 +215,8 @@ def test_h5_reads_a_picked_type_only_when_a_step_needs_it(files, deck, monkeypat
 def test_shared_unread_reasons():
     assert rt.unread_reason("stress.cquad4_composite_stress", read=True) == rt.PLIES_READ
     assert rt.unread_reason("QUAD4_COMP", read=False) == rt.PLIES
+    assert rt.unread_reason("stress.cquad4_composite_stress", read=True, plies=True) is None  # a ply type reads it
+    assert rt.unread_reason("QUAD4_COMP_CPLX", read=False, complex_=True, plies=True) == rt.COMPLEX
     assert rt.unread_reason("BAR_CPLX", read=False, complex_=True) == rt.COMPLEX
     assert rt.unread_reason("strain.ctria3_strain", read=False, curvature=True) == rt.CURVATURE
     assert rt.unread_reason("stress.cshear_stress", read=False) == rt.NOT_READ
@@ -342,7 +345,8 @@ def test_convert_attaches_forces_and_names_the_types_it_left_out(files, tmp_path
     code, text = run_cli(["convert", DECK, "--results", files["op2"], "-o", out])
     assert code == 0, code
     assert ("result types not attached: ShellStress, SolidStress, LineStress, ShellStrain, SolidStrain, "
-            "LineStrain (--result-types to choose)") in text
+            "LineStrain, PlyStress (--result-types to choose)") in text
+    assert "ply results" not in text  # no ply type attached
     assert "stress.celas1_stress, subcase 1: no result type reads this table" in text  # a warning
     mb = read_model(out)
     close(cells(mb, "Lines", "AxialForce"), [7, 15, 31])

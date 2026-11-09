@@ -8,6 +8,18 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Added
 
+- Composite layups and ply results (roadmap task 13). A deck whose shells use a PCOMP or PCOMPG
+  gets Shells `PlyCount` and the field table `PLY_PID PLY_Index PLY_ID PLY_MID PLY_Thickness
+  PLY_Angle PLY_Z PLY_SOUT PLY_FT` (one row per ply, `LAM=SYM` and `SMCORE` expanded, PCOMPG global ply ids,
+  `-GPLYID` for the mirrored copy of a symmetric PCOMPG's ply); other decks are unchanged. The result types `PlyStress` (`PlyStress PlyInterlaminarStress
+  PlyPrincipalStress PlyMaxShearStress PlyVonMises`), `PlyStrain` and `PlyFailureIndex`
+  (`PlyFailureIndex PlyBondIndex PlyFailureIndexMax`, on by default) read the OP2 composite stress,
+  strain and failure-index tables and the MSC/NX HDF5 `*_COMP` datasets, one ply per element:
+  `--ply N` (a ply id) for ply N, which also lays its layup on the shells (`PlyThickness PlyAngle
+  PlyMID PlySOUT PlyZ PlyAxis`, the ply's fibre direction), or `--ply max` (the default) for each
+  element's critical ply, with its id in `PlyStressPly` and the like; `convert` names the ply types that have
+  the ply and warns about the others. Those tables leave the "not attached" report; the ply types read
+  real tables only (a complex ply table stays reported) (#71).
 - Results helpers (roadmap task 12; docs/results-helpers.md), from the CLI and as filters:
   - Envelopes: `--envelope [max min absmax]` (`convert`, `stats`, `store add`; `--envelope-steps`)
     and *Nastran Envelope* (over the input's time steps) add `<array>_Max`, `_Min`, `_AbsMax` and
