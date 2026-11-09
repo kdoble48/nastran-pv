@@ -8,6 +8,16 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Added
 
+- Composite plies in ParaView: the reader's *Ply* (`convert --ply`: a ply id, or 0 for each
+  element's critical ply), the *Nastran Ply Axes* filter (a ply's fibre and 2-directions as lines
+  through each shell, from the layup table, so on converted files too; ply 0 draws the reader's ply
+  or the element material axes) and the NPV Plies view and macro (`view`/`render --preset plies`:
+  the shells by `PlyFailureIndexMax`, `PlyVonMises` or the ply's layup, grey where an element has
+  no such ply, with the ply axes; `nv.apply("plies", ply=, quantity=, component=, size=, both=)`:
+  it turns on only the result types the quantity needs, and a bad argument changes nothing).
+  Ply ids may be -N, the mirrored copy of a symmetric PCOMPG ply.
+  The views that recolor a reused block (NPV Forces, NPV Stress, NPV Plies) now hide the legend
+  of the array they replace (#74).
 - Composite layups and ply results (roadmap task 13). A deck whose shells use a PCOMP or PCOMPG
   gets Shells `PlyCount` and the field table `PLY_PID PLY_Index PLY_ID PLY_MID PLY_Thickness
   PLY_Angle PLY_Z PLY_SOUT PLY_FT` (one row per ply, `LAM=SYM` and `SMCORE` expanded, PCOMPG global ply ids,

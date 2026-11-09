@@ -568,6 +568,113 @@ def force_stress_view_checks(pv, nv):
         _newest_first(pv, _model_sources(pv, nv, src) + _model_sources(pv, nv, reader))
 
 
+def ply_view_checks(pv, nv):
+    """Composite plies (roadmap task 13) on tests/data/composites.bdf with the synthesized OP2 (its
+    values by hand: tests/test_composites.py): the reader's Ply (critical ply, a chosen ply, a PCOMPG
+    global ply, a ply no property has), the layup it lays on the shells, NPV Plies (the array, the
+    Result Types it turns on, its arguments) and Nastran Ply Axes (count, ply, Both Axes kept on a
+    rerun), and a file converted with --ply."""
+    from op2_fixture import make_composite_op2
+
+    deck = os.path.join(HERE, "data", "composites.bdf")
+    nan = float("nan")
+
+    def same(got, want):
+        return all((np.isnan(w) and np.isnan(got[k])) or abs(got[k] - w) < 1e-4 for k, w in want.items())
+
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        op2 = os.path.join(tmp, "composites.op2")
+        make_composite_op2(failure=False).write_op2(op2)  # pyNastran writes no failure-index table
+        reader = nv.load_reader(deck, op2)
+        reader.UpdatePipeline()
+        check(int(reader.Ply) == 0, "the reader's Ply starts at 0: each element's critical ply")
+        check(_by_eid(reader, "Shells", "PlyCount") == {1: 3, 2: 3, 3: 4, 4: 3, 5: 2, 6: 0},
+              "Shells PlyCount (LAM=SYM: 4 plies)")
+        view = pv.CreateRenderView()
+        model = nv.apply("plies", reader=reader, view=view)
+        disp = pv.GetDisplayProperties(pv.FindSource(nv._name(model, "Shells")), view)
+        check(disp.ColorArrayName[1] == "PlyVonMises" and "PlyStress" in list(reader.ResultTypes),
+              f"NPV Plies turns PlyStress on and colors by PlyVonMises: {disp.ColorArrayName[1]}")
+        check(same(_by_eid(reader, "Shells", "PlyStressPly"), {1: 1, 2: 3, 3: 4, 4: 103, 5: 102, 6: nan}),
+              "the critical ply of each element (its id in PlyStressPly)")
+        axes = pv.FindSource(nv._name(model, "ply axes"))
+        text = _info(nv, model)
+        check(axes is not None and int(nv._glyph_field(axes, "AxisCount")) == 6 and "critical" in text
+              and "element material axes" in text, f"critical ply: the element material axes, 6 lines: {text!r}")
+        model = nv.apply("plies", reader=reader, view=view, ply=2)
+        check(int(reader.Ply) == 2 and same(_by_eid(reader, "Shells", "PlyVonMises"),
+                                            {1: nan, 2: nan, 3: 20.0, 4: nan, 5: nan, 6: nan}),
+              "ply=2 sets the reader's Ply: CTRIA3 3's ply 2 (PCOMP 10's ply 2 has SOUT=NO)")
+        check(same(_by_eid(reader, "Shells", "PlyAngle"), {1: 45, 2: 45, 3: 60, 4: nan, 5: nan, 6: nan}),
+              "the reader lays ply 2's layup on the shells")
+        check(int(nv._glyph_field(axes, "AxisCount")) == 3 and int(nv._glyph_field(axes, "AxesPly")) == 2
+              and "ply 2" in _info(nv, model), "the axes follow the reader's ply: 3 lines")
+        axes.BothAxes = 1  # the user turns the 2-direction on: kept by a rerun
+        model = nv.apply("plies", reader=reader, view=view, ply=102, quantity="angle")
+        disp = pv.GetDisplayProperties(pv.FindSource(nv._name(model, "Shells")), view)
+        check(disp.ColorArrayName[1] == "PlyAngle" and int(axes.BothAxes) == 1
+              and int(nv._glyph_field(axes, "AxisCount")) == 4,
+              "a PCOMPG global ply: PlyAngle, both axes of EIDs 4 and 5 (Both Axes kept on the rerun)")
+        model = nv.apply("plies", reader=reader, view=view, quantity="stress", component=1)
+        disp = pv.GetDisplayProperties(pv.FindSource(nv._name(model, "Shells")), view)
+        lut = pv.GetColorTransferFunction("PlyStress", disp, separate=True)
+        check(nv.enum_text(lut, "VectorMode") == "Component" and int(lut.VectorComponent) == 1,
+              "quantity=stress component=1: PlyStress S22")
+        # a bad argument is refused before the reader changes (its Ply, its Result Types)
+        types, ply_before = list(reader.ResultTypes), int(reader.Ply)
+        for bad in ({"ply": 3, "quantity": "tsai"}, {"ply": "first"}, {"ply": 3, "quantity": "stress", "component": 3}):
+            try:
+                nv.apply("plies", reader=reader, view=view, **bad)
+                check(False, f"plies {bad} should be refused")
+            except ValueError as exc:
+                check(int(reader.Ply) == ply_before and list(reader.ResultTypes) == types,
+                      f"plies {bad} refused before the reader changes: {exc}")
+        axes.Ply = 1  # the user's own setting on the filter: an explicit ply= wins over it
+        nv.apply("plies", reader=reader, view=view, ply=2)
+        check(int(axes.Ply) == 2 and int(reader.Ply) == 2, "an explicit ply= sets the axes filter's Ply too")
+        reader.ResultTypes = ["Displacement"]
+        model = nv.apply("plies", reader=reader, view=view, quantity="angle")
+        check(list(reader.ResultTypes) == ["Displacement"] and not nv._TURNED_ON.get("plies"),
+              "quantity=angle (the layup) turns no result type on")
+        disp = pv.GetDisplayProperties(pv.FindSource(nv._name(model, "Shells")), view)
+        own = pv.GetColorTransferFunction("PlyAngle", disp, separate=True)
+        shared = pv.GetColorTransferFunction("PlyAngle")
+        check(list(own.NanColor) == list(nv.PLY_NAN_RGB) and list(shared.NanColor) != list(nv.PLY_NAN_RGB),
+              "the grey of elements without the ply is on the display's own color map, not the shared one")
+        reader.Ply = 0
+        model = nv.apply("plies", reader=reader, view=view, quantity="Angle")
+        check("No angle to show: a ply id (the reader's Ply) lays that ply's layup" in _info(nv, model),
+              f"a layup quantity without a laid ply says how to lay one: {_info(nv, model)!r}")
+        plain = nv.load_reader(DECK)
+        no_layup = pv.NastranPlyAxes(Input=plain)
+        no_layup.Ply = 2
+        out = _messages(no_layup.UpdatePipeline)
+        check(no_layup.GetDataInformation().GetNumberOfCells() == 0 and "no composite layup" in out,
+              f"Nastran Ply Axes on a deck without PCOMP draws nothing and says why: {out.strip()[:120]!r}")
+        pv.Delete(no_layup)
+        pv.Delete(plain)
+        out = _messages(lambda: (setattr(reader, "Ply", 9), reader.UpdatePipeline()))
+        check("Ply: ply 9: no composite shell property has it (ply ids: 1-4, 101-104)" in out
+              and reader.GetDataInformation().GetNumberOfPoints() > 0,
+              f"a ply no property has is reported in Output Messages: {out.strip()[:160]!r}")
+        reader.Ply = 0
+        pv.Delete(view)
+        vtm = os.path.join(tmp, "plies.vtm")
+        convert(["convert", deck, "--results", op2, "--result-types", "PlyStress", "--ply", "3", "-o", vtm, "-q"])
+        src = nv.load_reader(vtm)
+        view = pv.CreateRenderView()
+        model = nv.apply("plies", reader=src, view=view)
+        axes = pv.FindSource(nv._name(model, "ply axes"))
+        check("as the file was converted" in _info(nv, model) and int(nv._glyph_field(axes, "AxesPly")) == 3
+              and int(nv._glyph_field(axes, "AxisCount")) == 3,
+              "a file converted with --ply 3: its ply results and its PlyAxis")
+        model = nv.apply("plies", reader=src, view=view, ply=101)
+        check(int(axes.Ply) == 101 and int(nv._glyph_field(axes, "AxisCount")) == 1,
+              "ply= on a converted file draws that ply's axes from the layup table (PCOMPG 20)")
+        pv.Delete(view)
+        _newest_first(pv, _model_sources(pv, nv, src) + _model_sources(pv, nv, reader))
+
+
 def beam_checks(pv, nv, view, tmp):
     """Nastran Beam Sections filter on tests/data/beams.bdf: sweep, tree visibility, deformation, view."""
     from vtkmodules.util.numpy_support import vtk_to_numpy
@@ -2077,7 +2184,7 @@ VIEW_SELECTS = {"masses": "mass glyphs", "bushes": "bush glyphs", "bushrotations
                 "beams": None, "loads": "load glyphs", "spc": "spc glyphs", "rigid": None, "family": None,
                 "group": None, "pid": None, "mid": None, "elementtype": None, "thickness": None, "nsm": None,
                 "results": "deform", "random": None, "randomsweep": None, "parts": "parts", "grow": "grow",
-                "path": "path", "check": "check", "forces": None, "stress": None}
+                "path": "path", "check": "check", "forces": None, "stress": None, "plies": None}
 
 
 def clear_checks(pv, nv, reader):
@@ -3105,6 +3212,7 @@ def main():
         result_type_checks(rm, nv, reader, full)
         element_result_checks(pv, nv)
         force_stress_view_checks(pv, nv)
+        ply_view_checks(pv, nv)
         anim = pv.CreateRenderView()
         model = nv.apply("results", reader=reader, view=anim)  # the results view: peak deflection
         deform = pv.FindSource(nv._name(model, "deform"))

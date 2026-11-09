@@ -429,6 +429,8 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         self._results_key = None
         self._result_types = vtkDataArraySelection()  # ResultTypes: what the results file has
         self._result_types.AddObserver("ModifiedEvent", _reexecutes(self))
+        self._ply = 0  # Ply: a ply id, 0 the critical ply
+        self._ply_key = None  # (multiblock key, multiblock, ply) whose layup is on the cached model
         self._random_asd = ""
         self._random_drive = 2
         self._random_damping = 0.05
@@ -480,6 +482,14 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         """The result types the OP2/HDF5 file has (Displacement, VonMisesMax, ...): only the
         checked ones are attached at each time step (convert --result-types)."""
         return self._result_types
+
+    @smproperty.intvector(name="Ply", default_values=0)
+    def SetPly(self, v):
+        """Composite ply (convert --ply): a ply id (the PCOMP ply number or a PCOMPG global ply id;
+        -N the mirrored copy of a symmetric PCOMPG's ply N) lays that ply's layup on Shells
+        (PlyAngle, PlyAxis, ...) and gives the ply result types (PlyStress, PlyStrain,
+        PlyFailureIndex) at that ply; 0 gives each element's critical ply."""
+        self._set("_ply", int(v))
 
     @smproperty.doublevector(name="PhaseAngle", default_values=0.0)
     @smdomain.doublerange(min=-360.0, max=360.0)
@@ -839,8 +849,20 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         without a RequestInformation, and then its new types must be listed (at their default)."""
         if hasattr(res, "select"):
             self._list_result_types()
-            res.select([n for n in res.available if self._result_types.ArrayIsEnabled(n)])
+            res.select([n for n in res.available if self._result_types.ArrayIsEnabled(n)], ply=self._ply)
             res.phase = self._phase_angle  # complex steps: the instant the arrays show
+
+    def _attach_ply(self, mb):
+        """The Ply's layup on the cached model's Shells (``plies.attach_ply``), when the ply or the
+        model changed; its messages (no composite, no property with that ply) go to Output Messages."""
+        key = (self._mb_key, id(mb), self._ply)
+        if key == self._ply_key:
+            return
+        from nastran_pv.plies import attach_ply
+
+        for msg in attach_ply(mb, self._ply):
+            _message(f"nastran-pv: Ply: {msg}")
+        self._ply_key = key
 
     def _list_categories(self, mb, deck):
         """Checklist entries for the current multiblock; settings of labels that stay are kept."""
@@ -945,6 +967,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
             rebuilt = self._reported_key != self._mb_key  # RequestInformation may have built it
             self._reported_key = self._mb_key
             self._list_categories(mb, deck)
+            self._attach_ply(mb)
             res = self._get_response()
             time_value = None
             messages = []
@@ -1386,6 +1409,56 @@ class NastranPVSPCGlyphs(_GlyphFilter):
 
         on = {int(n.split()[-1]) for n in _checked(self._spc_sets)}
         return spc_glyphs(block, diag, self._size, sets=on, dofs=self._dofs, resolution=self._resolution)
+
+
+_PLY_AXIS_SIZE = 0.5  # copy of nastran_pv.glyphs.PLY_AXIS_SIZE (test_plugin_constants)
+
+
+@smproxy.filter(name="NastranPVPlyAxes", label="Nastran Ply Axes")
+@smhint.xml('<ShowInMenu category="Nastran" />')
+@smproperty.input(name="Input", port_index=0)
+@smdomain.datatype(dataTypes=["vtkDataObject"], composite_data_supported=True)
+class NastranPVPlyAxes(_GlyphFilter):
+    """A composite ply's material axes as lines through each shell's centre: its 1-direction (the
+    fibre) and, with Both Axes, its 2-direction. Ply: a ply id (the PCOMP ply number or a PCOMPG
+    global ply id; -N the mirrored copy of a symmetric PCOMPG's ply N); 0 draws the model's PlyAxis
+    (the reader's Ply) or, without one, the element material axes (THETA/MCID). Size: a line's
+    length over its element's size. Nothing to draw is reported in Output Messages, with why."""
+
+    BLOCK, REQUIRED = "Shells", "NID"
+
+    def __init__(self):
+        _GlyphFilter.__init__(self)
+        self._ply = 0
+        self._size = _PLY_AXIS_SIZE
+        self._both = 0
+        self._note = None  # the last reason reported (once per change)
+
+    @smproperty.intvector(name="Ply", default_values=0)
+    def SetPly(self, v):
+        self._set("_ply", int(v))
+
+    @smproperty.doublevector(name="Size", default_values=_PLY_AXIS_SIZE)
+    @smdomain.doublerange(min=0.05, max=2.0)
+    def SetSize(self, v):
+        self._set("_size", float(v))
+
+    @smproperty.intvector(name="BothAxes", default_values=0)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetBothAxes(self, v):
+        """Also the 2-direction (normal x 1-direction)."""
+        self._set("_both", int(v))
+
+    def _glyphs(self, block, diag, model):
+        from nastran_pv.fields.common import field_strings
+        from nastran_pv.glyphs import ply_axes
+
+        out = ply_axes(block, self._ply, self._size, bool(self._both))
+        note = (field_strings(out, "AxesNote") or [None])[0]
+        if note is not None and note != self._note:
+            _message(f"nastran-pv: Nastran Ply Axes: nothing drawn: {note}")
+        self._note = note
+        return out
 
 
 def _spc_set_ids(data):
