@@ -1290,6 +1290,13 @@ def results_helper_checks(pv, nv):
     dmin = vtk_to_numpy(blk.GetPointData().GetArray("Displacement_Min"))[nid.index(3)].tolist()
     check(np.allclose(dmin, [0.15, 0, 3], rtol=1e-5) and blk.GetPointData().GetArray("Displacement_AbsMax") is None,
           f"Steps 0 2, no Max Abs: Displacement_Min at grid 3 {dmin}")
+    env.Steps = ","  # selects no step: said, and every step is used (it raised IndexError in the pipeline)
+    text = _messages(lambda: env.UpdatePipeline())
+    blk = as_multiblock(rm.nv.fetch(env))
+    blk = blk.GetBlock(nv.block_names(blk).index("Shells"))
+    dmin = vtk_to_numpy(blk.GetPointData().GetArray("Displacement_Min"))[nid.index(3)].tolist()
+    check("selects no step" in text and np.allclose(dmin, [-0.6, 0, -6], rtol=1e-5),
+          f"Steps ',': reported, every step used ({dmin})")
     pv.Delete(env)
     pv.Delete(reader)
     series = os.path.join(tmp, "env.vtkhdf")
@@ -1333,12 +1340,19 @@ def results_helper_checks(pv, nv):
         t0 = (rm.timesteps(reader) or [0.0])[0]
         fb = pv.NastranFreeBody(Input=reader, SeedIDs="PID 2")
         fb.StayWithin = "seed properties"
+        text = _messages(lambda: fb.UpdatePipeline(t0))
+        check(np.isnan(_table_row(rm.nv.fetch(fb, 1), "Elements")).all() and "no GridPointForce" in text,
+              f"{ext}: GridPointForce is off by default: the cut load from equilibrium, and the filter says so")
+        pv.Delete(fb)
+        fb = nv.free_body("PID 2", reader=reader)  # checks GridPointForce in the reader, stays in PID 2
+        check("GridPointForce" in list(reader.ResultTypes) and nv.enum_text(fb, "StayWithin") == "seed properties",
+              f"{ext}: nv.free_body checks GridPointForce and stays within the seed property")
         fb.UpdatePipeline(t0)
         cut = _table_row(rm.nv.fetch(fb, 1), "Cut")
         check(np.allclose(cut, [10, 0, 80, -15, -180, -10], atol=1e-5), f"{ext}: Free Body PID 2, cut load {cut}")
         check(np.allclose(_table_row(rm.nv.fetch(fb, 1), "Imbalance"), 0, atol=1e-5), f"{ext}: the imbalance is zero")
         check(_root(fb, "ArrowCount", 2) == [2], f"{ext}: the glyph has the force and moment arrows")
-        check(_by_eid(fb, "Lines", "FreeBody") == {1: 0, 2: 1, 3: 1, 4: 1, 21: 0, 22: 0, 23: 0, 24: 0},
+        check(_by_eid(fb, "Lines", "FreeBody") == {1: 0, 2: 1, 3: 1, 4: 1, 21: 0, 22: 0, 23: 0, 24: 0, 31: 0, 32: 0},
               f"{ext}: FreeBody marks bars 2-4")
         fb.SumAbout = "Grid"
         fb.Grid = 4
@@ -1353,10 +1367,18 @@ def results_helper_checks(pv, nv):
         fb.UpdatePipeline(t0)
         cut = _table_row(rm.nv.fetch(fb, 1), "Cut")
         check(np.allclose(cut, [0, 0, 100, 5, -100, 0], atol=1e-5), f"{ext}: bar 3 alone (Max Hops 0) {cut}")
+        fb.SeedIDs = "PID 32"  # with the RBE2, not CBAR 31: its MPC force at grid 32 is the cut load
+        fb.LimitHops = 0
+        fb.ExcludePIDs = "31"
+        fb.UpdatePipeline(t0)
+        table = rm.nv.fetch(fb, 1)
+        cut, mpc = _table_row(table, "Cut"), _table_row(table, "MPC")
+        check(np.allclose(cut, [0, 0, 10, 0, -15, 0], atol=1e-5) and np.allclose(mpc, cut, atol=1e-5),
+              f"{ext}: the load through the body's RBE2 is in the cut load {cut}")
         pv.Delete(fb)
         pv.Delete(reader)
     vtm = os.path.join(tmp, "fb.vtm")
-    convert(["convert", fb_deck, "--results", op2, "-o", vtm, "-q"])
+    convert(["convert", fb_deck, "--results", op2, "--result-types", "all", "-o", vtm, "-q"])
     src = nv.load_reader(vtm)
     fb = pv.NastranFreeBody(Input=src, SeedIDs="PID 22")
     fb.StayWithin = "seed properties"

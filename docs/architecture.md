@@ -81,15 +81,20 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   and `...Step` arrays of every registry point/cell array), `average.py` (`nodal_average`: per mesh
   block an unstructured grid with points duplicated per (NID, PID) and the cell arrays averaged
   onto them; grids are matched by `NID`, since a gathered tree has a point per grid and piece) and
-  `freebody.py` (`select_body` grows the body with the topology rules; `sum_free_body` takes the
-  cut load from the root `GridPointForce*` table, else from equilibrium). The CLI runs the
+  `freebody.py` (`select_body` grows the body with the topology rules, `default_rules` by the
+  seeds; `sum_free_body` takes the cut load from the root `GridPointForce*` table plus the body's
+  rigid elements' MPC forces at the cut grids, else from equilibrium). The CLI runs the
   envelope before the field options and the averaging and free body after `--select`;
   `post.StepHelpers` wraps the results so that the series writers re-run those two after every
-  `attach`. The plugin's *Nastran Envelope* iterates its input's time steps with
+  `attach`; a VTKHDF series' signature pass calls `attach_signature`, where the averaging writes
+  zeros (`post.average.Averager` keeps each block's geometry) and the free body keeps the table it
+  sums for the writing pass (`FreeBodySteps`). The plugin's *Nastran Envelope* iterates its input's time steps with
   `CONTINUE_EXECUTING` (its output has no time steps, so a time change does not re-execute it).
-  A `ResultType` with `location="table"` (`GridPointForce`) writes root arrays
-  (`table_names`), not block arrays; its OP2 source reads the rows itself (`Op2Source.rows`),
-  which also normalises MYSTRAN's negated element rows.
+  A `ResultType` with `location="table"` (`GridPointForce`, off by default; `results.also`
+  turns it on for the free body) writes root arrays (`table_names`), not block arrays, on the
+  union of the file's rows (`_Results.table_keys`, NaN where a step has none) so that every step
+  has one size; its OP2 source reads the rows itself (`Op2Source.rows`), on first use and once per
+  table and time (`Op2Results._table_rows`), which also normalises MYSTRAN's negated rows.
 - `fields/`: `derived.py` (material, quality, size, cg, pidmass), `tables.py` (`read_table` and
   `map_table` by EID/PID/MID/NID/FAMILY/GROUP; text columns become codes plus a `<name>Names`
   table), `db.py` (SQLite or SQLAlchemy), and `calc.py` (`calculate` with a restricted-namespace

@@ -71,47 +71,56 @@ max shear) or meshes whose element systems agree.
 ## Free-body sums
 
 ```bash
-nastran-pv convert run.bdf --results run.op2 --free-body "PID 7" --rules "within=pid" -o out/fb.vtm
-nastran-pv convert run.bdf --results run.op2 --free-body "EID 1001 1002" --rules "max_hops=0" \
-    --free-body-point "GRID 55" -o out/fb.vtm
-nastran-pv convert out/fb.vtm --free-body "PID 7" --rules "within=pid" -o out/fb2.vtm   # no deck needed
+nastran-pv convert run.bdf --results run.op2 --free-body "PID 7" -o out/fb.vtm   # property 7
+nastran-pv convert run.bdf --results run.op2 --free-body "EID 1001 1002" --free-body-point "GRID 55" -o out/fb.vtm
+nastran-pv convert run.bdf --results run.op2 --free-body "PID 7" --free-body-rules "exclude_pids=8" -o out/fb.vtm
+nastran-pv convert out/fb.vtm --free-body "PID 7" -o out/fb2.vtm   # a converted file: no deck needed
 ```
 
 ```text
 free body (Subcase 1): 3 element(s), 4 grid(s), 1 on the cut; from GPFORCE; about (1, 0, 0) (cut centroid)
   Source     FX  FY  FZ  MX   MY    MZ   Grids
   Cut        10  0   80  -15  -180  -10  1
+  Elements   10  0   80  -15  -180  -10  1
+  MPC        0   0   0   0    0     0    0
   Applied    10  0   80  -15  -180  -10  2
   SPC        0   0   0   0    0     0    0
-  MPC        0   0   0   0    0     0    0
   Imbalance  0   0   0   0    0     0    4
 ```
 
-**The free body** is what a grow from the seeds reaches under the [traversal rules](tools.md#traversal-rules):
-`PID 7` with `within=pid` is everything connected within property 7, `EID 1001 1002` with
-`max_hops=0` exactly those elements. Its **cut grids** are its grids that an element outside it
-also uses (shells, solids, lines, rigid elements, connectors and bushes of the model, or an
-element a grid point force row names); its other grids are **interior**.
+**The free body** is what a grow from the seeds reaches under the [traversal rules](tools.md#traversal-rules),
+given by `--free-body-rules` (the `--rules` syntax). By default PID and GRID seeds stay within
+their properties (`within=pid`: `PID 7` is property 7, and its cut is where the other properties
+start) and EID seeds alone are exactly those elements (`max_hops=0`); without `within`, a seed
+would grow through the whole connected model and there would be no cut. Its **cut grids** are
+its grids that an element outside it also uses (shells, solids, lines, rigid elements,
+connectors and bushes of the model, or an element a grid point force row names); its other grids
+are **interior**.
 
 **The cut load** (row `Cut`) is the force and moment the free body applies to the rest of the
 model through the cut grids: Patran's and Femap's *interface load*. With the grid point force
-balance in the results (Case Control `GPFORCE=`, the result type `GridPointForce`), it is the sum,
-over the cut grids, of the grid point forces of the body's own elements. Static equilibrium makes
-it equal to the loads on the interior grids: the rows `Applied` (OLOAD), `SPC` and `MPC` forces
-there, and `Imbalance` = Cut − (Applied + SPC + MPC) shows a wrong cut or missing output. A body
-loaded only by applied loads transmits exactly them. Without GPFORCE the cut load is that sum of
-the interior loads (`equilibrium`; the imbalance is NaN: there is no check).
+balance in the results (Case Control `GPFORCE=`), it is, at the cut grids, the grid point forces
+of the body's own elastic elements (row `Elements`) plus the MPC forces of the body's rigid
+elements and MPCs (row `MPC`: GPFORCE does not list those as elements, so a body whose load
+leaves through an RBE2 spider transmits it there). Static equilibrium makes it equal to the
+loads on the interior grids, the rows `Applied` (OLOAD) and `SPC` forces there, and `Imbalance` =
+Cut − (Applied + SPC) shows a wrong cut or missing output. A body loaded only by applied loads
+transmits exactly them. Without GPFORCE the cut load is that sum of the interior loads
+(`equilibrium`; `Elements`, `MPC` and `Imbalance` are NaN: there is no check).
 
-All rows are in basic; moments are about the summation point (M + (r − p) × F):
-`--free-body-point "X Y Z"` or `"GRID n"`, by default the centroid of the cut grids. `Grids` counts
-the grids each row sums: the cut grids, the interior grids with a non-zero load, every grid of the
-body. The model gets cell `FreeBody` (1 in the body), point `FreeBodyGrid` (2 cut, 1 interior, 0
-elsewhere) and the root table `FREEBODY_Source FREEBODY_FX ... FREEBODY_MZ FREEBODY_Grids`,
-`FreeBodyPoint` and `FreeBodyMethod`; with `--all-steps` each step has its own table.
+`--free-body` turns on the result type `GridPointForce` (off by default: a row per element and
+grid on every step otherwise), so it needs no `--result-types`. All rows are in basic; moments
+are about the summation point (M + (r − p) × F): `--free-body-point "X Y Z"` or `"GRID n"`, by
+default the centroid of the cut grids. `Grids` counts the grids each row sums: the cut grids,
+the cut grids with an element row or a rigid element of the body, the interior grids with a
+non-zero load, every grid of the body. The model gets cell `FreeBody` (1 in the body), point
+`FreeBodyGrid` (2 cut, 1 interior, 0 elsewhere) and the root table `FREEBODY_Source FREEBODY_FX
+... FREEBODY_MZ FREEBODY_Grids`, `FreeBodyPoint` and `FreeBodyMethod`; with `--all-steps` each
+step has its own table.
 
-Ask Nastran for `GPFORCE=ALL OLOAD=ALL SPCFORCES=ALL MPCFORCES=ALL` (the last two where the body
-has constraints or rigid elements). A row whose output is missing is NaN, not zero, with a
-warning; a cut grid without grid point force rows warns too.
+Ask Nastran for `GPFORCE=ALL OLOAD=ALL SPCFORCES=ALL MPCFORCES=ALL` (SPC forces where the body
+has constraints, MPC forces where its rigid elements reach the cut). A row whose output is
+missing is NaN, not zero, with a warning; a cut grid without grid point force rows warns too.
 
 Limits:
 
@@ -119,11 +128,14 @@ Limits:
   Modes, frequency response and transients are not free bodies here.
 - Rigid elements and MPCs are not elastic elements in the balance: their forces are the MPC
   forces (MSC writes them as `F-OF-MPC`; NX lists rigid elements by name, and nastran-pv leaves
-  those rows out so they are counted once). A rigid element wholly inside the body sums to zero;
-  one across the cut makes its grids cut grids, so the load it carries is in the cut row.
+  those rows out so they are counted once). One wholly inside the body is internal; one outside
+  makes its grids in the body cut grids, where the body's elements carry the load to it. A cut
+  grid where rigid elements of both sides meet cannot be split: the `MPC` and `Cut` rows are then
+  NaN, with a warning naming the grids (move the cut).
 - Elements nastran-pv does not draw ([card report](model.md#cards-not-drawn)) are never in the
   body; their grids in it are cut grids.
-- GPFORCE requested for a set of grids must include the cut grids.
+- GPFORCE requested for a set of grids must include the cut grids. Subcases may have different
+  sets: the table holds every row of the file, NaN where a step has none.
 - MYSTRAN 19 writes the element rows of its OP2 balance with the opposite sign (its `.f06` has
   the MSC sign): nastran-pv detects it from the grids' balance, negates them and says so.
 
@@ -140,10 +152,14 @@ Limits:
   mesh blocks; the results come checked) and *Average Within* (Property, Material, Family, Group,
   Whole block).
 * **Nastran Free Body** sums the free body at the current time step. *Seed IDs* and the
-  *Traversal* group (as on Nastran Grow: *Stay Within* seed properties, *Limit Hops* and *Max
-  Hops* 0 for exactly the seed elements) pick the body; *Sum About* (Cut centroid, Point, Grid),
+  *Traversal* group (as on Nastran Grow, whose defaults grow through the whole connected model:
+  set *Stay Within* seed properties, or *Limit Hops* with *Max Hops* 0 for exactly the seed
+  elements) pick the body; *Sum About* (Cut centroid, Point, Grid),
   *Point* and *Grid* the summation point; the *Glyph Size* group sizes the arrows. Output 0 is the
   model with `FreeBody` and `FreeBodyGrid`, output 1 the table (open it in a SpreadSheet view),
   output 2 the cut load as arrows at the summation point (force single-headed, moment
   double-headed). It works on converted files too: the grid point forces are a root table of the
-  model (`GridPointForceNID GridPointForceEID GridPointForce GridPointMoment`).
+  model (`GridPointForceNID GridPointForceEID GridPointForce GridPointMoment`). On the deck
+  reader, check *GridPointForce* in its *Result Types* (off by default; without it the filter
+  sums from equilibrium and says so), or let `nastran_views.free_body("PID 7")` set up the
+  filter: it checks the type and applies the CLI's default rules.

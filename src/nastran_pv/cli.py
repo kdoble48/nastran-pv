@@ -115,7 +115,8 @@ def load_model(args, verbose=False):
         from .results import attach_op2
 
         with progress.stage(f"results {Path(args.results).name}"):
-            results = attach_op2(mb, deck, args.results, args.step, types)
+            also = ("GridPointForce",) if getattr(args, "free_body", None) else ()  # the free body's source
+            results = attach_op2(mb, deck, args.results, args.step, types, also)
         if getattr(args, "random", None):
             from .randvib import random_response
 
@@ -224,8 +225,8 @@ def apply_field_options(mb, args) -> list[str]:
                 notes += [f"grow: {res.cells} cell(s) reached, max {res.max_hop} hop(s)"] + res.warnings
         except ValueError as exc:
             raise SystemExit(f"nastran-pv: {exc}") from None
-    elif getattr(args, "rules", None) and not getattr(args, "free_body", None):
-        raise SystemExit("nastran-pv: --rules needs --parts, --grow or --free-body")
+    elif getattr(args, "rules", None):
+        raise SystemExit("nastran-pv: --rules needs --parts or --grow (a free body takes --free-body-rules)")
     for expr in args.calc or []:
         notes.append(f"calc {expr!r} on {', '.join(calculate(mb, expr))}")
     return notes
@@ -240,8 +241,11 @@ def add_step_helper_arguments(g) -> None:
     g.add_argument("--average-within", choices=tuple(WITHIN), default=None,
                    help="what the averaging does not cross (default pid; none = the whole block)")
     g.add_argument("--free-body", metavar="SEEDS",
-                   help='the load a free body transmits through its cut, e.g. "PID 7" with --rules "within=pid", '
-                        'or "EID 1 2" with --rules max_hops=0')
+                   help='the load a free body transmits through its cut: "PID 7" (property 7) or "EID 1 2" '
+                        '(those elements); turns on the GridPointForce result type')
+    g.add_argument("--free-body-rules", metavar="TEXT",
+                   help='how the body grows from its seeds, as --rules (default: within=pid for PID or GRID '
+                        'seeds, max_hops=0 for EID seeds)')
     g.add_argument("--free-body-point", metavar="POINT",
                    help='summation point: "X Y Z" (basic) or "GRID n" (default: the centroid of the cut grids)')
 
@@ -263,40 +267,37 @@ def apply_step_helpers(mb, args, deck, results):
     After ``--select``: the helpers see what the selection keeps, at every step alike."""
     names, within = getattr(args, "average", None), getattr(args, "average_within", None)
     seeds, point = getattr(args, "free_body", None), getattr(args, "free_body_point", None)
+    rules = getattr(args, "free_body_rules", None)
     if names is None and within:
         raise SystemExit("nastran-pv: --average-within needs --average")
-    if seeds is None and point:
-        raise SystemExit("nastran-pv: --free-body-point needs --free-body")
+    if seeds is None and (point or rules):
+        raise SystemExit("nastran-pv: --free-body-point and --free-body-rules need --free-body")
     helpers, notes = [], []
     if names is not None:
-        from .post.average import add_averaged
+        from .post.average import Averager
 
-        within = within or "pid"
-        names = names or None
-        res = add_averaged(mb, names, within)
-        notes += [res.summary(within)] + [f"warning: {w}" for w in res.warnings]
-        helpers.append(lambda model: add_averaged(model, names, within))
+        averager = Averager(names or None, within or "pid")
+        res = averager(mb)
+        notes += [res.summary(averager.within)] + [f"warning: {w}" for w in res.warnings]
+        helpers.append(averager)
     if seeds is not None:
-        from .post.freebody import parse_point, select_body, step_label, sum_free_body, write_free_body
+        from .post import step_label
+        from .post.freebody import FreeBodySteps, parse_point, select_body, sum_free_body, write_free_body
         from .topology import Rules
 
         try:
             where = parse_point(point)
-            body = select_body(mb, seeds, Rules.parse(args.rules))
+            body = select_body(mb, seeds, Rules.parse(rules) if rules else None)
             res = sum_free_body(mb, body, where)
         except ValueError as exc:
             raise SystemExit(f"nastran-pv: --free-body: {exc}") from None
         write_free_body(mb, body, res)
         notes += free_body_lines(res, step_label(mb))
-
-        def step_free_body(model):
-            write_free_body(model, body, sum_free_body(model, body, where))
-
-        helpers.append(step_free_body)
+        helpers.append(FreeBodySteps(body, where))
     if helpers and results is not None:
         from .post import StepHelpers
 
-        results = StepHelpers(results, lambda model, step: [h(model) for h in helpers])
+        results = StepHelpers(results, helpers)
     return results, notes
 
 

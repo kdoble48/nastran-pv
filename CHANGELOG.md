@@ -16,13 +16,16 @@ All notable changes to nastran-pv are listed here. The format follows
     (`--average-within pid|mid|family|group|none`) adds the `Averaged` block, the mesh blocks on
     points duplicated per (grid, PID) with the averages as point arrays; *Nastran Nodal Average*
     outputs the same. Each step of a series gets its own.
-  - Free-body sums: `convert --free-body SEEDS` (with `--rules` and `--free-body-point`) and
+  - Free-body sums: `convert --free-body SEEDS` (with `--free-body-rules`, by default within the
+    seeds' properties, and `--free-body-point`) and
     *Nastran Free Body* (table and arrows at the summation point) give the load a free body grown
     under the traversal rules transmits through its cut grids, from the grid point force balance,
-    with the applied, SPC and MPC forces inside it as the check; without GPFORCE, from equilibrium.
-  - The `GridPointForce` result type (OP2 `grid_point_forces`, HDF5 `NODAL/GRID_FORCE`): the
-    balance's element rows as a root table per step (a new `table` location in the registry),
-    MYSTRAN's negated OP2 rows normalised (#73).
+    the body's rigid elements' MPC forces there included, with the applied and SPC forces inside
+    it as the check; without GPFORCE, from equilibrium.
+  - The `GridPointForce` result type (OP2 `grid_point_forces`, HDF5 `NODAL/GRID_FORCE`), off by
+    default and turned on by `--free-body`: the balance's element rows as a root table per step
+    (a new `table` location in the registry; every step has the file's rows, so a VTKHDF series
+    holds subcases with different GPFORCE sets), MYSTRAN's negated OP2 rows normalised (#73).
 - NPV Forces and NPV Stress views (`view`/`render --preset forces stress`): each block colored by its
   element forces (shells `MembraneForce`, lines `AxialForce`, bushes, springs) or by von Mises stress
   (shells at the top fibre, solids, lines `MaxStress`); `nv.apply("stress", quantity=, fibre=,

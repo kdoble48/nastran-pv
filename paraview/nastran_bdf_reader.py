@@ -2082,7 +2082,7 @@ class NastranPVEnvelope(_FieldFilter):
     def RequestUpdateExtent(self, request, inInfo, outInfo):
         if self._done == 0:
             self._todo = self._chosen()
-        if self._times:  # the next step to read
+        if self._times and self._done < len(self._todo):  # the next step to read
             inInfo[0].GetInformationObject(0).Set(vtkStreamingDemandDrivenPipeline.UPDATE_TIME_STEP(),
                                                   self._times[self._todo[self._done]])
         return 1

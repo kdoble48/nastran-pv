@@ -105,6 +105,8 @@ def test_kinds_and_steps_are_checked():
     assert chosen_steps(4) == [0, 1, 2, 3] and chosen_steps(4, "1-2") == [1, 2]
     with pytest.raises(ValueError, match="out of range"):
         chosen_steps(3, "0 5")
+    with pytest.raises(ValueError, match="selects no step"):
+        chosen_steps(3, ",")
 
 
 def test_an_envelope_of_any_model_sequence(deck):
@@ -169,6 +171,7 @@ def test_stats_of_an_envelope(env_op2):
     ([], "--envelope needs --results"),
     (["--results", "R", "--random", "20:0.01,2000:0.01"], "--envelope and --random"),
     (["--results", "R", "--envelope-steps", "7"], "out of range"),
+    (["--results", "R", "--envelope-steps", ","], "selects no step"),
     (["--results", "R", "--envelope", "mean"], "unknown envelope"),
 ])
 def test_bad_envelope_options(env_op2, extra, message):

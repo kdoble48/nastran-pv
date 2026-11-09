@@ -17,7 +17,8 @@ from __future__ import annotations
 import numpy as np
 
 from .. import result_types, vtkutil
-from ..fields.common import field_strings, iter_blocks
+from ..fields.common import iter_blocks
+from . import step_label
 
 KINDS = ("max", "min", "absmax")
 SUFFIXES = {"max": "Max", "min": "Min", "absmax": "AbsMax"}
@@ -51,11 +52,6 @@ def result_arrays(registry=result_types.REGISTRY) -> dict:
     return out
 
 
-def _label(mb, step: int) -> str:
-    labels = field_strings(mb, "ResultLabel")
-    return labels[0] if labels else f"step {step}"
-
-
 def _is_mode(mb) -> bool:
     a = mb.GetFieldData().GetArray("Frequency")
     return a is not None and a.GetNumberOfTuples() > 0 and np.isfinite(a.GetTuple1(0))
@@ -76,7 +72,7 @@ class Envelope:
     def add(self, mb, step: int) -> None:
         """Fold the result arrays of ``mb`` (the model at ``step``) into the envelopes."""
         self.steps.append(int(step))
-        self.labels.append(_label(mb, step))
+        self.labels.append(step_label(mb, f"step {step}"))
         self.modes += _is_mode(mb)
         for path, ds in iter_blocks(mb):
             for location in ("point", "cell"):
@@ -162,12 +158,14 @@ MIXED = "the envelope mixes modes with static steps: mode shapes have an arbitra
 
 def chosen_steps(n_steps: int, text=None) -> list[int]:
     """The step indexes of ``text`` (``"0-2 5"``, ``tree.parse_ids`` syntax; empty: all ``n_steps``),
-    each checked against the range."""
+    each checked against the range; ValueError for text that selects none (``","``)."""
     from ..tree import parse_ids
 
-    if not text or not str(text).strip():
+    if text is None or not str(text).strip():
         return list(range(n_steps))
     steps = sorted(parse_ids(str(text)))
+    if not steps:
+        raise ValueError(f"{str(text).strip()!r} selects no step (give step indexes, e.g. 0-2 5, or nothing for all)")
     bad = [s for s in steps if s >= n_steps]
     if bad:
         raise ValueError(f"steps {', '.join(map(str, bad))} out of range: the results have {n_steps} step(s) "

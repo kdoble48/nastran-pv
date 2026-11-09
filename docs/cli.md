@@ -39,7 +39,7 @@ step, `--step N` (0-based, default 0); `--all-steps` writes them all. On a conve
 chooses what the steps carry, by [result type](model.md#result-types): `--result-types VonMisesMax`
 attaches the stresses without the displacements, `--result-types ShellStress,SolidStress` the
 stress components (names are case-insensitive and may be comma-separated; `all` is every type;
-the default is `Displacement VonMisesMax SPCForce MPCForce AppliedLoad`, the element forces and `GridPointForce`).
+the default is `Displacement VonMisesMax SPCForce MPCForce AppliedLoad` and the element forces).
 `convert` prints the types the file has that it left out, and a type named that the results
 file lacks gives a warning. With SPC forces, MPC forces or applied loads attached, `convert`
 prints their resultant at the attached step (`--step`, also with `--all-steps`), e.g.
@@ -58,7 +58,7 @@ debugging.
 `--envelope [max min absmax]` adds the envelopes of every result array over the steps
 (`--envelope-steps` to choose them), with the step of each extreme; `stats` and `store add` take it
 too. `convert --average [ARRAY ...]` adds the `Averaged` block, the element results averaged to the
-grids within each PID, and `convert --free-body SEEDS` (with `--rules` and `--free-body-point`)
+grids within each PID, and `convert --free-body SEEDS` (with `--free-body-rules` and `--free-body-point`)
 prints and stores the load a free body transmits through its cut; both follow every step of an
 `--all-steps` series (see [Results helpers](results-helpers.md)).
 

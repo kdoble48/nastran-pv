@@ -107,10 +107,35 @@ class _Results:
         self.named = () if names is None or result_types.says_all(names) else self.selected
         return self
 
+    def also(self, names):
+        """Attach the types ``names`` too, on top of the selection (the defaults when nothing is
+        selected), without asking the file for them: a helper that can use a type (the free body:
+        ``GridPointForce``) turns it on and copes without it. Returns ``self``."""
+        base = result_types.parse(None, self.registry) if self.selected is None else self.selected
+        extra = {result_types.by_name(n, self.registry).name for n in names}
+        self.selected = tuple(t.name for t in self.registry if t.name in base or t.name in extra)
+        return self
+
     def attached(self) -> list:
         """The result types the next :meth:`attach` writes: selected and in the file."""
         want = result_types.parse(None, self.registry) if self.selected is None else self.selected
         return [t for t in self.registry if t.name in want and t.name in self.available]
+
+    def table_keys(self, rtype) -> np.ndarray:
+        """Sorted (n, 2) id and integer-column pairs of every row table type ``rtype`` has at any
+        step, made once: each step writes this one set of rows (NaN where it has none), so a
+        VTKHDF series, which needs one size per field array, holds steps with different rows."""
+        cache = self.__dict__.setdefault("_table_keys", {})
+        if rtype.name not in cache:
+            col = next(spec.columns[0] for spec in rtype.arrays if spec.integer)
+            keys = []
+            for step in self.steps:
+                got = self.values(rtype, step)
+                if got is not None:
+                    ok = np.isfinite(got[1][:, col])
+                    keys.append(np.column_stack([got[0][ok], got[1][ok, col].astype(np.int64)]))
+            cache[rtype.name] = np.unique(np.concatenate(keys), axis=0) if keys else np.zeros((0, 2), np.int64)
+        return cache[rtype.name]
 
     def missing(self) -> list[str]:
         """Types selected by name that the file does not have."""
@@ -280,16 +305,9 @@ class Op2Results(_Results):
                         if rtype.steps:
                             self.skipped.append(f"{kind} subcase {_subcase(key)}: complex results are not supported")
                         continue
-                    if src.rows is not None:  # rows not one per id: the source reads them itself
-                        try:
-                            got = src.rows(obj, 0)
-                        except (AttributeError, IndexError, ValueError):
-                            got = None
-                        if got is None:
-                            continue
-                        if got[2]:
-                            self.skipped.append(f"{name}, subcase {_subcase(key)}: {got[2]}")
-                        found.append(Op2Table(name, key, obj, None, kind, rows=src.rows))
+                    if src.rows is not None:  # rows not one per id: the source reads them when a step
+                        if getattr(obj, "data", None) is not None:  # needs them (_table_rows)
+                            found.append(Op2Table(name, key, obj, None, kind, rows=src.rows))
                         continue
                     ids = _ids(obj, rtype)
                     if not rtype.steps and ids is None:
@@ -347,6 +365,24 @@ class Op2Results(_Results):
         return steps
 
     # ------------------------------------------------------------ values
+    def _table_rows(self, table, itime):
+        """(ids, values) of a table whose source reads its rows (``Op2Source.rows``) at ``itime``,
+        made once per table and time (a series attaches each step twice); its note goes into
+        ``skipped`` once. None when the source cannot read the table."""
+        cache = self.__dict__.setdefault("_rows_cache", {})
+        key = (table.name, table.key, itime)
+        if key not in cache:
+            try:
+                got = table.rows(table.obj, itime)
+            except (AttributeError, IndexError, ValueError):
+                got = None
+            if got is not None and got[2]:
+                note = f"{table.name}, subcase {_subcase(table.key)}: {got[2]}"
+                if note not in self.skipped:
+                    self.skipped.append(note)
+            cache[key] = None if got is None else got[:2]
+        return cache[key]
+
     def _rows(self, rtype, step):
         """A step-defining type reads the step's own table at its index; the others every table
         of the step's subcase, at the row whose time value matches the step's."""
@@ -362,7 +398,9 @@ class Op2Results(_Results):
                 if itime is None:
                     continue
             if table.rows is not None:
-                yield table.rows(table.obj, itime)[:2]
+                got = self._table_rows(table, itime)
+                if got is not None:
+                    yield got
                 continue
             data = table.obj.data[itime]
             if table.plan is not None:
@@ -415,29 +453,40 @@ def _write(mb, names, targets, rtype, got) -> None:
             vtkutil.add_array(attrs, spec.name, v, skip_all_nan=bool(np.isnan(rtype.fill)))
 
 
-def _write_table(mb, rtype, got) -> None:
-    """Root ``rtype.table_names`` from ``got`` (ids, values): the ids, then each array; rows with a
-    non-finite ``integer`` column are no rows of the table; sorted by id, then by those columns.
-    Dropped when ``got`` is None."""
+def _write_table(mb, rtype, got, keys=None) -> None:
+    """Root ``rtype.table_names`` from ``got`` (ids, values) on the rows ``keys`` (sorted (n, 2) id
+    and integer-column pairs, :meth:`_Results.table_keys`; None: the rows of ``got``): the ids,
+    then each array, NaN where this step has no such row (rows of one pair sum). A row of ``got``
+    with a non-finite integer column is no row of the table. Dropped when ``got`` is None."""
     fd = mb.GetFieldData()
     names = rtype.table_names
     for name in names:
         fd.RemoveArray(name)
     if got is None:
         return
+    col = next(spec.columns[0] for spec in rtype.arrays if spec.integer)
     ids, vals = got
-    keys = [spec.columns[0] for spec in rtype.arrays if spec.integer]
-    keep = np.isfinite(vals[:, keys]).all(axis=1) if keys else np.ones(len(ids), bool)
-    ids, vals = ids[keep], vals[keep]
-    if not len(ids):
+    ok = np.isfinite(vals[:, col])
+    ids, vals = ids[ok].astype(np.int64), vals[ok]
+    pairs = np.column_stack([ids, vals[:, col].astype(np.int64)])
+    keys = np.unique(pairs, axis=0) if keys is None else np.asarray(keys, dtype=np.int64)
+    if not len(keys):
         return
-    order = np.lexsort([vals[:, k] for k in reversed(keys)] + [ids]) if keys else np.argsort(ids, kind="stable")
-    ids, vals = ids[order], vals[order]
-    vtkutil.add_array(fd, names[0], ids.astype(np.int64))
+    code = lambda k: k[:, 0] * 2**32 + (k[:, 1] % 2**32)  # noqa: E731  (ids and EIDs are below 2**31)
+    idx = vtkutil.match_ids(code(keys), code(pairs))
+    hit = idx >= 0
+    table = np.zeros((len(keys), vals.shape[1]))
+    np.add.at(table, idx[hit], vals[hit])
+    have = np.zeros(len(keys), bool)
+    have[idx[hit]] = True
+    table[~have] = np.nan
+    vtkutil.add_array(fd, names[0], keys[:, 0])
     for name, spec in zip(names[1:], rtype.arrays):
-        v = vals[:, _columns(spec.columns)]
-        v = v[:, 0] if v.shape[1] == 1 else v
-        vtkutil.add_array(fd, name, v.astype(np.int64) if spec.integer else v)
+        if spec.integer:
+            vtkutil.add_array(fd, name, keys[:, 1])
+            continue
+        v = table[:, _columns(spec.columns)]
+        vtkutil.add_array(fd, name, v[:, 0] if v.shape[1] == 1 else v)
 
 
 def _attach_sections(mb, names) -> None:
@@ -545,7 +594,7 @@ def attach_step(results, mb, step_index: int, deck=None) -> None:
         if got is not None and rtype.frame == "grid_cd" and deck is not None:
             got = (got[0], to_basic(deck, got[0], got[1]))
         if rtype.location == "table":
-            _write_table(mb, rtype, got)
+            _write_table(mb, rtype, got, None if got is None else results.table_keys(rtype))
             continue
         _write(mb, names, targets, rtype, got)
         _write_resultant(mb, names, rtype, got, deck)
@@ -609,17 +658,24 @@ def to_basic(deck, nids: np.ndarray, data: np.ndarray) -> np.ndarray:
     return data
 
 
-def attach_op2(mb, deck, op2_path, step_index: int = 0, types=None):
+def attach_op2(mb, deck, op2_path, step_index: int = 0, types=None, also=()):
     """Read an OP2 or HDF5 results file and attach one step; returns the results object.
-    ``types``: the result types to attach (``results.select``); None attaches the defaults."""
+    ``types``: the result types to attach (``results.select``); None attaches the defaults.
+    ``also``: types to attach on top when the file has them (``results.also``). Messages the
+    attach adds (a table read on first use) are warned too."""
     results = open_results(op2_path)
     if types is not None:
         results.select(types)
+    if also:
+        results.also(also)
     for msg in results.skipped:
         deck.warn(msg)
     for name in results.missing():
         deck.warn(f"{op2_path}: no {name} results to attach")
     if not results.steps:
         deck.warn(f"{op2_path}: no displacement/eigenvector output found")
+    known = len(results.skipped)
     results.attach(mb, step_index, deck)
+    for msg in results.skipped[known:]:
+        deck.warn(msg)
     return results

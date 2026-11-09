@@ -134,6 +134,29 @@ def test_unknown_array_warns(deck):
     assert res.arrays == [] and "Nope" in res.warnings[0]
 
 
+def test_an_array_without_values_is_not_listed(deck):
+    """All NaN: nothing is written (an all-NaN array breaks VTK's XML reader), so the summary does
+    not name it and the warning does."""
+    res = nodal_average(_model(deck, X=X, Y={e: np.nan for e in X}), ["X", "Y"])
+    shells = res.blocks.GetBlock(0)
+    assert res.arrays == ["X"] and shells.GetPointData().GetArray("Y") is None
+    assert len(res.warnings) == 1 and "Y" in res.warnings[0] and "only NaN" in res.warnings[0]
+    assert "within each pid: X" in res.summary()
+
+
+def test_the_geometry_is_kept_between_steps(deck):
+    """A cache keeps each block's averaged mesh; a dry run (a series' signature pass) writes zeros
+    of each array's shape without averaging."""
+    mb = _model(deck, X=X, V={e: (float(e), 0.0, 0.0) for e in X})
+    cache = {}
+    first = nodal_average(mb, ["X", "V"], cache=cache)
+    assert len(cache) == 2  # Shells and Solids
+    again = nodal_average(mb, ["X", "V"], cache=cache)
+    assert _values(again.blocks.GetBlock(0), "X") == _values(first.blocks.GetBlock(0), "X") and len(cache) == 2
+    dry = nodal_average(mb, ["X", "V"], cache=cache, dry=True).blocks.GetBlock(0)
+    assert dry.GetNumberOfPoints() == 9 and arr(dry, "V").shape == (9, 3) and not arr(dry, "X").any()
+
+
 # ------------------------------------------------------------------ CLI
 def test_convert_average(tmp_path):
     from nastran_pv.vtkio import read_model

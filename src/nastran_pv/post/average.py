@@ -74,13 +74,20 @@ def _as_unstructured(ds) -> vtkUnstructuredGrid:
     return out
 
 
-def average_block(ds, names, key: str | None = "PID") -> tuple[vtkUnstructuredGrid | None, list[str]]:
-    """(the averaged grid of mesh block ``ds``, the names it averaged) for the cell arrays ``names``
-    the block has, within the cell array ``key`` (None: the whole block); (None, []) without cells."""
-    ug = _as_unstructured(ds)
+@dataclass
+class _Geometry:
+    """The averaged mesh of one block, which every step shares: the template grid (points
+    duplicated per (grid, domain), the block's cells on them, the copied cell arrays), the source
+    point of each new point, the cell of each corner and the new point of each corner."""
+
+    template: vtkUnstructuredGrid
+    point: np.ndarray
+    cell_of: np.ndarray
+    inv: np.ndarray
+
+
+def _geometry(ug, key) -> _Geometry:
     n_cells = ug.GetNumberOfCells()
-    if not n_cells or ug.GetPoints() is None:
-        return None, []
     cells = ug.GetCells()
     offsets = vtkutil.to_numpy(cells.GetOffsetsArray()).astype(np.int64)
     conn = vtkutil.to_numpy(cells.GetConnectivityArray()).astype(np.int64)
@@ -98,39 +105,71 @@ def average_block(ds, names, key: str | None = "PID") -> tuple[vtkUnstructuredGr
                                  return_inverse=True)
     inv = inv.reshape(-1)
     point, domain = conn[first], values[uniq % width]
-
     out = vtkUnstructuredGrid()
     xyz = vtkutil.to_numpy(ug.GetPoints().GetData()).reshape(-1, 3)
     out.SetPoints(vtkutil.make_points(xyz[point]))
     out.SetCells(vtkutil.cell_types(ug), vtkutil.make_cell_array(np.diff(offsets), inv))
-    out.GetFieldData().ShallowCopy(ds.GetFieldData())
-    opd, ocd = out.GetPointData(), out.GetCellData()
     if nid is not None:
-        vtkutil.add_array(opd, "NID", np.asarray(nid)[point])
+        vtkutil.add_array(out.GetPointData(), "NID", np.asarray(nid)[point])
     if key is not None:
-        vtkutil.add_array(opd, key, domain)
-    for name in POINT_COPIES:
-        a = get_array(pd, name)
-        if a is not None:
-            vtkutil.add_array(opd, name, np.asarray(a)[point])
+        vtkutil.add_array(out.GetPointData(), key, domain)
     for name in CELL_COPIES:
         a = cd.GetArray(name)
         if a is not None:
-            ocd.AddArray(a)
+            out.GetCellData().AddArray(a)
+    return _Geometry(out, point, cell_of, inv)
+
+
+def _means(v, inv, n) -> np.ndarray:
+    """(n, k) mean per new point of the corner values ``v`` (m, k) over the corners ``inv`` maps
+    to it, NaN skipped; NaN where a point has no value."""
+    out = np.full((n, v.shape[1]), np.nan)
+    for c in range(v.shape[1]):
+        ok = np.isfinite(v[:, c])
+        counts = np.bincount(inv[ok], minlength=n)
+        sums = np.bincount(inv[ok], weights=v[ok, c], minlength=n)
+        np.divide(sums, counts, out=out[:, c], where=counts > 0)
+    return out
+
+
+def average_block(ds, names, key: str | None = "PID", cache: dict | None = None,
+                  dry: bool = False) -> tuple[vtkUnstructuredGrid | None, list[str]]:
+    """(the averaged grid of mesh block ``ds``, the names written on it) for the float cell arrays
+    ``names`` the block has, within the cell array ``key`` (None: the whole block); (None, [])
+    without cells. An array with no value at all is not written, nor listed. ``cache`` (a dict)
+    keeps the geometry for the next step of the same block; ``dry`` writes zeros of each array's
+    shape, for a series writer's pass that only needs the arrays' names (no means computed)."""
+    ug = _as_unstructured(ds)
+    n_cells = ug.GetNumberOfCells()
+    if not n_cells or ug.GetPoints() is None:
+        return None, []
+    made = (ds.__this__, n_cells, ds.GetNumberOfPoints(), key)  # the C++ object: wrappers come and go
+    geo = None if cache is None else cache.get(made)
+    if geo is None:
+        geo = _geometry(ug, key)
+        if cache is not None:
+            cache[made] = geo
+    out = vtkutil.shallow_copy(geo.template)
+    out.GetFieldData().ShallowCopy(ds.GetFieldData())
+    opd = out.GetPointData()
+    cd, pd = ug.GetCellData(), ug.GetPointData()
+    for name in POINT_COPIES:
+        a = get_array(pd, name)
+        if a is not None:
+            vtkutil.add_array(opd, name, np.asarray(a)[geo.point])
+    n = len(geo.point)
     done = []
     for name in names:
         a = cd.GetArray(name)
         if a is None or a.GetDataType() not in (10, 11):
             continue
-        v = vtkutil.to_numpy(a).astype(float).reshape(n_cells, -1)[cell_of]
-        ok = np.isfinite(v)
-        sums = np.zeros((len(uniq), v.shape[1]))
-        counts = np.zeros((len(uniq), v.shape[1]))
-        np.add.at(sums, inv, np.where(ok, v, 0.0))
-        np.add.at(counts, inv, ok)
-        mean = np.divide(sums, counts, out=np.full(sums.shape, np.nan), where=counts > 0)
+        v = vtkutil.to_numpy(a).astype(float).reshape(n_cells, -1)
+        if not np.isfinite(v).any():  # no value anywhere: the mean would be all NaN
+            continue
+        mean = np.zeros((n, v.shape[1])) if dry else _means(v[geo.cell_of], geo.inv, n)
         vtkutil.add_array(opd, name, mean[:, 0] if mean.shape[1] == 1 else mean, skip_all_nan=True)
-        done.append(name)
+        if opd.GetArray(name) is not None:
+            done.append(name)
     return out, done
 
 
@@ -145,10 +184,12 @@ class AverageResult:
         return f"averaged to the grids within each {within}: {what}"
 
 
-def nodal_average(mb, names=None, within: str = "pid") -> AverageResult:
+def nodal_average(mb, names=None, within: str = "pid", cache: dict | None = None,
+                  dry: bool = False) -> AverageResult:
     """The averaged mesh blocks of ``mb`` (multiblock) for the cell arrays ``names`` (None: every
     result cell array, :func:`result_cell_arrays`), within ``within`` (``pid``, ``mid``,
-    ``family``, ``group`` or ``none``)."""
+    ``family``, ``group`` or ``none``). A named array that no block could average (none has it,
+    or only NaN) is warned about. ``cache`` and ``dry``: :func:`average_block`."""
     key = domain_key(within)
     wanted = result_cell_arrays() if names is None else list(names)
     blocks = dict(iter_blocks(mb))
@@ -158,21 +199,23 @@ def nodal_average(mb, names=None, within: str = "pid") -> AverageResult:
         ds = blocks.get(path)
         if ds is None:
             continue
-        grid, done = average_block(ds, wanted, key)
+        grid, done = average_block(ds, wanted, key, cache, dry)
         if grid is not None:
             vtkutil.add_block(out, path, grid)
             averaged += [n for n in done if n not in averaged]
     if names is not None:
         missing = [n for n in names if n not in averaged]
         if missing:
-            warnings.append(f"average: no mesh block has the float cell array(s) {', '.join(missing)}")
+            warnings.append(f"average: {', '.join(missing)}: no mesh block has a value to average (no float "
+                            "cell array of that name, or only NaN)")
     return AverageResult(out, averaged, warnings)
 
 
-def add_averaged(mb, names=None, within: str = "pid") -> AverageResult:
+def add_averaged(mb, names=None, within: str = "pid", cache: dict | None = None,
+                 dry: bool = False) -> AverageResult:
     """:func:`nodal_average` of ``mb``, put on ``mb`` as the block ``Averaged`` (replacing an
     earlier one, so a series step gets its own). Only the top-level mesh blocks are read."""
-    res = nodal_average(mb, names, within)
+    res = nodal_average(mb, names, within, cache, dry)
     for i in range(mb.GetNumberOfBlocks()):
         if mb.HasMetaData(i) and mb.GetMetaData(i).Get(vtkMultiBlockDataSet.NAME()) == BLOCK:
             mb.SetBlock(i, res.blocks)
@@ -181,5 +224,19 @@ def add_averaged(mb, names=None, within: str = "pid") -> AverageResult:
     return res
 
 
-__all__ = ["BLOCK", "WITHIN", "AverageResult", "add_averaged", "average_block", "domain_key", "float_cell_arrays",
+class Averager:
+    """``--average`` at every step of a series (``post.StepHelpers``): the geometry made once per
+    block, the means once per step (a VTKHDF writer's signature pass writes zeros)."""
+
+    def __init__(self, names=None, within: str = "pid"):
+        self.names, self.within, self.cache = names, within, {}
+
+    def __call__(self, mb, step=None) -> AverageResult:
+        return add_averaged(mb, self.names, self.within, self.cache)
+
+    def signature(self, mb, step=None) -> AverageResult:
+        return add_averaged(mb, self.names, self.within, self.cache, dry=True)
+
+
+__all__ = ["BLOCK", "WITHIN", "AverageResult", "Averager", "add_averaged", "average_block", "domain_key", "float_cell_arrays",
            "nodal_average", "result_cell_arrays"]

@@ -101,11 +101,11 @@ The [field options](fields.md) add further arrays on top of these.
 | `SolidStress` | Solids, at the centre: `Stress` (XX YY ZZ XY YZ ZX, a symmetric tensor), `PrincipalStress` (3, largest first), `MaxShearStress`, `VonMises` | `stress.c{tetra,penta,hexa,pyram}_stress` / `STRESS/*` with `X Y Z TXY TYZ TZX` |
 | `LineStress` | Lines: `AxialStress` (bars, rods), `TorsionalStress` (rods), `MaxStress`/`MinStress` (the largest S-MAX and smallest S-MIN of a bar's or beam's two ends; a rod's axial stress) | `stress.cbar_stress`, `stress.cbeam_stress`, `stress.c{rod,onrod,tube}_stress` / `STRESS/{BAR,BEAM,ROD,CONROD,TUBE}` |
 | `ShellStrain`, `SolidStrain`, `LineStrain` | as the stresses, with `Strain` for `Stress` (`StrainTop`, `PrincipalStrain`, `MaxShearStrainBottom`, `AxialStrain`, `MaxStrain`, ...) and no von Mises | the `strain.*` tables / `ELEMENTAL/STRAIN/*` |
-| `GridPointForce` | root table of the grid point force balance's element rows (the force and moment of each element on each of its grids, MSC sign), per step: `GridPointForceNID GridPointForceEID GridPointForce GridPointMoment`, rotated from each grid's CD into basic; the applied, SPC and MPC rows (they are the types above), the totals and rigid elements' rows are left out; read by the [free-body sums](results-helpers.md#free-body-sums) | `grid_point_forces` / `NODAL/GRID_FORCE` (`GPFORCE=`) |
+| `GridPointForce` | root table of the grid point force balance's element rows (the force and moment of each element on each of its grids, MSC sign), per step: `GridPointForceNID GridPointForceEID GridPointForce GridPointMoment`, rotated from each grid's CD into basic; the applied, SPC and MPC rows (they are the types above), the totals and rigid elements' rows are left out; every step has every row of the file (NaN where it has none); off by default, turned on by the [free-body sums](results-helpers.md#free-body-sums) | `grid_point_forces` / `NODAL/GRID_FORCE` (`GPFORCE=`) |
 
 
-`Displacement`, `VonMisesMax`, `SPCForce`, `MPCForce`, `AppliedLoad`, the forces and `GridPointForce`
-are attached by default (a file without a type's tables gets none of its arrays), the stresses and strains when
+`Displacement`, `VonMisesMax`, `SPCForce`, `MPCForce`, `AppliedLoad` and the forces are attached by
+default (a file without a type's tables gets none of its arrays), the stresses and strains when
 chosen (`--result-types ShellStress,SolidStress` or `all`; `convert` prints the types it left out).
 The types are declared in `src/nastran_pv/result_types.py`.
 

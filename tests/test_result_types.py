@@ -37,9 +37,9 @@ def _cell(block, name):
 LOAD_TYPES = ("SPCForce", "MPCForce", "AppliedLoad")
 FORCE_TYPES = ("ShellForce", "LineForce", "BushForce", "SpringForce")
 STRESS_TYPES = ("ShellStress", "SolidStress", "LineStress", "ShellStrain", "SolidStrain", "LineStrain")
-GPF_TYPES = ("GridPointForce",)  # roadmap task 12: the grid point force balance, a root table
+GPF_TYPES = ("GridPointForce",)  # roadmap task 12: the grid point force balance, a root table (opt-in)
 ALL_TYPES = ("Displacement", "VonMisesMax") + LOAD_TYPES + FORCE_TYPES + STRESS_TYPES + GPF_TYPES
-DEFAULTS = ("Displacement", "VonMisesMax") + LOAD_TYPES + FORCE_TYPES + GPF_TYPES
+DEFAULTS = ("Displacement", "VonMisesMax") + LOAD_TYPES + FORCE_TYPES
 
 
 def test_registry_starts_with_the_first_types():

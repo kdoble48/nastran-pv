@@ -215,6 +215,8 @@ class ResultType:
             raise ValueError(f"result type {self.name}: its sources pick different numbers of columns {widths}")
         if (self.location == "table") != (not self.blocks):
             raise ValueError(f"result type {self.name}: a table type has no blocks, and only a table type")
+        if self.location == "table" and sum(a.integer for a in self.arrays) > 1:
+            raise ValueError(f"result type {self.name}: a table type has at most one integer column")
 
     @property
     def op2_sources(self) -> tuple:
@@ -587,20 +589,25 @@ GPF_FLIPPED = ("element rows written with the opposite sign (the grid's rows bal
                "as MYSTRAN writes its OP2): negated")
 
 
+def _source_names(names) -> np.ndarray:
+    return np.char.strip(np.asarray(names).astype(str))
+
+
 def gpforce_element_rows(names) -> np.ndarray:
     """Mask of the elastic-element rows of a grid point force balance, by source name."""
-    names = np.char.strip(np.asarray(names).astype(str))
+    names = _source_names(names)
     return (names != "") & ~np.any([np.char.startswith(names, p) for p in GPF_NOT_ELEMENTS], axis=0)
 
 
-def gpforce_sign(nids, names, data) -> float:
+def gpforce_sign(nids, names, data, elem=None) -> float:
     """-1 when the element rows of one table and time balance the grids' other rows only negated
     (MYSTRAN 19's OP2; its .f06 has the MSC sign), else 1: the MSC convention, the force of the
     element on the grid, so that every grid's rows sum to zero. Decided on the grids with an
-    applied load, SPC, MPC or rigid-element row; a table without any keeps its sign."""
-    names = np.char.strip(np.asarray(names).astype(str))
+    applied load, SPC, MPC or rigid-element row; a table without any keeps its sign. ``elem``:
+    :func:`gpforce_element_rows` of ``names`` when the caller has it."""
+    names = _source_names(names)
     data = np.asarray(data, dtype=float)
-    elem = gpforce_element_rows(names)
+    elem = gpforce_element_rows(names) if elem is None else elem
     load = ~elem & (names != "") & ~np.char.startswith(names, "*")
     if not load.any():
         return 1.0
@@ -608,22 +615,31 @@ def gpforce_sign(nids, names, data) -> float:
     e, n = np.zeros((len(grids), 6)), np.zeros((len(grids), 6))
     np.add.at(e, inv[elem], data[elem])
     np.add.at(n, inv[load], data[load])
-    loaded = np.isin(np.arange(len(grids)), inv[load])
+    loaded = np.zeros(len(grids), bool)
+    loaded[inv[load]] = True
     plus, minus = np.abs(n + e)[loaded].sum(), np.abs(n - e)[loaded].sum()
     return -1.0 if minus < 1e-3 * plus else 1.0
 
 
+def gpforce_rows(nids, eids, names, data):
+    """``(grid ids, (n, 7) F1-F3 M1-M3 EID, sign)`` of the elastic-element rows of one table and
+    time of a grid point force balance, in the MSC sign (:func:`gpforce_sign`)."""
+    names = _source_names(names)
+    data = np.asarray(data, dtype=float)
+    elem = gpforce_element_rows(names)
+    sign = gpforce_sign(nids, names, data, elem)
+    values = np.column_stack([sign * data[elem], np.asarray(eids)[elem].astype(float)])
+    return np.asarray(nids)[elem].astype(np.int64), values, sign
+
+
 def gpforce_op2_rows(table, itime):
-    """``(grid ids, (n, 7) F1-F3 M1-M3 EID, note)`` of the elastic-element rows of a pyNastran
-    grid point force table at ``itime``, in the MSC sign (:func:`gpforce_sign`)."""
+    """``(grid ids, (n, 7) F1-F3 M1-M3 EID, note)`` of a pyNastran grid point force table at
+    ``itime`` (:func:`gpforce_rows`); the note says when the rows were negated."""
     ne, names = np.asarray(table.node_element), np.asarray(table.element_names)
     ne = ne[itime] if ne.ndim == 3 else ne
     names = names[itime] if names.ndim == 2 else names
-    data = np.asarray(table.data[itime], dtype=float)
-    sign = gpforce_sign(ne[:, 0], names, data)
-    elem = gpforce_element_rows(names)
-    values = np.column_stack([sign * data[elem], ne[elem, 1].astype(float)])
-    return ne[elem, 0].astype(np.int64), values, (GPF_FLIPPED if sign < 0 else None)
+    ids, values, sign = gpforce_rows(ne[:, 0], ne[:, 1], names, table.data[itime])
+    return ids, values, (GPF_FLIPPED if sign < 0 else None)
 
 
 def gpforce_h5_table(rows) -> np.ndarray | None:
@@ -632,11 +648,13 @@ def gpforce_h5_table(rows) -> np.ndarray | None:
     if not {"EID", "ELNAME", "F1", "F2", "F3", "M1", "M2", "M3"} <= set(rows.dtype.names):
         return None
     names = np.char.decode(rows["ELNAME"], "latin-1") if rows["ELNAME"].dtype.kind == "S" else rows["ELNAME"]
+    names = _source_names(names)
+    elem = gpforce_element_rows(names)
     data = np.column_stack([rows[f].astype(float) for f in ("F1", "F2", "F3", "M1", "M2", "M3")])
     for d in np.unique(rows["DOMAIN_ID"]):
         m = rows["DOMAIN_ID"] == d
-        data[m] *= gpforce_sign(rows["ID"][m], names[m], data[m])
-    eid = np.where(gpforce_element_rows(names), rows["EID"].astype(float), np.nan)
+        data[m] *= gpforce_sign(rows["ID"][m], names[m], data[m], elem[m])
+    eid = np.where(elem, rows["EID"].astype(float), np.nan)
     return np.column_stack([data, eid])
 
 
@@ -646,7 +664,7 @@ GRID_POINT_FORCE = ResultType(
      ArraySpec("GridPointForceEID", (6,), integer=True)),
     op2=Op2Source(("grid_point_forces",), rows=gpforce_op2_rows),
     h5=H5Source(("NODAL/GRID_FORCE",), compute=gpforce_h5_table),
-    frame="grid_cd", key="NID")
+    frame="grid_cd", key="NID", default=False)  # a row per element and grid: chosen, or by the free body
 
 REGISTRY: tuple[ResultType, ...] = (
     DISPLACEMENT, VON_MISES_MAX, SPC_FORCE, MPC_FORCE, APPLIED_LOAD,
