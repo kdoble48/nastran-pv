@@ -1212,8 +1212,9 @@ def diff_checks(pv, nv):
     check(right in pv.GetViews() and right != left and pv.GetActiveSource() is b, "side by side: a second view, B selected")
     names = {v: k[0] for k, v in pv.GetSources().items()}
     sides = [sorted(names.get(s, "?") for s in nv.shown_sources(v)) for v in (left, right)]
-    check(sides == [["NPV Shells [diff_a.bdf]", "NPV diff removed element [diff_b.bdf]", "NPV info [diff_a.bdf]"],
-                    ["NPV diff Shells [diff_b.bdf]", "NPV diff removed element [diff_b.bdf]", "NPV info [diff_b.bdf]"]],
+    of_d = lambda what: f"NPV {nv._diff_what(d, what)} [diff_b.bdf]"  # noqa: E731  (d is not B's own NPV diff)
+    check(sides == [sorted(["NPV Shells [diff_a.bdf]", of_d("removed element"), "NPV info [diff_a.bdf]"]),
+                    sorted([of_d("Shells"), of_d("removed element"), "NPV info [diff_b.bdf]"])],
           f"A's shells left, B's from the diff right, A's removed elements in both: {sides}")
     rgb = list(pv.GetColorTransferFunction("Thickness").RGBPoints)
     check(abs(rgb[0] - 0.1) < 1e-9 and abs(rgb[-4] - 0.25) < 1e-9, f"shared Thickness range {rgb[0]}..{rgb[-4]}")
@@ -1228,7 +1229,7 @@ def diff_checks(pv, nv):
     names = {v: k[0] for k, v in pv.GetSources().items()}
     shown = sorted(names.get(s, "?") for s in nv.shown_sources(left))
     check(nv._shown_array(right) == ("CELLS", "DiffStatus"), "DiffStatus on the right")
-    check(shown == ["NPV diff removed [diff_b.bdf]", "NPV info [diff_a.bdf]", "NPV mesh [diff_a.bdf]"],
+    check(shown == sorted([of_d("removed"), "NPV info [diff_a.bdf]", "NPV mesh [diff_a.bdf]"]),
           f"side by side DiffStatus, left: {shown}")
 
     # hidden elements are still part of the model: a reader's hidden EID 6 is not "removed"
@@ -1366,7 +1367,7 @@ def diff2_checks(pv, nv):
     text = pv.FindSource(nv._name(nv.Model(b), "info")).Text
     check("loads: 2 added, 3 removed, 2 changed" in text and "coords: 1 added" in text
           and "masses:" not in text, f"diff v2 view text {text!r}")
-    mesh = pv.FindSource(nv._name(nv.Model(b), "diff items"))
+    mesh = pv.FindSource(nv._name(nv._ReaderOnly(b), nv._diff_what(d, "items")))  # d: a user's Diff
     shown = nv.block_names(nv.fetch(mesh))
     check({"Rigid", "Connectors", "Bushes", "Constraints"} <= set(shown), f"diff v2 view blocks {shown}")
     pv.Delete(view)
@@ -2246,7 +2247,7 @@ class _Cmp:
                 if nv._xml_name(s) == "TextSource" or s in (self.a, self.b):
                     continue
                 who = nv.owner(s)
-                if who != own and not (scene.role == "B" and "diff removed" in name):
+                if who != own and not (scene.role == "B" and " removed" in name):  # A's removed layer
                     problems.append(f"{tag}: {name} of the other model in {scene.role}'s view")
         comparison = not state.endswith("single") and command != "single"
         if comparison and command in CMP_SCOPE:
