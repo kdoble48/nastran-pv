@@ -44,6 +44,7 @@ import contextlib
 import math
 import os
 import re
+import sys
 
 import numpy as np
 from paraview import servermanager
@@ -63,7 +64,13 @@ SHOWCASE_DIR = (-1.0, -0.35, 0.6)  # "showcase" camera: Z up, looking from ahead
 
 def ensure_plugin():
     if not hasattr(pv, "NastranBulkDatanastranpv"):
-        pv.LoadPlugin(os.path.join(HERE, "nastran_bdf_reader.py"))
+        # ParaView compiles the plugin like an import: write no __pycache__ into an installed
+        # package's folder (pip would leave a ParaView 5.13 cpython-310.pyc behind on uninstall)
+        before, sys.dont_write_bytecode = sys.dont_write_bytecode, True
+        try:
+            pv.LoadPlugin(os.path.join(HERE, "nastran_bdf_reader.py"))
+        finally:
+            sys.dont_write_bytecode = before
 
 
 def load_reader(deck, op2=None, nsm_set=None, random=None):
