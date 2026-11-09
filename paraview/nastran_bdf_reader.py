@@ -705,6 +705,17 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         res = self._get_response(quiet=True)
         return res.times if res is not None and res.steps else None
 
+    @smproperty.stringvector(name="StepLabels", information_only="1")
+    def GetStepLabels(self):
+        """Each time step's label, one per line (``Subcase 1 mode 3 (45.2 Hz)``): the views name a step
+        without reading the model at it. Asking does not run the reader."""
+        res = self._get_response(quiet=True)
+        if res is None or not res.steps:
+            return ""
+        from nastran_pv.results import step_name
+
+        return "\n".join(step_name(step) for step in res.steps)
+
     # --------------------------------------------------------------- loading
     @staticmethod
     def _files_key(files):
@@ -1668,22 +1679,31 @@ class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
         sddp = vtkStreamingDemandDrivenPipeline
         inp = inInfo[0].GetInformationObject(0)
         self._asked, self._unmatched = None, False
+        times = inp.Get(sddp.TIME_STEPS()) if self._match and inp.Has(sddp.TIME_STEPS()) else None
         if self._vibrate:  # every phase reads the same mode: upstream executes once
-            inp.Set(sddp.UPDATE_TIME_STEP(), self._mode_time)
-        elif self._match:
+            held = self._mode_time  # following Match Steps, Mode Time is the layout's: its step of that index
+            if times:
+                held = self._matched(times, self._mode_time)
+            inp.Set(sddp.UPDATE_TIME_STEP(), self._mode_time if held is None else held)
+        elif times:
             out = outInfo.GetInformationObject(0)
-            times = inp.Get(sddp.TIME_STEPS()) if inp.Has(sddp.TIME_STEPS()) else None
-            if out.Has(sddp.UPDATE_TIME_STEP()) and times:
-                try:
-                    from nastran_pv.deform import matched_time
-                except ImportError:
-                    return 1
+            if out.Has(sddp.UPDATE_TIME_STEP()):
                 self._asked = out.Get(sddp.UPDATE_TIME_STEP())
-                held = matched_time(times, self._match, self._asked)
-                self._unmatched = held is None
+                held = self._matched(times, self._asked)
                 if held is not None:
                     inp.Set(sddp.UPDATE_TIME_STEP(), held)
         return 1
+
+    def _matched(self, times, t):
+        """The input's step of the index of Match Steps' step at ``t``; None (and not moved, no step's
+        arrays) without one."""
+        try:
+            from nastran_pv.deform import matched_time
+        except ImportError:
+            return t
+        held = matched_time(times, self._match, t)
+        self._unmatched = held is None
+        return held
 
     def RequestData(self, request, inInfo, outInfo):
         import math
@@ -1717,9 +1737,20 @@ class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
             scale = 0.0
         elif deformer.complex and self._phase:
             angle = start + self._phase
-        out.ShallowCopy(deformer.apply(scale, angle))
+        if self._unmatched:  # nor show the reader's nearest step's results: none of this step
+            scale = 0.0
+            from nastran_pv.deform import without_arrays
+            from nastran_pv.results import step_arrays
+
+            arrays, fields = step_arrays()
+            out.ShallowCopy(without_arrays(deformer.apply(0.0), arrays, fields))
+        else:
+            out.ShallowCopy(deformer.apply(scale, angle))
+            fields = ()
         fd = vtkFieldData()  # a copy: the input's field data is the reader's (or the cached model's)
         fd.ShallowCopy(inp.GetFieldData())
+        for name in fields:
+            fd.RemoveArray(name)
         fd.RemoveArray(DEFORM_SCALE)
         fd.AddArray(_double_array(DEFORM_SCALE, scale))
         fd.RemoveArray(DEFORM_PHASE)

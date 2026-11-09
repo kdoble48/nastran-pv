@@ -317,8 +317,10 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
     whatever the coloring; A's view of a pair: `A: <label> (the reference)` and, when A has no step
     of B's index, that it does not move), and hides it when nothing is left to say. Labels
     (`_labels`, `_label`): the Pipeline Browser name, or for models that share it
-    `labels.unique_labels` of their paths; `_relabel` renames a model's `NPV ...` objects when its
-    label changes. `scene_of` empties a scene whose reader was deleted and hides what is left of it
+    `labels.unique_labels` of their paths. Every command (`@_command`: the views, the macros,
+    `run_macro`) runs `sync_labels` once when it starts, which renames a model's `NPV ...` objects when
+    its label changed, and reads the labels from that map while it runs; outside a command `_labels`
+    works them out without renaming, and `load_reader` syncs after opening a model. `scene_of` empties a scene whose reader was deleted and hides what is left of it
     in the view (its objects still open, the `NPV ...` texts); a deleted Diff or model ends the
     comparison the same way, and a closed partner view ends the pair.
   - Time (R5): `_layout_models(view)` is `(B, [A])` in a comparison, else the view's model; the
@@ -326,8 +328,12 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
     `_mode_labels`: A's own label, or that it has no such step). `_sync_steps` (end of every
     `_apply_view`) puts B's time steps in the *Match Steps* of A's deforms while A is the left side
     of a pair (`_followed`), and empties every other's; `Model` of that A reads A's step of B's index
-    (`Model.step`, `Model.unmatched`). `_prepare_modes` never redraws: only a view with no layers gets
-    NPV Results.
+    (`Model.step`, `Model.unmatched`; without one its data drops the step's arrays, as A's deforms do).
+    NPV Results in a pair draws A at B's scale (`_share_scale`, after both views). `_prepare_modes`
+    never redraws: only a view with no layers gets NPV Results. A's mode label comes from the reader's
+    *StepLabels* (an information property: each step's name, without reading A at it). `play_mode`
+    records the readers it took out of the time keeper (`_SUPPRESSED`), so Stop gives back A even with
+    no deform of its own (one comparison view).
   - Pipeline Browser (R7): no command shows a raw reader. *Highlight File* sets its selection on the
     reader directly (`pv.SelectThresholds` would show the reader) and draws `NPV highlight`, an
     ExtractSelection of `NPV deform` by that selection; *Index Colors* uses the active source's

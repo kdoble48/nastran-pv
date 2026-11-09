@@ -258,9 +258,14 @@ The "Left to the builder" points for the comparison, as built:
   past A's last step A is not moved (rather than the reader's nearest, wrong mode). The Nastran Diff
   matches A by index on its own and gives the Removed block A's displacement by grid, so A's removed
   items move with A in both views (and stay without A's step). Outside a pair nothing follows.
-- **One amplitude while animating.** The animation macros and the play button drive A's deforms at
-  B's amplitude (one scale for the layout). NPV Results keeps each side's own Auto Scale: a fixed
-  scale on A could not follow B's per-step Auto Scale when the time controls step without a command.
+- **One scale for the layout.** The animation macros and the play button drive A's deforms at
+  B's amplitude. NPV Results in a pair puts A's deforms at the scale B's view applied (B's Auto Scale
+  peak at that step), which B's diff layers, and A's removed items in them, move with too: so A's mesh
+  and its removed items stay together (review of #75). Stepping the time controls keeps that scale on
+  both sides until NPV Results is clicked again.
+- **A step A lacks** shows A undeformed and without results: its deforms drop the step's arrays
+  (`results.step_arrays`) instead of passing on the reader's nearest step, and `Model` of A drops them
+  too, so its texts and colorings say "no step" rather than A's last mode.
 - **Time suppression** covers both readers while the play button loops a mode, and only then: every
   nastran-pv model's steps are indices, so outside play the time controls already step through
   matching steps.

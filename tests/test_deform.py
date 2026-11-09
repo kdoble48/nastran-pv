@@ -158,3 +158,26 @@ def test_steps_match_by_index():
     assert matched_time(a_times, b_steps, 0.0) == 10.0 and matched_time(a_times, b_steps, 0.9) == 20.0
     assert matched_time(a_times, b_steps, 2.0) is None  # A has no third step
     assert matched_time(a_times, [], 1.0) is None and matched_time([], b_steps, 0.0) is None
+
+
+def test_a_step_a_model_lacks_shows_no_results(model):
+    """R5: at a step it does not have, A shows its geometry and no step's arrays or labels, as a copy
+    (the reader's own model keeps them)."""
+    from nastran_pv.deform import without_arrays
+    from nastran_pv.results import step_arrays
+
+    _, mb = model
+    arrays, fields = step_arrays()
+    assert {"Displacement", "DisplacementMagnitude", "Displacement_Real", "VonMisesMax"} <= arrays
+    assert {"ResultLabel", "Frequency", "PhaseAngle"} <= fields
+    data = tree.build_tree(mb).output(mb)
+    vtkutil.add_string_array(data.GetFieldData(), "ResultLabel", ["Subcase 1"])
+    bare = without_arrays(data, arrays, fields)
+    assert bare.GetFieldData().GetAbstractArray("ResultLabel") is None
+    assert data.GetFieldData().GetAbstractArray("ResultLabel") is not None
+    shells = get_block(tree.as_multiblock(bare), "Shells")
+    assert shells.GetPointData().GetArray("Displacement") is None and shells.GetNumberOfCells() == 3
+    assert get_block(tree.as_multiblock(data), "Shells").GetPointData().GetArray("Displacement") is not None
+    single = without_arrays(get_block(mb, "Shells"), arrays, fields)
+    assert single.GetPointData().GetArray("Displacement") is None
+    assert get_block(mb, "Shells").GetPointData().GetArray("Displacement") is not None

@@ -2917,6 +2917,20 @@ def comparison_detail_checks(pv, nv):
     gone = pv.FindSource(nv._name(m, "diff removed mass"))
     check(gone is not None and nv._gather(nv.fetch(gone), "EID", "CELLS").tolist() == [202]
           and "1 removed (red)" in _info(nv, m), "A's removed CONM2 202 red in the masses overlay")
+    a_deforms = len(nv.model_deforms(a))  # A is not drawn in this view: none of its own
+    nv.play_mode(1, frames=4, view=view)
+    try:
+        held = list(pv.GetTimeKeeper().SuppressedTimeSources)
+    except AttributeError:  # no such property: not checked
+        held = [a, b]
+    nv.stop_mode_animation(view=view)
+    try:
+        left_out = list(pv.GetTimeKeeper().SuppressedTimeSources)
+    except AttributeError:
+        left_out = []
+    check(a in held and b in held and a not in left_out and b not in left_out,
+          f"Animate Mode in one comparison view takes both readers out of the time controls and Stop gives "
+          f"both back (A with {a_deforms} deform(s))")
     pv.SetActiveSource(a)  # roles are the Diff's: A selected changes nothing
     sources = set(pv.GetSources())
     nv.apply("diff", view=view)
@@ -3143,6 +3157,11 @@ def scene_time_checks(pv, nv):
           and "Concentrated mass: 3  (2 items)" in texts[0] and "1 CBUSH" in texts[0]
           and texts[1].startswith("b/model.bdf vs a/model.bdf") and "Concentrated mass: 3  (1 items)" in texts[1]
           and "No CBUSH" in texts[1], f"each view of the pair lists its own layers, the diff summary first: {texts}")
+    nv.apply("masses", view=right)  # drawn last, though Bushes comes after it in the scene
+    nv.side_by_side(view=right)  # the pair drawn again in place
+    text = nv.info_of(left)
+    check("Model mass (structure + concentrated)" in text and "thick = clearly" not in text,
+          f"Side by Side again keeps the layer drawn last (Masses) in full, not the last one redrawn: {text!r}")
 
     nv.apply("pid", view=right)  # A's removed elements under the coloring, red, in both views
     steps = nv.timesteps(b)
@@ -3167,11 +3186,14 @@ def scene_time_checks(pv, nv):
     except AttributeError:  # no such property: not checked
         suppressed = [a, b]
     peak = [bounds(s, v) for s, v in ((a_mesh, left), (b_mesh, right), (gone, left))]
+    label = pv.FindSource(nv._name(nv._ReaderOnly(a), "mode label")).Text
     check(all(f.VibrateMode for f in list(a_deforms) + list(b_deforms)) and a in suppressed and b in suppressed,
           "Animate Mode in a pair: every deform of both readers vibrates, both readers' steps leave the time controls")
     check(peak[1][5] > rest[1][5] + 1e-6 and abs(peak[0][5] - 2 * peak[1][5]) < 1e-6 and abs(peak[2][5] - peak[0][5]) < 1e-6,
           f"a mode played in a pair moves both models at one amplitude (A twice as far), A's removed shell with A: "
           f"top z {[p[5] for p in peak]}")
+    check(nv._step_names(a) == ["Subcase 1"] and label == "A: Subcase 1",
+          f"A's mode label from the reader's StepLabels, without reading A at the step: {label!r}")
     nv.stop_mode_animation(view=left)
     check(not any(f.VibrateMode for f in list(a_deforms) + list(b_deforms)) and left.ViewTime == steps[0]
           and right.ViewTime == steps[0], "Stop Mode Animation: both readers back on the step")
@@ -3191,19 +3213,39 @@ def scene_time_checks(pv, nv):
         nv.pv.Render = real
     check(len(seen["A"]) > 1 and len(seen["B"]) > 1 and right.ViewTime == steps[0],
           f"Animate All Modes in a pair moves both models: top z of A {sorted(seen['A'])}, of B {sorted(seen['B'])}")
+    paths, real_path = [], nv._model_path
+    nv._model_path = lambda r: paths.append(r) or real_path(r)
+    try:
+        nv.save_mode_animations([1], frames=4, folder=os.path.join(tmp, "gifs"), view=left)
+    finally:
+        nv._model_path = real_path
+    check(paths and paths[0] == a, "Save Mode Animations in A's view of a pair names the GIF after A, which it shows")
 
     nv.apply("results", view=right)
     moved = [bounds(s, v) for s, v in ((a_mesh, left), (b_mesh, right), (gone, left))]
+    a_main = pv.FindSource(nv._name(nv._ReaderOnly(a), "deform"))
+    b_layers = pv.FindSource(nv._name(nv._ReaderOnly(b), f"deform {nv._diff_what(d, '')}"))
+    check(not a_main.AutoScale and abs(a_main.ScaleFactor - b_layers.ScaleFactor) < 1e-12
+          and abs(moved[2][5] - moved[0][5]) < 1e-6 and moved[0][5] > rest[0][5] + 1e-6,
+          f"NPV Results in a pair: one scale (A {a_main.ScaleFactor:.4g}, B's layers {b_layers.ScaleFactor:.4g}), so "
+          f"A's removed shell stays on A's mesh (top z {moved[2][5]:.4g}, {moved[0][5]:.4g})")
     nv._set_layout_time(right, steps[2])  # the time controls on B's mode 2 (T2 = NID): A has no third step
     later = [bounds(s, v) for s, v in ((a_mesh, left), (b_mesh, right), (gone, left))]
-    check(moved[0][5] > rest[0][5] + 1e-6 and moved[2][5] > rest[2][5] + 1e-6
-          and later[0] == rest[0] and later[2] == rest[2] and later[1][3] > rest[1][3] + 1e-6,
+    check(later[0] == rest[0] and later[2] == rest[2] and later[1][3] > rest[1][3] + 1e-6,
           f"stepping to a step A lacks: A and its removed items stay (z {later[0][5]:.3g}, {later[2][5]:.3g}), "
           f"B moves (y max {later[1][3]:.3g})")
+    lacks = nv.Model(a, steps[2])
+    check(not {"Displacement", "DisplacementMagnitude"} & set(a_mesh.PointData.keys()) and lacks.unmatched
+          and lacks.field_strings(None, "ResultLabel") == [] and lacks.array("Shells", "Displacement") is None,
+          f"a step A lacks shows none of A's results (not its nearest step's): {sorted(a_mesh.PointData.keys())}")
     nv.apply("results", view=right)
     check("no step 3 here (it has 1): not moved" in nv.info_of(left) and "Subcase" in nv.info_of(right),
           f"NPV Results on a step A lacks: A's text says so ({nv.info_of(left)!r})")
-    nv._set_layout_time(right, steps[0])
+    nv._set_layout_time(right, steps[0])  # back to a step A has, with the time controls only
+    back = bounds(a_mesh, left)
+    color = pv.GetDisplayProperties(a_mesh, left).ColorArrayName[1]
+    check(back[5] > rest[0][5] + 1e-6 and color == "DisplacementMagnitude" and "DisplacementMagnitude" in a_mesh.PointData.keys(),
+          f"NPV Results clicked on a step A lacks: back on one it has, A is deformed and colored again (top z {back[5]:.3g})")
 
     nv.apply("pid", view=right)
     ids = os.path.join(tmp, "ids.csv")
@@ -3217,6 +3259,21 @@ def scene_time_checks(pv, nv):
           and lit[1].GetDataInformation().GetNumberOfCells() == 2 and pv.GetActiveSource() == b
           and nv.selected_ids() == ("EID", [1, 2]),
           "Highlight File in a pair: each view draws its model's highlight, no reader shown, B's selection active")
+    only_b = os.path.join(tmp, "only_b.csv")
+    with open(only_b, "w") as f:
+        f.write("EID\n4\n")  # the shell B added
+    nv.highlight_file(only_b, view=right)
+    shown = [nv.shown_sources(v) for v in (left, right)]
+    check(lit[0] not in shown[0] and lit[1] in shown[1] and lit[1].GetDataInformation().GetNumberOfCells() == 1,
+          "Highlight File of an element only B has: B's view highlights it, A's highlight goes, no error")
+    nothing = os.path.join(tmp, "nothing.csv")
+    with open(nothing, "w") as f:
+        f.write("EID\n999\n")
+    try:
+        nv.highlight_file(nothing, view=right)
+        check(False, "a file neither model has should be reported")
+    except RuntimeError as exc:
+        check("match nothing in either model" in str(exc), f"Highlight File, ids in neither model: {exc}")
     for r in (a, b):
         pv.ClearSelection(r)
     pv.SetActiveView(left)

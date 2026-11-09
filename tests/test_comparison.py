@@ -105,6 +105,30 @@ def test_removed_items_move_with_a(pair):
         assert not arr(get_block(now, "Removed"), "Displacement").any()
 
 
+def test_removed_items_turn_with_a_complex_step(pair):
+    """R5 on a complex step: A's removed items get A's Displacement_Real/_Imag by NID too, so a phase
+    sweep turns them with A (Displacement alone would hold them at the attached phase)."""
+    from nastran_pv.diff import removed_displacement
+
+    a, _, out = pair
+    turning = shallow_clone(a)
+    ds = get_block(turning, "Shells")
+    nid = arr(ds, "NID").astype(float)
+    zero = np.zeros_like(nid)
+    add_array(ds.GetPointData(), "Displacement", np.c_[nid, zero, zero])
+    add_array(ds.GetPointData(), "Displacement_Real", np.c_[nid, zero, zero])
+    add_array(ds.GetPointData(), "Displacement_Imag", np.c_[zero, zero, -nid])
+    now = shallow_clone(out)
+    removed_displacement(now, turning)
+    removed = get_block(now, "Removed")
+    nids = arr(removed, "NID").astype(float)
+    assert np.array_equal(arr(removed, "Displacement_Real")[:, 0], nids)
+    assert np.array_equal(arr(removed, "Displacement_Imag")[:, 2], -nids)
+    removed_displacement(now, turning, moved=False)  # no step of B's index: nothing to turn by
+    pd = get_block(now, "Removed").GetPointData()
+    assert pd.GetArray("Displacement_Real") is None and pd.GetArray("Displacement_Imag") is None
+
+
 def test_own_arrays_include_what_annotate_overwrote(pair):
     """A diff output used as B again (a converted or saved diff) already has DiffStatus: annotate
     writes its own, and a cache hit keeps that one, not the source's stale copy."""

@@ -320,9 +320,12 @@ Nastran Diff's *Input*), and **A**, the reference (its *Reference*). The compari
 - **Time is the layout's, steps match by index.** The time controls step through B's steps. A is
   read at its own step of the same index (mode 3 of A with mode 3 of B, whatever their
   frequencies), also when you step by hand: A's *NPV deform* filters follow B's steps (their *Match
-  Steps*). When A has no step of that index it stays undeformed, and its view's text says *no step 3
-  here*. NPV Results deforms each side by its own displacement at its own step, and A's removed items
-  move with A (the diff gives them A's displacement by grid), in both views.
+  Steps*). When A has no step of that index it stays undeformed and shows no results (not its
+  nearest step's), and its view's text says *no step 3 here*. NPV Results deforms each side by its own
+  displacement at its own step, at one scale for the pair (B's, at the step it was clicked at), and A's
+  removed items move with A (the diff gives them A's displacement by grid, and on a complex step its
+  real and imaginary parts), in both views. Clicked on a step A lacks, it still sets A up, so the time
+  controls bring A back deformed and colored on a step it has.
 - **Animation moves both models.** NPV Animate Mode, Animate All Modes, Save Mode Animations and the
   play button vibrate B's mode and A's step of the same index, at one amplitude (B's), from either
   view; while the play button loops, neither reader's own steps are in the time controls.
