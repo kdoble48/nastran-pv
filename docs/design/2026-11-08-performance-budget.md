@@ -159,7 +159,9 @@ plus `diff_models` rows and the `diff` CLI output for three pairs. 32 cases: eve
 the demo, two synthetic layouts, the curvilinear-CD deck, three robustness decks, uCRM-9 coarse,
 medium (modal) and fine, three Linderholt models and the A/B pair. Run on the origin/main snapshot
 and on the branch, compared with exact equality (NaN equals NaN): **identical**, at `41fe0ec` and
-again after merging #63 and #58 (origin/main `8dcb72e` against the merged branch). Every `.vtm` file is
+again after merging #63 and #58 (origin/main `8dcb72e` against the merged branch), and after the
+review fixes on 35 decks (adding `pressures.bdf` from #66 and two decks that reach every `basis`
+caller with a cylindrical or spherical system) against `d94b6b4` and `e30edfc`. Every `.vtm` file is
 byte-identical; VTKHDF files differ in bytes between any two writes of the same model (HDF5
 timestamps its objects), so they are compared read back.
 
