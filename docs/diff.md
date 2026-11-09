@@ -192,6 +192,17 @@ A's removed items of their kind in red. The visibility macros (Show Only, Hide, 
 Selection File ones) write the same IDs to both readers, and the drawn layers follow them: B's items
 by B's scope, A's removed items by A's. Cells picked on the removed items are A's.
 
+The view's one text starts with the diff summary whatever you add: NPV Masses after NPV Diff lists
+the counts and the mass change, then the masses' summary below them. When the two models have the
+same file name (`A/run.bdf` and `B/run.bdf`), the summary, the texts and the `NPV ...` objects name
+each by its folder too (`B/run.bdf vs A/run.bdf`).
+
+The time controls step through B's steps, and A shows its own step of the same index (mode 3 with
+mode 3, whatever their frequencies), or stays undeformed when it has none. NPV Results deforms B's
+layers by B's displacement and A's removed items by A's; NPV Animate Mode and the play button
+vibrate both models, B's mode and A's step of that index at one amplitude, with neither reader's own
+steps left in the time controls while they loop.
+
 From the shell, `--against` opens A too:
 
 ```bash
@@ -219,7 +230,7 @@ The comparison is kept per model content and Compare/Tolerances settings: it run
 model changes (another deck, other reader options) or a setting of those groups does. Changing a
 Show setting only filters it again; a reader's visibility (its checklists and ID lists) and the time
 step do not run it either, and each step's results are put on the kept output. On uCRM-9 coarse
-the comparison takes 1.1 s once, and a scope change after it 0.75 s instead of 2.1 s.
+the comparison takes 1.1 s once, and a scope change after it 0.6 s instead of 2.1 s.
 NPV Diff reruns keep these settings, and its summary says what is shown.
 From Python: `pv.NastranDiff(Input=b, Reference=a, Kinds=["Elements", "Loads"], ShowSame=0)`.
 
@@ -237,9 +248,13 @@ single model with its removed items in red, B's side from the diff when there is
 has one legend (PID, MID, ...) or one range (Thickness, ...) over both; with no coloring it is
 `DiffStatus` when B has a diff (A's removed items on the left, B's changes on the right), else
 `PID`. From then on **every macro run in either view is drawn in both**: NPV Masses in the left view
-adds the masses to A's side and the changed masses to B's. Running NPV Side by Side again, from
-either view, draws the same pair again in place and keeps the camera link; it never makes a third
-view. *NPV Single* closes the right view and shows B alone in the left one.
+adds the masses to A's side and the changed masses to B's. Each view has its own text: the left
+one starts with `A: <label> (the reference)`, the right one with the diff summary, then each lists
+its own layers. A mode animated from either view moves both sides, each by its own model's
+displacement at the step of the same index (the left side stays still where A has no such step,
+and says so). Running NPV Side by Side again, from either view, draws the same pair again in place
+and keeps the camera link; it never makes a third view. *NPV Single* closes the right view and shows
+B alone in the left one.
 
 ```python
 import nastran_views as nv
@@ -247,5 +262,8 @@ nv.apply("diff")                        # B active, A open: the view becomes a c
 nv.side_by_side(array="Thickness")      # one Thickness range for both
 nv.side_by_side(array="DiffStatus")     # removed items on the left, changes on the right
 nv.apply("masses")                      # in both views
+nv.play_mode(2)                         # B's mode 2 and A's second step vibrate, one amplitude
+nv.stop_mode_animation()
+nv.info_of(nv.pv.GetActiveView())       # the view's text: the diff summary, then its layers
 nv.single()                             # back to one view of B
 ```

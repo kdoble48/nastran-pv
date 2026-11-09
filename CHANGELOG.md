@@ -90,6 +90,21 @@ All notable changes to nastran-pv are listed here. The format follows
   NPV Diff 2.1 s -> 0.75 s, NPV Masses 0.9 s -> 0.14 s). The mass, bush, load and SPC glyphs and beam
   sections carry `DiffStatus`, and the diff's Removed block knows the grid of a removed mass or bush.
   `tests/data/same_name/` holds a same-named pair (#67).
+- Time and texts follow the scene (scene layers PR 3, rules R5 to R7). A comparison's steps match by
+  index: A shows its own step of B's index (mode 3 with mode 3), also when the time controls step,
+  and stays undeformed without one (*Nastran Deform* gains *Match Steps*, which NPV Side by Side sets
+  on A's side, and shows none of A's results there; the Nastran Diff reads A at that step and moves
+  A's removed items with A, complex steps too; NPV Results draws a pair at one scale). NPV Animate
+  Mode, Animate All Modes, Save Mode Animations and the play button move both models, at one
+  amplitude, with both readers out of the time controls while playing; they never redraw the view
+  (only an empty view still gets NPV Results). Each view has one text, `NPV info [<view>]`, listing
+  its layers (the one clicked last in full, the others by their first line), after the diff summary
+  in B's view of a comparison and `A: <label>` in A's (`nv.info_of(view)`). Two open models with one
+  file name are labelled by folder (`a/model.bdf`, `b/model.bdf`, `labels.unique_labels`) in texts
+  and `NPV ...` names, which are renamed with a label (once per command). NPV Highlight File no longer
+  shows the reader: it draws the selection as *NPV highlight* (in each view of a pair that has the
+  ids); NPV Index Colors with a hidden
+  source selected colors the view's coloring instead of showing that source (#75).
 - Pressure loads and GRAV drawn: PLOAD, PLOAD2 and PLOAD4 (shells, THRU ranges, solid faces, corner
   pressures, N1-N3 directions) become the `Pressures/SID_n`/`LOAD_n` blocks, a polygon per loaded
   face with `Pressure CornerPressure PressureDirection PressureForce` and the set's

@@ -36,31 +36,31 @@ def test_shared_objects_stay():
     assert s.clear() == ["mesh", "rotation glyphs", "BushLines"] and s.empty and s.model is None
 
 
-def test_info_writer_forgotten_with_its_layer():
-    s = Scene(coloring=Layer("ghost", ["mesh"]))
-    s.add_overlay(Layer("loads", ["load glyphs"]))
-    s.info = "loads"
-    s.add_overlay(Layer("masses", ["mass glyphs"]))
-    s.remove_overlay("masses")
-    assert s.info == "loads"
-    s.remove_overlay("loads")
-    assert s.info is None
-    s.info = "pid"
-    s.clear()
-    assert s.info is None
+def test_summary_lists_every_layer_the_last_one_in_full():
+    """R6: one info text per view, the coloring first, then the overlays in order; the layer drawn
+    last in full, the others by their first line."""
+    s = Scene(coloring=Layer("pid", ["mesh"]))
+    assert s.summary() == ("", "Upper Left Corner")
+    s.add_overlay(Layer("masses", ["glyphs"], summary="Concentrated mass: 4  (2 items)\nCG (black sphere): (0, 0, 0)"))
+    s.add_overlay(Layer("bushes", ["bars"], summary="\n1 CBUSH\nK_ref = 10"))
+    s.latest = "masses"
+    assert s.summary()[0] == "Concentrated mass: 4  (2 items)\nCG (black sphere): (0, 0, 0)\n1 CBUSH"
+    s.latest = "gone"  # a removed layer: the last one listed is given in full
+    assert s.summary()[0] == "Concentrated mass: 4  (2 items)\n1 CBUSH\nK_ref = 10"
+    s.set_coloring(Layer("results", ["mesh"], summary="Mode 2\nDeformation x3", where="Upper Center"))
+    s.latest = "results"
+    assert s.summary() == ("Mode 2\nDeformation x3\nConcentrated mass: 4  (2 items)\n1 CBUSH", "Upper Center")
 
 
-def test_replaced_coloring_forgets_its_info():
-    """A coloring that wrote the info text takes it along when another coloring replaces it (the
-    view then hides the text, unless the new coloring writes its own); an overlay's text stays."""
-    s = Scene(coloring=Layer("family", ["mesh"]))
-    s.info = "family"
-    s.set_coloring(Layer("pid", ["mesh"]))
-    assert s.info is None
-    s.add_overlay(Layer("masses", ["mass glyphs"]))
-    s.info = "masses"
+def test_summary_header_comes_first_whatever_the_coloring():
+    """R6 in a comparison: the diff summary is the first entry and stays whole."""
+    s = Scene(coloring=Layer("pid", ["diff mesh"]), role="B", diff="the diff")
+    s.add_overlay(Layer("masses", ["glyphs"], summary="Concentrated mass: 3  (1 items)\nchanges: 1 changed"))
+    s.latest = "masses"
+    header = "b/model.bdf vs a/model.bdf\nelements: 1 added, 1 removed, 0 changed"
+    assert s.summary(header) == (header + "\nConcentrated mass: 3  (1 items)\nchanges: 1 changed", "Upper Left Corner")
     s.set_coloring(Layer("thickness", ["shells"]))
-    assert s.info == "masses"
+    assert s.summary(header)[0].startswith(header) and s.clear() and s.latest is None
 
 
 def test_clear_macro_installed():

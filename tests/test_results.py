@@ -63,3 +63,12 @@ def test_op2_file_round_trip(tmp_path, mb):
     res.attach(mb, 0)
     shells = get_block(mb, "Shells")
     assert arr(shells, "VonMisesMax", "cell")[row_of(shells, "EID", 2, "cell")] == 7.0
+
+
+def test_step_name_is_the_label_with_its_frequency():
+    """The reader's StepLabels (what the views name A's step with, without reading A at it)."""
+    from nastran_pv.results import Step, step_name
+
+    assert step_name(Step("Subcase 1 mode 3 (45.2 Hz)", "eigenvector", 1, 2, 45.2)) == "Subcase 1 mode 3 (45.2 Hz)"
+    assert step_name(Step("Subcase 1", "displacement", 1, 0)) == "Subcase 1"
+    assert step_name(Step("Random Z", "random", None, 0, 12.5)) == "Random Z (12.5 Hz)"

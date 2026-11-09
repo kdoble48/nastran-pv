@@ -184,7 +184,7 @@ Restart ParaView, open a deck, select the reader (or anything downstream of it) 
 A button edits what the view shows instead of starting over
 ([How views combine](#how-views-combine)): a coloring (PID, Thickness, Results, ...) replaces the
 coloring, and an overlay (Masses, Loads, SPC, ...) adds itself to it, with its glyphs, lookup table,
-legend and a short summary; clicking an overlay's button again removes it. Nothing resets the view
+legend and a short summary in the view's text; clicking an overlay's button again removes it. Nothing resets the view
 but *NPV Clear*. Running a view again reuses its pipeline objects, which are named `NPV ...`, and keeps
 what you changed on them. A macro ends with the filter it is about selected (*NPV mass glyphs*,
 *NPV load glyphs*, *NPV beam sections*, *NPV grow*, the Nastran Diff, *NPV deform* for Results and
@@ -212,16 +212,16 @@ an `NPV ...` filter selected finds the model upstream of it.
 | NPV Plies | Composite plies ([Composites](model.md#composites)) over a ghost of the model: the shells colored by `PlyFailureIndexMax`, else `PlyVonMises`, else the ply's layup, grey where an element has no such ply, and the ply's material axes on top (*NPV ply axes*: the fibre direction black, the 2-direction red with *Both Axes*). It turns on in the reader's *Result Types* what the quantity needs, nothing more (failure: `PlyFailureIndex`; vonmises and stress: `PlyStress`; strain: `PlyStrain`; by default `PlyFailureIndex` and `PlyStress`; the layup quantities none). The ply is the reader's *Ply*: 0, each element's critical ply (its id in `PlyStressPly`; the axes are then the element material axes), a ply id, or -N for a symmetric PCOMPG's mirrored copy of ply N. From Python: `nv.apply("plies", ply=3, quantity="stress", component=0)` (`ply` sets the reader's *Ply* and the axes' *Ply*; on a converted file only the axes', the results staying as converted; `quantity`: failure, vonmises, stress, strain, angle, thickness, count; a bad argument is refused before the reader changes) |
 | NPV Random RMS | Random response (reader *Random ASD* set, see [Random vibration](random-vibration.md)): the mesh colored by acceleration RMS on a log scale, with the drive, input RMS and captured mass. Drive, damping and g are the reader's *Random* properties, since the reader computes the response; with *Random Output* it shows the SOL 111 run's own RMS and names that source |
 | NPV Random Sweep | The response ASD at the current frequency frame on one fixed log range, with the frame's frequency: press play to sweep |
-| NPV Animate Mode | Vibrates the mode the time controls are on, in the view as it is (masses, PID, loads, results, a show-only subset, anything you switched on): two cycles at 24 frames/s. It then leaves the **play button** looping that mode: the time steps become the 24 phases of one cycle (the time widget reads *Phase*), and the mode and its frequency stay in the upper right corner. A converted single-step file (`convert --results` without `--all-steps`) has one mode. A complex step (a frequency of a frequency response, a complex mode) turns through one cycle of its phase at full amplitude instead of swinging by a sine; Animate All Modes and Save Mode Animations do the same. From Python: `nv.play_mode(3, frames=36)` |
+| NPV Animate Mode | Vibrates the mode the time controls are on, in the view as it is (masses, PID, loads, results, a show-only subset, anything you switched on): two cycles at 24 frames/s. It then leaves the **play button** looping that mode: the time steps become the 24 phases of one cycle (the time widget reads *Phase*), and the mode and its frequency stay in the upper right corner. A converted single-step file (`convert --results` without `--all-steps`) has one mode. In a comparison both models vibrate, B's mode and A's step of the same index ([Comparing two models](#comparing-two-models)). A complex step (a frequency of a frequency response, a complex mode) turns through one cycle of its phase at full amplitude instead of swinging by a sine; Animate All Modes and Save Mode Animations do the same. From Python: `nv.play_mode(3, frames=36)` |
 | NPV Stop Mode Animation | Gives the time controls back to the modes, on the mode that vibrated. Any NPV view, Animate All Modes and Save Mode Animations do this too. Step to another mode and click NPV Animate Mode again |
-| NPV Animate All Modes | Plays every mode in turn, one cycle each, in the view as it is, with each mode's frequency shown, then returns to the step it was on. A view with nothing drawn through *NPV deform* gets NPV Results first. Modes whose step has no displacement are listed in Output Messages |
-| NPV Save Mode Animations | Saves every mode's vibration, in the view as it is, as a looping GIF `<model>_mode01.gif`, `<model>_mode02.gif`, ... next to the model file (24 frames each, at the view's size, with the mode's frequency); Output Messages lists them, and any mode with no displacement or whose frames never change. The view keeps its step and deformation. From Python: `nv.save_mode_animations([1, 2], folder=..., frames=36)` |
+| NPV Animate All Modes | Plays every mode in turn, one cycle each, in the view as it is (both views of a pair), with each mode's frequency shown, then returns to the step it was on. Only an empty view gets NPV Results first; what a view shows is never replaced. Modes whose step has no displacement are listed in Output Messages |
+| NPV Save Mode Animations | Saves every mode's vibration, in the view as it is, as a looping GIF `<model>_mode01.gif`, `<model>_mode02.gif`, ... next to the model file (24 frames each, at the view's size, with the mode's frequency); Output Messages lists them, and any mode with no displacement or whose frames never change. The view keeps its step and deformation. In a pair both models move and the GIF is of the active view. From Python: `nv.save_mode_animations([1, 2], folder=..., frames=36)` |
 | NPV Parts | Connected parts in indexed colors; uncheck card types on *NPV parts* to split at connectors |
 | NPV Grow | Elements reached from the seeds, colored by element hops |
 | NPV Grow from Selection | Seeds *NPV grow* with the selected cells (EIDs) or grids, then shows NPV Grow |
 | NPV Path from Selection | Shortest element path between two selected grids (*Show Only* *Path only* on *NPV path* outputs just the path) |
 | NPV Model Check | Free edges and faces, coincident grids, duplicates, dangling connectors, floating parts (*Show Only* *Errors only* on *NPV check* drops the informational ones) |
-| NPV Index Colors | Turns the selected object's current integer coloring (PID, MID, FamilyId, …) into an indexed LUT with annotations |
+| NPV Index Colors | Turns the selected object's current integer coloring (PID, MID, FamilyId, …) into an indexed LUT with annotations; with an object the view does not show selected (the reader), the view's coloring. It never shows anything |
 | NPV Show Only | Shows only the selected elements (Select Cells On first); loads and SPCs stay |
 | NPV Hide | Adds the selected elements to the reader's *Hidden Elements* |
 | NPV Show All | Clears both element lists, checks every property, material, type, family and group, and sets *Selection Mode* to Off |
@@ -233,7 +233,7 @@ an `NPV ...` filter selected finds the model upstream of it.
 | NPV Single | Ends the comparison: the view shows B as one model again, with the same overlays (DiffStatus becomes PID); in a pair the right view closes. Deletes nothing: NPV Diff starts the comparison again |
 | NPV Show Only Reached / NPV Hide Reached | Shows only, or hides, what *NPV grow* reached; with *Stay Within* that is "everything connected to this point inside its group" ([Model tools](tools.md#paraview)) |
 | NPV Show Only File / NPV Hide File | Shows only, or hides, what the reader's *Selection File* lists ([above](#selection-from-an-id-file)); set the file on the reader first, since macros cannot open a file dialog |
-| NPV Highlight File | Selects what the *Selection File* lists, as a ParaView selection on the reader (grids for a GRID file, elements otherwise), without hiding anything |
+| NPV Highlight File | Selects what the *Selection File* lists, as a ParaView selection on the reader (grids for a GRID file, elements otherwise), without hiding anything, and draws it in magenta as *NPV highlight*, moved with the view's deformation; the reader itself stays hidden. In a pair each view highlights its own model |
 
 The same views can be called from the Python shell (`import nastran_views as nv; nv.apply("masses")`),
 from `render_model.py`, and as `nastran-pv render` presets (see [CLI](cli.md#batch-screenshots)).
@@ -248,6 +248,7 @@ What a render view shows is a *scene* made of layers, and each macro edits one l
 | Overlays | Glyphs and lines drawn on the mesh; any number | NPV Masses, Bushes, Bush Rotations, Beams, Loads, SPC, Rigid |
 | Scope | What part of the model is in play: the reader's checklists, its Show Only / Hide element lists and its *Selection File* | the visibility macros ([Model tree and visibility](#model-tree-and-visibility)) |
 | Time | The time step, the deformation scale and mode animation | NPV Results, the animation macros, the time controls |
+| Text | One per view (`NPV info [RenderView1]`): a line or more per layer | every macro, from the layers it leaves |
 
 - A **coloring** replaces the coloring and keeps the overlays: NPV Masses then NPV Group shows the
   masses on the groups, and NPV Thickness afterwards swaps the groups (and their legend) for the
@@ -266,6 +267,16 @@ What a render view shows is a *scene* made of layers, and each macro edits one l
   picking cells there, does not move a macro to another model. A macro for **another model** (a
   second reader selected in the Pipeline Browser since the last macro) starts a new scene in that
   view: the first model's layers are hidden.
+- **One text per view** lists its layers, the coloring first and the overlays in the order they
+  were added: the layer clicked last in full, the others by their first line (NPV Masses after NPV
+  Loads lists the loads' first line, then the masses' summary). Removing an overlay drops its line; a
+  coloring without a text (PID) drops the replaced coloring's. Each view has its own text, so two
+  views of one model, or the two views of a pair, never overwrite each other's.
+- **Labels tell same-named models apart.** A model's objects are named after it, `NPV <what>
+  [<label>]`, and so are its texts. The label is its Pipeline Browser name, unless two open models
+  share one: then each takes as many parent folders as it takes (`A/run_uCRM-9_modal_coarse.bdf`,
+  `B/run_uCRM-9_modal_coarse.bdf`), and their `NPV ...` objects are renamed with it (opening a second
+  `model.bdf` renames the first one's). The same file opened twice gets `#<id>` on the second.
 - **NPV Clear** is the reset: it hides every layer and puts the deformation back to 0, and
   deletes nothing. A comparison stays one (NPV Single ends it); in a side-by-side pair it clears
   both views.
@@ -301,13 +312,23 @@ Nastran Diff's *Input*), and **A**, the reference (its *Reference*). The compari
   again from either view draws the same pair again in place.
 - **Changing a layer does not compare again.** The Nastran Diff runs again only when a model's content
   changes (a new deck, other reader options, a tolerance); the scope and the time step only cut and
-  update the kept comparison (uCRM-9: 1.1 s to compare, then 0.14 s for NPV Masses and 0.75 s for a
+  update the kept comparison (uCRM-9: 1.1 s to compare, then 0.14 s for NPV Masses and 0.6 s for a
   scope change).
-
-NPV Results deforms B's diff layers by B's displacement (A's removed items follow B's grids), and
-in a pair A's side by A's own. The animation macros and the play button vibrate the model of the
-view they are run in; vibrating both sides of a pair, and a summary per view that lists every
-layer, are to come.
+- **The text says what is compared.** B's view starts with the diff summary (B vs A, the counts per
+  kind and the mass change), whatever the coloring and the overlays below it; A's view of a pair
+  starts with `A: <label> (the reference)`.
+- **Time is the layout's, steps match by index.** The time controls step through B's steps. A is
+  read at its own step of the same index (mode 3 of A with mode 3 of B, whatever their
+  frequencies), also when you step by hand: A's *NPV deform* filters follow B's steps (their *Match
+  Steps*). When A has no step of that index it stays undeformed and shows no results (not its
+  nearest step's), and its view's text says *no step 3 here*. NPV Results deforms each side by its own
+  displacement at its own step, at one scale for the pair (B's, at the step it was clicked at), and A's
+  removed items move with A (the diff gives them A's displacement by grid, and on a complex step its
+  real and imaginary parts), in both views. Clicked on a step A lacks, it still sets A up, so the time
+  controls bring A back deformed and colored on a step it has.
+- **Animation moves both models.** NPV Animate Mode, Animate All Modes, Save Mode Animations and the
+  play button vibrate B's mode and A's step of the same index, at one amplitude (B's), from either
+  view; while the play button loops, neither reader's own steps are in the time controls.
 
 ## Filter properties
 
@@ -322,7 +343,7 @@ again keeps what you changed; from Python an argument you pass explicitly wins
 | Beams | *NPV beam sections* (the triads are on *NPV beam axes*) | *ShowSections*, *ShowAxes*, *ShowTriads*, *TriadSize*, *Max Triads*, *DeformationScale* |
 | Loads | *NPV load glyphs* | *Source*, *Load Sets*, *Show*, *Show Pressures*, *Show Gravity*, *Arrow Length*, *Every Nth Point*; *Glyph Size* group |
 | SPC | *NPV spc glyphs* | *SPC Sets*, *DOFs*; *Glyph Size* group |
-| Results, Animate Mode | *NPV deform* | *Auto Scale*, *Scale Factor*, *Auto Scale Peak* (advanced), *Phase* (complex steps); the undeformed outline's opacity is the Display opacity of *NPV undeformed mesh* |
+| Results, Animate Mode | *NPV deform* | *Auto Scale*, *Scale Factor*, *Auto Scale Peak* (advanced), *Phase* (complex steps), *Match Steps* (advanced, set by the views on A's side of a pair); the undeformed outline's opacity is the Display opacity of *NPV undeformed mesh* |
 | Plies | *NPV ply axes* (the ply itself is the reader's *Ply*) | *Ply* (0: the model's, as the reader laid it; the view's `ply=` sets it), *Size*, *Both Axes* |
 | Random RMS, Random Sweep | the reader | *Random ASD*, *Random Drive*, *Random Damping*, *Random G*, *Random Frames* (the reader computes the response), or *Random Output* (the SOL 111 tables) |
 | Grow, Path, Model Check, Parts | *NPV grow*, *NPV path*, *NPV check*, *NPV parts* | the *Traversal* group; Path and Model Check also *Show Only* ([Model tools](tools.md#paraview)) |
@@ -359,7 +380,9 @@ the selection commands make no filter of their own.
   without vibrating; real steps ignore it. A `.pvd` series opened with ParaView's own reader has no
   root fields, so there θ counts as 0. NPV Animate Mode leaves a complex step at the frame of its
   largest displacement. Auto Scale sizes a
-  complex step by its amplitude (`Displacement_Mag`).
+  complex step by its amplitude (`Displacement_Mag`). *Match Steps* (advanced; NPV Side by Side sets
+  it on A's side of a pair, as B's time steps) follows another model's steps by index: at its n-th
+  step the input is read at its own n-th step, and without one it is not moved.
 
 * **Nastran Scope** is the overlays' copy of the model. Its mesh blocks keep what the reader
   keeps (checklists, Show Only/Hide, the selection file). Masses, rigid elements, bushes, SPCs
