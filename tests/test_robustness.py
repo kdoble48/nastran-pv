@@ -94,6 +94,40 @@ def test_results_rotated_from_cd_to_basic(tmp_path):
     np.testing.assert_allclose(out[1, 3:], [0, 2, 0], atol=1e-12)
 
 
+CURVILINEAR_CD = """\
+CORD2C,20,,0.,0.,0.,0.,0.,1.,
+,1.,0.,0.
+CORD2S,30,,0.,0.,0.,0.,0.,1.,
+,1.,0.,0.
+CORD2C,40,,0.,0.,1.,0.,0.,2.,
+,0.,1.,1.
+GRID,1,,0.,0.,0.
+GRID,2,,0.,2.,5.,20
+GRID,3,,0.,1.,1.,30
+GRID,4,,1.,1.,0.,20
+GRID,5,,0.,3.,1.,40
+"""
+
+
+def test_results_rotated_from_cylindrical_and_spherical_cd(tmp_path):
+    """Every grid of a curvilinear CD gets the axes at its own position (hand-computed):
+    grid 2 at theta = 90 deg (e_r = +Y, e_theta = -X); grid 3 in CORD2S at azimuth 90 deg, polar
+    45 deg (e_r = (0, s, s), e_polar = (0, s, -s), e_azimuth = -X); grid 4 at theta = 45 deg;
+    grid 5 in CORD2C 40 (origin z = 1, its x-axis = basic +Y) at local theta = 0: e_r = +Y,
+    e_theta = -X. Grid 1 (basic) and the unknown grid 99 are left as they are."""
+    deck = load_deck(write(tmp_path, "cd.bdf", CURVILINEAR_CD), echo=False)
+    rows = np.tile([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], (6, 1))
+    out = to_basic(deck, np.array([5, 99, 3, 1, 2, 4]), rows)
+    s = np.sqrt(0.5)
+    np.testing.assert_allclose(out[0], [-2, 1, 3, -5, 4, 6], atol=1e-12)
+    np.testing.assert_allclose(out[1], [1, 2, 3, 4, 5, 6])
+    np.testing.assert_allclose(out[2], [-3, 3 * s, -s, -6, 9 * s, -s], atol=1e-12)
+    np.testing.assert_allclose(out[3], [1, 2, 3, 4, 5, 6])
+    np.testing.assert_allclose(out[4], [-2, 1, 3, -5, 4, 6], atol=1e-12)
+    np.testing.assert_allclose(out[5], [-s, 3 * s, 3, -s, 9 * s, 6], atol=1e-12)
+    assert not [w for w in deck.warnings if "CD" in w]
+
+
 def test_composite_element_ids_and_complex_results_are_handled():
     assert _element_ids(SimpleNamespace(element_layer=np.array([[7, 1], [7, 2]]))).tolist() == [7, 7]
     assert _element_ids(SimpleNamespace(element=np.array([3]))).tolist() == [3]
