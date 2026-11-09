@@ -10,6 +10,8 @@ python -m pyflakes src paraview/*.py tests  # lint (skip paraview/_vendor)
 Every push to `main` and every pull request runs the tests and lint on Linux, Windows and macOS
 with Python 3.10 to 3.12 (`.github/workflows/tests.yml`), and builds this site
 (`.github/workflows/docs.yml`). Tests that need ParaView, MYSTRAN or the real datasets skip there.
+A separate job holds the [performance budget](performance.md#ci-check) (`python -m pytest -m perf`;
+the default run deselects those timing tests).
 Changes that affect users get a line in the
 [CHANGELOG](https://github.com/kdoble48/nastran-pv/blob/main/CHANGELOG.md); see
 [Versioning](versioning.md) for what bumps which version.
@@ -76,6 +78,7 @@ The docs describe behavior that lives in code. Update them in the same change wh
 | `selection.py`, the reader's *Selection* properties, the NPV *File* macros | [cli.md](cli.md#selection-from-an-id-file), [paraview.md](paraview.md#selection-from-an-id-file) |
 | `vtkio.py`, `vtkhdf.py`, `store.py` | [output-formats.md](output-formats.md), [store.md](store.md) |
 | Dependencies, extras, environment variables | [install.md](install.md) |
+| A speedup or slowdown of a timed stage; `tests/benchmark.py`, `tests/perf_deck.py`, `tests/test_performance.py` `RECORDED` | [performance.md](performance.md) |
 | Any user-facing change; a public name or default (see [Versioning](versioning.md#public-api)) | `CHANGELOG.md` (*Unreleased*), [versioning.md](versioning.md) when the policy changes |
 
 ## Regenerating the gallery
