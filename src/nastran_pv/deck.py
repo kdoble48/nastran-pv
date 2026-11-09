@@ -37,7 +37,8 @@ class Deck:
     ``path`` is the deck's file and ``model`` the pyNastran ``BDF`` (read without
     cross-referencing, then ``safe_cross_reference``). ``nids`` holds the grid ids, sorted, with
     their basic coordinates in ``xyz`` (n, 3) and their displacement systems (CD) in ``cd``.
-    ``warnings`` lists what pyNastran and the builders reported, the mass-changing ones first;
+    ``warnings`` lists what pyNastran and the builders reported: a failed cross-reference first
+    (it explains missing MIDs and masses), then those that change the model mass, then the rest;
     ``includes`` is the tree of files read (which file each element came from).
     """
 

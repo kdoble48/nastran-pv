@@ -7,9 +7,12 @@ and a change to one is listed in the
 period before it goes ([Deprecation](versioning.md#deprecation)). Each module below lists these
 names in its `__all__`. Everything else in the package is internal and can change in any release:
 other modules, names starting with `_`, and names this page does not show, even where a module's
-`__all__` lists them (`topology`, `post` and `fields` list a few helpers of their own there).
+`__all__` lists them (the packages `topology`, `post` and `fields` list a few helpers of their own
+there; every other module lists exactly the names below).
 
-The package needs pyNastran, numpy and VTK ([Install](install.md)). It imports VTK through
+The package needs pyNastran, numpy and VTK ([Install](install.md)), and h5py (the `h5` extra) for
+`H5Results`, `write_vtkhdf_series` with `compact` (the default) and reading a VTKHDF file back
+(`read_model`); those raise an `ImportError` naming the extra without it. It imports VTK through
 `vtkmodules` only, so the same code runs in a regular Python with the `vtk` wheel and in
 ParaView's `pvpython`.
 

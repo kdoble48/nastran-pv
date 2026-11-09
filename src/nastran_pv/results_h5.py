@@ -27,10 +27,10 @@ from typing import NamedTuple
 import numpy as np
 
 from . import result_types
-from .result_types import CPLX, von_mises_table
+from .result_types import CPLX
 from .results import Step, _mode_frequency, _Results, step_label
 
-__all__ = ["H5Results", "von_mises_table", "ROOT", "pick_fields"]
+__all__ = ["H5Results"]
 
 ROOT = "/NASTRAN/RESULT"
 ID_FIELDS = {"NID": "ID", "EID": "EID"}  # the id field of the tables of a type keyed by NID or EID
@@ -128,7 +128,10 @@ class H5Results(_Results):
     :class:`~nastran_pv.results.Op2Results`. Needs h5py (``pip install nastran-pv[h5]``)."""
 
     def __init__(self, path, registry=None):
-        import h5py
+        try:
+            import h5py
+        except ImportError as exc:
+            raise ImportError('MSC/NX HDF5 results need h5py: pip install "nastran-pv[h5]"') from exc
 
         self.path = Path(path)
         self.registry = result_types.REGISTRY if registry is None else tuple(registry)

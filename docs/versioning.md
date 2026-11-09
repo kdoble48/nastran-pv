@@ -39,10 +39,12 @@ A public name is not renamed or removed in one release. It is deprecated first:
 
 1. It keeps working, as an alias of its replacement where there is one.
 2. Using it warns, naming what to use instead and the release that removes it:
-   - a Python name or keyword argument raises a `DeprecationWarning`, which Python shows in
-     `__main__`, under pytest and with `python -W default`;
-   - a CLI flag prints a `nastran-pv:` line on stderr, which a command-line user sees;
-   - a view name or a plugin property prints the same line, in ParaView to the Output Messages.
+   - a Python name or keyword argument (for code that calls nastran-pv) raises a
+     `DeprecationWarning`, which Python shows in `__main__`, under pytest and with
+     `python -W default`;
+   - what a user types (a CLI flag, a token of `--rules`, a view name, a plugin
+     property) prints a `nastran-pv:` line on stderr, once per run; ParaView shows it in its
+     Output Messages.
 3. The CHANGELOG lists it under *Deprecated* in the release that deprecates it, with what to use
    instead, and under *Removed* in the release that removes it.
 
@@ -61,9 +63,15 @@ is not, the rename waits for a release that may break.
 
 | Helper | For |
 |---|---|
-| `@renamed_keywords("0.5.0", old="new")` | keyword arguments of a function |
-| `old_name = renamed_function(new_name, "old_name", "0.5.0")` | a module-level function |
-| `cli.DEPRECATED_FLAGS["--old"] = ("--new", "0.5.0")` | a CLI flag: `cli.main` rewrites it before parsing (`rename_flags`), so the old flag stays out of `--help` |
+| `@renamed_keywords("1.0.0", old="new")` | keyword arguments of a function |
+| `old_name = renamed_function(new_name, "old_name", "1.0.0")` | a module-level function |
+| `warn(old, new, "1.0.0")` | any other Python spelling, such as a field with a new meaning |
+| `flag_alias(subparser, "--old", "--new", "1.0.0")` | a CLI flag: the old spelling added to that subcommand only, hidden from `--help`, with the new flag's action (abbreviations keep working) |
+| `notice(old, new, "1.0.0")` | anything else a user types: a token, a view name, a plugin property |
+
+Deprecated today, removed in 1.0.0: `Rules(within_pids=True)` and the `--rules` token
+`within_pids` (use `within=pid`), and the model-tool filters' hidden `StayWithinSeedPIDs`
+property (use *Stay Within* = seed properties).
 
 ## Version 1.0
 
