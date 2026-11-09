@@ -12,7 +12,7 @@ All notable changes to nastran-pv are listed here. The format follows
   element forces (shells `MembraneForce`, lines `AxialForce`, bushes, springs) or by von Mises stress
   (shells at the top fibre, solids, lines `MaxStress`); `nv.apply("stress", quantity=, fibre=,
   strain=, component=)` chooses the array, and the views check the types they need in the reader's
-  *Result Types* (#PR).
+  *Result Types* (#65).
 - Element forces, stresses and strains as result types (roadmap task 9). Attached by default when
   the run wrote them: `ShellForce` (`MembraneForce BendingMoment TransverseShear`), `LineForce`
   (bars, beams and rods: `AxialForce Torque ShearForce BendingMomentA BendingMomentB`),
