@@ -11,8 +11,10 @@ All notable changes to nastran-pv are listed here. The format follows
 - NPV Forces and NPV Stress views (`view`/`render --preset forces stress`): each block colored by its
   element forces (shells `MembraneForce`, lines `AxialForce`, bushes, springs) or by von Mises stress
   (shells at the top fibre, solids, lines `MaxStress`); `nv.apply("stress", quantity=, fibre=,
-  strain=, component=)` chooses the array, and the views check the types they need in the reader's
-  *Result Types* (#65).
+  strain=, component=)` chooses the array (each block over its exact range; lines and springs draw
+  only their elements with a value). The views turn on the types they need in the reader's *Result
+  Types* (the stresses, or the strains with `strain=True`, swapping the ones they turned on) and
+  name them in their text (#65).
 - Element forces, stresses and strains as result types (roadmap task 9). Attached by default when
   the run wrote them: `ShellForce` (`MembraneForce BendingMoment TransverseShear`), `LineForce`
   (bars, beams and rods: `AxialForce Torque ShearForce BendingMomentA BendingMomentB`),

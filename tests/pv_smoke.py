@@ -446,22 +446,31 @@ def element_result_checks(pv, nv):
         check(cells.GetArray("BendingMomentB") is not None and cells.GetArray("MaxStress") is not None
               and model.block("Shells").GetCellData().GetArray("PrincipalStressBottom") is not None,
               "a converted VTKHDF series carries the forces and stresses")
-        for s in (src, reader):
-            pv.Delete(s)
+        _newest_first(pv, [src, reader])
 
 
-def _delete_models(pv, *labels):
-    """Delete the readers named ``labels`` and every NPV object of theirs, consumers first."""
-    doomed = [s for (name, _), s in pv.GetSources().items()
-              if name in labels or any(name.endswith(f"[{label}]") for label in labels)]
-    for s in sorted(doomed, key=lambda s: -int(s.GetGlobalIDAsString())):
-        pv.Delete(s)
+def _newest_first(pv, sources):
+    """Delete ``sources``, consumers first (they were made after their inputs)."""
+    unique = []  # proxies are compared, not hashed
+    for src in sources:
+        if src not in unique:
+            unique.append(src)
+    for src in sorted(unique, key=lambda v: -int(v.GetGlobalIDAsString())):
+        pv.Delete(src)
+
+
+def _model_sources(pv, nv, reader):
+    """The reader and every NPV object made for its model (``nv._name``'s tag, twin labels such as
+    'deck #ID' included)."""
+    tag = nv._name(nv.Model(reader), "")[len("NPV "):].strip()
+    return [v for k, v in pv.GetSources().items() if v == reader or k[0].endswith(tag)]
 
 
 def force_stress_view_checks(pv, nv):
     """NPV Forces and NPV Stress (roadmap task 9) on tests/data/elements.bdf with the synthesized
-    OP2: the array each block is colored by, the views' arguments, the Result Types they check,
-    and a converted file without stress components (the VonMisesMax fallback)."""
+    OP2: the array each block is colored by and its range, the views' arguments, the Result Types
+    they turn on (and off again), and a converted file without stress components (the VonMisesMax
+    fallback)."""
     from op2_fixture import make_element_op2
 
     deck = os.path.join(HERE, "data", "elements.bdf")
@@ -472,33 +481,68 @@ def force_stress_view_checks(pv, nv):
         view = pv.CreateRenderView()
 
         def colored(model, block):
-            disp = pv.GetDisplayProperties(pv.FindSource(nv._name(model, block)), view)
+            src = pv.FindSource(nv._name(model, f"{block} with values")) if block in ("Lines", "Connectors") else None
+            disp = pv.GetDisplayProperties(src or pv.FindSource(nv._name(model, block)), view)
             lut = pv.GetColorTransferFunction(disp.ColorArrayName[1])
             return disp.ColorArrayName[1], (nv.enum_text(lut, "VectorMode"), int(lut.VectorComponent))
+
+        def color_range(array):
+            points = list(pv.GetColorTransferFunction(array).RGBPoints)
+            return points[0], points[-4]
 
         model = nv.apply("forces", reader=reader, view=view)
         text = _info(nv, model)
         check(colored(model, "Lines")[0] == "AxialForce" and colored(model, "Shells") == ("MembraneForce", ("Magnitude", 0))
               and colored(model, "Bushes")[0] == "BushForce" and colored(model, "Connectors")[0] == "SpringForce",
               "NPV Forces: shells by MembraneForce, lines by AxialForce, bushes and springs by their force")
-        check("Lines: AxialForce" in text and "element frame" in text, f"forces info: {text!r}")
-        model = nv.apply("forces", reader=reader, view=view, shell="bending", line="BendingMomentB", component=1)
+        check(text.startswith("Subcase 1 element forces") and "Lines: AxialForce" in text and "element frame" in text
+              and "Turned on" not in text, f"forces info (the forces were on already): {text!r}")
+        springs = pv.FindSource(nv._name(model, "Connectors with values"))
+        check(springs.GetDataInformation().GetNumberOfCells() == 2,
+              "Connectors: only the two springs are drawn thick (not the MPC leg, whose force is NaN)")
+        model = nv.apply("forces", reader=reader, view=view, shell="bending", line="bendingmomentb", component=1)
         check(colored(model, "Shells") == ("BendingMoment", ("Component", 1))
               and colored(model, "Lines")[0] == "BendingMomentB",
-              "forces shell=/line=/component= choose the arrays and the component")
-        check("ShellStress" not in list(reader.ResultTypes), "the stresses start unchecked")
+              "forces shell=/line= (any case)/component= choose the arrays and the component")
+        check(np.allclose(color_range("BendingMoment"), (5.0, 50.0)),  # MY of CQUAD4 1 and CTRIA3 2; |M| is 87.7
+              f"the color range is the component's own: {color_range('BendingMoment')}")
+        for bad, why in (({"component": -1}, "negative"), ({"component": 3}, "past MembraneForce's 3"),
+                         ({"component": "x"}, "not an int"), ({"line": "Moment"}, "not a LineForce array")):
+            try:
+                nv.apply("forces", reader=reader, view=view, **bad)
+                check(False, f"forces {bad} ({why}) should be refused")
+            except ValueError as exc:
+                check(True, f"forces {bad} refused: {exc}")
+        reader.ResultTypes = ["Displacement", "ShellForce"]  # a script's own choice, not in the Info yet
         model = nv.apply("stress", reader=reader, view=view)
-        check({"ShellStress", "SolidStress", "LineStress"} <= set(reader.ResultTypes),
-              f"NPV Stress checks the stress types: {list(reader.ResultTypes)}")
+        on = list(reader.ResultTypes)
+        check(on[:2] == ["Displacement", "ShellForce"] and set(on[2:]) == {"ShellStress", "SolidStress", "LineStress"},
+              f"NPV Stress adds the stress types to the script's choice, nothing else: {on}")
+        check(model.array("Shells", "VonMisesTop", "cell") is not None,
+              "apply returns the model with the arrays the view turned on")
+        text = _info(nv, model)
+        check("Turned on in the reader's Result Types: ShellStress, SolidStress, LineStress" in text
+              and "shells at the top fibre" in text, f"stress info: {text!r}")
         check(colored(model, "Shells")[0] == "VonMisesTop" and colored(model, "Solids")[0] == "VonMises"
               and colored(model, "Lines")[0] == "MaxStress", "NPV Stress: von Mises at the top fibre, lines MaxStress")
         model = nv.apply("stress", reader=reader, view=view, quantity="principal", fibre="bottom")
         check(colored(model, "Shells") == ("PrincipalStressBottom", ("Component", 0))
               and colored(model, "Solids") == ("PrincipalStress", ("Component", 0)),
               "stress quantity=principal fibre=bottom: the major principal stress")
+        try:
+            nv.apply("stress", reader=reader, view=view, quantity="principal", component=2)
+            check(False, "stress principal component=2 should be refused (shells have 2 principals)")
+        except ValueError as exc:
+            check("Shells PrincipalStressTop: 0-1" in str(exc) and "Solids PrincipalStress: 0-2" in str(exc),
+                  f"the refusal names each array's range: {exc}")
+        reader.ResultTypes = list(reader.ResultTypes) + ["ShellStrain"]  # the user checks one strain type
         model = nv.apply("stress", reader=reader, view=view, strain=True)
+        on = set(reader.ResultTypes)
         check(colored(model, "Shells") == ("PrincipalStrainTop", ("Component", 0))
-              and "ShellStrain" in list(reader.ResultTypes), "stress strain=True: the major principal strain")
+              and {"SolidStrain", "LineStrain", "ShellStrain"} <= on and not on & {"ShellStress", "SolidStress", "LineStress"},
+              f"strain=True turns the strains on and the stresses the view turned on off: {sorted(on)}")
+        nv.apply("pid", reader=reader, view=view)
+        check({"SolidStrain", "LineStrain"} <= set(reader.ResultTypes), "another view leaves them on")
         for bad in ({"quantity": "vonmises", "strain": True}, {"fibre": "middle"}, {"quantity": "tresca"}):
             try:
                 nv.apply("stress", reader=reader, view=view, **bad)
@@ -511,12 +555,13 @@ def force_stress_view_checks(pv, nv):
         src = nv.load_reader(vtm)
         view = pv.CreateRenderView()
         model = nv.apply("stress", reader=src, view=view)
-        check(colored(model, "Shells")[0] == "VonMisesMax" and "envelope" in _info(nv, model),
-              "stress on a file without components shows the VonMisesMax envelope")
+        text = _info(nv, model)
+        check(colored(model, "Shells")[0] == "VonMisesMax" and "envelope" in text and "shells at the" not in text,
+              f"stress on a file without components shows the VonMisesMax envelope: {text!r}")
         model = nv.apply("forces", reader=src, view=view)
         check(colored(model, "Lines")[0] == "AxialForce", "forces on a converted file")
         pv.Delete(view)
-        _delete_models(pv, "elements.bdf", "forces.vtm")
+        _newest_first(pv, _model_sources(pv, nv, src) + _model_sources(pv, nv, reader))
 
 
 def beam_checks(pv, nv, view, tmp):
@@ -783,11 +828,7 @@ def scene_checks(pv, nv, reader):
     for v in (view, view2):
         nv.clear(v)
         pv.Delete(v)
-    tag = nv._name(nv.Model(twin), "")[len("NPV "):].strip()
-    for src in sorted((v for k, v in pv.GetSources().items() if k[0].endswith(tag)),
-                      key=lambda v: -int(v.GetGlobalIDAsString())):
-        pv.Delete(src)
-    pv.Delete(twin)
+    _newest_first(pv, _model_sources(pv, nv, twin))
     pv.SetActiveSource(reader)
 
 
@@ -821,11 +862,7 @@ def stray_checks(pv, nv, reader):
     check(not vis(reader) and not vis(info) and nv.scene_of(view).model is twin,
           "another model's PID hides A's reader and A's NPV info")
     nv.clear(view)
-    tag = nv._name(nv.Model(twin), "")[len("NPV "):].strip()
-    for src in sorted((v for k, v in pv.GetSources().items() if k[0].endswith(tag)),
-                      key=lambda v: -int(v.GetGlobalIDAsString())):
-        pv.Delete(src)
-    pv.Delete(twin)
+    _newest_first(pv, _model_sources(pv, nv, twin))
     state = pv.CreateRenderView()                   # a reopened .pvsm: shown objects, no scene
     glyphs = pv.FindSource(nv._name(m, "mass glyphs"))
     for src in (reader, glyphs, info):
@@ -921,9 +958,7 @@ def group_scope_checks(pv, nv):
               "Visible Groups without WING_SPARS: only the masses of WING_SKIN (103 through its RBE2)")
         nv.clear(view)
         pv.Delete(view)
-        for src in sorted((s for s in pv.GetSources().values() if s not in keep),
-                          key=lambda v: -int(v.GetGlobalIDAsString())):
-            pv.Delete(src)
+        _newest_first(pv, [s for s in pv.GetSources().values() if s not in keep])
 
 
 def preset_checks(pv, nv):
@@ -2156,9 +2191,7 @@ def scope_deform_checks(pv, nv):
         check(nv.scope_active(r) and data_time() == mode1,
               f"scope_active does not run the reader at the active view's time (reader at {data_time()})")
         pv.Delete(other)
-        for src in sorted((s for s in pv.GetSources().values() if s not in keep),
-                          key=lambda v: -int(v.GetGlobalIDAsString())):
-            pv.Delete(src)
+        _newest_first(pv, [s for s in pv.GetSources().values() if s not in keep])
 
 
 def scene_review_checks(pv, nv, reader):
@@ -2182,9 +2215,8 @@ def scene_review_checks(pv, nv, reader):
     keep = set(pv.GetSources().values())
     twin = rm.load_reader(DECK)
     text = pv.FindSource(nv._name(nv.apply("masses", reader=twin, view=view), "info"))
-    for src in sorted((s for s in pv.GetSources().values() if any(u == twin for u in nv.upstream(s))),
-                      key=lambda v: -int(v.GetGlobalIDAsString())):
-        pv.Delete(src)                              # Delete Tree on the twin reader: its info text stays
+    # Delete Tree on the twin reader: its info text stays
+    _newest_first(pv, [s for s in pv.GetSources().values() if any(u == twin for u in nv.upstream(s))])
     check(nv.scene_of(view).model is None and text not in nv.shown_sources(view),
           "a scene whose reader was deleted is emptied, and what is left of it (its info text) hidden")
     pv.SetActiveSource(None)
