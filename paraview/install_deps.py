@@ -1,10 +1,12 @@
-"""Install pyNastran (and the bits ParaView lacks) into ``paraview/_vendor``.
+"""Install pyNastran (and the bits ParaView lacks) into the plugin's vendor folder.
 
 ParaView ships its own Python with numpy but without pyNastran/scipy. This
 script asks ``pvpython`` for its Python version, platform and numpy version and
 for the packages it can already import, then uses *any* Python with pip to fill
-``paraview/_vendor`` (gitignored). The reader plugin puts that folder on
-``sys.path`` automatically.
+the vendor folder (``locate.vendor_dir``): ``paraview/_vendor`` (gitignored) in a checkout,
+a per-user folder per ParaView Python version for an installed nastran-pv
+(``%LOCALAPPDATA%/nastran-pv/vendor/py3.12``, ...), or ``NASTRAN_PV_VENDOR_DIR``. The reader
+plugin puts that folder on ``sys.path`` automatically.
 
 * pyNastran comes from its GitHub ``main`` branch (1.4.1, the last release, needs
   numpy < 2 and so no Python >= 3.13). It is pure Python, so the wheel built here
@@ -35,6 +37,14 @@ import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+# nastran_pv.locate (standard library only): a checkout's ../src, else the installed package this
+# file ships in (nastran_pv/paraview/install_deps.py), normally importable already
+if (HERE.parent / "src" / "nastran_pv").is_dir():
+    sys.path.insert(0, str(HERE.parent / "src"))
+elif str(HERE.parent.parent) not in sys.path:
+    sys.path.append(str(HERE.parent.parent))
+from nastran_pv import locate  # noqa: E402
+
 PYNASTRAN_MAIN = "pyNastran @ git+https://github.com/SteveDoyle2/pyNastran.git@main"
 # import name -> pip requirement (pyNastran's runtime dependencies that ParaView lacks)
 DEPS = {"cpylog": "cpylog>=1.6", "docopt": "docopt-ng>=0.9", "colorama": "colorama"}
@@ -219,7 +229,7 @@ def probe(pvpython: str, target: Path, modules, script: str = PROBE):
 
 def pip_install(target: Path, extra: list[str], dry_run: bool) -> None:
     cmd = [sys.executable, "-m", "pip", "install", "--target", str(target), *extra]
-    print(" ".join(cmd))
+    print(" ".join(cmd), flush=True)  # before pip writes
     if not dry_run:
         subprocess.run(cmd, check=True)
 
@@ -239,7 +249,9 @@ def binary_reason(target: Path, name: str, dist: str, python: str, platform: str
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--pvpython", default=None, help="path to pvpython (default: search)")
-    ap.add_argument("--target", default=str(HERE / "_vendor"))
+    ap.add_argument("--target", default=None,
+                    help="vendor folder (default: paraview/_vendor in a checkout, a per-user folder per "
+                         "ParaView Python for an installed nastran-pv, or NASTRAN_PV_VENDOR_DIR)")
     ap.add_argument("--pynastran", default=None, metavar="SPEC",
                     help="pip requirement to vendor instead of pyNastran main (e.g. a local checkout); "
                          "always installed")
@@ -257,14 +269,20 @@ def main() -> int:
         ap.error("pvpython not found; pass --pvpython")
     if Path(pvpython).exists():
         pvpython = str(Path(pvpython).resolve())  # CreateProcess misses relative forward-slash paths
-    target = Path(args.target).resolve()
-    info = probe(pvpython, target, ["pyNastran", "scipy", *DEPS])
+    # the default folder depends on ParaView's Python version, known only after the probe; until then
+    # the probe hides the running Python's folder from ParaView (the same one in a checkout)
+    target = Path(args.target) if args.target else locate.vendor_dir(HERE)
+    info = probe(pvpython, target.resolve(), ["pyNastran", "scipy", *DEPS])
+    if not args.target:
+        target = locate.vendor_dir(HERE, python=info["version"])
+    target = target.resolve()
     found = info["found"]
     for name, b in info.get("broken", {}).items():
         print(f"warning: {name} is on ParaView's path ({b['path']}) but fails to import: {b['error']}")
     major, minor = info["version"].split(".")
     numpy_major = int(info["numpy"].split(".")[0])
     print(f"pvpython: Python {info['version']} on {info['platform']}, numpy {info['numpy']}")
+    print(f"vendor folder: {target}", flush=True)
 
     # pyNastran: pure Python, so no platform/ABI flags (and a git requirement cannot be binary-only)
     pynastran = None

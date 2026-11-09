@@ -120,3 +120,26 @@ def test_verify_reports_imports_that_still_fail(monkeypatch, capsys, tmp_path):
     assert "cannot import scipy" in capsys.readouterr().err
     monkeypatch.setattr(install_deps, "probe", lambda *a: {})
     assert install_deps.verify("pvpython", tmp_path, dry_run=False) == 0
+
+
+def test_default_target_is_per_paraview_python_when_installed(tmp_path, monkeypatch, capsys):
+    """An installed plugin (nastran_pv/paraview/) vendors into the per-user folder of ParaView's
+    Python version, not into site-packages; a checkout keeps paraview/_vendor."""
+    installed = tmp_path / "site-packages" / "nastran_pv" / "paraview"
+    installed.mkdir(parents=True)
+    (installed.parent / "__init__.py").write_text("")
+    monkeypatch.delenv("NASTRAN_PV_VENDOR_DIR", raising=False)
+    monkeypatch.setattr(install_deps.locate, "user_data_dir", lambda: tmp_path / "data")
+
+    def fake_probe(pvpython, tgt, modules, script=install_deps.PROBE):
+        found = {m: {"version": "1", "path": "pv"} for m in modules}  # nothing to install
+        return {"version": "3.10", "platform": "win-amd64", "numpy": "1.26.4", "found": found, "broken": {}}
+
+    monkeypatch.setattr(install_deps, "probe", fake_probe)
+    monkeypatch.setattr(sys, "argv", ["install_deps", "--pvpython", sys.executable, "--dry-run"])
+    for here, want in ((installed, tmp_path / "data" / "vendor" / "py3.10"),
+                       (ROOT / "paraview", ROOT / "paraview" / "_vendor")):
+        monkeypatch.setattr(install_deps, "HERE", here)
+        assert install_deps.main() == 0
+        assert f"vendor folder: {want.resolve()}" in capsys.readouterr().out
+    assert not (tmp_path / "data").exists()  # a dry run creates nothing

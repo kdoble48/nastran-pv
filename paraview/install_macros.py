@@ -4,8 +4,10 @@
     python paraview/install_macros.py --remove   # remove them again
 
 Each macro is a three-line stub in ParaView's user macro folder that imports
-``nastran_views`` from this checkout, so updating the repository updates the
-macros. Restart ParaView (or use Macros > Import) after installing.
+``nastran_views`` from the folder this script is in (a checkout's ``paraview/``, or
+``nastran_pv/paraview`` of an installed package), so updating the checkout or
+``pip install -U nastran-pv`` updates the macros; a new environment needs them
+installed again. Restart ParaView (or use Macros > Import) after installing.
 """
 import argparse
 import os

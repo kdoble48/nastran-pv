@@ -6,12 +6,17 @@ environment variable), then File > Open a deck and choose
 
 The plugin finds its dependencies in this order:
 
-1. anything already importable (e.g. PYTHONPATH),
-2. ``../src`` relative to this file (the nastran_pv package),
-3. ``./_vendor`` next to this file (filled by ``install_deps.py``),
+1. nastran_pv: ``../src`` relative to this file in a checkout (put first on ``sys.path``), or, in
+   an installed wheel (``nastran_pv/paraview/``), the package this file ships in, imported on its
+   own so the rest of that site-packages stays off ParaView's path;
+2. anything else already importable (ParaView's own packages, ``PYTHONPATH``),
+3. the vendor folder filled by ``install_deps.py`` (``locate.vendor_dir``: ``./_vendor`` in a
+   checkout, a per-user folder for an installed package, or ``NASTRAN_PV_VENDOR_DIR``),
 4. folders listed in the ``NASTRAN_PV_SITE_PACKAGES`` environment variable.
 """
 import importlib
+import importlib.machinery
+import importlib.util
 import itertools
 import os
 import sys
@@ -39,16 +44,41 @@ def _plugin_dir():
     return None
 
 
+def _import_package(root):
+    """Import nastran_pv from ``root`` alone (the site-packages this installed plugin ships in, often
+    another Python's), without putting all of ``root`` on sys.path ahead of ParaView's numpy."""
+    if "nastran_pv" in sys.modules:
+        return
+    spec = importlib.machinery.PathFinder.find_spec("nastran_pv", [root])
+    if spec is None:
+        return
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["nastran_pv"] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        del sys.modules["nastran_pv"]
+        raise
+
+
 def _bootstrap():
     here = _plugin_dir()
-    front, back = [], []
     if here:
-        front.append(os.path.join(os.path.dirname(here), "src"))
-        back.append(os.path.join(here, "_vendor"))
+        parent = os.path.dirname(here)
+        src = os.path.join(parent, "src")
+        if os.path.isdir(src):  # a checkout: <repo>/paraview next to <repo>/src
+            if src not in sys.path:
+                sys.path.insert(0, src)
+        elif os.path.basename(parent) == "nastran_pv" and os.path.isfile(os.path.join(parent, "__init__.py")):
+            _import_package(os.path.dirname(parent))  # an installed wheel: .../nastran_pv/paraview
+    try:  # nastran_pv imports without pyNastran, which may be in the vendor folder
+        from nastran_pv.locate import vendor_dir
+
+        vendor = str(vendor_dir(here)) if here else os.environ.get("NASTRAN_PV_VENDOR_DIR")
+    except ImportError:  # no nastran_pv: the reader reports what is missing on first use
+        vendor = os.path.join(here, "_vendor") if here else None
+    back = [vendor] if vendor else []
     back += [p for p in os.environ.get("NASTRAN_PV_SITE_PACKAGES", "").split(os.pathsep) if p]
-    for p in reversed(front):
-        if os.path.isdir(p) and p not in sys.path:
-            sys.path.insert(0, p)
     for p in back:  # after ParaView's own site-packages so its numpy wins
         if os.path.isdir(p) and p not in sys.path:
             sys.path.append(p)
@@ -59,7 +89,7 @@ _bootstrap()
 _HELP = (
     "nastran-pv could not import {missing}. Install pyNastran and its dependencies (cpylog,\n"
     "docopt-ng, colorama, scipy) for ParaView's Python with\n"
-    "  python paraview/install_deps.py --pvpython <path to pvpython>\n"
+    "  nastran-pv setup --pvpython <path to pvpython>   (or python paraview/install_deps.py ...)\n"
     "(it keeps a pyNastran that ParaView can already import and adds only what is missing),\n"
     "or point NASTRAN_PV_SITE_PACKAGES at a site-packages folder of a CPython with the same\n"
     "version as ParaView's Python that has pyNastran installed. Original error: {err}"

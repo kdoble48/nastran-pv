@@ -1,0 +1,2 @@
+# The ParaView plugin, copied into the wheel by setup.py (never paraview/_vendor)
+include paraview/*.py paraview/*.json

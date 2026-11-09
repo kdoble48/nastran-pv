@@ -6,8 +6,9 @@ one-click views on the Macros toolbar. For step-by-step walkthroughs, see
 
 ## Open a deck
 
-1. Tools > Manage Plugins > Load New... and select `paraview/nastran_bdf_reader.py`. Tick
-   *Auto Load* to keep it. Setting `PV_PLUGIN_PATH` to the `paraview/` folder also works.
+1. Tools > Manage Plugins > Load New... and select `nastran_bdf_reader.py`: the path that
+   `nastran-pv setup` prints (inside the installed package), or `paraview/nastran_bdf_reader.py`
+   in a clone. Tick *Auto Load* to keep it. Setting `PV_PLUGIN_PATH` to its folder also works.
 2. Use File > Open on a run deck or bulk-data file and choose **Nastran Bulk Data (nastran-pv)**.
    ParaView also offers its VisIt NASTRAN reader for some extensions.
 3. In the Properties panel, switch blocks on or off and optionally set *OP2 File Name*, which

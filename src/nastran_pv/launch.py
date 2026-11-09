@@ -133,15 +133,24 @@ def cmd_render(args) -> int:
 def cmd_setup(args) -> int:
     """Vendor pyNastran & co. for ParaView's Python and install the toolbar macros."""
     scripts = paraview_scripts_dir()
-    pvpython = args.pvpython or str(find_executable("pvpython"))
+    plugin = scripts / "nastran_bdf_reader.py"
+    print(f"plugin: {plugin}")
+    try:
+        pvpython = args.pvpython or str(find_executable("pvpython"))
+    except FileNotFoundError as exc:
+        if not args.dry_run:
+            raise
+        print(f"warning: {exc}; showing the commands with <pvpython>")
+        pvpython = "<pvpython>"
     steps = [[sys.executable, str(scripts / "install_deps.py"), "--pvpython", pvpython]]
     if not args.no_macros:
         steps.append([sys.executable, str(scripts / "install_macros.py")])
     for cmd in steps:
-        print("+", " ".join(cmd))
+        print("+", " ".join(cmd), flush=True)  # before the child writes
         if not args.dry_run and subprocess.call(cmd) != 0:
             return 1
-    print("Done. Start ParaView, load the plugin once (Tools > Manage Plugins, Auto Load) or use `nastran-pv view`.")
+    print(f"Done. Start ParaView and load the plugin once (Tools > Manage Plugins > Load New: {plugin}, "
+          "tick Auto Load), or use `nastran-pv view`.")
     return 0
 
 
