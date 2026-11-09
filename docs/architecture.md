@@ -256,7 +256,9 @@ Every gotcha found so far, by area. The few that bite on any change are also in 
     the root `FillArrays` (read back, only those are dropped: `vtkutil.drop_fill_arrays`).
   - vtkHDFWriter (VTK 9.5) writes the step offset of a field array whose size changes between steps
     wrongly (the previous offset plus this step's size), and the reader then reads past the array.
-    So `FillArrays` is padded with `""` to the same length at every step (`_StepSource.fill_width`).
+    So every field array has one size at every step (`vtkhdf._field_widths`): `FillArrays` and the
+    other string arrays are padded with `""`, a string array a step lacks is filled with `""` and
+    listed in `FillArrays`, and a numeric field array whose size changes is refused (ValueError).
   - Empty `vtkStringArray`s break the reader, so `add_string_array` skips them.
   - A collection's own field data is not written, so the root summary is copied onto the mesh
     partitions and listed in `RootFieldNames`; `vtkutil.promote_root_fields` (in `tree.gather`, so

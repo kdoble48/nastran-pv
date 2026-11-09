@@ -1129,6 +1129,8 @@ class NastranPVLoadGlyphs(_GlyphFilter):
         out = load_glyphs(sets, diag, _LOAD_SHOW[self._show % 3], self._size, _LOAD_SCALES[self._scale % 2],
                           self._stride, self._resolution)
         add_string_array(out.GetFieldData(), "LoadSetNames", [n for n, _ in sets])
+        if rtype and points.GetFieldData().GetArray("ForceSum") is not None:
+            out.GetFieldData().AddArray(points.GetFieldData().GetArray("ForceSum"))  # of the grids drawn
         return out
 
 

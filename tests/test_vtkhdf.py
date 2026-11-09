@@ -150,6 +150,51 @@ def test_fill_lists_of_different_lengths_read_back(model, tmp_path, compact):
     assert mode.GetFieldData().GetArray("Frequency") is not None
 
 
+class _StepFields:
+    """A results stand-in whose steps carry root field arrays of their own: a string array at step 0
+    only, a numeric one at step 1 only, ``ResultLabel`` at both."""
+
+    def __init__(self, sizes=None):
+        self.steps = [object(), object()]
+        self.sizes = sizes
+
+    def attach(self, mb, step, deck=None):
+        from nastran_pv import vtkutil
+
+        fd = mb.GetFieldData()
+        for name in ("StepNote", "Probe", "Table", "ResultLabel", "ResultStep"):
+            fd.RemoveArray(name)
+        if step == 0:
+            vtkutil.add_string_array(fd, "StepNote", ["first", "of two"])
+        else:
+            vtkutil.add_array(fd, "Probe", np.array([[1.0, 2.0, 3.0]]))
+        if self.sizes:
+            vtkutil.add_array(fd, "Table", np.arange(float(self.sizes[step])))
+        vtkutil.add_string_array(fd, "ResultLabel", [f"step {step}"])
+        vtkutil.add_array(fd, "ResultStep", np.array([step]))
+
+
+@pytest.mark.parametrize("compact", [True, False])
+def test_field_arrays_of_some_steps_read_back(model, tmp_path, compact):
+    """vtkHDFWriter mis-offsets a field array whose size changes between steps, and a string array
+    missing at a step changes RootFieldNames' size: every field array is one size at every step."""
+    from nastran_pv.vtkio import read_model
+
+    deck, mb = model
+    path = write_vtkhdf_series(mb, _StepFields(), tmp_path / "f.vtkhdf", deck=deck, compact=compact)
+    first, second = read_model(path, 0), read_model(path, 1)
+    note = first.GetFieldData().GetAbstractArray("StepNote")
+    assert [note.GetValue(i) for i in range(note.GetNumberOfValues())] == ["first", "of two"]
+    assert second.GetFieldData().GetAbstractArray("StepNote") is None  # filled at step 1, dropped on read
+    assert first.GetFieldData().GetArray("Probe") is None
+    np.testing.assert_allclose(vtk_to_numpy(second.GetFieldData().GetArray("Probe")).reshape(-1), [1, 2, 3])
+    for mbs, label in ((first, "step 0"), (second, "step 1")):
+        assert mbs.GetFieldData().GetAbstractArray("ResultLabel").GetValue(0) == label
+        assert mbs.GetFieldData().GetArray("ModelMass") is not None  # the root summary came back whole
+    with pytest.raises(ValueError, match="Table"):
+        write_vtkhdf_series(mb, _StepFields(sizes=(2, 3)), tmp_path / "g.vtkhdf", deck=deck)
+
+
 def test_series_without_compaction_is_equivalent(model, tmp_path):
     deck, mb = model
     res = Op2Results(make_op2())

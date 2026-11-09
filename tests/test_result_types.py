@@ -262,8 +262,8 @@ def test_spc_forces_and_their_resultant_are_rotated_into_basic(tmp_path):
         res.attach(mb, 0, deck)
         shells = get_block(mb, "Shells")
         np.testing.assert_allclose(arr(shells, "SPCForce")[row_of(shells, "NID", 2)], [0, 5, 0], atol=1e-12)
-        np.testing.assert_allclose(arr(mb, "SPCForceResultant", "field").reshape(-1), [0, 5, 0], atol=1e-12)
-        np.testing.assert_allclose(arr(mb, "SPCMomentResultant", "field").reshape(-1), [0, 0, 7], atol=1e-12)
+        np.testing.assert_allclose(arr(mb, "ResultantSPCForce", "field").reshape(-1), [0, 5, 0], atol=1e-12)
+        np.testing.assert_allclose(arr(mb, "ResultantSPCMoment", "field").reshape(-1), [0, 0, 7], atol=1e-12)
 
 
 def test_a_step_type_with_nan_fill_drops_a_stale_array():

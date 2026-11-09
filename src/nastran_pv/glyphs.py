@@ -522,7 +522,8 @@ def result_load_points(mb, type_name: str) -> vtkPolyData:
     """One point per grid that has output of result type ``type_name`` (one with a resultant:
     ``SPCForce``, ``MPCForce``, ``AppliedLoad``), as a load set for :func:`load_glyphs`: point arrays
     ``NID``, ``Force`` and ``Moment`` (the type's two arrays), at the grid's position in the first
-    block that has it (Masses last: a mass's point is its CG). Grids without output (NaN) are left out."""
+    block that has it (Masses last: a mass's point is its CG). Grids without output (NaN) are left out.
+    Field ``ForceSum``: the force sum of those grids (of a cut model: of what it keeps)."""
     from .fields.common import get_array, iter_blocks
     from .result_types import by_name
 
@@ -544,12 +545,13 @@ def result_load_points(mb, type_name: str) -> vtkPolyData:
         vecs.append(v[on])
     if not nids:
         return vtkPolyData()
-    nid, first = np.unique(np.concatenate(nids), return_index=True)
-    v = np.nan_to_num(np.concatenate(vecs)[first])
-    pd = vtkutil.polydata(np.concatenate(xyz)[first])
+    nid, xyz, v = vtkutil.first_per_id(nids, xyz, vecs)
+    v = np.nan_to_num(v)
+    pd = vtkutil.polydata(xyz)
     vtkutil.add_array(pd.GetPointData(), "NID", nid)
     vtkutil.add_array(pd.GetPointData(), "Force", v[:, :3])
     vtkutil.add_array(pd.GetPointData(), "Moment", v[:, 3:])
+    vtkutil.add_array(pd.GetFieldData(), "ForceSum", v[:, :3].sum(axis=0)[None, :])  # of the grids drawn
     return pd
 
 

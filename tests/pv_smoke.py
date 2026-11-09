@@ -972,7 +972,8 @@ def result_load_checks(pv, nv, main_reader):
     result source, and a converted VTKHDF series."""
     from vtkmodules.util.numpy_support import vtk_to_numpy
 
-    from op2_fixture import make_loads_op2, write_loads_h5
+    from nastran_pv.vtkutil import vector_text
+    from op2_fixture import LOAD_ROWS, make_loads_op2, write_loads_h5
 
     tmp = tempfile.mkdtemp()  # not removed: an open VTKHDF reader keeps its file locked
     op2 = os.path.join(tmp, "loads.op2")
@@ -990,8 +991,8 @@ def result_load_checks(pv, nv, main_reader):
         nid = list(vtk_to_numpy(shells.GetPointData().GetArray("NID")))
         f3 = vtk_to_numpy(shells.GetPointData().GetArray("SPCForce"))[nid.index(3)].tolist()
         check(np.allclose(f3, [0, 0, -50]), f"{ext}: SPCForce at grid 3 {f3}")
-        got = [model.field(n).reshape(-1).tolist() for n in ("SPCForceResultant", "AppliedForceResultant",
-                                                             "SPCMomentResultant", "AppliedMomentResultant")]
+        got = [model.field(n).reshape(-1).tolist() for n in ("ResultantSPCForce", "ResultantAppliedForce",
+                                                             "ResultantSPCMoment", "ResultantAppliedMoment")]
         check(np.allclose(got[0], spc) and np.allclose(got[1], applied)
               and np.allclose(np.add(got[2], got[3]), 0), f"{ext}: resultants balance: {got}")
         if results == op2:
@@ -1012,6 +1013,15 @@ def result_load_checks(pv, nv, main_reader):
             nv.apply("loads", reader=reader, view=view, source="Applied loads (OLOAD)", show="Forces")
             check(_point_values(lg, "NID") == {3, 6} and "Resultant force (0, 100, 50)" in _info(nv, model),
                   "Source Applied loads (OLOAD)")
+            reader.HiddenElements = "1 3"  # the reader's scope cuts the model: the text says whose numbers
+            nv.apply("loads", reader=reader, view=view, source="SPC forces")
+            drawn = _point_values(lg, "NID")
+            want = np.sum([LOAD_ROWS["spc_forces"][n][:3] for n in sorted(drawn)] or [[0, 0, 0]], axis=0)
+            text = _info(nv, model)
+            check(drawn <= {1, 3, 4} and "in the reader's scope" in text
+                  and f"Force sum of these grids {vector_text(want)}" in text
+                  and "Whole-model resultant force (0, -100, -50)" in text, f"scoped: the arrows' sum, labelled: {text!r}")
+            reader.HiddenElements = ""
             reader.ResultTypes = ["Displacement"]
             nv.apply("loads", reader=reader, view=view)
             check(_root(lg, "ArrowCount") == [0] and "No Applied loads (OLOAD) to draw" in _info(nv, model),
@@ -1032,7 +1042,7 @@ def result_load_checks(pv, nv, main_reader):
     src = nv.load_reader(series)
     t0 = (rm.timesteps(src) or [0.0])[0]  # one step: no TimestepValues
     model = rm.Model(src, t0)
-    check(np.allclose(model.field("SPCForceResultant").reshape(-1), spc)
+    check(np.allclose(model.field("ResultantSPCForce").reshape(-1), spc)
           and model.block("Constraints").GetPointData().GetArray("SPCForce") is not None,
           "converted VTKHDF series: SPCForce and its resultant")
     g = pv.NastranLoadGlyphs(Input=src)
