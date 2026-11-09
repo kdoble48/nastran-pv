@@ -18,15 +18,30 @@ All notable changes to nastran-pv are listed here. The format follows
   of the array they replace (#74).
 - Composite layups and ply results (roadmap task 13). A deck whose shells use a PCOMP or PCOMPG
   gets Shells `PlyCount` and the field table `PLY_PID PLY_Index PLY_ID PLY_MID PLY_Thickness
-  PLY_Angle PLY_Z PLY_SOUT PLY_FT` (one row per ply, `LAM=SYM` expanded, PCOMPG global ply ids);
-  other decks are unchanged. The result types `PlyStress` (`PlyStress PlyInterlaminarStress
+  PLY_Angle PLY_Z PLY_SOUT PLY_FT` (one row per ply, `LAM=SYM` and `SMCORE` expanded, PCOMPG global ply ids,
+  `-GPLYID` for the mirrored copy of a symmetric PCOMPG's ply); other decks are unchanged. The result types `PlyStress` (`PlyStress PlyInterlaminarStress
   PlyPrincipalStress PlyMaxShearStress PlyVonMises`), `PlyStrain` and `PlyFailureIndex`
   (`PlyFailureIndex PlyBondIndex PlyFailureIndexMax`, on by default) read the OP2 composite stress,
   strain and failure-index tables and the MSC/NX HDF5 `*_COMP` datasets, one ply per element:
   `--ply N` (a ply id) for ply N, which also lays its layup on the shells (`PlyThickness PlyAngle
   PlyMID PlySOUT PlyZ PlyAxis`, the ply's fibre direction), or `--ply max` (the default) for each
-  element's critical ply, with its id in `PlyStressPly` and the like. Those tables leave the
-  "not attached" report (#71).
+  element's critical ply, with its id in `PlyStressPly` and the like; `convert` names the ply types that have
+  the ply and warns about the others. Those tables leave the "not attached" report; the ply types read
+  real tables only (a complex ply table stays reported) (#71).
+- Complex, frequency and transient results (roadmap task 11). A frequency response (SOL 108/111),
+  complex modes (SOL 107/110) and a transient (SOL 109/112) load as time series in the reader and
+  convert to `.pvd` or temporal VTKHDF (compaction unchanged): one step per frequency, complex mode
+  or time (`Subcase 1 12.5 Hz`, `Subcase 1 complex mode 2 (10 Hz)`, `Subcase 1 time 0.01`; root
+  `Frequency`, `Time`). Every result type but `VonMisesMax` reads complex tables from OP2 and from
+  MSC/NX HDF5 `*_CPLX` datasets: each array that copies columns gets `<array>_Real`, `_Imag`,
+  `_Mag` and `_Phase` (degrees, Nastran's convention), and the plain arrays, derived ones included,
+  are the response at the phase angle `convert --phase` / the reader's *Phase Angle* (default 0,
+  the real part; root `PhaseAngle`). New default types `Velocity` and `Acceleration`. NPV Animate
+  Mode, Animate All Modes and Save Mode Animations turn a complex step through its phase
+  (*Nastran Deform* *Phase*), and `convert --phase-sweep N --step K` writes N phases of one
+  frequency as a series. `--random-output` (reader *Random Output*) shows a SOL 111 run's own PSD,
+  RMS and zero-crossing tables in the random arrays and views (`AccelRMS`, `DispRMS`, `AccelN0`,
+  `AccelASD`; root `RandomSource`). Existing outputs are unchanged (#72).
 - NPV Forces and NPV Stress views (`view`/`render --preset forces stress`): each block colored by its
   element forces (shells `MembraneForce`, lines `AxialForce`, bushes, springs) or by von Mises stress
   (shells at the top fibre, solids, lines `MaxStress`); `nv.apply("stress", quantity=, fibre=,
@@ -201,6 +216,8 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Fixed
 
+- `convert --random` no longer repeats the results file's warnings (unread tables, ...) after its
+  own: the random response warns only what it adds (#72).
 - `VonMisesMax` reads MSC/NX HDF5 shell stress tables that spell the shear `TXY1`/`TXY2` (TRIA3
   and the corner layouts), which it dropped before (#64).
 - A VTKHDF series whose steps fill different numbers of arrays (stresses on shells and solids at a

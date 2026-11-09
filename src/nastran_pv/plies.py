@@ -2,16 +2,18 @@
 
 A deck with a composite shell property gets, on ``Shells`` (``add_layup``, from ``build_shells``):
 
-* cell ``PlyCount``: the plies of each element's property (LAM=SYM expanded; 0 for a PSHELL);
+* cell ``PlyCount``: the plies of each element's property (LAM=SYM and SMCORE expanded; 0 for a
+  PSHELL);
 * field data ``PLY_PID PLY_Index PLY_ID PLY_MID PLY_Thickness PLY_Angle PLY_Z PLY_SOUT PLY_FT``: one
   row per ply of each composite property the shells use, by PID, from the bottom ply (``Index`` 1).
-  ``ID`` is the ply id the results use (the ply number of a PCOMP, the global ply id of a PCOMPG),
-  ``Angle`` the ply angle in degrees from the element's material axis, ``Z`` the ply's mid-plane
-  from the reference plane, ``SOUT`` 1 for SOUT=YES, ``FT`` the property's failure theory.
+  ``ID`` is the ply id the results use (the ply number of a PCOMP, the global ply id of a PCOMPG,
+  ``-GPLYID`` for a PCOMPG's mirrored copy), ``Angle`` the ply angle in degrees from the element's
+  material axis, ``Z`` the ply's mid-plane from the reference plane, ``SOUT`` 1 for SOUT=YES,
+  ``FT`` the property's failure theory.
 
 A table keyed by PID, not cells x plies arrays: see docs/design/2026-11-09-composites.md.
-:func:`attach_ply` lays one ply's layup on the elements (``PLY_ARRAYS``, for ``convert --ply`` and the
-reader's *Ply*); :func:`ply_axis` turns the material axis by a ply angle.
+:func:`attach_ply` lays one ply's layup on the elements (``PLY_ARRAYS``, for ``convert --ply``);
+:func:`ply_axis` turns the material axis by a ply angle.
 """
 from __future__ import annotations
 
@@ -27,26 +29,37 @@ PLY_ARRAYS = ("PlyThickness", "PlyAngle", "PlyMID", "PlySOUT", "PlyZ", "PlyAxis"
 LAYUP_PLY = "LayupPly"  # Shells field: the ply id PLY_ARRAYS describe
 
 
-def _given(prop) -> list[int]:
-    """The given ply of each built ply: LAM=SYM mirrors the plies given (the bottom half) above
-    them, ply n+1 = ply n, ..., 2n = ply 1."""
+def _stack(prop) -> list[tuple[int, float, bool]]:
+    """The plies a PCOMP/PCOMPG builds, from the bottom, as (given ply, thickness factor, mirrored
+    copy). LAM=SYM: the plies given are the bottom half, mirrored above them (ply n+1 = ply n, ...,
+    2n = ply 1). LAM=SMCORE: the last ply is the core, and half of each face ply goes below it and
+    half above, mirrored (QRG: "half the face sheet thicknesses above the core and the other half
+    below"). MEM, BEND and SMEAR only change which stiffness terms Nastran builds: plies as given."""
     n = len(prop.thicknesses)
-    sym = str(getattr(prop, "lam", None) or "").strip().upper() == "SYM"
-    return list(range(n)) + (list(range(n - 1, -1, -1)) if sym else [])
+    lam = str(getattr(prop, "lam", None) or "").strip().upper()
+    if lam == "SYM":
+        return [(i, 1.0, False) for i in range(n)] + [(i, 1.0, True) for i in range(n - 1, -1, -1)]
+    if lam == "SMCORE" and n > 1:
+        faces = range(n - 1)
+        return [(i, 0.5, False) for i in faces] + [(n - 1, 1.0, False)] + [(i, 0.5, True) for i in reversed(faces)]
+    return [(i, 1.0, False) for i in range(n)]
 
 
 def plies_of(prop) -> list[tuple]:
-    """(Index, ID, MID, Thickness, Angle, Z, SOUT) of each ply of a PCOMP/PCOMPG, from the bottom.
-    A PCOMPG's mirrored plies keep their global ply id (pyNastran's ``get_global_ply_ids`` fails
-    on a symmetric PCOMPG, so the mirror is taken here for every column)."""
-    given = _given(prop)
-    t = np.array([float(prop.thicknesses[i] or 0.0) for i in given])
+    """(Index, ID, MID, Thickness, Angle, Z, SOUT) of each ply of a PCOMP/PCOMPG, from the bottom
+    (:func:`_stack`). A PCOMP's plies are numbered 1, 2, ... from the bottom; a PCOMPG's keep their
+    global ply id, and the mirrored copy of a symmetric (or SMCORE) PCOMPG gets ``-GPLYID``: Nastran
+    groups composite output by global ply id, so the copy needs an address of its own
+    (``result_types.mirrored_plies`` gives its result rows the same id). pyNastran's
+    ``get_global_ply_ids`` fails on a symmetric PCOMPG, so the stack is built here for every column."""
+    stack = _stack(prop)
+    t = np.array([float(prop.thicknesses[i] or 0.0) * f for i, f, _ in stack])
     z0 = float(prop.z0) if getattr(prop, "z0", None) is not None else -0.5 * float(t.sum())
     z = z0 + np.cumsum(t) - 0.5 * t
     gids = getattr(prop, "global_ply_ids", None) if prop.type == "PCOMPG" else None
     out = []
-    for k, i in enumerate(given):
-        ply_id = int(gids[i]) if gids is not None else k + 1
+    for k, (i, _, mirrored) in enumerate(stack):
+        ply_id = (-1 if mirrored else 1) * int(gids[i]) if gids is not None else k + 1
         sout = 1 if str(prop.souts[i] or "").strip().upper() == "YES" else 0
         out.append((k + 1, ply_id, int(prop.mids[i]), float(t[k]), float(prop.thetas[i] or 0.0), float(z[k]), sout))
     return out
@@ -98,17 +111,20 @@ def read_table(block) -> dict | None:
 
 def ply_rows(table, pids, ply) -> np.ndarray:
     """Per cell, the table row of ply id ``ply`` (one id, or one per cell) of the cell's PID, or -1;
-    the first row when a property repeats an id."""
+    the first row when a property repeats an id (as ``result_types.reduce_plies`` takes the first)."""
     pids = np.asarray(pids, dtype=np.int64)
     plies = np.broadcast_to(np.asarray(ply, dtype=np.int64), pids.shape)
-    first = {}
-    for row, key in enumerate(zip(np.asarray(table["PID"]).tolist(), np.asarray(table["ID"]).tolist())):
-        first.setdefault(key, row)
-    if not len(pids):
-        return np.zeros(0, dtype=np.int64)
-    pairs, inverse = np.unique(np.column_stack([pids, plies]), axis=0, return_inverse=True)
-    rows = np.array([first.get((int(p), int(i)), -1) for p, i in pairs], dtype=np.int64)
-    return rows[inverse.reshape(-1)]
+    table_pids, table_ids = np.asarray(table["PID"], dtype=np.int64), np.asarray(table["ID"], dtype=np.int64)
+    if not len(pids) or not len(table_pids):
+        return np.full(len(pids), -1, dtype=np.int64)
+    span = int(max(np.abs(table_ids).max(), np.abs(plies).max()))  # (PID, ply id) as one int64 key
+
+    def key(p, i):
+        return p * (2 * span + 1) + (i + span)
+
+    keys, first = np.unique(key(table_pids, table_ids), return_index=True)
+    idx = vtkutil.match_ids(keys, key(pids, plies))
+    return np.where(idx >= 0, first[np.maximum(idx, 0)], -1)
 
 
 def ply_axis(material_axis, normal, angle) -> np.ndarray:
@@ -143,14 +159,10 @@ def ply_arrays(block, ply) -> dict | None:
 
 
 def _ids_text(ids) -> str:
-    """``1-4, 101-104``: sorted ids as runs."""
-    ids = sorted({int(i) for i in ids})
-    runs, start = [], ids[0]
-    for a, b in zip(ids, ids[1:] + [None]):
-        if b != a + 1:
-            runs.append(f"{start}" if start == a else f"{start}-{a}")
-            start = b
-    return ", ".join(runs)
+    """``1-4, 101-104`` (``-102 to -101`` for mirrored copies): the ids as runs."""
+    from .selection import id_runs
+
+    return ", ".join(str(a) if a == b else f"{a}{' to ' if a < 0 else '-'}{b}" for a, b in id_runs(ids))
 
 
 def attach_ply(mb, ply: int) -> list[str]:

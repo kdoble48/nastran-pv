@@ -91,6 +91,8 @@ The [field options](fields.md) add further arrays on top of these.
 | `SPCForce` | point `SPCForce` (F1-F3), `SPCMoment` (M1-M3), rotated from each grid's CD into basic; NaN on grids without output; root `ResultantSPCForce ResultantSPCMoment` | `spc_forces` / `NODAL/SPC_FORCE` (Case Control `SPCFORCES=`) |
 | `MPCForce` | point `MPCForce`, `MPCMoment`, as for `SPCForce`; root `ResultantMPCForce ResultantMPCMoment` | `mpc_forces` / `NODAL/MPC_FORCE` (`MPCFORCES=`) |
 | `AppliedLoad` | point `AppliedForce`, `AppliedMoment` (OLOAD: the load Nastran applied, GRAV and pressures included), as for `SPCForce`; root `ResultantAppliedForce ResultantAppliedMoment` | `load_vectors` / `NODAL/APPLIED_LOAD` (`OLOAD=`) |
+| `Velocity` | point `Velocity` (T1-T3), `AngularVelocity` (R1-R3), rotated from CD into basic, NaN on grids without output | `velocities` / `NODAL/VELOCITY` (`VELOCITY=`, transient and frequency response) |
+| `Acceleration` | point `Acceleration`, `AngularAcceleration`, as for `Velocity` | `accelerations` / `NODAL/ACCELERATION` (`ACCELERATION=`) |
 
 | `ShellForce` | Shells: `MembraneForce` (FX FY FXY), `BendingMoment` (MX MY MXY), `TransverseShear` (QX QY), per unit length at the centre | `force.c{tria3,tria6,triar,quad4,quad8,quadr}_force` / `ELEMENTAL/ELEMENT_FORCE/*` with `MX ... TY` |
 | `LineForce` | Lines: `AxialForce`, `Torque`, `ShearForce` (plane 1, 2), `BendingMomentA`, `BendingMomentB` (plane 1, 2: ends A and B); a CBEAM's shear, axial force and torque are at end A; rods have axial force and torque only | `force.cbar_force`, `force.cbeam_force`, `force.c{rod,onrod,tube,visc}_force` / `ELEMENT_FORCE/{BAR,BEAM,ROD,CONROD,TUBE,VISC}` |
@@ -105,10 +107,10 @@ The [field options](fields.md) add further arrays on top of these.
 | `PlyFailureIndex` | Shells, one ply per element: `PlyFailureIndex` (FP, direct stresses or strains), `PlyBondIndex` (FB, interlaminar; NaN where Nastran computed none), `PlyFailureIndexMax` (the larger of the two), `PlyFailureIndexPly` | `failure_indices.c..._composite_force` (OEFIT: a PCOMP with FT and SB); the HDF5 `ELEMENTAL/FAILURE_INDEX/*` datasets are not read (reported) |
 
 
-`Displacement`, `VonMisesMax`, `SPCForce`, `MPCForce`, `AppliedLoad`, the forces and
-`PlyFailureIndex` are attached by default (a file without a type's tables gets none of its
-arrays), the stresses and strains when chosen (`--result-types ShellStress,SolidStress` or `all`;
-`convert` prints the types it left out).
+`Displacement`, `VonMisesMax`, `SPCForce`, `MPCForce`, `AppliedLoad`, the forces, `Velocity`,
+`Acceleration` and `PlyFailureIndex` are attached by default (a file without a type's tables gets
+none of its arrays), the stresses and strains when chosen (`--result-types ShellStress,SolidStress`
+or `all`; `convert` prints the types it left out).
 The types are declared in `src/nastran_pv/result_types.py`.
 
 The resultants are per step, named like the Loads blocks' `ResultantForce`: `Resultant<array>`
@@ -144,28 +146,75 @@ the MPC forces, else the applied loads (static steps, one per subcase). [Nastran
   ask for `STRAIN(FIBER)`), and the families no type covers yet (CSHEAR, CBUSH and CELAS stresses,
   CGAP, CBEND, CFAST, CWELD and damper forces, ...).
 
+### Complex, frequency and transient results
+
+A frequency response (SOL 108, 111), complex modes (SOL 107, 110) and a transient (SOL 109, 112)
+are time series like modes: one step per frequency, complex mode or output time, labelled
+`Subcase 1 12.5 Hz`, `Subcase 1 complex mode 2 (10 Hz)` and `Subcase 1 time 0.01`. The root
+`Frequency` holds the frequency (a complex mode's damped frequency, `|Im λ| / 2π`), `Time` a
+transient step's time. Time values stay the step index.
+
+Complex steps carry every type above except `VonMisesMax` and the ply types (an envelope or a
+chosen ply has no phase), from OP2
+and from the HDF5 `*_CPLX` datasets (each field `F` as `FR + i FI`):
+
+* **The arrays** (`Displacement`, `SPCForce`, `MembraneForce`, `StressTop`, `VonMisesTop`, ...)
+  are the response at the *phase angle* θ, `Re(U e^(iθ)) = Real cos θ − Imag sin θ` (CLI
+  `--phase`, the reader's *Phase Angle*; default 0, the real part), root `PhaseAngle`. So the
+  views, filters, Warp By Vector and the derived principals and von Mises work at that instant.
+* **The parts**: each array that copies columns gets `<array>_Real`, `<array>_Imag`,
+  `<array>_Mag` and `<array>_Phase` (`Displacement_Mag`, `MembraneForce_Phase`, ...), the same at
+  any θ. The phase is in degrees in [0, 360), as Nastran prints it: the response is
+  `Mag cos(ωt + Phase)`. A vector's `_Mag` is per component; its vector magnitude is the
+  amplitude. Magnitudes and derived arrays (`DisplacementMagnitude`, principals, von Mises,
+  max shear) have no parts.
+* **Resultants** are those of the forces at θ.
+* **Reported, not attached**: complex tables no type reads (complex beam stresses at the C-F
+  points, composite plies, ...). pyNastran's complex bar stresses have no S-MAX/S-MIN, so
+  `MaxStress`/`MinStress` of a bar are NaN on a complex step (rods keep theirs).
+
+*Nastran Deform* animates a complex step through its phase (NPV Animate Mode and the mode
+animations, [ParaView](paraview.md#glyph-filters)), and `convert --phase-sweep N` writes the
+phases of one frequency as a series ([CLI](cli.md#converting)). The SOL 111 PSD and RMS tables
+are the random views' input ([Random vibration](random-vibration.md#sol-111-output)). Design:
+`docs/design/2026-11-09-dynamic-results.md`.
+
 ## Composites
 
 A deck whose shells use a PCOMP or PCOMPG gets the layup on the `Shells` block (other decks get
 none of this):
 
-* cell `PlyCount`: the plies of each element's property, `LAM=SYM` expanded (0 for a PSHELL or
-  PSHEAR). `Thickness` stays the total, `MID` the first ply's material and `MassPerArea` all plies.
+* cell `PlyCount`: the plies of each element's property, `LAM=SYM` and `SMCORE` expanded (0 for
+  a PSHELL or PSHEAR). `Thickness` stays the total, `MID` the first ply's material and
+  `MassPerArea` all plies.
 * field data `PLY_PID PLY_Index PLY_ID PLY_MID PLY_Thickness PLY_Angle PLY_Z PLY_SOUT PLY_FT`: one
   row per ply of each composite property the shells use, by PID and from the bottom ply
   (`PLY_Index` 1). `PLY_ID` is the ply id the results use: the ply number of a PCOMP, the global
   ply id of a PCOMPG (a ply shared by several properties, at any position in each). `PLY_Angle` is
   in degrees from the element's material axis, `PLY_Z` the ply's mid-plane from the reference
   plane (`Z0`, default -T/2), `PLY_SOUT` 1 for SOUT=YES, `PLY_FT` the property's failure theory
-  (empty when blank). With `LAM=SYM` the plies given are the bottom half, mirrored above them (ply
-  n+1 is ply n, ..., 2n is ply 1; a PCOMPG's mirrored plies keep their global ids).
+  (empty when blank).
+
+`LAM` builds the stack as Nastran does:
+
+* `SYM`: the plies given are the bottom half, mirrored above them (ply n+1 is ply n, ..., 2n is
+  ply 1).
+* `SMCORE`: the last ply given is the core; half of each face ply goes below it and half above,
+  mirrored (n given plies make 2n - 1, the core in the middle).
+* `MEM`, `BEND`, `SMEAR`: only the stiffness terms Nastran builds change; the plies stay as given.
+
+A PCOMPG lists a mirrored ply (`SYM`, or a face ply of `SMCORE`) under its global ply id twice, and
+Nastran groups ply output by global ply id. So nastran-pv addresses the mirrored (upper) copy as
+`-GPLYID`, in `PLY_ID`, in `--ply` and in the results, where an element's second row with the same
+ply id is that copy. Nastran's documentation does not say how it labels that copy; this is the
+reading that keeps both copies.
 
 The layup is a table per property rather than one array per ply: cells x plies arrays would be
 large on a big laminate, could not hold NaN for the integer columns and colour badly in ParaView.
 It is block field data, so it travels with `Shells` into `.vtm`, VTKHDF and every piece of the
 reader's model tree.
 
-**One ply.** `convert --ply N` (the reader's *Ply*) lays ply id `N`'s layup on the elements:
+**One ply.** `convert --ply N` lays ply id `N`'s layup on the elements (in ParaView: the reader's *Ply*, plugin #74):
 `PlyThickness PlyAngle PlyMID PlySOUT PlyZ PlyAxis` (NaN, or -1 for `PlyMID`/`PlySOUT`, where an
 element's property has no ply `N`) and the field `LayupPly` = N. `PlyAxis` is the ply's
 1-direction: `MaterialAxis` turned by the ply angle about `Normal`, as the PCOMP measures it. A ply
@@ -178,7 +227,9 @@ element's critical ply: the ply with the largest `PlyVonMises`, `PlyMaxShearStra
 `PlyFailureIndexMax` (with `PlyFailureIndex`, Nastran's failure index of the element). Every array
 of a type then holds that one ply, and `<type>Ply` (`PlyStressPly`, ...) its ply id. Principals,
 max shear and von Mises are computed from the components, for OP2 and HDF5 alike; strains have
-engineering shear, as for shells. `convert` says which ply it attached (`ply results: ply 3`).
+engineering shear, as for shells. `convert` says which ply and types it attached
+(`ply results: ply 3 (PlyStress)`), and warns about a selected ply type that has no value at that
+ply (`PlyStrain: no element has ply 2 in the results at this step`: SOUT=NO, or not written).
 
 ## Derived quantities
 

@@ -37,15 +37,17 @@ def _cell(block, name):
 LOAD_TYPES = ("SPCForce", "MPCForce", "AppliedLoad")
 FORCE_TYPES = ("ShellForce", "LineForce", "BushForce", "SpringForce")
 STRESS_TYPES = ("ShellStress", "SolidStress", "LineStress", "ShellStrain", "SolidStrain", "LineStrain")
+MOTION_TYPES = ("Velocity", "Acceleration")
 PLY_TYPES = ("PlyStress", "PlyStrain", "PlyFailureIndex")
-ALL_TYPES = ("Displacement", "VonMisesMax") + LOAD_TYPES + FORCE_TYPES + STRESS_TYPES + PLY_TYPES
-DEFAULTS = ("Displacement", "VonMisesMax") + LOAD_TYPES + FORCE_TYPES + ("PlyFailureIndex",)
+ALL_TYPES = ("Displacement", "VonMisesMax") + LOAD_TYPES + FORCE_TYPES + STRESS_TYPES + MOTION_TYPES + PLY_TYPES
+DEFAULTS = ("Displacement", "VonMisesMax") + LOAD_TYPES + FORCE_TYPES + MOTION_TYPES + ("PlyFailureIndex",)
 
 
 def test_registry_starts_with_the_first_types():
     """Appended to, never reordered: the first types and their declarations are pinned; forces,
-    stresses and strains (roadmap task 9) come after the loads, forces on by default; the composite
-    plies (task 13) after them, the failure indices on by default."""
+    stresses and strains (roadmap task 9) come after the loads, forces on by default; velocities
+    and accelerations (task 11) and the composite plies (task 13) after them, the failure indices
+    on by default."""
     assert [t.name for t in rt.REGISTRY] == list(ALL_TYPES)
     disp, vm = rt.REGISTRY[:2]
     assert disp is rt.DISPLACEMENT and vm is rt.VON_MISES_MAX
@@ -203,9 +205,9 @@ PSHELL,1,1,.1,1
 CQUAD4,1,1,1,2,3,4
 """
 
-VELOCITY = rt.ResultType(  # a type no registry has: declared here, read with no reader code
-    "Velocity", "point", rt.RESULT_BLOCKS,
-    (rt.ArraySpec("Velocity", (0, 1, 2)), rt.ArraySpec("AngularVelocity", (3, 4, 5))),
+SPEED = rt.ResultType(  # a type no registry has: declared here, read with no reader code
+    "GridSpeed", "point", rt.RESULT_BLOCKS,
+    (rt.ArraySpec("Speed", (0, 1, 2)), rt.ArraySpec("Spin", (3, 4, 5))),
     op2=rt.Op2Source(("velocities",)),
     h5=rt.H5Source(("NODAL/VELOCITY",), fields=("X", "Y", "Z", "RX", "RY", "RZ")),
     frame="grid_cd")
@@ -248,24 +250,26 @@ def _cd_deck(tmp_path):
 
 
 def test_a_new_point_type_is_declared_not_coded(tmp_path):
-    """A velocity type as a declaration: read, rotated from CD into basic, written with NaN where a
-    grid has no row, on the OP2 and the HDF5 reader alike."""
+    """A grid vector type as a declaration (it reads the velocity tables, like the registry's
+    Velocity): read, rotated from CD into basic, written with NaN where a grid has no row, on the
+    OP2 and the HDF5 reader alike."""
     deck = _cd_deck(tmp_path)
-    registry = rt.REGISTRY + (VELOCITY,)
+    registry = rt.REGISTRY + (SPEED,)
     h5 = _cd_h5(tmp_path / "v.h5", "NODAL/VELOCITY")
     for res in (Op2Results(_cd_op2("velocities"), registry=registry), H5Results(h5, registry=registry)):
-        assert res.available == ("Displacement", "Velocity")
+        assert res.available == ("Displacement", "Velocity", "GridSpeed")
         mb = build_multiblock(deck)
         res.attach(mb, 0, deck)
         shells = get_block(mb, "Shells")
-        v, w = arr(shells, "Velocity"), arr(shells, "AngularVelocity")
-        np.testing.assert_allclose(v[row_of(shells, "NID", 2)], [0, 5, 0], atol=1e-12)
-        np.testing.assert_allclose(w[row_of(shells, "NID", 1)], [0, 0, 2], atol=1e-12)
-        assert np.isnan(v[row_of(shells, "NID", 3)]).all()  # no output there
+        for linear, angular in (("Speed", "Spin"), ("Velocity", "AngularVelocity")):
+            v, w = arr(shells, linear), arr(shells, angular)
+            np.testing.assert_allclose(v[row_of(shells, "NID", 2)], [0, 5, 0], atol=1e-12)
+            np.testing.assert_allclose(w[row_of(shells, "NID", 1)], [0, 0, 2], atol=1e-12)
+            assert np.isnan(v[row_of(shells, "NID", 3)]).all()  # no output there
         res.select(["Displacement"]).attach(mb, 0, deck)
-        assert _point(shells, "Velocity") is None
-    with pytest.raises(ValueError, match="Velocity"):
-        Op2Results(_cd_op2("velocities")).select(["Velocity"])  # not in the default registry
+        assert _point(shells, "Speed") is None and _point(shells, "Velocity") is None
+    with pytest.raises(ValueError, match="GridSpeed"):
+        Op2Results(_cd_op2("velocities")).select(["GridSpeed"])  # not in the default registry
 
 
 def test_spc_forces_and_their_resultant_are_rotated_into_basic(tmp_path):
