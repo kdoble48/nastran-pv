@@ -22,7 +22,7 @@ All notable changes to nastran-pv are listed here. The format follows
     with the applied, SPC and MPC forces inside it as the check; without GPFORCE, from equilibrium.
   - The `GridPointForce` result type (OP2 `grid_point_forces`, HDF5 `NODAL/GRID_FORCE`): the
     balance's element rows as a root table per step (a new `table` location in the registry),
-    MYSTRAN's negated OP2 rows normalised (#PR).
+    MYSTRAN's negated OP2 rows normalised (#73).
 - NPV Forces and NPV Stress views (`view`/`render --preset forces stress`): each block colored by its
   element forces (shells `MembraneForce`, lines `AxialForce`, bushes, springs) or by von Mises stress
   (shells at the top fibre, solids, lines `MaxStress`); `nv.apply("stress", quantity=, fibre=,
