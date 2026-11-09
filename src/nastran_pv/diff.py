@@ -110,7 +110,7 @@ class ModelDiff:
     grids: dict = field(default_factory=dict, repr=False)
     masses_b: dict = field(default_factory=dict, repr=False)
     removed: list = field(default_factory=list, repr=False)  # (A block, A cell ids, delta masses)
-    removed_masses: list = field(default_factory=list, repr=False)  # (EID, xyz, mass)
+    removed_masses: list = field(default_factory=list, repr=False)  # (EID, xyz, mass, NID)
     items: dict = field(default_factory=dict, repr=False)  # B block -> v2 status/reason arrays
     removed_legs: list = field(default_factory=list, repr=False)  # (A block, A cell ids, item type)
     removed_points: list = field(default_factory=list, repr=False)  # (item type, EID, SID, NID, xyz, mass)
@@ -237,8 +237,10 @@ class _Side:
         self.conc = None
         pd = masses.GetPointData() if masses is not None else None
         if masses is not None and masses.GetNumberOfPoints() and pd.GetArray("EID") and pd.GetArray("Mass"):
+            n = masses.GetNumberOfPoints()
             self.conc = {"eid": get_array(pd, "EID").astype(np.int64), "mass": get_array(pd, "Mass").astype(float),
-                         "xyz": vtkutil.to_numpy(masses.GetPoints().GetData()).reshape(-1, 3).astype(float)}
+                         "xyz": vtkutil.to_numpy(masses.GetPoints().GetData()).reshape(-1, 3).astype(float),
+                         "nid": get_array(pd, "NID", np.full(n, -1)).astype(np.int64)}
 
     def diagonal(self) -> float:
         if not len(self.xyz):
@@ -504,7 +506,7 @@ def diff_models(a, b, tol: Tolerances | None = None) -> ModelDiff:
         gone = np.flatnonzero(vtkutil.match_ids(np.sort(eb), ea) < 0)
         conc_counts["Removed"] = len(gone)
         for k in gone:
-            removed_masses.append((int(ea[k]), A.conc["xyz"][k], float(A.conc["mass"][k])))
+            removed_masses.append((int(ea[k]), A.conc["xyz"][k], float(A.conc["mass"][k]), int(A.conc["nid"][k])))
             row("mass", int(ea[k]), "removed", "Mass", float(A.conc["mass"][k]), None)
     if compare_conc:
         summary.append(conc_counts)
@@ -659,7 +661,7 @@ def removed_block(a, d: ModelDiff):
         if nid is not None:
             vtkutil.add_array(out.GetPointData(), "NID", nid)
         pieces.append((out, keep, delta))
-    points = [(MASS_ITEM, e, -1, -1, x, m) for e, x, m in d.removed_masses] + list(d.removed_points)
+    points = [(MASS_ITEM, e, -1, g, x, m) for e, x, m, g in d.removed_masses] + list(d.removed_points)
     if points:
         eids = np.array([p[1] for p in points], dtype=np.int64)
         xyz = np.array([p[4] for p in points], dtype=float).reshape(-1, 3)
@@ -779,6 +781,97 @@ def show_only(b, statuses=ALL_STATUSES, reasons: int = 0, removed: bool = True):
         return out
 
     return visit(b)
+
+
+def status_counts(data, association) -> dict:
+    """``{DiffStatus: count}`` of a block, or of a multiblock's leaves (``association`` "POINTS" or
+    "CELLS"): what an overlay draws in a comparison, for its summary."""
+    leaves = [] if data is None else [ds for _, ds in iter_blocks(data)] if data.IsA("vtkMultiBlockDataSet") \
+        else [data]
+    counts = {}
+    for ds in leaves:
+        status = get_array(ds.GetPointData() if association == "POINTS" else ds.GetCellData(), "DiffStatus")
+        if status is not None:
+            for s, c in zip(*np.unique(np.asarray(status).astype(np.int64), return_counts=True)):
+                counts[int(s)] = counts.get(int(s), 0) + int(c)
+    return counts
+
+
+def removed_count(removed, item: str) -> int:
+    """How many of A's removed items (a diff's ``Removed`` block, or None) are of ``item``
+    (``diff_items.ITEM_TYPES``: "element", "mass", ...)."""
+    from .diff_items import ITEM_TYPES
+
+    types = get_array(removed.GetCellData(), "ItemType") if removed is not None else None
+    return 0 if types is None else int((np.asarray(types) == ITEM_TYPES.index(item)).sum())
+
+
+def change_text(counts: dict, removed: int = 0) -> str:
+    """'changes: 1 changed, 2 added; 1 removed (red)' from :func:`status_counts` and a removed count."""
+    parts = [f"{counts[s]} {STATUS_NAMES[s]}" for s in (ADDED, CHANGED, PROPERTY) if counts.get(s)]
+    return "changes: " + (", ".join(parts) or "none") + (f"; {removed} removed (red)" if removed else "")
+
+
+# --------------------------------------------------------------- cached outputs
+def _attrs(ds):
+    """``(key, attribute container)`` of a block's point, cell and field data (field only for a root)."""
+    if ds.IsA("vtkMultiBlockDataSet"):
+        return [("field", ds.GetFieldData())]
+    return [("point", ds.GetPointData()), ("cell", ds.GetCellData()), ("field", ds.GetFieldData())]
+
+
+def _names(attr) -> set:
+    return {attr.GetAbstractArray(i).GetName() for i in range(attr.GetNumberOfArrays())} - {None, ""}
+
+
+def _paired(annotated, source):
+    """``(path, source block, annotated block)`` per block path both have, the roots ("") first."""
+    blocks = dict(iter_blocks(annotated))
+    return [("", source, annotated)] + [(path, ds, blocks[path]) for path, ds in iter_blocks(source)
+                                        if path in blocks]
+
+
+def _written(a_attr, s_attr) -> set:
+    """Names of ``a_attr``'s arrays that are not ``s_attr``'s own array of that name: what was added
+    or replaced since ``a_attr`` was a shallow copy of ``s_attr``."""
+    out = set()
+    for name in _names(a_attr):
+        mine, theirs = a_attr.GetAbstractArray(name), s_attr.GetAbstractArray(name)
+        if theirs is None or mine.__this__ != theirs.__this__:
+            out.add(name)
+    return out
+
+
+def own_arrays(annotated, source) -> dict:
+    """What :func:`annotate` wrote on ``annotated`` (a ``shallow_clone`` of ``source``, annotated):
+    ``{block path ("" for the root): {"point"/"cell"/"field": names}}`` of the arrays that are not
+    ``source``'s: new ones, and those annotate replaced under a name ``source`` already had (a diff
+    output used as B carries its own ``DiffStatus``). Call it right after annotate."""
+    return {path: {key: _written(a_attr, s_attr) for (key, a_attr), (_, s_attr) in zip(_attrs(a), _attrs(s))}
+            for path, s, a in _paired(annotated, source)}
+
+
+def reattach(annotated, source, own) -> None:
+    """Bring a cached diff output up to date with the model it was made from. A reader replaces its
+    per-step arrays (``Displacement``, results, random response) in place, on the same multiblock, so a
+    diff kept per model content puts ``source``'s point, cell and field arrays on ``annotated``'s blocks
+    of the same path, by reference, and drops the ones ``source`` no longer has, except ``own``
+    (:func:`own_arrays`: what annotate wrote)."""
+    for path, s, a in _paired(annotated, source):
+        mine = own.get(path, {})
+        for (key, a_attr), (_, s_attr) in zip(_attrs(a), _attrs(s)):
+            written = mine.get(key, set())
+            for name in _names(a_attr) - _names(s_attr) - written:
+                a_attr.RemoveArray(name)
+            for i in range(s_attr.GetNumberOfArrays()):
+                arr = s_attr.GetAbstractArray(i)
+                name = arr.GetName()
+                if not name or name in written:  # annotate's own, though the source has one of that name
+                    continue
+                held = a_attr.GetAbstractArray(name)
+                if held is None or held.__this__ != arr.__this__:
+                    a_attr.RemoveArray(name)
+                    a_attr.AddArray(arr)
 
 
 # ------------------------------------------------------------------- report

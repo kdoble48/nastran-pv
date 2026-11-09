@@ -1,0 +1,22 @@
+$ Modified model (B) of a same-named pair: same_name/a/model.bdf is the reference, with the same
+$ file name. vs A: shell 3, CONM2 202 and CBUSH 501 removed (grids 8, 9 too), shell 4 added
+$ (a "stringer" on grids 4 5 11 10), CONM2 201 2.0 -> 3.0 (the heavier engine mass).
+GRID,1,,0.,0.,0.
+GRID,2,,1.,0.,0.
+GRID,3,,2.,0.,0.
+GRID,4,,0.,1.,0.
+GRID,5,,1.,1.,0.
+GRID,6,,2.,1.,0.
+GRID,7,,1.,1.,1.
+GRID,10,,0.,2.,0.
+GRID,11,,1.,2.,0.
+CQUAD4,1,1,1,2,5,4
+CQUAD4,2,1,2,3,6,5
+CQUAD4,4,2,4,5,11,10
+PSHELL,1,1,0.1
+PSHELL,2,1,0.2
+MAT1,1,70000.,,0.3,2.0
+CONM2,201,7,,3.0
+RBE2,301,5,123456,7
+SPC1,1,123456,1,4
+FORCE,10,3,,1.,0.,0.,1.

@@ -116,7 +116,8 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   coordinate systems from the root `CORD_*`/`GRIDCS_*` tables (`coords.py`, written by `assemble`;
   `CoordSystemCount` marks files that have them, older ones skip with `ModelDiff.notes`).
   `annotate` writes `DiffStatus`/`DiffReason`/deltas, a `Removed` block (in none of the mesh-block
-  lists; `ItemType` per cell) and `DIFF_*`/`DIFFMASS_*`/`DIFFLOAD_*` tables onto B. Used
+  lists; `ItemType` per cell, point `NID` on every item) and `DIFF_*`/`DIFFMASS_*`/`DIFFLOAD_*`
+  tables onto B. Used
   by `diff`, `convert --diff-against`, the *Nastran Diff* proxy (two inputs) and the `diff` view;
   `nastran_views.side_by_side` adds a second, camera-linked view. The reader tags its output with
   `NPVWholeModel` (field string + array signature) so a Nastran Diff fed directly by it diffs the
@@ -124,13 +125,24 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   object identity cannot be used. `Tolerances` (frozen, hashable) also carries what is compared:
   `kinds` (`KINDS`; unchecked ones skip with a note), `ignore_moves`, `grid_absolute`, per-kind
   `load`/`stiffness`/`mass` and an absolute `floor`; `show_only` filters an annotated output by
-  status, reason bits and the Removed block (display only: the proxy caches the annotated B per
-  input objects + MTimes + `Tolerances`).
+  status, reason bits and the Removed block (display only). The proxy caches the annotated B per
+  model content (a reader's whole multiblock, which visibility and time steps leave as it is; else
+  the input object + MTime) + `Tolerances`; on a cache hit `reattach` puts the reader's per-step
+  arrays back on a shallow clone of it, never on the kept output that earlier outputs share
+  (`own_arrays`: what annotate wrote, by identity, stays). Its output 0 carries `NPVDiff`, naming a
+  `vtkWeakReference` to the filter (a Python weakref dies with the wrapper ParaView drops), whose `_entry` (the whole annotated B, both readers' registry tags,
+  A's whole model, the Show settings, the output's leaf signature) the comparison's *Nastran Scope*
+  uses: its cached cut only for the Diff's own output (`_leaf_signature`: ParaView hands the next
+  filter new datasets with the same points), a fresh cut for a moved copy (`_structure` matches),
+  else the input as it is.
 - `selection.py`: selection from a file of IDs. `read_ids` reads CSV/TSV/text/Excel/JSON (ranges,
   `THRU`/`BY`; the key comes from the column header) into an `IdList`; `item_masks` matches it per
   block (EID/PID/MID/FAMILY/GROUP, NID with `grids="all"|"any"`; masses, SPCs and loads on the grids
   of a selected cell join); `apply_selection` keeps the selection or marks it (`Selected`,
-  root `SelectionInfo`). Used by `--select` (applied after the field options) and, through
+  root `SelectionInfo`). `scope_masks` is the overlays' join (R2); `comparison_masks` cuts a diff
+  output with it by B's scope and its Removed block by A's (`removed_mask`: A's kept items by EID,
+  loads and SPCs by set and grid); `ScopedCopy` holds such a cut and re-slices only the arrays a new
+  time step replaced. Used by `--select` (applied after the field options) and, through
   `tree.Visibility`, by the reader's *Selection File* and the NPV Show Only/Hide/Highlight File macros.
 - `store.py`: SQLite in long format (`runs`, `elements`, `nodes`, `element_values`,
   `node_values`), plus `<db>_vtm/run_<id>.vtm`.
@@ -172,7 +184,9 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   (masses, bushes, loads, SPCs, beam sections), the deform filter (it writes the scale it applied as
   root `DeformScale`), *Nastran Scope* (after the model's deform: the overlays' copy of the model
   cut by `selection.scope_masks`, moved by `DeformScale`; both deforms look grid displacements up
-  in the whole model, `Deformer(grids=)`), *Nastran Files* (the `Files` checklist and
+  in the whole model, `Deformer(grids=)`; on a Nastran Diff's output, the comparison's layers: the
+  Diff's whole annotated B cut by `selection.comparison_masks` of both readers' current scopes, then
+  the Diff's Show filter), *Nastran Files* (the `Files` checklist and
   tree on any model, converted files included), three field filters, four topology
   filters (grow, parts, path, model check) and the two-input *Nastran Diff*.
   - Shared settings are class decorators, one PropertyGroup each: `_with(label, setters)` copies
@@ -195,15 +209,36 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
     model tree is cached by the visibility settings too; its checklists are filled in
     `RequestInformation`, before the first Apply.
 - `paraview/nastran_views.py`: view functions (`apply(name)`) on the deck reader or a converted
-  `.vtm`/VTKHDF (`find_reader`, `is_model_file`: root field `DeckPath` or `ModelMass`; `deck_reader` guards the
-  commands that need the deck), `index_colors`, the selection
+  `.vtm`/VTKHDF (`subject(view)`: the model follows the view; `find_reader`, `is_model_file`: root
+  field `DeckPath` or `ModelMass`; `deck_reader` guards the commands that need the deck),
+  `index_colors`, the selection
   commands (grow/path from selection, Femap-style show only/hide/show all, show only/hide/highlight
-  from an ID file), the diff view and `side_by_side`, and the macro entry point `run_macro`
+  from an ID file), the diff view, `side_by_side` and `single`, and the macro entry point `run_macro`
   (`ACTIONS` for the macros that are not views).
   - Scene layers: one `scene.Scene` per render view (`scene_of`): one coloring layer plus named
-    overlay layers, each the objects `_recorded` saw shown through `_show`. `apply` replaces the
-    coloring or adds/toggles an overlay and hides only what the dropped layer owned (`_hide`, per
-    lookup table); `clear` (NPV Clear) is the full reset.
+    overlay layers, each the objects `_recorded` saw shown through `_show` (with the view's
+    arguments, `Layer.args`, to draw it again). `apply` replaces the coloring or adds/toggles an
+    overlay and hides only what the dropped layer owned (`_hide`, per lookup table); `clear` (NPV
+    Clear) is the full reset of the layers.
+  - Which model (R4): `subject(view)` is a comparison side's model by its role (from the Diff's
+    sides, `diff_sides`, else `Scene.side` for a pair without a diff), else the scene's model unless
+    the user selected another model's object since the last command (`_FINISHED`), else the active
+    source's. `owner(src)` resolves a pick: through a Diff to B, or to A for an object that draws
+    the Removed block.
+  - Comparisons (R3): `Scene.role` ("A"/"B"), `partner` (the other view's id: `_SCENES` holds both
+    views of a pair) and `diff`. `_begin_comparison` (NPV Diff) takes the Diff a model is in
+    (`diff_with`, either side) or, for a given pair of models, `diff_for(b, a)` (one with exactly
+    those sides, else a new one). B's side is a `Model(diff=, role="B")` whose data and
+    every extract and overlay come from `compared(reader, diff)`: `NPV diff scope` (Nastran Scope on
+    the Diff) then `NPV deform diff` (a B deform, so `set_deformation` moves it); its objects are
+    named `NPV diff <what> [B]` for B's own NPV diff and `NPV diff <id> <what> [B]` for any other
+    (`_diff_what`), so comparisons sharing B keep apart, and overlays are colored by `DiffStatus`
+    (the glyph filters carry it).
+    `_draw` adds A's removed items (`removed_layer`: a Threshold on `ItemType`, `REMOVED_ITEMS`):
+    the elements under every coloring, an overlay's kind with the overlay. A pair (`side_by_side`)
+    runs every `apply` in both views (`_pair`), A's side as a single model plus the removed layer,
+    and shares the coloring's legend or range (`_share_coloring`); a session change redraws a view's
+    layers (`_redraw`). Visibility commands write both readers by ID (`_scope_readers`).
   - Overlays follow the scope (R2): every overlay's glyph filters and extracts (`NPV scoped <block>`)
     draw from `scoped(model)`, the `NPV scope` filter (*Nastran Scope*) after `NPV deform`; its counts
     and "nothing to draw" checks use `Model.scoped(name)`, and `scope_active(reader)` (the reader's
@@ -213,7 +248,8 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   - The shared `NPV info` text belongs to no layer: `Scene.info` names the layer that wrote it last,
     and `apply` hides it when that layer goes (an overlay toggled off, a coloring replaced by one
     that writes none). `scene_of` empties a scene whose reader was deleted and hides what is left
-    of it in the view (its objects still open, the `NPV ...` text).
+    of it in the view (its objects still open, the `NPV ...` text); a deleted Diff or model ends the
+    comparison the same way, and a closed partner view ends the pair.
   - Mode animation: `mode_times` (the reader's steps, or one step for a converted single-step
     file with a `Displacement`), `animate_modes`/`animate_mode` and `save_mode_animations`. They
     run inside `_kept_view`, which puts back the view's time and every NPV deform scale, and
@@ -280,7 +316,8 @@ Every gotcha found so far, by area. The few that bite on any change are also in 
   C++ (an observer, a logger the deck keeps), because Python's garbage collector cannot see it: a
   deleted reader or checklist filter was never freed, caches and all. Checklist observers use
   `vtkutil.modified_callback` (a `vtkWeakReference`), and `load_deck` lets go of the caller's
-  progress when the read ends. pv_smoke deletes a reader and its filters and checks they are freed.
+  progress when the read ends. pv_smoke deletes a reader and its filters (a Diff and its Scope too)
+  and checks they are freed.
 - VTK reports the observers added through a wrapper to Python's garbage collector
   (`PyVTKObject_Traverse`). When the cyclic collector frees a wrapper, it clears those observers
   first, so a `DeleteEvent` observer would run cleared and crash. `vtkutil` keeps each

@@ -59,6 +59,22 @@ def replace_array(attr, name, values, skip_all_nan=True):
     vtkutil.add_array(attr, name, np.asarray(values), skip_all_nan=skip_all_nan)
 
 
+def set_id_of_name(name) -> int:
+    """The set id in a load set block name (``LOAD_1001`` -> 1001, the inverse of
+    ``builders.loads.LoadSet.name``), else -1."""
+    try:
+        return int(str(name).rsplit("_", 1)[1])
+    except (IndexError, ValueError):
+        return -1
+
+
+def load_set_id(ds, name) -> int:
+    """The set id of a ``Loads/*`` or ``Pressures/*`` block: its ``LoadSet`` field value, else the
+    number in its block ``name``, else -1."""
+    sid = get_array(ds.GetFieldData(), "LoadSet")
+    return int(sid.reshape(-1)[0]) if sid is not None and sid.size else set_id_of_name(name)
+
+
 def mpc_legs(ds):
     """Mask of the MPC legs among ``ds``'s cells, whose ``EID`` is the MPC set id, not an element id;
     None without a ``ConnectorType`` array. The codes resolve through the block's
