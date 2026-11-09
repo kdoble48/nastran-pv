@@ -218,10 +218,8 @@ class _Side:
             if nid is not None and ds.GetPoints() is not None:
                 nids.append(nid.astype(np.int64))
                 xyz.append(vtkutil.to_numpy(ds.GetPoints().GetData()).reshape(-1, 3))
-        nid = np.concatenate(nids) if nids else np.zeros(0, dtype=np.int64)
-        pts = np.concatenate(xyz) if xyz else np.zeros((0, 3))
-        self.nid, first = np.unique(nid, return_index=True)
-        self.xyz = pts[first].astype(float)
+        self.nid, self.xyz = vtkutil.first_per_id(nids, xyz)
+        self.xyz = self.xyz.astype(float)
         self.cells = {}
         for name, ds in self.mesh.items():
             cd = ds.GetCellData()

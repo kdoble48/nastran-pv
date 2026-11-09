@@ -18,6 +18,14 @@ All notable changes to nastran-pv are listed here. The format follows
   NPV Diff 2.1 s -> 0.75 s, NPV Masses 0.9 s -> 0.14 s). The mass, bush, load and SPC glyphs and beam
   sections carry `DiffStatus`, and the diff's Removed block knows the grid of a removed mass or bush.
   `tests/data/same_name/` holds a same-named pair (#67).
+- SPC forces, MPC forces and applied loads (OLOAD) as the result types `SPCForce`, `MPCForce` and
+  `AppliedLoad`, from OP2 and MSC/NX HDF5: point `SPCForce SPCMoment`, `MPCForce MPCMoment` and
+  `AppliedForce AppliedMoment` on the result blocks (rotated from CD into basic, NaN without
+  output) and, per step, the root resultants `Resultant<array>` (the moment about the basic
+  origin), which `convert` prints for the attached step. A run without displacements takes its
+  steps from these tables. *Nastran Load Glyphs* gains *Source* to draw them as arrows, one per
+  grid with output, and the loads view gives their resultant (the scope's force sum when the
+  reader's scope cuts the model) (#63).
 - Card report: every card no block draws is counted per card type and reason (not drawn, scalar
   points, grounded, patch form, heat transfer, matrix input, superelement, not read), with its
   first ids. `convert` prints it, `stats` and `check` on stderr, the reader in Output Messages,
@@ -75,6 +83,14 @@ All notable changes to nastran-pv are listed here. The format follows
 - Model tools: grow, parts, path and model checks with per-card-type traversal rules (#5).
 - Project skills for using and extending nastran-pv (#4).
 - Interactive 3D gallery and docs site on GitHub Pages (#1).
+- The wheel carries the ParaView plugin, views, macros and installers (`nastran_pv/paraview/`), so
+  `pip install` of a wheel and `nastran-pv setup` work without a clone. For an installed package,
+  `install_deps.py` vendors into a per-user folder, one per ParaView Python (so ParaView 5.13 and
+  6.0 both work from one install), and `NASTRAN_PV_VENDOR_DIR` overrides it; `setup` prints the
+  plugin path, and `setup --dry-run` works without ParaView. A plugin loaded from a clone also
+  looks in the per-user folder; `setup` refuses a Microsoft Store Python, whose writes under AppData
+  ParaView cannot see. CI builds the wheel (from the sdist and from the tree) and checks it in a
+  fresh venv (#58).
 
 ### Changed
 
@@ -106,9 +122,17 @@ All notable changes to nastran-pv are listed here. The format follows
   without `--parts` or `--grow` is an error instead of being ignored; the run store's `elements`
   table holds the Connectors elements (not MPC equations; `pid` NULL where there is no property)
   and `n_elements` counts elements, not rigid-element legs (#57).
+- `vtk` is a dependency (the `vtk` extra still works), since every `nastran-pv` command imports it;
+  `import nastran_pv` no longer imports pyNastran (`Deck` and `load_deck` load on first use); a
+  `NASTRAN_PV_PARAVIEW_DIR` without the plugin is an error (#58).
 
 ### Fixed
 
+- A VTKHDF series whose steps fill different numbers of arrays (stresses on shells and solids at a
+  static step, none at the modes) read the later steps wrongly (the NaN fill stayed, or garbage):
+  vtkHDFWriter mis-offsets a field array whose size changes, so every field array now has one size
+  at every step (string arrays padded or filled with `""`; a numeric one that changes size is
+  refused) (#63).
 - A random response with `--beam-sections` no longer leaves the first mode's `Displacement` on
   `BeamSections` (#60).
 - Overlays follow the scope as the reader applies it: a selection file of PIDs, MIDs, families,

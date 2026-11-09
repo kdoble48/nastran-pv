@@ -25,11 +25,12 @@ It has two front ends that share one core, built on [pyNastran](https://github.c
 ## Install
 
 ```bash
-pip install -e ".[vtk]"          # core + the vtk wheel, for the CLI and the tests
+pip install -e .                 # from a clone: the CLI, with the vtk wheel
 nastran-pv setup                 # ParaView-side dependencies + toolbar macros (finds pvpython)
 ```
 
-See [Install](docs/install.md) for extras, environment variables and the example datasets.
+A wheel built from the clone carries the plugin too, so it needs no clone. See
+[Install](docs/install.md) for the wheel, extras, environment variables and the example datasets.
 
 ## Quickstart
 

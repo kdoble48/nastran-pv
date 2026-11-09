@@ -36,3 +36,62 @@ jobs:
         run: python -m pyflakes src paraview/*.py tests
       - name: Test
         run: python -m pytest -q -ra
+
+  wheel:
+    # the wheel alone (no clone, no NASTRAN_PV_PARAVIEW_DIR) must carry and find the ParaView plugin
+    name: wheel / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the sdist and the wheel from it, and a wheel straight from the tree
+        run: |
+          # stand-ins for a developer's vendored packages and caches: they must stay out of the wheel.
+          # The sdist's wheel tests MANIFEST.in; the tree's wheel (as pip builds a clone) tests setup.py
+          mkdir -p paraview/_vendor/scipy paraview/__pycache__
+          touch paraview/_vendor/scipy/__init__.py paraview/__pycache__/nastran_views.cpython-312.pyc
+          python -m pip install build
+          python -m build --outdir dist
+          python -m build --wheel --outdir dist-tree
+      - name: Both wheels carry the plugin, and nothing else from paraview/
+        run: |
+          for whl in dist/*.whl dist-tree/*.whl; do
+            echo "== $whl"
+            python -m zipfile -l "$whl" | grep nastran_pv/paraview/
+            python -m zipfile -l "$whl" > files.txt
+            for f in nastran_bdf_reader.py nastran_views.py install_deps.py install_macros.py \
+                     render_model.py nastran_pv_colors.json; do
+              grep -q "nastran_pv/paraview/$f" files.txt || { echo "::error::$whl lacks $f"; exit 1; }
+            done
+            if grep -E "_vendor|__pycache__|\.pyc" files.txt; then echo "::error::$whl has vendored files"; exit 1; fi
+          done
+      - name: Install it into a fresh venv and find the plugin there
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          bin="$RUNNER_TEMP/venv/bin"; [ -d "$bin" ] || bin="$RUNNER_TEMP/venv/Scripts"
+          "$bin/python" -m pip install dist/*.whl
+          cd "$RUNNER_TEMP"   # outside the checkout
+          unset NASTRAN_PV_PARAVIEW_DIR NASTRAN_PV_VENDOR_DIR
+          "$bin/nastran-pv" setup --dry-run | tee setup.txt
+          grep -E "^plugin: .*site-packages.nastran_pv.paraview.nastran_bdf_reader\.py" setup.txt
+          "$bin/python" -c "
+          from pathlib import Path
+          import nastran_pv
+          from nastran_pv import locate
+          scripts = locate.paraview_scripts_dir()
+          assert scripts == Path(nastran_pv.__file__).parent / 'paraview', scripts
+          assert locate.is_installed_plugin_dir(scripts)
+          vendor = locate.vendor_dir(python='3.12')
+          assert vendor == locate.user_data_dir() / 'vendor' / 'py3.12', vendor
+          print('plugin folder:', scripts)
+          print('vendor folder:', vendor)
+          "

@@ -45,8 +45,9 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   `build_multiblock` before the masses; its warnings use `deck.warn(..., mass=True)`, which lists
   them first.
 - `result_types.py` / `results.py` / `results_h5.py`: what is attached is declared, one
-  `ResultType` per kind of result in `result_types.REGISTRY` (today `Displacement` and
-  `VonMisesMax`): its OP2 tables and H5 datasets, blocks, location, arrays, reduction and frame.
+  `ResultType` per kind of result in `result_types.REGISTRY` (today `Displacement`,
+  `VonMisesMax`, `SPCForce`, `MPCForce` and `AppliedLoad`): its OP2 tables and H5 datasets, blocks,
+  location, arrays, reduction, frame and (forces and moments at grids) a root resultant.
   `Op2Results` and `H5Results` share a base (`results._Results`) and its interface (`steps`, `times`,
   `skipped`, `available`, `select`, `values`, `attach`); each only finds a type's tables and
   yields raw rows per step (`_rows`). `_Results.values` joins, sorts and reduces them, and the
@@ -122,8 +123,12 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
 - `store.py`: SQLite in long format (`runs`, `elements`, `nodes`, `element_values`,
   `node_values`), plus `<db>_vtm/run_<id>.vtm`.
 - `cli.py`: the `convert`, `stats`, `check`, `sections`, `diff` and `store` commands, with shared field options.
-  `launch.py` provides `view`, `render` and `setup`, and `locate.py` finds the ParaView executables
-  and the repo's `paraview/` folder.
+  `launch.py` provides `view`, `render` and `setup`, and `locate.py` (standard library only) finds
+  the ParaView executables, the plugin folder (`NASTRAN_PV_PARAVIEW_DIR`, then the wheel's
+  `nastran_pv/paraview`, then the checkout's `paraview/`) and the vendor folder (`vendor_dir`:
+  `paraview/_vendor` in a checkout, a per-user folder per ParaView Python for an installed package).
+  `nastran_pv/__init__.py` loads `Deck`/`load_deck` lazily, so `nastran_pv.locate` imports without
+  pyNastran.
 - `progress.py`: stderr stages and throttled counters (`Progress`, silent `NULL`). `load_deck` hooks
   pyNastran's include opener and the model's `add_card` only for the read and removes the hooks
   afterward. The CLI's `-q` disables it; the reader passes a callback that drives ParaView's
@@ -169,8 +174,11 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   - Each reader output is tagged (`NPVWholeModel`) with a registry entry `(whole multiblock,
     signature, Visibility, names, generation)`; `_whole_model` (Nastran Diff) and `_reader_scope`
     (Nastran Scope) find it while the array signature still matches (a deform keeps it).
-  - At import it bootstraps `sys.path` with `../src`, then `_vendor`, then
-    `NASTRAN_PV_SITE_PACKAGES`, and imports nastran_pv lazily.
+  - At import it bootstraps `sys.path` with `../src` (a checkout), or, for a wheel
+    (`nastran_pv/paraview/`), adds a meta path finder (`_InstalledPackage`) that imports the package
+    it ships in from that site-packages alone and writes no bytecode there (see
+    `docs/design/2026-11-08-wheel-plugin.md`). Then it appends `locate.vendor_dirs` (`_vendor_paths`),
+    then `NASTRAN_PV_SITE_PACKAGES`, and imports the rest of nastran_pv lazily.
   - The reader caches the deck by the mtimes of the main file and every INCLUDE, and caches the
     built multiblock by its options, so changing the time step only re-attaches results. The cut
     model tree is cached by the visibility settings too; its checklists are filled in
@@ -282,6 +290,11 @@ Every gotcha found so far, by area. The few that bite on any change are also in 
     frees the object.
   - Every array must exist at every time step; `_fill_missing` adds NaN arrays and lists them in
     the root `FillArrays` (read back, only those are dropped: `vtkutil.drop_fill_arrays`).
+  - vtkHDFWriter (VTK 9.5) writes the step offset of a field array whose size changes between steps
+    wrongly (the previous offset plus this step's size), and the reader then reads past the array.
+    So every field array has one size at every step (`vtkhdf._field_widths`): `FillArrays` and the
+    other string arrays are padded with `""`, a string array a step lacks is filled with `""` and
+    listed in `FillArrays`, and a numeric field array whose size changes is refused (ValueError).
   - Empty `vtkStringArray`s break the reader, so `add_string_array` skips them.
   - A collection's own field data is not written, so the root summary is copied onto the mesh
     partitions and listed in `RootFieldNames`; `vtkutil.promote_root_fields` (in `tree.gather`, so
