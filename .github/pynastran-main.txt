@@ -1,0 +1,5 @@
+# pyNastran from its main branch, pinned, for the Python 3.13 and 3.14 test jobs (tests.yml):
+# pyNastran 1.4.1 needs numpy < 2, which has no wheels past Python 3.12. To bump it, put a newer
+# commit of https://github.com/SteveDoyle2/pyNastran/commits/main here and let CI run
+# (docs/development.md#pynastran-main-in-ci).
+pyNastran @ git+https://github.com/SteveDoyle2/pyNastran.git@c946222478afba49df717c7a9670463092ae13b4

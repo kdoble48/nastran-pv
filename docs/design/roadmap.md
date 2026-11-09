@@ -81,6 +81,23 @@ so the fixes ship in 0.2.0.
     `pyproject.toml` and the CHANGELOG.
   - Classifiers, and Python 3.13 and 3.14 in the CI matrix: 3.14 support shipped in #18 but CI
     tests only 3.10 to 3.12 (3.13+ needs pyNastran main). Fix what fails rather than drop them.
+- Done in #69 (release infrastructure, merged before the release PR):
+  - `.github/workflows/publish.yml`: one build, `twine check --strict` and `tests/check_dists.py`
+    (dist contents against git, and the tag against the version); environments `testpypi`
+    (`vX.Y.ZrcN` tags, manual runs) and `pypi` (`vX.Y.Z` tags).
+  - The version is single-sourced: `__version__` in `src/nastran_pv/__init__.py`, read by
+    `pyproject.toml`. PyPI metadata: classifiers, URLs, keywords, an SPDX license; the README's
+    links are absolute.
+  - The CHANGELOG cites every merged PR.
+  - CI tests Python 3.10 to 3.14 on the three OSes. 3.13 and 3.14 use pyNastran `main` at the
+    commit pinned in `.github/pynastran-main.txt` (`docs/development.md#pynastran-main-in-ci`).
+  - pyNastran's self-checks (`IS_CI`) now run in CI too. They failed on the synthetic OP2, whose
+    plate stress listed element 2 before 1; `tests/op2_fixture.py` now lists them in ascending
+    order, as Nastran does. A test that used numpy's removed `np.trapz` was fixed.
+- Left, in #70 (draft) and after it: the pending publishers and GitHub environments, then
+  `0.2.0rc1` to TestPyPI, a check from TestPyPI, and `0.2.0` to PyPI
+  (`docs/versioning.md#releasing`). The docs make `pip install nastran-pv` the primary install
+  in #70, since the site deploys on merge.
 - Exit: on a clean Windows and a clean Linux machine,
   `pip install nastran-pv==0.2.0 && nastran-pv setup` opens a `tests/data` deck in ParaView.
 - Depends on: 1, 2, and part A of task 6.

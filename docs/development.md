@@ -8,18 +8,39 @@ python -m pyflakes src paraview/*.py tests  # lint (skip paraview/_vendor)
 ```
 
 Every push to `main` and every pull request runs the tests and lint on Linux, Windows and macOS
-with Python 3.10 to 3.14 (`.github/workflows/tests.yml`; 3.13 and 3.14 with pyNastran `main`),
-and builds this site (`.github/workflows/docs.yml`). Tests that need ParaView, MYSTRAN or the real
-datasets skip there.
+with Python 3.10 to 3.14 (`.github/workflows/tests.yml`; 3.13 and 3.14 with pyNastran `main`,
+see below), and builds this site (`.github/workflows/docs.yml`). Tests that need ParaView,
+MYSTRAN or the real datasets skip there.
 The *paraview* workflow (`.github/workflows/paraview.yml`, on pull requests that touch
 `paraview/`, `src/` or `tests/`, or by hand) installs the wheel on Linux, runs `nastran-pv setup`
 against a headless ParaView 6.0.1 and 5.13.1 unpacked in the home folder, and runs
 `tests/pv_smoke.py` on both; the downloads are cached. The *wheel* job builds the sdist and the
-wheel from it, checks them with `tests/check_dists.py`, installs the wheel into a fresh venv
-outside the checkout, and checks that `nastran-pv setup --dry-run` finds the plugin there. The
-*publish* workflow (`.github/workflows/publish.yml`) publishes releases
-([Releasing](versioning.md#releasing)); on pull requests that touch the packaging it runs its
-build job alone.
+wheel from it, checks them with `twine check --strict` and `tests/check_dists.py`, installs the
+wheel into a fresh venv outside the checkout, and checks that `nastran-pv setup --dry-run` finds
+the plugin there. The *publish* workflow (`.github/workflows/publish.yml`) publishes releases
+([Releasing](versioning.md#releasing)); a pull request that changes it or `check_dists.py` runs
+its build job alone.
+
+## pyNastran main in CI
+
+pyNastran 1.4.1 needs numpy < 2, which has no wheels past Python 3.12, so the 3.13 and 3.14 jobs
+install pyNastran's `main` branch at the commit pinned in `.github/pynastran-main.txt`. A moving
+`main` cannot then break an unrelated pull request. Under GitHub Actions pyNastran also runs its
+own self-checks on every OP2 the tests read (`pyNastran.IS_CI`, see
+[Architecture](architecture.md#gotchas)), as it would in a user's workflow.
+
+To bump the pin, put a newer commit of
+[pyNastran main](https://github.com/SteveDoyle2/pyNastran/commits/main) in that file and open a
+pull request; the 3.13 and 3.14 jobs test it. To try it locally first:
+
+```bash
+python3.13 -m venv out/py313                       # Windows: py -3.13, then out/py313/Scripts/python
+out/py313/bin/python -m pip install -r .github/pynastran-main.txt -e ".[test]"
+GITHUB_ACTOR=local out/py313/bin/python -m pytest -q   # GITHUB_ACTOR: pyNastran's self-checks too
+```
+
+The ParaView job vendors pyNastran `main` through `nastran-pv setup`, unpinned, as a user's
+setup does.
 
 ## Packaging
 
@@ -27,14 +48,16 @@ The wheel carries `paraview/*.py` and `paraview/*.json` as `nastran_pv/paraview/
 hook in `setup.py` copies them at build time (the metadata stays in `pyproject.toml`), and
 `MANIFEST.in` puts them in the sdist. An editable install copies nothing and uses `paraview/`.
 A new kind of file in `paraview/` needs a pattern in `setup.py`, `MANIFEST.in` and
-`tests/check_dists.py`. The sdist holds the package, the plugin, the project files and
-`CHANGELOG.md`, but not the tests (they need `tests/data` and `docs/`). Build and check locally
-with:
+`tests/check_dists.py` (`PLUGIN_PATTERNS`): the check compares the dists with what git tracks,
+so a tracked file no pattern ships fails it. The sdist holds the package, the plugin, the project
+files and `CHANGELOG.md`, but not the tests (they need `tests/data` and `docs/`). The version is
+`__version__` in `src/nastran_pv/__init__.py`, which `pyproject.toml` reads. Build and check
+locally with:
 
 ```bash
-python -m build --outdir out/dist       # pip install build twine; the wheel is built from the sdist
-python -m twine check --strict out/dist/*
-python tests/check_dists.py out/dist/*  # the plugin and every module in, nothing generated
+python -m build --outdir out/dist       # pip install build twine "readme-renderer[md]"; the wheel is built from the sdist
+python -m twine check --strict out/dist/*   # twine expands the *, in PowerShell too
+python tests/check_dists.py out/dist    # the folder's sdist and wheel of the current version
 ```
 
 The design and the lookup order are in `docs/design/2026-11-08-wheel-plugin.md`.
@@ -106,7 +129,8 @@ The docs describe behavior that lives in code. Update them in the same change wh
 | `selection.py`, the reader's *Selection* properties, the NPV *File* macros | [cli.md](cli.md#selection-from-an-id-file), [paraview.md](paraview.md#selection-from-an-id-file) |
 | `vtkio.py`, `vtkhdf.py`, `store.py` | [output-formats.md](output-formats.md), [store.md](store.md) |
 | Dependencies, extras, environment variables, `locate.py`, `setup.py`, `MANIFEST.in` | [install.md](install.md), [development.md](#packaging) |
-| `publish.yml`, `tests/check_dists.py`, the version in `pyproject.toml` | [versioning.md](versioning.md#releasing), `README.md` (PyPI shows it) |
+| `publish.yml`, `tests/check_dists.py`, `__version__` | [versioning.md](versioning.md#releasing), `README.md` (PyPI shows it) |
+| `tests.yml`, `.github/pynastran-main.txt` | [development.md](#pynastran-main-in-ci) |
 | Any user-facing change; a public name or default (see [Versioning](versioning.md#public-api)) | `CHANGELOG.md` (*Unreleased*), [versioning.md](versioning.md) when the policy changes |
 
 ## Regenerating the gallery

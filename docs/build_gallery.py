@@ -30,7 +30,8 @@ RELEASE = "gallery-assets"
 SCENE_WARN_BYTES = 3_000_000
 MODEL_ORDER = ["ucrm9", "demo"]
 VIEW_ORDER = ["masses", "bushes", "bushrotations", "beams", "loads", "spc", "rigid", "family", "group", "pid", "mid",
-              "elementtype", "thickness", "nsm", "grow", "parts", "check", "results", "random", "randomsweep", "diff"]
+              "elementtype", "thickness", "nsm", "grow", "parts", "check", "results", "forces", "stress", "random",
+              "randomsweep", "diff"]
 UCRM9_CREDIT = ("uCRM-9 wingbox, coarse mesh: Brooks, Kenway and Martins, *Benchmark Aerostructural Models "
                 "for the Study of Transonic Aircraft Wings*, AIAA Journal 56(7), 2018. Data: "
                 "[doi:10.17632/gpk4zn73xn.1](https://doi.org/10.17632/gpk4zn73xn.1), CC BY 4.0.")

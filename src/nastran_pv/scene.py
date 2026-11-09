@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 COLORINGS = ("family", "group", "pid", "mid", "elementtype", "thickness", "nsm", "results",
-             "random", "randomsweep", "parts", "grow", "path", "check", "diff")
+             "random", "randomsweep", "parts", "grow", "path", "check", "diff", "forces", "stress")
 OVERLAYS = ("masses", "bushes", "bushrotations", "beams", "loads", "spc", "rigid")
 GHOST = "ghost"
 GHOST_OPACITY = {"loads": 0.5, "spc": 0.35, "rigid": 0.3}   # default 0.2

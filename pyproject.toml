@@ -4,8 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nastran-pv"
-# a release sets it here and in src/nastran_pv/__init__.py (docs/versioning.md#releasing)
-version = "0.2.0rc1"
+# the version is `__version__` in src/nastran_pv/__init__.py, set there by a release
+# (docs/versioning.md#releasing)
+dynamic = ["version"]
 description = "Visualize Nastran decks and results in ParaView: properties, masses, bushes, loads, derived and mapped fields, run store"
 readme = "README.md"   # PyPI renders it too: its links must be absolute
 license = "MIT"
@@ -66,6 +67,9 @@ Issues = "https://github.com/kdoble48/nastran-pv/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.dynamic]
+version = { attr = "nastran_pv.__version__" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

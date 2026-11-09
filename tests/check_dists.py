@@ -1,13 +1,18 @@
 """Check built dists before CI installs or publishes them, and pick where the publish workflow uploads.
 
-    python tests/check_dists.py dist/* [dist-tree/*.whl] [--event NAME --ref REF --github-output FILE]
+    python tests/check_dists.py out/dist                    # a folder: its files of the current version
+    python tests/check_dists.py dist/* dist-tree/*.whl [--event NAME --ref REF --github-output FILE]
 
-Every file is named for the version in ``pyproject.toml``, which ``nastran_pv.__version__`` repeats.
+The version is ``nastran_pv.__version__`` (``pyproject.toml`` reads it from there), and every file
+must be named for it. A folder stands for its sdist and wheels of that version, so older builds in
+it are ignored.
 
-- A wheel holds every ``src/nastran_pv`` module and the ParaView plugin (every ``paraview/*.py`` and
-  ``paraview/*.json`` of this tree, as ``nastran_pv/paraview/``), and nothing vendored or compiled.
-- The sdist holds what ``MANIFEST.in`` promises (the same plugin files, ``CHANGELOG.md``), the
-  package sources and the project files, and nothing else: no tests, ``_vendor`` or caches.
+- What the dists must carry comes from git, not from the build's own patterns: every tracked
+  ``src/nastran_pv`` module, and every tracked file in ``paraview/`` (as ``nastran_pv/paraview/`` in
+  a wheel). A tracked file there that no pattern ships (``PLUGIN_PATTERNS``, which ``setup.py`` and
+  ``MANIFEST.in`` repeat) is an error, so a new kind of plugin file cannot be left out silently.
+- A wheel holds nothing else (nothing vendored or compiled); the sdist holds that plus the project
+  files and ``CHANGELOG.md``, and nothing else (no tests, ``_vendor`` or caches).
 
 With ``--event`` (the publish workflow passes ``GITHUB_EVENT_NAME`` and ``GITHUB_REF``) it also
 prints, and writes to ``--github-output``, ``version=`` and ``target=``: ``testpypi`` for a tag
@@ -16,8 +21,11 @@ anything else. A tag that is not ``v`` + that version, or of neither form, is re
 Release steps: docs/versioning.md#releasing.
 """
 import argparse
+import ast
+import fnmatch
 import os
 import re
+import subprocess
 import sys
 import tarfile
 import zipfile
@@ -25,7 +33,7 @@ from email.parser import HeaderParser
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PLUGIN_PATTERNS = ("*.py", "*.json")   # setup.py PATTERNS and MANIFEST.in
+PLUGIN_PATTERNS = ("*.py", "*.json")   # setup.py PATTERNS and MANIFEST.in: paraview/ top level only
 SDIST_REQUIRED = ("PKG-INFO", "pyproject.toml", "setup.py", "MANIFEST.in", "README.md", "LICENSE",
                   "CHANGELOG.md")
 SDIST_ALLOWED = ("setup.cfg",)          # written by setuptools (egg_info), like src/*.egg-info/
@@ -39,18 +47,50 @@ class ReleaseError(Exception):
 
 
 def project_version(root=ROOT):
-    import tomllib   # Python 3.11+; CI runs this script on 3.12
+    """``__version__`` of src/nastran_pv/__init__.py, read without importing the package."""
+    tree = ast.parse((root / "src" / "nastran_pv" / "__init__.py").read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "__version__" for t in node.targets):
+            return ast.literal_eval(node.value)
+    raise ValueError("src/nastran_pv/__init__.py sets no __version__")
 
-    with open(root / "pyproject.toml", "rb") as f:
-        return tomllib.load(f)["project"]["version"]
+
+def tracked_files(root=ROOT):
+    """The files git tracks under src/nastran_pv and paraview/, relative to the checkout."""
+    try:
+        out = subprocess.run(["git", "ls-files", "-z", "--", "src/nastran_pv", "paraview"], cwd=root,
+                             capture_output=True, text=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError) as e:
+        raise SystemExit(f"check_dists.py needs the git checkout the dists were built from: {e}")
+    return sorted(f for f in out.split("\0") if f)
 
 
-def tree_files(root=ROOT):
-    """(package modules, plugin files) of the checkout, relative to it: what every dist carries."""
-    modules = sorted(p.relative_to(root).as_posix() for p in (root / "src" / "nastran_pv").rglob("*.py"))
-    plugin = sorted(p.relative_to(root).as_posix() for pattern in PLUGIN_PATTERNS
-                    for p in (root / "paraview").glob(pattern))
-    return modules, plugin
+def split_tracked(tracked):
+    """(package modules, plugin files, unshipped) of the tracked files: what every dist must carry,
+    and the tracked files no build pattern ships."""
+    modules, plugin, unshipped = [], [], []
+    for f in tracked:
+        if f.startswith("paraview/_vendor/"):
+            continue
+        if f.startswith("src/nastran_pv/"):
+            (modules if f.endswith(".py") else unshipped).append(f)
+        elif f.startswith("paraview/"):
+            name = f.removeprefix("paraview/")
+            top = "/" not in name and any(fnmatch.fnmatch(name, p) for p in PLUGIN_PATTERNS)
+            (plugin if top else unshipped).append(f)
+    return modules, plugin, unshipped
+
+
+def dists_in(paths, version):
+    """Files as given; a folder stands for its sdist and wheels of this version."""
+    found = []
+    for path in map(Path, paths):
+        if path.is_dir():
+            found += sorted(path.glob(f"nastran_pv-{version}.tar.gz"))
+            found += sorted(path.glob(f"nastran_pv-{version}-*.whl"))
+        else:
+            found.append(path)
+    return found
 
 
 def _metadata_version(text):
@@ -68,7 +108,7 @@ def check_wheel(path, version, modules, plugin):
     """Problems with one wheel, as messages (none: it is fine)."""
     stem = f"nastran_pv-{version}"
     if Path(path).name != f"{stem}-py3-none-any.whl":
-        return [f"{Path(path).name} is not {stem}-py3-none-any.whl (pyproject.toml has {version})"]
+        return [f"{Path(path).name} is not {stem}-py3-none-any.whl (nastran_pv.__version__ is {version})"]
     with zipfile.ZipFile(path) as z:
         names = set(z.namelist())
         init = z.read("nastran_pv/__init__.py").decode() if "nastran_pv/__init__.py" in names else ""
@@ -82,7 +122,7 @@ def check_wheel(path, version, modules, plugin):
         problems.append(_listed(f"{path} has vendored or compiled files", generated))
     stray = {n for n in names - want - generated if not n.startswith(f"{stem}.dist-info/")}
     if stray:
-        problems.append(_listed(f"{path} has files from outside src/nastran_pv and the plugin", stray))
+        problems.append(_listed(f"{path} has files other than the tracked modules and plugin files", stray))
     if _metadata_version(metadata) != version:
         problems.append(f"{path}: METADATA does not say Version: {version}")
     if f'__version__ = "{version}"' not in init:
@@ -94,7 +134,7 @@ def check_sdist(path, version, modules, plugin):
     """Problems with one sdist, as messages (none: it is fine)."""
     stem = f"nastran_pv-{version}"
     if Path(path).name != f"{stem}.tar.gz":
-        return [f"{Path(path).name} is not {stem}.tar.gz (pyproject.toml has {version})"]
+        return [f"{Path(path).name} is not {stem}.tar.gz (nastran_pv.__version__ is {version})"]
     with tarfile.open(path) as t:
         names = {m.name for m in t.getmembers() if not m.isdir()}
         pkg_info = t.extractfile(f"{stem}/PKG-INFO").read().decode() if f"{stem}/PKG-INFO" in names else ""
@@ -123,7 +163,7 @@ def publish_target(event, ref, version):
     if tag == ref:
         raise ReleaseError(f"publish runs on tags, not on {ref}")
     if tag != f"v{version}":
-        raise ReleaseError(f"tag {tag} is not v{version}, the version in pyproject.toml")
+        raise ReleaseError(f"tag {tag} is not v{version}, the version in nastran_pv.__version__")
     if CANDIDATE.fullmatch(version):
         return "testpypi"
     if FINAL.fullmatch(version):
@@ -133,7 +173,7 @@ def publish_target(event, ref, version):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("dists", nargs="+", type=Path, help="the sdist and wheel(s)")
+    ap.add_argument("dists", nargs="+", help="the sdist and wheel(s), or folders holding them")
     ap.add_argument("--event", help="GITHUB_EVENT_NAME: also pick the index to publish to")
     ap.add_argument("--ref", default="", help="GITHUB_REF, e.g. refs/tags/v0.2.0")
     ap.add_argument("--github-output", type=Path, help="append version= and target= to this file")
@@ -141,12 +181,16 @@ def main(argv=None):
     error = "::error::" if os.environ.get("GITHUB_ACTIONS") else "error: "
 
     version = project_version()
-    modules, plugin = tree_files()
-    wheels = [d for d in args.dists if d.name.endswith(".whl")]
-    sdists = [d for d in args.dists if d.name.endswith(".tar.gz")]
-    problems = [f"{d} is neither a wheel nor an sdist" for d in args.dists if d not in wheels + sdists]
+    modules, plugin, unshipped = split_tracked(tracked_files())
+    dists = dists_in(args.dists, version)
+    wheels = [d for d in dists if d.name.endswith(".whl")]
+    sdists = [d for d in dists if d.name.endswith(".tar.gz")]
+    problems = [f"{d} is neither a wheel nor an sdist" for d in dists if d not in wheels + sdists]
+    if unshipped:
+        problems.append(_listed("git tracks files that no pattern in setup.py, MANIFEST.in and "
+                                "check_dists.PLUGIN_PATTERNS ships", unshipped))
     if not wheels or not sdists:
-        problems.append("give at least one wheel and one sdist")
+        problems.append(f"no wheel and sdist of nastran-pv {version} among {', '.join(args.dists)}")
     for wheel in wheels:
         problems += check_wheel(wheel, version, modules, plugin)
     for sdist in sdists:
@@ -163,7 +207,7 @@ def main(argv=None):
         return 1
 
     print(f"nastran-pv {version}: {len(wheels)} wheel(s) and {len(sdists)} sdist(s) carry the "
-          f"{len(modules)} modules and {len(plugin)} plugin files, and nothing generated")
+          f"{len(modules)} modules and {len(plugin)} plugin files git tracks, and nothing generated")
     if args.event:
         print(f"publish to: {target or 'nowhere (build only)'}")
         if args.github_output:
