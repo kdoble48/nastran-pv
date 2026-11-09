@@ -31,7 +31,7 @@ stress tables were dropped without a word (an OP2 table without a `von_mises` co
 | Fibres | Shell stress and strain per fibre, `Bottom` (Z1, the first row) and `Top` (Z2) | Nastran's two fibre rows; no averaging |
 | Derived values | Computed from the components by the shared code (`ArraySpec.derive`), for OP2 and HDF5 alike | MSC/NX HDF5 has no principals; one formula for both readers |
 | Strain shear | Shear strains are engineering strains (γ), as Nastran writes them; principals use γ/2; max shear strain is engineering (ε1 − ε2 for shells, ε1 − ε3 for solids) | Matches the components' convention; no von Mises strain (its definition differs between solvers) |
-| Plate strain as curvature | `STRAIN(STRCUR)` tables (pyNastran header `fiber_curvature`) are reported, not attached | Their two rows are mid-plane strain and curvature, not fibres |
+| Plate strain as curvature | `STRAIN(STRCUR)` tables (pyNastran header `fiber_curvature`; in HDF5 the fibre distances 0 and -1 on every row, the same flags, `H5Source.accept=fibre_rows`) are reported, not attached | Their two rows are mid-plane strain and curvature, not fibres |
 | Bar, beam, rod stress | `LineStress`: `AxialStress` (bars, rods), `TorsionalStress` (rods), `MaxStress`/`MinStress` (the largest S-MAX and smallest S-MIN of the two ends; a rod's axial stress) | The one quantity bars, beams and rods share is the extreme longitudinal stress; the C/D/E/F point stresses (bending only for CBAR, total for CBEAM) are left out |
 | Beam forces | `BendingMomentA`/`B` from the end A and end B rows; shear, axial force and torque from end A (CBAR writes them once) | One layout for bars and beams |
 | Bush forces | On the `Bushes` points, matched by their `EID` point array (`ResultType.key`) | Every CBUSH has a point (grounded ones have no line), and `Axis1-3` (the element frame) sit on the same points |
@@ -80,19 +80,26 @@ ArraySpec(name, columns, magnitude=False, derive="", shear=1.0)
 #           | "max" | "min" (over the columns); shear: factor from the written shear to tensor
 #           shear (0.5 for engineering strain); max shear is written in the components' convention
 Op2Source(tables, columns=(), kinds=(), picks=(), requires=())
-H5Source(datasets, fields=(), compute=None, kinds=(), picks=(), slots="")
+H5Source(datasets, fields=(), compute=None, kinds=(), picks=(), slots="", accept=None)
 #   picks: ((position, (column, ...)), ...): per element, the row (OP2: the n-th row of the
 #          element; HDF5: the n-th slot of array-valued fields; negative from the end) and the
 #          columns to take there, concatenated into the type's columns. A column is a name, a tuple
-#          of alternative names, or None (NaN). requires: header names a table must have.
-#          slots: HDF5 field whose non-zero entries are the used slots (end B of a CBEAM)
+#          of alternative names, or None (NaN) (result_types.resolve). requires: header names a
+#          table must have. slots: HDF5 field whose non-zero entries are the used slots (end B of
+#          a CBEAM). accept(dataset): false leaves a dataset out (fibre_rows: STRCUR)
 ResultType(..., op2=Op2Source | tuple[Op2Source, ...], h5=H5Source | tuple[H5Source, ...],
-           key="")   # the id array on the blocks ("NID" | "EID"; default by location)
+           key="")   # the id array on the blocks ("NID" | "EID"; default by location);
+                     # block_ids(block): those ids, with -1 on MPC legs for cell types keyed by EID
 ```
 
 A type with several sources (bars, beams and rods for `LineForce`) gives each the same columns;
 the readers stay one interface: OP2 resolves header names, HDF5 field names, and both take the
-declared rows through `result_types.pick_rows` (OP2) or the slots of the array fields (HDF5).
+declared rows through a `result_types.PickPlan` (OP2: made once per table, the rows do not change
+between steps) or the slots of the array fields (HDF5), both resolving names with
+`result_types.resolve`. HDF5 picked tables keep only their ids and domain ids at open; their values
+are read when a step first needs the type (a 200 000-shell, 50 000-hexa, 3-domain synthetic file:
+kept memory after open 164 MB before, 53 MB after; the uCRM-9 20-mode file, without element
+results, unchanged at 0.13 s and 78 MB).
 
 ## No output change
 

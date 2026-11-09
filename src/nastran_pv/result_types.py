@@ -17,6 +17,7 @@ and keep the components in the frame Nastran writes them in.
 """
 from __future__ import annotations
 
+import fnmatch
 import re
 from dataclasses import dataclass
 from typing import Callable, Union
@@ -86,7 +87,7 @@ class Op2Source:
     ``picks`` (instead of ``columns``): ``((position, (column, ...)), ...)``, one value row per
     element: at each position (the n-th row of the element, negative from its last row) the
     named header columns (a tuple of alternatives, or None for NaN), concatenated
-    (:func:`pick_rows`). ``requires``: header names a table must have to be read (a shell table
+    (:func:`pick_plan`, :func:`pick_values`). ``requires``: header names a table must have to be read (a shell table
     with ``fiber_distance``, not ``fiber_curvature``).
     """
 
@@ -117,7 +118,9 @@ class H5Source:
     array-valued fields (the centre and corners of a shell or solid, the stations of a beam) and
     is ignored by scalar fields. ``slots``: an array field whose non-zero entries mark the used
     slots, so that negative positions count from the last used one (``GRID``: end B of a CBEAM).
-    A dataset without every picked field (one of each tuple of alternatives) is left out.
+    A dataset without every picked field (one of each tuple of alternatives) is left out, and so is
+    one ``accept(dataset)`` is false for (:func:`fibre_rows`: a STRCUR plate strain table). Picked
+    values are read when a step first needs them.
     """
 
     datasets: tuple[str, ...]
@@ -126,6 +129,7 @@ class H5Source:
     kinds: tuple[str, ...] = ()
     picks: tuple = ()
     slots: str = ""
+    accept: Callable | None = None
 
     def __post_init__(self):
         _check_picks(f"H5 source {self.datasets}", self.picks, self.fields)
@@ -152,12 +156,20 @@ class ResultType:
       basic when the deck is known; ``none`` leaves the values as they are.
     * ``steps``: its tables define the result steps (one per subcase, load step or mode; each
       source's ``kinds`` names the kind of step of each table); the other types are paired with
-      those steps by subcase and time value.
+      those steps by subcase and time value. A type with ``steps=False`` whose sources declare
+      ``kinds`` defines the steps when no step-defining type has tables (a run without displacement
+      output): the first such type with tables, in registry order.
     * ``default``: attached when nothing is selected.
+    * ``resultant``: a point type whose first two arrays are a force (columns 0-2) and a moment
+      (3-5) at each grid: ``attach_step`` also writes their sums at each step, root
+      ``Resultant<force array>`` and ``Resultant<moment array>`` (``resultant_names``, named like
+      the Loads blocks' ``ResultantForce``): the force sum and the moment about the basic origin
+      (sum of M + r x F).
     * ``op2``/``h5``: one source, or a tuple of them whose picks give the same columns (the bar,
       beam and rod tables of one line type).
     * ``key``: the id the rows are keyed by and the blocks' id array, ``NID`` or ``EID``; by default
-      ``NID`` for point and ``EID`` for cell types (``EID`` on the points of ``Bushes``).
+      ``NID`` for point and ``EID`` for cell types (``EID`` on the points of ``Bushes``). A cell
+      type keyed by ``EID`` never matches an MPC leg, whose ``EID`` is its set id (:meth:`block_ids`).
     """
 
     name: str
@@ -171,6 +183,7 @@ class ResultType:
     fill: float = float("nan")
     steps: bool = False
     default: bool = True
+    resultant: bool = False
     key: str = ""
 
     def __post_init__(self):
@@ -178,11 +191,17 @@ class ResultType:
                                (self.key, KEYS)):
             if value not in allowed:
                 raise ValueError(f"result type {self.name}: {value!r} is not one of {allowed}")
-        if self.steps and (any(len(s.kinds) != len(s.tables) for s in self.op2_sources)
-                           or any(len(s.kinds) != len(s.datasets) for s in self.h5_sources)):
+        sources = self.op2_sources + self.h5_sources
+        if (self.steps or any(s.kinds for s in sources)) and (
+                any(len(s.kinds) != len(s.tables) for s in self.op2_sources)
+                or any(len(s.kinds) != len(s.datasets) for s in self.h5_sources)):
             raise ValueError(f"result type {self.name} defines steps: give one step kind per OP2 table "
                              "and per H5 dataset (Op2Source.kinds, H5Source.kinds)")
-        widths = {_check_picks(self.name, s.picks, ()) for s in self.op2_sources + self.h5_sources if s.picks}
+        if self.resultant and (self.location != "point" or len(self.arrays) < 2
+                               or [a.columns for a in self.arrays[:2]] != [(0, 1, 2), (3, 4, 5)]):
+            raise ValueError(f"result type {self.name}: a resultant needs a point type whose first two arrays "
+                             "take columns 0-2 (force) and 3-5 (moment)")
+        widths = {_check_picks(self.name, s.picks, ()) for s in sources if s.picks}
         if len(widths) > 1:
             raise ValueError(f"result type {self.name}: its sources pick different numbers of columns {widths}")
 
@@ -195,12 +214,40 @@ class ResultType:
         return _sources(self.h5)
 
     @property
+    def resultant_names(self) -> tuple[str, ...]:
+        """The root field arrays of the resultant (force, moment), or () for a type without one."""
+        return tuple(f"Resultant{a.name}" for a in self.arrays[:2]) if self.resultant else ()
+
+    @property
+    def defines_steps(self) -> bool:
+        """The type can give the steps: a step-defining type, or one whose sources declare kinds
+        (when no step-defining type has tables)."""
+        return self.steps or any(s.kinds for s in self.op2_sources)
+
+    @property
     def id_array(self) -> str:
         return self.key or ("NID" if self.location == "point" else "EID")
 
     def attributes(self, block):
         """The block's point or cell data, where this type's arrays live."""
         return block.GetPointData() if self.location == "point" else block.GetCellData()
+
+    def block_ids(self, block) -> np.ndarray | None:
+        """The ids of ``block``'s points or cells that this type's rows match (its ``id_array``),
+        or None without one. Cells keyed by ``EID`` get -1 on MPC legs (``Connectors``), whose
+        ``EID`` is the MPC set id, not an element's (``fields.common.mpc_legs``)."""
+        from .fields.common import mpc_legs
+        from .vtkutil import to_numpy
+
+        arr = self.attributes(block).GetArray(self.id_array)
+        if arr is None:
+            return None
+        ids = to_numpy(arr)
+        if self.location == "cell" and self.id_array == "EID":
+            legs = mpc_legs(block)  # None (one array lookup) on every block without ConnectorType
+            if legs is not None and legs.any():
+                ids = np.where(legs, -1, ids)
+        return ids
 
 
 # ------------------------------------------------------------------ HDF5 von Mises
@@ -236,28 +283,80 @@ def von_mises_table(rows) -> np.ndarray | None:
 
 
 # ------------------------------------------------------------------ picks and derived arrays
-def pick_rows(ids, data, picks) -> tuple[np.ndarray, np.ndarray]:
-    """(element ids, (n, k) values) of a table with several rows per element (``ids`` per row,
-    each element's rows contiguous, as pyNastran keeps them): for each ``(position, columns)`` of
-    ``picks``, the element's row at ``position`` (negative from its last row) and those column
-    indices of ``data`` (None: NaN), concatenated. An element without that row gets NaN."""
-    ids = np.asarray(ids)
-    data = np.asarray(data)
+def resolve(column, names) -> str | None:
+    """The header or field a pick ``column`` names among ``names``: the name itself, the first of a
+    tuple of alternatives that ``names`` has, or None for a None (NaN) column. KeyError when the
+    table has none of them. Both readers resolve their columns through it."""
+    if column is None:
+        return None
+    for n in (column,) if isinstance(column, str) else column:
+        if n in names:
+            return n
+    raise KeyError(column)
+
+
+def resolve_picks(picks, names) -> tuple | None:
+    """``picks`` with every column :func:`resolve`-d against ``names``, or None when one is missing."""
+    try:
+        return tuple((pos, tuple(resolve(c, names) for c in cols)) for pos, cols in picks)
+    except KeyError:
+        return None
+
+
+@dataclass(frozen=True)
+class PickPlan:
+    """Where the picked rows of a table with several rows per element are: ``ids`` one per
+    element, and per pick position the row of each element (``rows``) and whether it has one
+    (``ok``). The rows of a table do not change between its steps, so a reader makes it once."""
+
+    ids: np.ndarray
+    rows: tuple
+    ok: tuple
+
+
+def pick_plan(row_ids, positions) -> PickPlan:
+    """The :class:`PickPlan` of a table whose rows belong to ``row_ids`` (each element's rows
+    contiguous, as pyNastran keeps them), for the pick ``positions`` (the n-th row of an element,
+    negative from its last row)."""
+    ids = np.asarray(row_ids)
     if ids.size == 0:
-        return ids.astype(np.int64), np.zeros((0, sum(len(c) for _, c in picks)))
+        empty = np.zeros(0, dtype=np.int64)
+        return PickPlan(empty, tuple(empty for _ in positions), tuple(empty.astype(bool) for _ in positions))
     starts = np.flatnonzero(np.r_[True, ids[1:] != ids[:-1]])
     counts = np.diff(np.r_[starts, len(ids)])
-    out = []
-    for pos, cols in picks:
+    rows, ok = [], []
+    for pos in positions:
         rel = np.full(len(starts), pos) if pos >= 0 else counts + pos
-        ok = (rel >= 0) & (rel < counts)
-        rows = starts + np.where(ok, rel, 0)
-        block = np.full((len(starts), len(cols)), np.nan)
+        has = (rel >= 0) & (rel < counts)
+        rows.append(starts + np.where(has, rel, 0))
+        ok.append(has)
+    return PickPlan(ids[starts].astype(np.int64), tuple(rows), tuple(ok))
+
+
+def pick_values(data, plan: PickPlan, columns) -> np.ndarray:
+    """(n elements, k) values of one step's ``data`` (rows x columns): per pick of ``plan``, the
+    column indices ``columns[i]`` (None: NaN) at that pick's rows, concatenated; NaN where an
+    element has no such row."""
+    data = np.asarray(data)
+    out = []
+    for rows, ok, cols in zip(plan.rows, plan.ok, columns):
+        block = np.full((len(plan.ids), len(cols)), np.nan)
         for j, c in enumerate(cols):
             if c is not None:
                 block[ok, j] = data[rows[ok], c]
         out.append(block)
-    return ids[starts].astype(np.int64), np.hstack(out)
+    return np.hstack(out) if out else np.zeros((len(plan.ids), 0))
+
+
+def fibre_rows(table) -> bool:
+    """False for a plate table written as mid-plane strain and curvature (``STRAIN(STRCUR)``): its
+    fibre distances are the flags 0 (``FD1``, the mid-plane strain) and -1 (``FD2``, the curvature)
+    on every row, as in the OP2, whose header says ``fiber_curvature``. ``table`` is an HDF5
+    dataset or a structured array; one without ``FD1``/``FD2`` is accepted."""
+    names = table.dtype.names or ()
+    if not {"FD1", "FD2"} <= set(names) or len(table) == 0:
+        return True
+    return not (np.all(np.asarray(table["FD1"]) == 0) and np.all(np.asarray(table["FD2"]) == -1))
 
 
 def _tensor(v, shear):
@@ -307,12 +406,14 @@ def derive(spec: ArraySpec, v) -> np.ndarray:
 
 
 # ------------------------------------------------------------------ the registry
+_GRID_VECTOR = ("X", "Y", "Z", "RX", "RY", "RZ")  # MSC/NX HDF5 fields of a nodal table
+
 DISPLACEMENT = ResultType(
     "Displacement", "point", RESULT_BLOCKS,
     (ArraySpec("Displacement", (0, 1, 2)), ArraySpec("Rotation", (3, 4, 5)),
      ArraySpec("DisplacementMagnitude", (0, 1, 2), magnitude=True)),
     op2=Op2Source(("displacements", "eigenvectors"), kinds=("displacement", "eigenvector")),
-    h5=H5Source(("NODAL/DISPLACEMENT", "NODAL/EIGENVECTOR"), fields=("X", "Y", "Z", "RX", "RY", "RZ"),
+    h5=H5Source(("NODAL/DISPLACEMENT", "NODAL/EIGENVECTOR"), fields=_GRID_VECTOR,
                 kinds=("displacement", "eigenvector")),
     frame="grid_cd", fill=0.0, steps=True)
 
@@ -321,6 +422,22 @@ VON_MISES_MAX = ResultType(
     op2=Op2Source(("stress.*",), columns=("von_mises",)),
     h5=H5Source(("ELEMENTAL/STRESS/*",), compute=von_mises_table),
     reduce="max")
+
+def _grid_loads(name, force, moment, op2_table, h5_dataset) -> ResultType:
+    """A force and moment per grid (T1-T3, R1-R3), rotated from CD like displacements, NaN where
+    a grid has no output, with root resultants; its tables give static steps when the file has no
+    displacements (DISP=NONE)."""
+    return ResultType(
+        name, "point", RESULT_BLOCKS, (ArraySpec(force, (0, 1, 2)), ArraySpec(moment, (3, 4, 5))),
+        op2=Op2Source((op2_table,), kinds=("displacement",)),
+        h5=H5Source((h5_dataset,), fields=_GRID_VECTOR, kinds=("displacement",)),
+        frame="grid_cd", resultant=True)
+
+
+SPC_FORCE = _grid_loads("SPCForce", "SPCForce", "SPCMoment", "spc_forces", "NODAL/SPC_FORCE")
+MPC_FORCE = _grid_loads("MPCForce", "MPCForce", "MPCMoment", "mpc_forces", "NODAL/MPC_FORCE")
+APPLIED_LOAD = _grid_loads("AppliedLoad", "AppliedForce", "AppliedMoment", "load_vectors", "NODAL/APPLIED_LOAD")
+
 
 # ------------------------------------------------------------------ forces (on by default)
 SHELL_CARDS = ("ctria3", "ctria6", "ctriar", "cquad4", "cquad8", "cquadr")
@@ -404,7 +521,7 @@ def _shell(kind: str, shear: float, comps: tuple) -> ResultType:
         f"Shell{kind}", "cell", ("Shells",), _shell_arrays(kind, shear),
         op2=Op2Source(_tables(word, SHELL_CARDS), picks=((0, comps), (1, comps)), requires=("fiber_distance",)),
         h5=H5Source((f"ELEMENTAL/{kind.upper()}/*",),
-                    picks=((0, ("X1", "Y1", ("XY1", "TXY1"), "X2", "Y2", ("XY2", "TXY2"))),)),
+                    picks=((0, ("X1", "Y1", ("XY1", "TXY1"), "X2", "Y2", ("XY2", "TXY2"))),), accept=fibre_rows),
         default=False)
 
 
@@ -443,7 +560,7 @@ SOLID_STRAIN = _solid("Strain", 0.5, ("exx", "eyy", "ezz", "exy", "eyz", "exz"))
 LINE_STRAIN = _line("Strain", "e")
 
 REGISTRY: tuple[ResultType, ...] = (
-    DISPLACEMENT, VON_MISES_MAX,
+    DISPLACEMENT, VON_MISES_MAX, SPC_FORCE, MPC_FORCE, APPLIED_LOAD,
     SHELL_FORCE, LINE_FORCE, BUSH_FORCE, SPRING_FORCE,
     SHELL_STRESS, SOLID_STRESS, LINE_STRESS, SHELL_STRAIN, SOLID_STRAIN, LINE_STRAIN,
 )
@@ -457,8 +574,22 @@ PLY_TABLES = ("*composite*", "*_COMP", "*_COMP_*")  # reported even when VonMise
 NOT_READ = "no result type reads this table"
 COMPLEX = "complex results are not supported"
 PLIES = "composite ply results are not attached"
+PLIES_READ = PLIES + " (VonMisesMax has their largest von Mises)"
 CURVATURE = ("plate strains as mid-plane strain and curvature (STRAIN(STRCUR)) are not attached; "
              "STRAIN(FIBER) writes them per fibre")
+
+
+def unread_reason(name: str, read: bool, complex_: bool = False, curvature: bool = False) -> str | None:
+    """Why the force, stress or strain table ``name`` (an OP2 result name or HDF5 dataset name) is
+    reported, or None when it is not: complex, composite plies (also when ``read``: VonMisesMax
+    takes their von Mises), plate curvature, or no type reading it. Both readers' ``_unread``."""
+    if complex_:
+        return COMPLEX
+    if any(fnmatch.fnmatchcase(name, p) for p in PLY_TABLES):
+        return PLIES_READ if read else PLIES
+    if read:
+        return None
+    return CURVATURE if curvature else NOT_READ
 
 
 # ------------------------------------------------------------------ selection

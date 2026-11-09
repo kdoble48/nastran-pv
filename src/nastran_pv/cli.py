@@ -308,6 +308,11 @@ def write_output(mb, args, deck, results) -> Path:
 def cmd_convert(args) -> int:
     t0 = time.perf_counter()
     mb, deck, results = load_model(args, args.verbose)
+    resultants = []  # of the --step attached now: writing a series leaves mb at its last step
+    if results is not None and not hasattr(results, "summary"):
+        from .results import resultant_lines
+
+        resultants = resultant_lines(mb, results.registry)
     t1 = time.perf_counter()
     progress = progress_for(args)
     with progress.stage("fields"):
@@ -336,6 +341,8 @@ def cmd_convert(args) -> int:
         others = [n for n in results.available if n not in attached]
         if others:
             print(f"result types not attached: {', '.join(others)} (--result-types to choose)")
+        for line in resultants:
+            print(line)
     print("\n".join(summarize(mb)))
     for n in notes:
         print(n)

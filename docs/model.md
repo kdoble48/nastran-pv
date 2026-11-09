@@ -73,7 +73,9 @@ With an OP2 or HDF5 file loaded, the mesh blocks, `Masses`, `Rigid` and `Constra
 `Displacement Rotation DisplacementMagnitude`, the mesh blocks cell `VonMisesMax` (when the results
 have stresses), the element blocks their element forces (when the results have them),
 `BeamSections` gets the rigid-section `Displacement` of its points, and the root
-gets `ResultLabel ResultStep` and `Frequency` (modes only). Each comes from a
+gets `ResultLabel ResultStep` and `Frequency` (modes only). Runs that wrote SPC forces, MPC forces
+or applied loads also give point `SPCForce SPCMoment`, `MPCForce MPCMoment` and
+`AppliedForce AppliedMoment` on the same blocks and their resultants on the root. Each comes from a
 [result type](#result-types), which `--result-types` and the reader's *Result Types* choose; the
 stress and strain components are there when chosen.
 
@@ -85,6 +87,10 @@ The [field options](fields.md) add further arrays on top of these.
 |---|---|---|
 | `Displacement` | point `Displacement` (T1-T3), `Rotation` (R1-R3), `DisplacementMagnitude`, rotated from each grid's CD into basic; 0 on grids without output | `displacements`, `eigenvectors` / `NODAL/DISPLACEMENT`, `NODAL/EIGENVECTOR`; these define the result steps |
 | `VonMisesMax` | cell `VonMisesMax` on the mesh blocks: the largest value over the element's layers, fibres and nodes; NaN without output | every stress table with a von Mises column / `ELEMENTAL/STRESS/*`, computed from the components |
+| `SPCForce` | point `SPCForce` (F1-F3), `SPCMoment` (M1-M3), rotated from each grid's CD into basic; NaN on grids without output; root `ResultantSPCForce ResultantSPCMoment` | `spc_forces` / `NODAL/SPC_FORCE` (Case Control `SPCFORCES=`) |
+| `MPCForce` | point `MPCForce`, `MPCMoment`, as for `SPCForce`; root `ResultantMPCForce ResultantMPCMoment` | `mpc_forces` / `NODAL/MPC_FORCE` (`MPCFORCES=`) |
+| `AppliedLoad` | point `AppliedForce`, `AppliedMoment` (OLOAD: the load Nastran applied, GRAV and pressures included), as for `SPCForce`; root `ResultantAppliedForce ResultantAppliedMoment` | `load_vectors` / `NODAL/APPLIED_LOAD` (`OLOAD=`) |
+
 | `ShellForce` | Shells: `MembraneForce` (FX FY FXY), `BendingMoment` (MX MY MXY), `TransverseShear` (QX QY), per unit length at the centre | `force.c{tria3,tria6,triar,quad4,quad8,quadr}_force` / `ELEMENTAL/ELEMENT_FORCE/*` with `MX ... TY` |
 | `LineForce` | Lines: `AxialForce`, `Torque`, `ShearForce` (plane 1, 2), `BendingMomentA`, `BendingMomentB` (plane 1, 2: ends A and B); a CBEAM's shear, axial force and torque are at end A; rods have axial force and torque only | `force.cbar_force`, `force.cbeam_force`, `force.c{rod,onrod,tube,visc}_force` / `ELEMENT_FORCE/{BAR,BEAM,ROD,CONROD,TUBE,VISC}` |
 | `BushForce` | Bushes (point data, by `EID`): `BushForce` (FX FY FZ), `BushMoment` (MX MY MZ) | `force.cbush_force` / `ELEMENT_FORCE/BUSH` |
@@ -94,9 +100,24 @@ The [field options](fields.md) add further arrays on top of these.
 | `LineStress` | Lines: `AxialStress` (bars, rods), `TorsionalStress` (rods), `MaxStress`/`MinStress` (the largest S-MAX and smallest S-MIN of a bar's or beam's two ends; a rod's axial stress) | `stress.cbar_stress`, `stress.cbeam_stress`, `stress.c{rod,onrod,tube}_stress` / `STRESS/{BAR,BEAM,ROD,CONROD,TUBE}` |
 | `ShellStrain`, `SolidStrain`, `LineStrain` | as the stresses, with `Strain` for `Stress` (`StrainTop`, `PrincipalStrain`, `MaxShearStrainBottom`, `AxialStrain`, `MaxStrain`, ...) and no von Mises | the `strain.*` tables / `ELEMENTAL/STRAIN/*` |
 
-`Displacement`, `VonMisesMax` and the forces are attached by default, the stresses and strains
-when chosen (`--result-types ShellStress,SolidStress` or `all`; `convert` prints the types it left
-out). The types are declared in `src/nastran_pv/result_types.py`.
+
+`Displacement`, `VonMisesMax`, `SPCForce`, `MPCForce`, `AppliedLoad` and the forces are attached by
+default (a file without a type's tables gets none of its arrays), the stresses and strains when
+chosen (`--result-types ShellStress,SolidStress` or `all`; `convert` prints the types it left out).
+The types are declared in `src/nastran_pv/result_types.py`.
+
+The resultants are per step, named like the Loads blocks' `ResultantForce`: `Resultant<array>`
+is the sum of the forces, and the moment one the sum of M + r × F about the origin of the basic
+system (what the `.f06` prints as the SPCFORCE and OLOAD RESULTANT without `PARAM,GRDPNT`), each
+grid once, in basic. Rows of grids the model does not place (scalar points, grids the deck lacks)
+are left out; without the deck (the Python API's `attach` with no `deck`) the rows stay in each
+grid's CD system, so the resultant is written only when none of those grids has one. `convert`
+prints them for the attached `--step`, and in a static run `ResultantSPCForce` +
+`ResultantAppliedForce` is zero (and the moments too) when there are no other reactions.
+
+A run without displacement output (`DISP=NONE`) takes its result steps from the SPC forces, else
+the MPC forces, else the applied loads (static steps, one per subcase). [Nastran Load Glyphs](paraview.md#filter-properties) draws all three as arrows
+(*Source*).
 
 * **Frames.** Forces, stresses and strains are written as Nastran writes them, not rotated: in the
   element system for shells (or the material system when the run asks for it), bars, beams and
@@ -113,7 +134,8 @@ out). The types are declared in `src/nastran_pv/result_types.py`.
 * **Reported, not attached.** Every force, stress and strain table no type reads is named in the
   results' messages (the CLI's warnings, the reader's Output Messages), once per table with its
   subcases: complex tables, composite plies (roadmap task 13; `VonMisesMax` still takes an OP2 ply
-  table's von Mises), plate strains written as mid-plane strain and curvature (`STRAIN(STRCUR)`;
+  table's von Mises), plate strains written as mid-plane strain and curvature (`STRAIN(STRCUR)`: the
+  OP2's `fiber_curvature` header, or HDF5 fibre distances 0 and -1 on every row;
   ask for `STRAIN(FIBER)`), and the families no type covers yet (CSHEAR, CBUSH and CELAS stresses,
   CGAP, CBEND, CFAST, CWELD and damper forces, ...).
 
@@ -147,12 +169,13 @@ out). The types are declared in `src/nastran_pv/result_types.py`.
   concentrated masses.
 * **Material axis.** THETA is measured from the projected G1→G2 edge. MCID projects that coordinate
   system's x-axis onto the element plane.
-* **Results.** OP2 and HDF5 displacements and eigenvectors are rotated from each grid's CD system
-  into basic. Complex results (SOL 107/108/110/111) are skipped with a message.
+* **Results.** OP2 and HDF5 displacements, eigenvectors, SPC and MPC forces and applied loads are
+  rotated from each grid's CD system into basic. Complex results (SOL 107/108/110/111) are skipped with a message.
 * **Random vibration.** Computed by nastran-pv from the normal modes and an input ASD, by modal
   superposition on a lumped mass (see [Random vibration](random-vibration.md#method)).
 * **MSC/NX HDF5.** The reader handles `/NASTRAN/RESULT/{DOMAINS, NODAL/DISPLACEMENT,
-  NODAL/EIGENVECTOR, ELEMENTAL/ELEMENT_FORCE/*, ELEMENTAL/STRESS/*, ELEMENTAL/STRAIN/*}`. Von Mises
+  NODAL/EIGENVECTOR, NODAL/SPC_FORCE, NODAL/MPC_FORCE, NODAL/APPLIED_LOAD,
+  ELEMENTAL/ELEMENT_FORCE/*, ELEMENTAL/STRESS/*, ELEMENTAL/STRAIN/*}`. Von Mises
   is computed from the components: plates use `X1 Y1 XY1`/`X2 Y2 XY2` (or `TXY1`/`TXY2`) on both
   fibres, and solids use `X Y Z TXY TYZ TZX`, taking the maximum over corner and centre points.
   Array-valued fields (corner layouts such as `QUAD4_CN`, solids, CBEAM stations) give the centre
