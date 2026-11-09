@@ -21,6 +21,7 @@ with `--help` for the full option list.
 
 The field options `--derive`, `--map` and `--calc` (for `convert`, `stats` and `store add`) are
 described in [Fields](fields.md); `--parts`, `--grow` and `--rules` in [Model tools](tools.md);
+`--envelope`, `--average` and `--free-body` in [Results helpers](results-helpers.md);
 `--select` below, in [Selection from an ID file](#selection-from-an-id-file). The `store` commands are described in [Run store](store.md),
 and `diff` and `--diff-against` in [Model diff](diff.md). Wherever a command takes a deck, it also
 takes a `.vtm` or `.vtkhdf` written by `convert`, with the same result; the options that need the deck
@@ -60,6 +61,13 @@ debugging.
 (default: Case Control `NSM=`; `0` = none; see [Nonstructural mass](model.md#nonstructural-mass));
 `view` and `render` take it too. An output ending in `.vtkhdf`, or
 `--format vtkhdf`, writes VTKHDF instead (see [Output formats](output-formats.md)).
+
+`--envelope [max min absmax]` adds the envelopes of every result array over the steps
+(`--envelope-steps` to choose them), with the step of each extreme; `stats` and `store add` take it
+too. `convert --average [ARRAY ...]` adds the `Averaged` block, the element results averaged to the
+grids within each PID, and `convert --free-body SEEDS` (with `--free-body-rules` and `--free-body-point`)
+prints and stores the load a free body transmits through its cut; both follow every step of an
+`--all-steps` series (see [Results helpers](results-helpers.md)).
 
 `--random ASD` turns the `--results` normal modes into a base-drive random response, with
 `--drive`, `--damping`, `--g` and `--random-frames`; `--random-output` shows instead the random
