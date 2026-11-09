@@ -104,3 +104,26 @@ def test_scene_export_finds_trame_in_the_plugins_vendor_folders(monkeypatch, tmp
     (installed / "_vendor").mkdir()
     ns["_add_vendor"]()
     assert sys.path[-1] == str(installed / "_vendor")
+
+
+def _guarded(text, statement):
+    """``statement`` (an import of the plugin folder) runs with bytecode writing off."""
+    before = text[:text.index(statement)]
+    return "sys.dont_write_bytecode = True" in before or "sys.dont_write_bytecode, True" in before
+
+
+def test_entry_points_write_no_bytecode_into_the_plugin_folder():
+    """ParaView 5.13's Python would cache cpython-310.pyc files in an installed package's
+    nastran_pv/paraview/, which pip leaves behind on uninstall."""
+    import importlib.util
+
+    from nastran_pv import launch
+
+    spec = importlib.util.spec_from_file_location("install_macros", PLUGIN.parent / "install_macros.py")
+    install_macros = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(install_macros)
+    assert _guarded(install_macros.STUB, "import nastran_views")
+    assert _guarded(launch.GUI_SCRIPT, "import nastran_views")
+    assert _guarded((PLUGIN.parent / "render_model.py").read_text(encoding="utf-8"), "import nastran_views")
+    ensure = _plugin_defs("ensure_plugin", path=PLUGIN.parent / "nastran_views.py")
+    assert _guarded(ensure, "pv.LoadPlugin(")

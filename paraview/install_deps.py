@@ -226,7 +226,9 @@ def is_main_build(version: str | None) -> bool:
 def probe(pvpython: str, dirs, modules, script: str = PROBE):
     """Run ``script`` in pvpython with the vendor folders ``dirs`` (a path or a list) and ``modules``."""
     dirs = dirs if isinstance(dirs, (list, tuple)) else [dirs]
-    out = subprocess.run([pvpython, "-c", script, os.pathsep.join(map(str, dirs)), *modules],
+    # never an empty argument: pvpython (ParaView 6.0 on Windows) crashes on one
+    arg = os.pathsep.join(map(str, dirs)) or os.pathsep
+    out = subprocess.run([pvpython, "-c", script, arg, *modules],
                          capture_output=True, text=True, check=True).stdout
     return json.loads(out.strip().splitlines()[-1])
 

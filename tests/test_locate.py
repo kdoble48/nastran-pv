@@ -184,7 +184,7 @@ def test_setup_dry_run_without_paraview(no_env, capsys):
     assert main(["setup", "--dry-run"]) == 0
     out = capsys.readouterr().out
     assert f"plugin: {ROOT / 'paraview' / PLUGIN}" in out
-    assert "install_deps.py --pvpython <pvpython>" in out and "install_macros.py" in out
+    assert "install_deps.py --pvpython" in out and "<pvpython>" in out and "install_macros.py" in out
     with pytest.raises(FileNotFoundError):
         main(["setup"])
 

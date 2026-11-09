@@ -199,6 +199,19 @@ def test_store_python_cannot_vendor_under_appdata(tmp_path, monkeypatch, capsys)
     assert install_deps.main() == 0
 
 
+def test_probe_never_passes_an_empty_argument(monkeypatch):
+    """pvpython 6.0 on Windows dies with an access violation on an empty argv entry."""
+    seen = []
+
+    def run(cmd, **kwargs):
+        seen.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, '{"version": "3.12"}\n', "")
+
+    monkeypatch.setattr(install_deps.subprocess, "run", run)
+    assert install_deps.probe("pvpython", [], [], install_deps.VERSION) == {"version": "3.12"}
+    assert all(arg for arg in seen[0]), seen[0]
+
+
 def test_pvpython_search_is_the_shared_one(monkeypatch):
     monkeypatch.setattr(install_deps.locate, "find_executable", lambda name: Path("pv") / "bin" / name)
     assert install_deps.find_pvpython() == str(Path("pv") / "bin" / "pvpython")
