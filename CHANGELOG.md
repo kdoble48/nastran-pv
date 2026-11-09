@@ -28,6 +28,24 @@ All notable changes to nastran-pv are listed here. The format follows
   element's critical ply, with its id in `PlyStressPly` and the like; `convert` names the ply types that have
   the ply and warns about the others. Those tables leave the "not attached" report; the ply types read
   real tables only (a complex ply table stays reported) (#71).
+- Results helpers (roadmap task 12; docs/results-helpers.md), from the CLI and as filters:
+  - Envelopes: `--envelope [max min absmax]` (`convert`, `stats`, `store add`; `--envelope-steps`)
+    and *Nastran Envelope* (over the input's time steps) add `<array>_Max`, `_Min`, `_AbsMax` and
+    the step of each (`_MaxStep`, ...) for every result array, per component.
+  - Element-to-node averaging that does not cross PID boundaries: `convert --average [ARRAY ...]`
+    (`--average-within pid|mid|family|group|none`) adds the `Averaged` block, the mesh blocks on
+    points duplicated per (grid, PID) with the averages as point arrays; *Nastran Nodal Average*
+    outputs the same. Each step of a series gets its own.
+  - Free-body sums: `convert --free-body SEEDS` (with `--free-body-rules`, by default within the
+    seeds' properties, and `--free-body-point`) and
+    *Nastran Free Body* (table and arrows at the summation point) give the load a free body grown
+    under the traversal rules transmits through its cut grids, from the grid point force balance,
+    the body's rigid elements' MPC forces there included, with the applied and SPC forces inside
+    it as the check; without GPFORCE, from equilibrium.
+  - The `GridPointForce` result type (OP2 `grid_point_forces`, HDF5 `NODAL/GRID_FORCE`), off by
+    default and turned on by `--free-body`: the balance's element rows as a root table per step
+    (a new `table` location in the registry; every step has the file's rows, so a VTKHDF series
+    holds subcases with different GPFORCE sets), MYSTRAN's negated OP2 rows normalised (#73).
 - Complex, frequency and transient results (roadmap task 11). A frequency response (SOL 108/111),
   complex modes (SOL 107/110) and a transient (SOL 109/112) load as time series in the reader and
   convert to `.pvd` or temporal VTKHDF (compaction unchanged): one step per frequency, complex mode

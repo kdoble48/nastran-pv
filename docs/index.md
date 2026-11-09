@@ -27,6 +27,9 @@ you use.
   ParaView filters.
 - [Model tools](tools.md): connectivity traversal (grow), parts, shortest paths and model checks,
   with per-card-type rules, from the CLI, Python and ParaView.
+- [Results helpers](results-helpers.md): envelopes over the subcases, element results averaged
+  to the grids without crossing property boundaries, and free-body sums of the load through a cut,
+  from the CLI and as ParaView filters.
 - [Model diff](diff.md): what changed between two versions of a model (grids, elements,
   properties, materials, mass and CG), as a report, as colors on the mesh and side by side.
 - [Run store](store.md): keep runs in SQLite and compare fields across runs and meshes.
@@ -69,6 +72,7 @@ paraview-tutorials
 cli
 fields
 tools
+results-helpers
 diff
 store
 random-vibration

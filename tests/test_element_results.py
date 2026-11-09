@@ -91,11 +91,11 @@ def test_forces_are_attached_by_default(results, deck):
 
 
 def test_every_type_is_available(results):
-    """Every type but the nodal SPC/MPC forces, applied loads, velocities, accelerations, ply strains
-    and failure indices, which the fixture lacks (its one composite table, CQUAD4 3's stresses, gives
-    PlyStress)."""
-    lacks = (rt.SPC_FORCE, rt.MPC_FORCE, rt.APPLIED_LOAD, rt.VELOCITY, rt.ACCELERATION, rt.PLY_STRAIN,
-             rt.PLY_FAILURE_INDEX)
+    """Every type but the nodal SPC/MPC forces, applied loads, velocities, accelerations, grid point
+    forces, ply strains and failure indices, which the fixture lacks (its one composite table, CQUAD4
+    3's stresses, gives PlyStress)."""
+    lacks = (rt.SPC_FORCE, rt.MPC_FORCE, rt.APPLIED_LOAD, rt.VELOCITY, rt.ACCELERATION, rt.GRID_POINT_FORCE,
+             rt.PLY_STRAIN, rt.PLY_FAILURE_INDEX)
     assert results.available == tuple(t.name for t in rt.REGISTRY if t not in lacks)
     assert [t.name for t in results.attached()] == [t.name for t in rt.REGISTRY if t.default and t not in lacks]
 

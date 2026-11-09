@@ -406,9 +406,10 @@ def element_result_checks(pv, nv):
             reader.ResultTypes = [t.name for t in REGISTRY if t.default]  # a new file: back to the defaults
             t0 = rm.timesteps(reader)[0]
             text += _messages(lambda: reader.UpdatePipeline(t0))
-            # not in the fixture: nodal loads, velocities, accelerations, ply strains and failure indices
-            # (its CQUAD4 3 ply stresses give PlyStress)
-            absent = ("SPCForce", "MPCForce", "AppliedLoad", "Velocity", "Acceleration", "PlyStrain", "PlyFailureIndex")
+            # not in the fixture: nodal loads, velocities, accelerations, grid point forces, ply
+            # strains and failure indices (its CQUAD4 3 ply stresses give PlyStress)
+            absent = ("SPCForce", "MPCForce", "AppliedLoad", "Velocity", "Acceleration", "GridPointForce",
+                      "PlyStrain", "PlyFailureIndex")
             listed = [t.name for t in REGISTRY if t.name not in absent]
             check(nv._listed(reader, "ResultTypes") == listed, f"{kind}: every type the fixture has is listed")
             check(_by_eid(reader, "Lines", "AxialForce") == {21: 7.0, 22: 15.0, 23: 31.0},
@@ -1309,6 +1310,164 @@ def result_load_checks(pv, nv, main_reader):
     g.UpdatePipeline(t0)
     check(_point_values(g, "NID") == {2, 5}, "Load Glyphs on a converted series: the MPC forces at grids 2 and 5")
     pv.Delete(g)
+    pv.Delete(src)
+
+
+def _table_row(table, source):
+    """FX FY FZ MX MY MZ of the row ``source`` of a free-body table."""
+    names = table.GetColumnByName("Source")
+    k = [names.GetValue(i) for i in range(table.GetNumberOfRows())].index(source)
+    return [table.GetColumnByName(c).GetValue(k) for c in ("FX", "FY", "FZ", "MX", "MY", "MZ")]
+
+
+def _averaged(nv, src, block="Shells"):
+    """{(NID, PID): VonMisesMax} of a Nastran Nodal Average output block."""
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    data = nv.fetch(src)
+    pd = data.GetBlock(nv.block_names(data).index(block)).GetPointData()
+    vm = pd.GetArray("VonMisesMax")
+    if vm is None:
+        return None
+    nid = vtk_to_numpy(pd.GetArray("NID")).tolist()
+    pid = vtk_to_numpy(pd.GetArray("PID")).tolist() if pd.GetArray("PID") is not None else [0] * len(nid)
+    return dict(zip(zip(nid, pid), vtk_to_numpy(vm).tolist()))
+
+
+def results_helper_checks(pv, nv):
+    """Nastran Envelope over the reader's and a converted series' time steps, Nastran Nodal Average
+    following the time, Nastran Free Body on the reader (OP2 and HDF5) and on a converted file:
+    the hand-computed values of test_envelope.py, test_average.py and test_freebody.py."""
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    from op2_fixture import make_envelope_op2, make_freebody_op2, make_op2, write_freebody_h5
+
+    tmp = tempfile.mkdtemp()  # not removed: an open VTKHDF reader keeps its file locked
+    env_op2 = os.path.join(tmp, "env.op2")
+    make_envelope_op2().write_op2(env_op2)
+    reader = rm.load_reader(DECK, env_op2)
+    env = pv.NastranEnvelope(Input=reader)
+    env.UpdatePipeline()
+    info = env.GetDataInformation().DataInformation
+    check(info.GetNumberOfTimeSteps() == 0 and rm.timesteps(reader),
+          f"Nastran Envelope: the output has no time steps ({info.GetNumberOfTimeSteps()})")
+    vmax = _by_eid(env, "Shells", "VonMisesMax_Max")
+    check(vmax[1] == 9 and vmax[2] == 7 and np.isnan(vmax[3])
+          and _by_eid(env, "Shells", "VonMisesMax_MaxStep") == {1: 2, 2: 0, 3: -1},
+          "Envelope over the reader's 3 steps: VonMisesMax max 9 (step 2) and 7 (step 0)")
+    from nastran_pv.tree import as_multiblock
+
+    blk = as_multiblock(rm.nv.fetch(env))
+    blk = blk.GetBlock(nv.block_names(blk).index("Shells"))
+    nid = list(vtk_to_numpy(blk.GetPointData().GetArray("NID")))
+    dmin = vtk_to_numpy(blk.GetPointData().GetArray("Displacement_Min"))[nid.index(3)].tolist()
+    check(np.allclose(dmin, [-0.6, 0, -6], rtol=1e-5) and blk.GetPointData().GetArray("Displacement") is None
+          and blk.GetCellData().GetArray("VonMisesMax") is None,
+          f"Displacement_Min at grid 3 {dmin}; the per-step arrays are gone")
+    env.Steps = "0 2"
+    env.MaxAbs = 0
+    env.UpdatePipeline()
+    blk = as_multiblock(rm.nv.fetch(env))
+    blk = blk.GetBlock(nv.block_names(blk).index("Shells"))
+    dmin = vtk_to_numpy(blk.GetPointData().GetArray("Displacement_Min"))[nid.index(3)].tolist()
+    check(np.allclose(dmin, [0.15, 0, 3], rtol=1e-5) and blk.GetPointData().GetArray("Displacement_AbsMax") is None,
+          f"Steps 0 2, no Max Abs: Displacement_Min at grid 3 {dmin}")
+    env.Steps = ","  # selects no step: said, and every step is used (it raised IndexError in the pipeline)
+    text = _messages(lambda: env.UpdatePipeline())
+    blk = as_multiblock(rm.nv.fetch(env))
+    blk = blk.GetBlock(nv.block_names(blk).index("Shells"))
+    dmin = vtk_to_numpy(blk.GetPointData().GetArray("Displacement_Min"))[nid.index(3)].tolist()
+    check("selects no step" in text and np.allclose(dmin, [-0.6, 0, -6], rtol=1e-5),
+          f"Steps ',': reported, every step used ({dmin})")
+    pv.Delete(env)
+    pv.Delete(reader)
+    series = os.path.join(tmp, "env.vtkhdf")
+    convert(["convert", DECK, "--results", env_op2, "--all-steps", "-o", series, "-q"])
+    src = nv.load_reader(series)
+    env = pv.NastranEnvelope(Input=src)
+    env.UpdatePipeline()
+    check(_by_eid(env, "Shells", "VonMisesMax_Max")[1] == 9.0 and _by_eid(env, "Shells", "VonMisesMax_MinStep")[2] == 2,
+          "Envelope over a converted VTKHDF series' time steps")
+    pv.Delete(env)
+    pv.Delete(src)
+
+    full = os.path.join(tmp, "full.op2")
+    make_op2().write_op2(full)
+    reader = rm.load_reader(DECK, full)
+    times = rm.timesteps(reader)
+    avg = pv.NastranNodalAverage(Input=reader)
+    avg.UpdatePipeline(times[0])
+    vm = _averaged(nv, avg)
+    check(vm is not None and vm[(5, 2)] == 7 and vm[(5, 1)] == 3 and len(vm) == 9,
+          f"Nodal Average: grid 5 gets 3 in PID 1 and 7 in PID 2, 9 points: {vm}")
+    avg.UpdatePipelineInformation()
+    listed = nv._listed(avg, "Arrays")
+    check("VonMisesMax" in listed and "Thickness" in listed, f"the Arrays checklist lists VonMisesMax: {listed}")
+    avg.AverageWithin = "Whole block"
+    avg.UpdatePipeline(times[0])
+    vm = _averaged(nv, avg)
+    check(len(vm) == 7, f"Average Within Whole block: one point per grid ({len(vm)})")
+    avg.UpdatePipeline(times[-1])
+    check(_averaged(nv, avg) is None, "a mode step has no VonMisesMax to average")
+    pv.Delete(avg)
+    pv.Delete(reader)
+
+    fb_deck = os.path.join(HERE, "data", "freebody.bdf")
+    op2 = os.path.join(tmp, "fb.op2")
+    make_freebody_op2().write_op2(op2)
+    h5 = str(write_freebody_h5(os.path.join(tmp, "fb.h5")))
+    for results in (op2, h5):
+        ext = os.path.splitext(results)[1]
+        reader = rm.load_reader(fb_deck, results)
+        t0 = (rm.timesteps(reader) or [0.0])[0]
+        fb = pv.NastranFreeBody(Input=reader, SeedIDs="PID 2")
+        fb.StayWithin = "seed properties"
+        text = _messages(lambda: fb.UpdatePipeline(t0))
+        check(np.isnan(_table_row(rm.nv.fetch(fb, 1), "Elements")).all() and "no GridPointForce" in text,
+              f"{ext}: GridPointForce is off by default: the cut load from equilibrium, and the filter says so")
+        pv.Delete(fb)
+        fb = nv.free_body("PID 2", reader=reader)  # checks GridPointForce in the reader, stays in PID 2
+        check("GridPointForce" in list(reader.ResultTypes) and nv.enum_text(fb, "StayWithin") == "seed properties",
+              f"{ext}: nv.free_body checks GridPointForce and stays within the seed property")
+        fb.UpdatePipeline(t0)
+        cut = _table_row(rm.nv.fetch(fb, 1), "Cut")
+        check(np.allclose(cut, [10, 0, 80, -15, -180, -10], atol=1e-5), f"{ext}: Free Body PID 2, cut load {cut}")
+        check(np.allclose(_table_row(rm.nv.fetch(fb, 1), "Imbalance"), 0, atol=1e-5), f"{ext}: the imbalance is zero")
+        check(_root(fb, "ArrowCount", 2) == [2], f"{ext}: the glyph has the force and moment arrows")
+        check(_by_eid(fb, "Lines", "FreeBody") == {1: 0, 2: 1, 3: 1, 4: 1, 21: 0, 22: 0, 23: 0, 24: 0, 31: 0, 32: 0},
+              f"{ext}: FreeBody marks bars 2-4")
+        fb.SumAbout = "Grid"
+        fb.Grid = 4
+        fb.UpdatePipeline(t0)
+        cut = _table_row(rm.nv.fetch(fb, 1), "Cut")
+        check(np.allclose(cut, [10, 0, 80, -15, -20, -10], atol=1e-5), f"{ext}: about GRID 4 {cut}")
+        fb.SumAbout = "Cut centroid"
+        fb.SeedIDs = "EID 3"
+        fb.StayWithin = "anything"
+        fb.LimitHops = 1
+        fb.MaxHops = 0
+        fb.UpdatePipeline(t0)
+        cut = _table_row(rm.nv.fetch(fb, 1), "Cut")
+        check(np.allclose(cut, [0, 0, 100, 5, -100, 0], atol=1e-5), f"{ext}: bar 3 alone (Max Hops 0) {cut}")
+        fb.SeedIDs = "PID 32"  # with the RBE2, not CBAR 31: its MPC force at grid 32 is the cut load
+        fb.LimitHops = 0
+        fb.ExcludePIDs = "31"
+        fb.UpdatePipeline(t0)
+        table = rm.nv.fetch(fb, 1)
+        cut, mpc = _table_row(table, "Cut"), _table_row(table, "MPC")
+        check(np.allclose(cut, [0, 0, 10, 0, -15, 0], atol=1e-5) and np.allclose(mpc, cut, atol=1e-5),
+              f"{ext}: the load through the body's RBE2 is in the cut load {cut}")
+        pv.Delete(fb)
+        pv.Delete(reader)
+    vtm = os.path.join(tmp, "fb.vtm")
+    convert(["convert", fb_deck, "--results", op2, "--result-types", "all", "-o", vtm, "-q"])
+    src = nv.load_reader(vtm)
+    fb = pv.NastranFreeBody(Input=src, SeedIDs="PID 22")
+    fb.StayWithin = "seed properties"
+    fb.UpdatePipeline()
+    cut = _table_row(rm.nv.fetch(fb, 1), "Cut")
+    check(np.allclose(cut, [0, -10, 0, 0, 0, -5], atol=1e-5), f"Free Body on a converted .vtm: the truss tip {cut}")
+    pv.Delete(fb)
     pv.Delete(src)
 
 
@@ -3380,6 +3539,7 @@ def main():
     calc_nan_checks(pv, nv)
     random_checks(pv, nv)
     result_load_checks(pv, nv, reader)
+    results_helper_checks(pv, nv)
     pressure_checks(pv, nv)
     dynamic_result_checks(pv, nv)
     topology_checks(pv, nv)

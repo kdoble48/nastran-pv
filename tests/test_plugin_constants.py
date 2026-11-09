@@ -49,3 +49,11 @@ def test_reader_glyph_and_diff_choices_match_nastran_pv():
     assert len(ast.literal_eval(found["_DIFF_KIND_LABELS"])) == len(diff.KINDS)
     assert ast.literal_eval(found["_DIFF_STATUSES"]) == diff.STATUS_NAMES
     assert ast.literal_eval(found["_DIFF_REASONS"]) == tuple(diff.REASON_NAMES[1 << i] for i in range(len(diff.REASON_NAMES)))
+
+
+def test_reader_results_helper_choices_match_nastran_pv():
+    from nastran_pv.post import average, envelope
+
+    found = _assignments("nastran_bdf_reader.py")
+    assert ast.literal_eval(found["_ENVELOPE_KINDS"]) == envelope.KINDS
+    assert ast.literal_eval(found["_AVERAGE_WITHIN"]) == tuple(average.WITHIN)

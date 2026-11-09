@@ -23,6 +23,7 @@ out when the deck has nothing for it.
 | `Loads/SID_n`, `Loads/LOAD_n` | FORCE/MOMENT(1,2) per set, LOAD combinations resolved | point: `NID Force Moment ForceMagnitude MomentMagnitude`; field: `LoadSet ResultantForce GravityAcceleration` (GRAV only) |
 | `Pressures/SID_n`, `Pressures/LOAD_n` | the faces PLOAD, PLOAD2 and PLOAD4 load, per set as for `Loads` (LOAD combinations scale and sum them); see [Pressure loads](#pressure-loads) | cell: `EID LoadCard Pressure PressureDirection PressureForce`; point: `NID CornerPressure`; field: `LoadSet ResultantForce LoadCardNames` |
 | `Removed` | the reference model's removed items (only with `convert --diff-against` or the Nastran Diff filter) | cell: `EID PID ElementType ElementMass DiffStatus DiffReason DeltaElementMass ItemType SID`; point: `NID`; see [Model diff](diff.md#diff-on-the-mesh) |
+| `Averaged/Shells`, `Averaged/Solids`, `Averaged/Lines` | cell arrays averaged to the grids without crossing PIDs (only with `convert --average`): the block's cells on points duplicated per (grid, PID); see [Results helpers](results-helpers.md#nodal-averaging-within-properties) | point: `NID PID Displacement` and the averaged arrays (named as the cell arrays); cell: `EID PID ElementType` |
 | `BeamSections` | CBAR/CBEAM cross sections swept in 3D (only with `--beam-sections`) | cell: `EID PID MID ElementType BeamPart Face`; point: `GA GB StationT`, with results `Displacement DisplacementMagnitude` |
 
 Categorical arrays keep their names in block field data: `ElementTypeNames`, `RigidTypeNames`,
@@ -102,6 +103,7 @@ The [field options](fields.md) add further arrays on top of these.
 | `SolidStress` | Solids, at the centre: `Stress` (XX YY ZZ XY YZ ZX, a symmetric tensor), `PrincipalStress` (3, largest first), `MaxShearStress`, `VonMises` | `stress.c{tetra,penta,hexa,pyram}_stress` / `STRESS/*` with `X Y Z TXY TYZ TZX` |
 | `LineStress` | Lines: `AxialStress` (bars, rods), `TorsionalStress` (rods), `MaxStress`/`MinStress` (the largest S-MAX and smallest S-MIN of a bar's or beam's two ends; a rod's axial stress) | `stress.cbar_stress`, `stress.cbeam_stress`, `stress.c{rod,onrod,tube}_stress` / `STRESS/{BAR,BEAM,ROD,CONROD,TUBE}` |
 | `ShellStrain`, `SolidStrain`, `LineStrain` | as the stresses, with `Strain` for `Stress` (`StrainTop`, `PrincipalStrain`, `MaxShearStrainBottom`, `AxialStrain`, `MaxStrain`, ...) and no von Mises | the `strain.*` tables / `ELEMENTAL/STRAIN/*` |
+| `GridPointForce` | root table of the grid point force balance's element rows (the force and moment of each element on each of its grids, MSC sign), per step: `GridPointForceNID GridPointForceEID GridPointForce GridPointMoment`, rotated from each grid's CD into basic; the applied, SPC and MPC rows (they are the types above), the totals and rigid elements' rows are left out; every step has every row of the file (NaN where it has none); off by default, turned on by the [free-body sums](results-helpers.md#free-body-sums) | `grid_point_forces` / `NODAL/GRID_FORCE` (`GPFORCE=`) |
 | `PlyStress` | Shells, one ply per element (`--ply`, see [Composites](#composites)), in the ply's material system (1 = fibre): `PlyStress` (S11 S22 S12), `PlyInterlaminarStress` (S1Z S2Z), `PlyPrincipalStress` (major, minor), `PlyMaxShearStress`, `PlyVonMises`, `PlyStressPly` (the ply id) | `stress.c{tria3,tria6,triar,quad4,quad8,quadr}_composite_stress` / `STRESS/{QUAD4,TRIA3,QUADR,TRIAR,QUAD8,TRIA6}_COMP` with `PLY X1 Y1 T1 L1 L2` |
 | `PlyStrain` | as `PlyStress`: `PlyStrain` (E11 E22 E12, engineering shear), `PlyInterlaminarStrain` (E1Z E2Z), `PlyPrincipalStrain`, `PlyMaxShearStrain`, `PlyStrainPly` | the `strain.*_composite_strain` tables / `STRAIN/*_COMP` |
 | `PlyFailureIndex` | Shells, one ply per element: `PlyFailureIndex` (FP, direct stresses or strains), `PlyBondIndex` (FB, interlaminar; NaN where Nastran computed none), `PlyFailureIndexMax` (the larger of the two), `PlyFailureIndexPly` | `failure_indices.c..._composite_force` (OEFIT: a PCOMP with FT and SB); the HDF5 `ELEMENTAL/FAILURE_INDEX/*` datasets are not read (reported) |
@@ -110,7 +112,8 @@ The [field options](fields.md) add further arrays on top of these.
 `Displacement`, `VonMisesMax`, `SPCForce`, `MPCForce`, `AppliedLoad`, the forces, `Velocity`,
 `Acceleration` and `PlyFailureIndex` are attached by default (a file without a type's tables gets
 none of its arrays), the stresses and strains when chosen (`--result-types ShellStress,SolidStress`
-or `all`; `convert` prints the types it left out).
+or `all`; `convert` prints the types it left out), and `GridPointForce` when chosen or when
+`--free-body` needs it.
 The types are declared in `src/nastran_pv/result_types.py`.
 
 The resultants are per step, named like the Loads blocks' `ResultantForce`: `Resultant<array>`

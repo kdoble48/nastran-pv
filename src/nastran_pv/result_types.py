@@ -39,7 +39,7 @@ from .assemble import MESH_BLOCKS
 # blocks that carry point results by NID (the grids of every element, mass, rigid element and SPC)
 RESULT_BLOCKS = MESH_BLOCKS + ("Masses", "Rigid", "Constraints")
 
-LOCATIONS = ("point", "cell")  # point or cell data of the blocks
+LOCATIONS = ("point", "cell", "table")  # point or cell data of the blocks, or a root table of rows
 KEYS = ("", "NID", "EID")  # the id the rows are keyed by ("": NID for point, EID for cell types)
 REDUCTIONS = ("none", "max", "ply")
 PLY_FIELD = "PLY"  # the ply id field of an MSC/NX HDF5 composite table (OP2: element_layer[:, 1])
@@ -68,13 +68,15 @@ class ArraySpec:
     ``max_shear`` and ``von_mises`` from stress or strain components (3 columns: XX YY XY of a
     shell; 6: XX YY ZZ XY YZ ZX of a solid), ``max``/``min`` over the columns. ``shear`` is the
     factor from the written shear components to tensor shear (0.5 for engineering strain); maximum
-    shear is written in the components' own convention."""
+    shear is written in the components' own convention. ``integer``: an id column of a table type,
+    written as integers (a row without it is no row of the table)."""
 
     name: str
     columns: tuple[int, ...]
     magnitude: bool = False
     derive: str = ""
     shear: float = 1.0
+    integer: bool = False
 
     def __post_init__(self):
         if self.derive not in DERIVES:
@@ -121,6 +123,11 @@ class Op2Source:
     (:func:`pick_plan`, :func:`pick_values`). ``requires``: header names a table must have to be read (a shell table
     with ``fiber_distance``, not ``fiber_curvature``).
 
+    ``rows`` (instead of ids and columns): ``rows(table, itime)`` gives ``(ids, values, note)`` of a
+    table whose rows are not one per id (the grid point force balance: :func:`gpforce_op2_rows`),
+    or None when it cannot read the table; ``note`` (or None) is reported once, when a step first
+    reads the table (the rows are read on first use).
+
     ``form``: the tables it reads, ``""`` real and complex ones (complex only for a type with
     ``complex`` parts), ``"real"`` or ``"complex"`` only: a complex table whose headers differ from
     the real one gets its own source. ``accept(table)``: false leaves a table out (:func:`fibre_table`:
@@ -132,6 +139,7 @@ class Op2Source:
     kinds: tuple[str, ...] = ()
     picks: tuple = ()
     requires: tuple[str, ...] = ()
+    rows: Callable | None = None
     form: str = ""
     accept: Callable | None = None
 
@@ -202,7 +210,9 @@ class ResultType:
     """One kind of result and the arrays it becomes.
 
     * ``location``: ``point`` (rows keyed by grid, written by ``NID``) or ``cell`` (by element,
-      written by ``EID``).
+      written by ``EID``), or ``table``: rows that are neither one per grid nor one per element,
+      written as a root table (``table_names``: the ids, then each array; no ``blocks``), sorted by
+      id and then by the ``integer`` columns.
     * ``blocks``: the blocks that get the arrays; ids without a row get ``fill`` (0 keeps
       ``Warp By Vector`` usable, NaN marks "no output", and an all-NaN array is not written).
     * ``reduce``: ``none`` (one row per id), ``max`` (the largest value of each column over an
@@ -284,6 +294,10 @@ class ResultType:
                              f"arrays and whose last array is {self.name}Ply (the ply id)")
         if self.ply_by and self.reduce != "ply":
             raise ValueError(f"result type {self.name}: ply_by needs reduce='ply'")
+        if (self.location == "table") != (not self.blocks):
+            raise ValueError(f"result type {self.name}: a table type has no blocks, and only a table type")
+        if self.location == "table" and sum(a.integer for a in self.arrays) > 1:
+            raise ValueError(f"result type {self.name}: a table type has at most one integer column")
 
     @property
     def op2_sources(self) -> tuple:
@@ -297,6 +311,14 @@ class ResultType:
     def resultant_names(self) -> tuple[str, ...]:
         """The root field arrays of the resultant (force, moment), or () for a type without one."""
         return tuple(f"Resultant{a.name}" for a in self.arrays[:2]) if self.resultant else ()
+
+    @property
+    def table_names(self) -> tuple[str, ...]:
+        """The root arrays of a table type: ``<name><id array>`` (the ids), then each array's;
+        () for other types."""
+        if self.location != "table":
+            return ()
+        return (f"{self.name}{self.id_array}",) + tuple(a.name for a in self.arrays)
 
     @property
     def defines_steps(self) -> bool:
@@ -843,12 +865,98 @@ def _grid_motion(name, linear, angular, op2_table, h5_dataset) -> ResultType:
 VELOCITY = _grid_motion("Velocity", "Velocity", "AngularVelocity", "velocities", "NODAL/VELOCITY")
 ACCELERATION = _grid_motion("Acceleration", "Acceleration", "AngularAcceleration", "accelerations",
                             "NODAL/ACCELERATION")
+# ------------------------------------------------------------------ grid point force balance (GPFORCE)
+# Not elastic-element rows: the applied load, SPC and MPC forces (AppliedLoad, SPCForce and MPCForce
+# carry them), the totals, and rigid elements (NX lists them by name; MSC as F-OF-MPC: in MPCForce
+# either way, so they are left out to be counted once).
+GPF_NOT_ELEMENTS = ("APP-", "F-OF-", "*", "RBE", "RBAR", "RROD", "RTRPLT", "RSPLINE", "RJOINT", "RSSCON")
+GPF_FLIPPED = ("element rows written with the opposite sign (the grid's rows balance only with them negated, "
+               "as MYSTRAN writes its OP2): negated")
+
+
+def _source_names(names) -> np.ndarray:
+    return np.char.strip(np.asarray(names).astype(str))
+
+
+def gpforce_element_rows(names) -> np.ndarray:
+    """Mask of the elastic-element rows of a grid point force balance, by source name."""
+    names = _source_names(names)
+    return (names != "") & ~np.any([np.char.startswith(names, p) for p in GPF_NOT_ELEMENTS], axis=0)
+
+
+def gpforce_sign(nids, names, data, elem=None) -> float:
+    """-1 when the element rows of one table and time balance the grids' other rows only negated
+    (MYSTRAN 19's OP2; its .f06 has the MSC sign), else 1: the MSC convention, the force of the
+    element on the grid, so that every grid's rows sum to zero. Decided on the grids with an
+    applied load, SPC, MPC or rigid-element row; a table without any keeps its sign. ``elem``:
+    :func:`gpforce_element_rows` of ``names`` when the caller has it."""
+    names = _source_names(names)
+    data = np.asarray(data, dtype=float)
+    elem = gpforce_element_rows(names) if elem is None else elem
+    load = ~elem & (names != "") & ~np.char.startswith(names, "*")
+    if not load.any():
+        return 1.0
+    grids, inv = np.unique(np.asarray(nids), return_inverse=True)
+    e, n = np.zeros((len(grids), 6)), np.zeros((len(grids), 6))
+    np.add.at(e, inv[elem], data[elem])
+    np.add.at(n, inv[load], data[load])
+    loaded = np.zeros(len(grids), bool)
+    loaded[inv[load]] = True
+    plus, minus = np.abs(n + e)[loaded].sum(), np.abs(n - e)[loaded].sum()
+    return -1.0 if minus < 1e-3 * plus else 1.0
+
+
+def gpforce_rows(nids, eids, names, data):
+    """``(grid ids, (n, 7) F1-F3 M1-M3 EID, sign)`` of the elastic-element rows of one table and
+    time of a grid point force balance, in the MSC sign (:func:`gpforce_sign`)."""
+    names = _source_names(names)
+    data = np.asarray(data, dtype=float)
+    elem = gpforce_element_rows(names)
+    sign = gpforce_sign(nids, names, data, elem)
+    values = np.column_stack([sign * data[elem], np.asarray(eids)[elem].astype(float)])
+    return np.asarray(nids)[elem].astype(np.int64), values, sign
+
+
+def gpforce_op2_rows(table, itime):
+    """``(grid ids, (n, 7) F1-F3 M1-M3 EID, note)`` of a pyNastran grid point force table at
+    ``itime`` (:func:`gpforce_rows`); the note says when the rows were negated."""
+    ne, names = np.asarray(table.node_element), np.asarray(table.element_names)
+    ne = ne[itime] if ne.ndim == 3 else ne
+    names = names[itime] if names.ndim == 2 else names
+    ids, values, sign = gpforce_rows(ne[:, 0], ne[:, 1], names, table.data[itime])
+    return ids, values, (GPF_FLIPPED if sign < 0 else None)
+
+
+def gpforce_h5_table(rows) -> np.ndarray | None:
+    """(n, 7) F1-F3 M1-M3 EID of an MSC/NX ``NODAL/GRID_FORCE`` table, the EID NaN on the rows
+    that are not elastic elements (dropped when written), signs normalised per domain."""
+    if not {"EID", "ELNAME", "F1", "F2", "F3", "M1", "M2", "M3"} <= set(rows.dtype.names):
+        return None
+    names = np.char.decode(rows["ELNAME"], "latin-1") if rows["ELNAME"].dtype.kind == "S" else rows["ELNAME"]
+    names = _source_names(names)
+    elem = gpforce_element_rows(names)
+    data = np.column_stack([rows[f].astype(float) for f in ("F1", "F2", "F3", "M1", "M2", "M3")])
+    for d in np.unique(rows["DOMAIN_ID"]):
+        m = rows["DOMAIN_ID"] == d
+        data[m] *= gpforce_sign(rows["ID"][m], names[m], data[m], elem[m])
+    eid = np.where(elem, rows["EID"].astype(float), np.nan)
+    return np.column_stack([data, eid])
+
+
+GRID_POINT_FORCE = ResultType(
+    "GridPointForce", "table", (),
+    (ArraySpec("GridPointForce", (0, 1, 2)), ArraySpec("GridPointMoment", (3, 4, 5)),
+     ArraySpec("GridPointForceEID", (6,), integer=True)),
+    op2=Op2Source(("grid_point_forces",), rows=gpforce_op2_rows),
+    h5=H5Source(("NODAL/GRID_FORCE",), compute=gpforce_h5_table),
+    frame="grid_cd", key="NID", default=False)  # a row per element and grid: chosen, or by the free body
 
 REGISTRY: tuple[ResultType, ...] = (
     DISPLACEMENT, VON_MISES_MAX, SPC_FORCE, MPC_FORCE, APPLIED_LOAD,
     SHELL_FORCE, LINE_FORCE, BUSH_FORCE, SPRING_FORCE,
     SHELL_STRESS, SOLID_STRESS, LINE_STRESS, SHELL_STRAIN, SOLID_STRAIN, LINE_STRAIN,
     VELOCITY, ACCELERATION,
+    GRID_POINT_FORCE,
     PLY_STRESS, PLY_STRAIN, PLY_FAILURE_INDEX,
 )
 
