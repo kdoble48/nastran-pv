@@ -65,7 +65,7 @@ _HELP = (
     "version as ParaView's Python that has pyNastran installed. Original error: {err}"
 )
 
-_FLAGS = ("shells", "lines", "solids", "masses", "rigid", "connectors", "bushes", "constraints", "loads")
+_FLAGS = ("shells", "lines", "solids", "masses", "rigid", "connectors", "plotels", "bushes", "constraints", "loads")
 # model tree checklists (reader property -> nastran_pv.tree category)
 _VISIBILITY = {"VisibleProperties": "Properties", "VisibleMaterials": "Materials",
                "VisibleElementTypes": "ElementTypes", "VisibleFamilies": "Families", "VisibleGroups": "Groups",
@@ -310,6 +310,8 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         self._mb_key = None
         self._results = None
         self._results_key = None
+        self._result_types = vtkDataArraySelection()  # ResultTypes: what the results file has
+        self._result_types.AddObserver("ModifiedEvent", lambda *args: None if self._listing else self.Modified())
         self._random_asd = ""
         self._random_drive = 2
         self._random_damping = 0.05
@@ -352,6 +354,12 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
     @smhint.filechooser(extensions="op2 OP2 h5 hdf5", file_description="Nastran results (OP2, MSC/NX HDF5)")
     def SetOP2FileName(self, name):
         self._set("_op2name", name or "")
+
+    @smproperty.dataarrayselection(name="ResultTypes")
+    def GetResultTypes(self):
+        """The result types the OP2/HDF5 file has (Displacement, VonMisesMax, ...): only the
+        checked ones are attached at each time step (convert --result-types)."""
+        return self._result_types
 
     # ----------------------------------------------- random vibration
     def _set_random(self, attr, value):
@@ -418,6 +426,11 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
     @smdomain.xml('<BooleanDomain name="bool"/>')
     def SetConnectors(self, v):
         self._set_flag("connectors", v)
+
+    @smproperty.intvector(name="Plotels", default_values=1)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetPlotels(self, v):
+        self._set_flag("plotels", v)
 
     @smproperty.intvector(name="Bushes", default_values=1)
     @smdomain.xml('<BooleanDomain name="bool"/>')
@@ -642,6 +655,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         info.Remove(key_steps)
         info.Remove(key_range)
         res = self._get_response(quiet=True)
+        self._list_result_types()
         if res is not None and res.steps:
             times = res.times
             for t in times:
@@ -655,6 +669,35 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
             except Exception:
                 pass  # RequestData reports it
         return 1
+
+    def _list_result_types(self):
+        """ResultTypes entries: the types of the results file; a type that stays keeps its setting,
+        a new one starts at its registry default."""
+        res = self._get_results(quiet=True)
+        names = list(getattr(res, "available", ()))
+        sel = self._result_types
+        if names == [sel.GetArrayName(i) for i in range(sel.GetNumberOfArrays())]:
+            return
+        from nastran_pv.result_types import by_name
+
+        self._listing = True
+        try:
+            for name in [sel.GetArrayName(i) for i in range(sel.GetNumberOfArrays())]:
+                if name not in names:
+                    sel.RemoveArrayByName(name)
+            for name in names:
+                if not sel.ArrayExists(name):
+                    sel.AddArray(name, by_name(name, res.registry).default)
+        finally:
+            self._listing = False
+
+    def _select_result_types(self, res):
+        """Attach the checked ResultTypes (the OP2/HDF5 results; a random response has its own
+        arrays). Listed again first: a time step can re-read a results file that changed on disk
+        without a RequestInformation, and then its new types must be listed (at their default)."""
+        if hasattr(res, "select"):
+            self._list_result_types()
+            res.select([n for n in res.available if self._result_types.ArrayIsEnabled(n)])
 
     def _list_categories(self, mb, deck):
         """Checklist entries for the current multiblock; settings of labels that stay are kept."""
@@ -721,6 +764,21 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         self._sel_error = None
         return self._sel_ids
 
+    def _report_messages(self, deck, mb):
+        """The deck's warnings, then the card report (what no block draws), in one Output Messages entry."""
+        from nastran_pv import cards
+
+        lines = deck.warnings[:25]
+        if len(deck.warnings) > 25:
+            lines.append(f"... {len(deck.warnings) - 25} more")
+        skipped = cards.read(mb)
+        if skipped:
+            lines.append(cards.summary(skipped))
+        if lines:
+            shown = "\n  ".join(lines)
+            count = len(deck.warnings) + bool(skipped)
+            _message(f"nastran-pv: {os.path.basename(self._filename)}: {count} message(s)\n  {shown}")
+
     def RequestData(self, request, inInfo, outInfo):
         if not self._filename:
             return 1
@@ -746,6 +804,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
                 if info.Has(vtkStreamingDemandDrivenPipeline.UPDATE_TIME_STEP()):
                     t = info.Get(vtkStreamingDemandDrivenPipeline.UPDATE_TIME_STEP())
                 step = int(min(range(len(res.times)), key=lambda i: abs(res.times[i] - t)))
+                self._select_result_types(res)
                 res.attach(mb, step, deck)
                 time_value = res.times[step]
                 if rebuilt:
@@ -765,10 +824,8 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
             _message(f"nastran-pv: failed to read {self._filename}:\n{traceback.format_exc()}", error=True)
             return 0
         self._load_error = ""
-        if rebuilt and deck.warnings:
-            shown = "\n  ".join(deck.warnings[:25])
-            more = f"\n  ... {len(deck.warnings) - 25} more" if len(deck.warnings) > 25 else ""
-            _message(f"nastran-pv: {os.path.basename(self._filename)}: {len(deck.warnings)} message(s)\n  {shown}{more}")
+        if rebuilt:
+            self._report_messages(deck, mb)
         output = vtkPartitionedDataSetCollection.GetData(outInfo, 0)
         output.ShallowCopy(pdc)
         if time_value is not None:

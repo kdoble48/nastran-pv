@@ -12,12 +12,17 @@ one-click views on the Macros toolbar. For step-by-step walkthroughs, see
    ParaView also offers its VisIt NASTRAN reader for some extensions.
 3. In the Properties panel, switch blocks on or off and optionally set *OP2 File Name*, which
    takes an `.op2` or MSC/NX `.h5` file. Each result step (subcase, load step or mode) becomes a
-   time step. *NSMSet* picks the bulk nonstructural mass set
+   time step, and *Result Types* lists the [result types](model.md#result-types) the file has
+   (all checked: uncheck one to leave its arrays off). *NSMSet* picks the bulk nonstructural mass set
    ([Nonstructural mass](model.md#nonstructural-mass)), *BushStiffnessReference* is `convert --k-ref`
    (0 = the softest stiffness), and *Random ASD* turns the modes into a random response
    ([Random vibration](random-vibration.md)).
 
 `nastran-pv view DECK --view masses` does all of this in one command.
+
+Output Messages lists the deck's warnings and, last, the card report: a one-line count of the cards
+no block draws, by card type ([Cards not drawn](model.md#cards-not-drawn); `nastran-pv convert`
+prints the full table).
 
 Open the run deck (the file with `INCLUDE`s) rather than a geometry include. Material and property
 cards often live in the run deck. A bare geometry file still loads, but without MID, density or mass.
@@ -36,8 +41,8 @@ source (or the source upstream of it).
 
 A converted file is fixed at conversion time, so a few things still need the deck:
 
-* *OP2 File Name*, *NSMSet* and the *Random* properties: convert again with `--results`,
-  `--nsm-set` or `--random` instead.
+* *OP2 File Name*, *Result Types*, *NSMSet* and the *Random* properties: convert again with
+  `--results`, `--result-types`, `--nsm-set` or `--random` instead.
 * The visibility checklists and the Show Only / Hide / Show All macros. On a converted file,
   use ParaView's Extract Selection or Threshold, or, for include files,
   [Nastran Files](#include-files).
@@ -48,7 +53,7 @@ The reader outputs a model tree, in the spirit of Femap's Model Info tree. Open 
 *View > MultiBlock Inspector*:
 
 ```
-Model/         Shells  Solids  Lines  Masses  Rigid  Connectors  Bushes  Constraints  Loads/LOAD_1001 …
+Model/         Shells  Solids  Lines  Masses  Rigid  Connectors  Plotels  Bushes  Constraints  Loads/LOAD_1001 …
 Properties/    PSHELL_101  PCOMP_7  PBUSH_3 …        (PID_<n> when the card is missing)
 Materials/     MAT1_1  MAT8_2 …                      (MID_<n> when the card is missing)
 ElementTypes/  CQUAD4  CTRIA3  CHEXA  RBE2  CBUSH …

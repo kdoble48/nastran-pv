@@ -18,6 +18,21 @@ All notable changes to nastran-pv are listed here. The format follows
   NPV Diff 2.1 s -> 0.9 s, NPV Masses 0.9 s -> 0.2 s). The mass, bush, load and SPC glyphs and beam
   sections carry `DiffStatus`, and the diff's Removed block knows the grid of a removed mass or bush.
   `tests/data/same_name/` holds a same-named pair (#PR).
+- Card report: every card no block draws is counted per card type and reason (not drawn, scalar
+  points, grounded, patch form, heat transfer, matrix input, superelement, not read), with its
+  first ids. `convert` prints it, `stats` and `check` on stderr, the reader in Output Messages,
+  and the root table `SKIPPED_Card SKIPPED_Count SKIPPED_Reason SKIPPED_IDs` plus
+  `SkippedCardCount` keep it in `.vtm`/VTKHDF. It replaces the scattered CMASS3/4, CWELD, CFAST
+  patch, SPC and load-type warnings, and covers what was dropped without a word (CTRIAX6, CQUADX,
+  CBUSH1D/2D, CHBDY*, CDAMP5, GENEL, DMIG, superelements, grounded springs, springs, masses, MPC
+  terms and PLOTELs on scalar points, cards pyNastran rejected). New `Plotels` block (PLOTEL
+  lines, `--no-plotels`, reader *Plotels*, not traversed by the model tools); CQUAD with nine
+  grids is a biquadratic cell (quadratic without G9), and a missing midside grid of a shell or
+  solid now warns; MPCADD is resolved into the root `MPCADD_ID MPCADD_Set` table, with
+  `ActiveMPCSets` from Case Control (#61).
+- Result types: what results attach is declared per type in `result_types.py` (`Displacement`,
+  `VonMisesMax`, outputs unchanged), so new results are added by declaration. Choose them with
+  `--result-types` (`convert`, `stats`, `store add`) or the reader's *Result Types* checklist (#60).
 - Scene layers (#54): the *NPV Clear* macro, the one full reset of a view (it hides every layer and
   sets the deformation back to 0, deleting nothing), and the *Nastran Scope* filter, the overlays'
   copy of the model cut by the reader's scope (`selection.scope_masks`).
@@ -63,6 +78,9 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Changed
 
+- `nastran-pv render` and `docs/build_gallery.py` run pvpython with `--force-offscreen-rendering`,
+  so batch screenshots and gallery exports no longer open a ParaView window; `render --onscreen`
+  opts out, and `--dry-run` quotes the command it prints (#62).
 - Views combine instead of redrawing (#54): a coloring (PID, Thickness, Results, ...) replaces the
   coloring and keeps the overlays, an overlay (Masses, Loads, SPC, ...) adds itself and a second
   toolbar click removes it, and only NPV Clear resets the view. Overlays follow
@@ -91,6 +109,8 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Fixed
 
+- A random response with `--beam-sections` no longer leaves the first mode's `Displacement` on
+  `BeamSections` (#60).
 - Overlays follow the scope as the reader applies it: a selection file of PIDs, MIDs, families,
   groups or grids now applies to masses, bushes, SPCs and loads too (adding what it lists to the
   grid join); a hidden or unticked rigid element or bush no longer carries the grid chain; one kept

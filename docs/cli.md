@@ -34,11 +34,16 @@ nastran-pv convert run.bdf --no-loads --k-ref 1e5 -o out/model.vtm
 
 Without `-o`, the output is `<input>.vtm` in the current folder. `--results` attaches one result
 step, `--step N` (0-based, default 0); `--all-steps` writes them all. On a converted series (a temporal
-`.vtkhdf`, or the `.pvd` of a `.vtm` series), `--step N` picks the step to read. `--no-nodal-arrays` leaves
+`.vtkhdf`, or the `.pvd` of a `.vtm` series), `--step N` picks the step to read. `--result-types`
+chooses what the steps carry, by [result type](model.md#result-types): `--result-types VonMisesMax`
+attaches the stresses without the displacements (names are case-insensitive and may be
+comma-separated; `all` is every type; the default is `Displacement VonMisesMax`). A type the
+results file lacks gives a warning; `stats` and `store add` take the flag too. `--no-nodal-arrays` leaves
 the `SPC_DOF`/`F_<sid>` point arrays off the mesh blocks, and `--ascii` writes ASCII XML for
 debugging.
 
-`--no-<block>` skips a block, and `--k-ref` sets the reference translational stiffness for the bush bars (see
+`--no-<block>` skips a block (`shells`, `lines`, `solids`, `masses`, `rigid`, `connectors`, `plotels`,
+`bushes`, `constraints`, `loads`), and `--k-ref` sets the reference translational stiffness for the bush bars (see
 [Model blocks and arrays](model.md#derived-quantities)). `--nsm-set ID` picks the bulk NSM set
 (default: Case Control `NSM=`; `0` = none; see [Nonstructural mass](model.md#nonstructural-mass));
 `view` and `render` take it too. An output ending in `.vtkhdf`, or
@@ -66,8 +71,10 @@ every 5 s instead. Stdout (the block summary and the tables) is unchanged. `-q`/
 the progress off, and `-v`/`--verbose` also echoes pyNastran's warnings as they come. In
 ParaView, the same stages and card counts drive the reader's progress bar.
 
-`convert` ends with the deck's first ten warnings, and `stats` and `check` print them to stderr
-(so the table and `--csv` stay clean). A failed cross-reference comes first, then the warnings
+`convert` ends with the card report (every card no block draws, one line per card type and
+reason, the first 25 rows; see [Cards not drawn](model.md#cards-not-drawn)) and the deck's first
+ten warnings. `stats` and `check` print both to stderr (so the table and `--csv` stay clean); on a
+converted file they are the ones it was written with. A failed cross-reference comes first, then the warnings
 that change the mass (NSM ids that match no element, excluded structural mass, impossible
 inertia), then pyNastran's own.
 
@@ -181,14 +188,16 @@ for `--view diff` and [side by side](diff.md#side-by-side).
 nastran-pv render run_deck.bdf --preset family masses loads spc --views iso top --out shots/
 nastran-pv render run.dat --results run.op2 --step 3 --preset results
 nastran-pv render out/modes.vtkhdf --step 3 --preset results   # a converted series: no --results
-# same as: pvpython paraview/render_model.py run_deck.bdf --preset ...
+# same as: pvpython --force-offscreen-rendering paraview/render_model.py run_deck.bdf --preset ...
 ```
 
 `--preset` defaults to `family masses loads spc`, `--out` to `shots/` and `--size` to `1600 1000`.
 `--step` is 0-based. The presets are the views from the toolbar macros: `masses`, `bushes`, `bushrotations`, `beams`, `loads`, `spc`, `rigid`,
 `family`, `group`, `pid`, `mid`, `elementtype`, `thickness`, `nsm`, `results`, `random`, `randomsweep`,
 `parts`, `check` and `diff`. The two random views need `--random` (or a converted random series),
-and `diff` needs `--against A`.
+and `diff` needs `--against A`. Rendering is offscreen, so no ParaView window opens; `--onscreen`
+renders in a visible window instead, for a ParaView build whose offscreen PNGs come out blank.
+`--dry-run` prints the pvpython command, quoted so it can be pasted into a shell.
 
 If the deck cannot be read, `render` writes no screenshots and exits with status 1 after printing
 `cannot read DECK: <error>`. The toolbar macros show the same message in Output Messages.

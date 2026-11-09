@@ -233,9 +233,12 @@ def sweep(lines, tables: dict, *, surfaces: bool = True, axes: bool = False, tri
 def attach_displacement(sections, lines, scale: float = 0.0) -> None:
     """Rigid-section ``Displacement``/``DisplacementMagnitude`` of every swept point from the
     ``Lines`` block's ``Displacement`` and ``Rotation``; ``scale`` != 0 also moves the points by
-    ``scale × u``. Nothing happens when the lines carry no results."""
+    ``scale × u``. When the lines carry no ``Displacement`` the sections lose theirs (a previous
+    step's) and stay where they are."""
     lpd = lines.GetPointData()
     if lpd.GetArray("Displacement") is None or sections.GetNumberOfPoints() == 0:
+        for name in ("Displacement", "DisplacementMagnitude"):
+            sections.GetPointData().RemoveArray(name)
         return
     D = vtkutil.to_numpy(lpd.GetArray("Displacement")).astype(float)
     R = get_array(lpd, "Rotation", np.zeros_like(D)).astype(float)

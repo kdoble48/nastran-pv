@@ -37,7 +37,8 @@ from conftest import DATA
 from model_compare import differences, snapshot
 from op2_fixture import make_op2
 
-DECKS = ("tiny_run", "tiny_bulk", "beams", "nsm", "topology", "diff_a", "diff_b", "diff2_a", "diff2_b", "inc_main")
+DECKS = ("tiny_run", "tiny_bulk", "beams", "nsm", "topology", "diff_a", "diff_b", "diff2_a", "diff2_b", "inc_main",
+         "cards")
 FORMATS = ("vtkhdf", "vtm")
 
 
@@ -230,7 +231,8 @@ def test_results_series_steps(files, tmp_path):
 
 def test_deck_only_options_refused(files):
     """Options that rebuild the model from the deck refuse a converted file instead of being ignored."""
-    for opts in (["--results", files["op2"]], ["--random", "20:0.01,2000:0.01"], ["--nsm-set", 5],
+    for opts in (["--results", files["op2"]], ["--result-types", "VonMisesMax"], ["--random", "20:0.01,2000:0.01"],
+                 ["--nsm-set", 5],
                  ["--k-ref", 10], ["--no-nodal-arrays"], ["--no-shells"]):
         code, _ = run(["convert", files["tiny_run"]["vtkhdf"], *opts, "-o", "unused.vtkhdf"])
         assert isinstance(code, str) and f"{opts[0]} needs the deck" in code, (opts, code)

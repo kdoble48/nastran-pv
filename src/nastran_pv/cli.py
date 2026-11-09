@@ -32,7 +32,8 @@ from .assemble import Options, add_beam_sections, block_names, build_multiblock,
 from .progress import Progress
 from .vtkio import MODEL_SUFFIXES, read_model, write_series, write_vtm
 
-BLOCK_FLAGS = ("shells", "lines", "solids", "masses", "rigid", "connectors", "bushes", "constraints", "loads")
+BLOCK_FLAGS = ("shells", "lines", "solids", "masses", "rigid", "connectors", "plotels", "bushes", "constraints",
+               "loads")
 
 __all__ = ["main", "write_vtm", "write_series", "summarize"]
 
@@ -56,8 +57,8 @@ def progress_for(args) -> Progress:
     return args._progress
 
 
-DECK_ONLY = (("results", "--results"), ("random", "--random"), ("nsm_set", "--nsm-set"), ("k_ref", "--k-ref"),
-             ("no_nodal_arrays", "--no-nodal-arrays"))
+DECK_ONLY = (("results", "--results"), ("result_types", "--result-types"), ("random", "--random"),
+             ("nsm_set", "--nsm-set"), ("k_ref", "--k-ref"), ("no_nodal_arrays", "--no-nodal-arrays"))
 
 
 def deck_only_flags(args) -> list[str]:
@@ -93,6 +94,7 @@ def load_model(args, verbose=False):
             add_beam_sections(mb)
         progress.done()
         return mb, None, None
+    types = result_types_given(args)  # checked before the (long) deck read
     deck = load_deck(src, echo=verbose, progress=progress)
     opts = Options(k_ref=getattr(args, "k_ref", None), nodal_arrays=not getattr(args, "no_nodal_arrays", False),
                    nsm_set=getattr(args, "nsm_set", None), beam_sections=getattr(args, "beam_sections", False))
@@ -105,7 +107,7 @@ def load_model(args, verbose=False):
         from .results import attach_op2
 
         with progress.stage(f"results {Path(args.results).name}"):
-            results = attach_op2(mb, deck, args.results, args.step)
+            results = attach_op2(mb, deck, args.results, args.step, types)
         if getattr(args, "random", None):
             from .randvib import random_response
 
@@ -120,6 +122,24 @@ def load_model(args, verbose=False):
         raise SystemExit("--random needs --results with normal modes (SOL 103)")
     progress.done()
     return mb, deck, results
+
+
+def result_types_given(args):
+    """The --result-types words as given (``results.select`` takes them, so ``all`` stays
+    "what the file has"), None when not given. Unknown names, an empty list and the flag without
+    --results exit."""
+    spec = getattr(args, "result_types", None)
+    if spec is None:
+        return None
+    from .result_types import parse
+
+    try:
+        parse(spec)
+    except ValueError as exc:
+        raise SystemExit(f"nastran-pv: --result-types: {exc}") from None
+    if not getattr(args, "results", None):
+        raise SystemExit("nastran-pv: --result-types needs --results")
+    return spec
 
 
 def apply_field_options(mb, args) -> list[str]:
@@ -178,12 +198,16 @@ def apply_select_options(mb, args):
 
 def add_model_arguments(p, results=True):
     from .launch import add_random_arguments, nsm_set_id
+    from .result_types import REGISTRY, parse
 
     p.add_argument("input", help="run deck (.bdf/.dat with INCLUDEs), bulk-data file, or a .vtm/.vtkhdf "
                                  "written by nastran-pv")
     if results:
         p.add_argument("--results", "--op2", dest="results", help="OP2 or MSC/NX HDF5 (.h5) results to attach")
         p.add_argument("--step", type=int, default=0, help="result step (mode/subcase index) to attach")
+        p.add_argument("--result-types", nargs="+", metavar="TYPE",
+                       help=f"result types to attach, by name: {' '.join(t.name for t in REGISTRY)}, or all "
+                            f"(default: {' '.join(parse(None))})")
         add_random_arguments(p.add_argument_group("random vibration (from the --results modes)"))
     p.add_argument("--k-ref", type=float, default=None, help="bush stiffness reference for log scaling")
     p.add_argument("--nsm-set", type=nsm_set_id, default=None, metavar="ID",
@@ -236,18 +260,23 @@ def _fmt(v):
     return f"{v:.6g}" if isinstance(v, float) else ("" if v is None else str(v))
 
 
+def _table_lines(rows: list[dict], limit=None, indent="") -> list[str]:
+    """``rows`` as aligned text lines: a header, at most ``limit`` rows, then "... N more rows"."""
+    cols = list(rows[0])
+    shown = rows if limit is None else rows[:limit]
+    widths = [max([len(c)] + [len(_fmt(r.get(c))) for r in shown]) for c in cols]
+    out = [(indent + "  ".join(c.ljust(w) for c, w in zip(cols, widths))).rstrip()]
+    out += [(indent + "  ".join(_fmt(r.get(c)).ljust(w) for c, w in zip(cols, widths))).rstrip() for r in shown]
+    if limit is not None and len(rows) > limit:
+        out.append(f"{indent}... {len(rows) - limit} more rows")
+    return out
+
+
 def _print_rows(rows: list[dict], limit=None):
     if not rows:
         print("(no rows)")
         return
-    cols = list(rows[0])
-    shown = rows if limit is None else rows[:limit]
-    widths = [max([len(c)] + [len(_fmt(r.get(c))) for r in shown]) for c in cols]
-    print("  ".join(c.ljust(w) for c, w in zip(cols, widths)))
-    for r in shown:
-        print("  ".join(_fmt(r.get(c)).ljust(w) for c, w in zip(cols, widths)))
-    if limit is not None and len(rows) > limit:
-        print(f"... {len(rows) - limit} more rows")
+    print("\n".join(_table_lines(rows, limit)))
 
 
 # ----------------------------------------------------------------- commands
@@ -306,6 +335,7 @@ def cmd_convert(args) -> int:
     print("\n".join(summarize(mb)))
     for n in notes:
         print(n)
+    print_skipped(mb)
     print_warnings(model_warnings(mb, deck))
     return 0
 
@@ -314,7 +344,7 @@ def _load_other(path, args):
     """The other model of a diff (deck, .vtm or VTKHDF), built with the same block/NSM options.
     Options that do not change what a diff compares (results, display scaling, nodal arrays) are
     not passed on, so a deck can be compared with a converted reference."""
-    unused = ("results", "random", "step", "all_steps", "k_ref", "no_nodal_arrays")
+    unused = ("results", "result_types", "random", "step", "all_steps", "k_ref", "no_nodal_arrays")
     other = argparse.Namespace(**{k: v for k, v in vars(args).items() if k not in unused})
     other.input = path
     if Path(path).suffix.lower() in MODEL_SUFFIXES:
@@ -408,6 +438,24 @@ def model_warnings(mb, deck) -> list[str]:
     return list(deck.warnings) if deck is not None else field_strings(mb, "Warnings")
 
 
+SKIPPED_ROWS = 25  # card report rows printed; the root SKIPPED_* table keeps them all
+
+
+def print_skipped(mb, file=None) -> None:
+    """The card report: the cards no block draws (root ``SKIPPED_*``, so a converted file prints it
+    too; nothing for a file written before the report)."""
+    from . import cards
+
+    rows = cards.read(mb)
+    if rows is None:
+        return
+    if not rows:
+        print("card report: every card is drawn or used", file=file)
+        return
+    print(f"{cards.header(rows)}:", file=file)
+    print("\n".join(_table_lines(rows, SKIPPED_ROWS, indent="  ")), file=file)
+
+
 def print_warnings(warnings, file=None, limit=10) -> None:
     """The first ``warnings`` (mass ones come first, see ``Deck.warn``)."""
     if not warnings:
@@ -424,7 +472,8 @@ def cmd_stats(args) -> int:
     mb, deck, _ = load_model(args, args.verbose)
     apply_field_options(mb, args)
     mb, selected = apply_select_options(mb, args)
-    print_warnings(model_warnings(mb, deck), file=sys.stderr)  # stderr: the table (or --csv) stays clean
+    print_skipped(mb, file=sys.stderr)  # stderr: the table (or --csv) stays clean
+    print_warnings(model_warnings(mb, deck), file=sys.stderr)
     for n in selected:
         print(n, file=sys.stderr)
     rows = group_stats(mb, args.by, args.field, broadcast=False)
@@ -440,6 +489,7 @@ def cmd_check(args) -> int:
     from .topology import CHECKS, Rules, check
 
     mb, deck, _ = load_model(args, args.verbose)
+    print_skipped(mb, file=sys.stderr)  # what the graph lacks: CWELD, CFAST patches, ... join nothing
     print_warnings(model_warnings(mb, deck), file=sys.stderr)
     try:
         res = check(mb, Rules.parse(args.rules), tol=args.tol, checks=args.only or CHECKS)
