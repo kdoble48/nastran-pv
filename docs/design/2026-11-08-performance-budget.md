@@ -195,4 +195,7 @@ reference machine) and the ratios were within 20% of the recorded ones; on anoth
 2.4x faster, while the stages were only 1.4x faster, so every ratio rose (1.2x to 1.9x the recorded
 value; load reached 25.1 of its 39.6 limit). numpy dispatches its sorts to AVX-512 kernels where the
 CPU has them, so the sort part measured the vector units, not the machine. The loop is now Python
-only and `RECORDED` was measured again with it.
+only and `RECORDED` was measured again with it. On two runners since (calibration 59 ms and 77 ms,
+load 0.99 s and 1.22 s) every ratio was 0.67x to 1.03x the recorded one: load 16.6 and 15.7 against
+16.2, build 3.22 and 3.53 against 3.94, diff 4.01 and 4.07 against 4.64. The numpy-heavy stages sit
+below their recorded ratios on those runners, which only widens their margin.
