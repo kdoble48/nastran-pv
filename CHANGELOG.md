@@ -8,6 +8,9 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Added
 
+- Result types: what results attach is declared per type in `result_types.py` (`Displacement`,
+  `VonMisesMax`, outputs unchanged), so new results are added by declaration. Choose them with
+  `--result-types` (`convert`, `stats`, `store add`) or the reader's *Result Types* checklist (#60).
 - Scene layers (#54): the *NPV Clear* macro, the one full reset of a view (it hides every layer and
   sets the deformation back to 0, deleting nothing), and the *Nastran Scope* filter, the overlays'
   copy of the model cut by the reader's scope (`selection.scope_masks`).
@@ -81,6 +84,8 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Fixed
 
+- A random response with `--beam-sections` no longer leaves the first mode's `Displacement` on
+  `BeamSections` (#60).
 - Overlays follow the scope as the reader applies it: a selection file of PIDs, MIDs, families,
   groups or grids now applies to masses, bushes, SPCs and loads too (adding what it lists to the
   grid join); a hidden or unticked rigid element or bush no longer carries the grid chain; one kept

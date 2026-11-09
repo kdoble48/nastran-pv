@@ -34,7 +34,11 @@ nastran-pv convert run.bdf --no-loads --k-ref 1e5 -o out/model.vtm
 
 Without `-o`, the output is `<input>.vtm` in the current folder. `--results` attaches one result
 step, `--step N` (0-based, default 0); `--all-steps` writes them all. On a converted series (a temporal
-`.vtkhdf`, or the `.pvd` of a `.vtm` series), `--step N` picks the step to read. `--no-nodal-arrays` leaves
+`.vtkhdf`, or the `.pvd` of a `.vtm` series), `--step N` picks the step to read. `--result-types`
+chooses what the steps carry, by [result type](model.md#result-types): `--result-types VonMisesMax`
+attaches the stresses without the displacements (names are case-insensitive and may be
+comma-separated; `all` is every type; the default is `Displacement VonMisesMax`). A type the
+results file lacks gives a warning; `stats` and `store add` take the flag too. `--no-nodal-arrays` leaves
 the `SPC_DOF`/`F_<sid>` point arrays off the mesh blocks, and `--ascii` writes ASCII XML for
 debugging.
 
