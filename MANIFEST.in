@@ -1,2 +1,7 @@
 # The ParaView plugin, copied into the wheel by setup.py (never paraview/_vendor)
 include paraview/*.py paraview/*.json
+include CHANGELOG.md
+# setuptools adds tests/test*.py by default, but they need conftest.py, tests/data and docs/ to run:
+# the test suite lives in the repository, not in the sdist
+prune tests
+# tests/check_dists.py checks that the sdist holds this and nothing else

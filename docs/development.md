@@ -8,25 +8,33 @@ python -m pyflakes src paraview/*.py tests  # lint (skip paraview/_vendor)
 ```
 
 Every push to `main` and every pull request runs the tests and lint on Linux, Windows and macOS
-with Python 3.10 to 3.12 (`.github/workflows/tests.yml`), and builds this site
-(`.github/workflows/docs.yml`). Tests that need ParaView, MYSTRAN or the real datasets skip there.
+with Python 3.10 to 3.14 (`.github/workflows/tests.yml`; 3.13 and 3.14 with pyNastran `main`),
+and builds this site (`.github/workflows/docs.yml`). Tests that need ParaView, MYSTRAN or the real
+datasets skip there.
 The *paraview* workflow (`.github/workflows/paraview.yml`, on pull requests that touch
 `paraview/`, `src/` or `tests/`, or by hand) installs the wheel on Linux, runs `nastran-pv setup`
 against a headless ParaView 6.0.1 and 5.13.1 unpacked in the home folder, and runs
-`tests/pv_smoke.py` on both; the downloads are cached. The *wheel* job builds the sdist and the wheel from it, checks that the wheel carries the plugin
-and no `_vendor`, installs it into a fresh venv outside the checkout, and checks that
-`nastran-pv setup --dry-run` finds the plugin there.
+`tests/pv_smoke.py` on both; the downloads are cached. The *wheel* job builds the sdist and the
+wheel from it, checks them with `tests/check_dists.py`, installs the wheel into a fresh venv
+outside the checkout, and checks that `nastran-pv setup --dry-run` finds the plugin there. The
+*publish* workflow (`.github/workflows/publish.yml`) publishes releases
+([Releasing](versioning.md#releasing)); on pull requests that touch the packaging it runs its
+build job alone.
 
 ## Packaging
 
 The wheel carries `paraview/*.py` and `paraview/*.json` as `nastran_pv/paraview/`. A `build_py`
 hook in `setup.py` copies them at build time (the metadata stays in `pyproject.toml`), and
 `MANIFEST.in` puts them in the sdist. An editable install copies nothing and uses `paraview/`.
-A new kind of file in `paraview/` needs a pattern in both. Build and check locally with:
+A new kind of file in `paraview/` needs a pattern in `setup.py`, `MANIFEST.in` and
+`tests/check_dists.py`. The sdist holds the package, the plugin, the project files and
+`CHANGELOG.md`, but not the tests (they need `tests/data` and `docs/`). Build and check locally
+with:
 
 ```bash
-python -m build --outdir out/dist       # pip install build; the wheel is built from the sdist
-python -m zipfile -l out/dist/nastran_pv-*.whl
+python -m build --outdir out/dist       # pip install build twine; the wheel is built from the sdist
+python -m twine check --strict out/dist/*
+python tests/check_dists.py out/dist/*  # the plugin and every module in, nothing generated
 ```
 
 The design and the lookup order are in `docs/design/2026-11-08-wheel-plugin.md`.
@@ -46,7 +54,9 @@ gallery) are project skills in
 ### Structure
 
 - `README.md` is the front page: what nastran-pv is, install, a short quickstart, and a link to
-  [the index](index.md). It holds no reference material.
+  [the index](index.md). It holds no reference material. PyPI shows it too, so its links are
+  absolute: the site's pages (`https://kdoble48.github.io/nastran-pv/<page>.html`) and GitHub
+  for repository files (`tests/test_release.py` checks).
 - Every page lives directly in `docs/` and is linked from [`docs/index.md`](index.md) exactly once,
   under one of these sections:
 
@@ -73,7 +83,7 @@ gallery) are project skills in
 - Start with a `# Title` that matches the index entry, then one or two sentences on what the page
   covers. Use `##` for sections, since other pages link to them by anchor (`paraview.md#indexed-colors`).
   Renaming a heading breaks those links, so search for the anchor first.
-- Use relative links between pages and to repo files.
+- Use relative links between pages and to repo files (not in `README.md`, see above).
 - Show commands in their installed form (`nastran-pv ...`), as runnable examples with a short
   comment, and list options in tables.
 - Images go in `docs/images/` and are named `<page>-<what>.png`, for example
@@ -96,6 +106,7 @@ The docs describe behavior that lives in code. Update them in the same change wh
 | `selection.py`, the reader's *Selection* properties, the NPV *File* macros | [cli.md](cli.md#selection-from-an-id-file), [paraview.md](paraview.md#selection-from-an-id-file) |
 | `vtkio.py`, `vtkhdf.py`, `store.py` | [output-formats.md](output-formats.md), [store.md](store.md) |
 | Dependencies, extras, environment variables, `locate.py`, `setup.py`, `MANIFEST.in` | [install.md](install.md), [development.md](#packaging) |
+| `publish.yml`, `tests/check_dists.py`, the version in `pyproject.toml` | [versioning.md](versioning.md#releasing), `README.md` (PyPI shows it) |
 | Any user-facing change; a public name or default (see [Versioning](versioning.md#public-api)) | `CHANGELOG.md` (*Unreleased*), [versioning.md](versioning.md) when the policy changes |
 
 ## Regenerating the gallery

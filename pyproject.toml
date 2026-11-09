@@ -1,14 +1,39 @@
 [build-system]
-requires = ["setuptools>=64"]
+requires = ["setuptools>=77"]   # 77: an SPDX `license` string and `license-files`
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "nastran-pv"
+# a release sets it here and in src/nastran_pv/__init__.py (docs/versioning.md#releasing)
 version = "0.1.0"
 description = "Visualize Nastran decks and results in ParaView: properties, masses, bushes, loads, derived and mapped fields, run store"
-readme = "README.md"
-license = { text = "MIT" }
+readme = "README.md"   # PyPI renders it too: its links must be absolute
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
+keywords = [
+    "nastran", "paraview", "vtk", "pynastran", "finite element", "fea", "bdf", "op2",
+    "visualization", "structural analysis",
+]
+# no license classifier: PEP 639 replaces it with the `license` expression above
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Environment :: Plugins",
+    "Intended Audience :: Science/Research",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Visualization",
+]
 # pyNastran: 1.4.1 (PyPI) on Python <= 3.12; Python 3.13+ needs main (1.5 dev), which pip
 # then leaves alone: pip install "pyNastran @ git+https://github.com/SteveDoyle2/pyNastran.git@main"
 # vtk: every nastran-pv command (setup included) imports vtkmodules. Never pip-install nastran-pv
@@ -28,10 +53,16 @@ tables = ["pandas", "openpyxl"]       # Excel tables for --map
 sql = ["pandas", "sqlalchemy"]        # non-SQLite databases for --map
 all = ["vtk>=9.3", "h5py", "pandas", "openpyxl", "sqlalchemy"]
 gallery = ["pillow"]                   # docs/build_gallery.py thumbnails
-test = ["pytest", "pyflakes", "pyyaml", "vtk>=9.3", "h5py", "pillow"]   # pyyaml: test_docs_workflow
+test = ["pytest", "pyflakes", "pyyaml", "vtk>=9.3", "h5py", "pillow"]   # pyyaml: the workflow tests
 
 [project.scripts]
 nastran-pv = "nastran_pv.cli:main"
+
+[project.urls]
+Homepage = "https://kdoble48.github.io/nastran-pv/"
+Source = "https://github.com/kdoble48/nastran-pv"
+Changelog = "https://github.com/kdoble48/nastran-pv/blob/main/CHANGELOG.md"
+Issues = "https://github.com/kdoble48/nastran-pv/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
