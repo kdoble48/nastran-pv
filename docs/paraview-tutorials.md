@@ -142,7 +142,8 @@ Femap's "select connected" from a point, without crossing into the next group:
 ![Mode 2 of the demo tray at 11.0 Hz](images/paraview-tutorials-results.png)
 
 `Displacement` (points) and, when the results have stress, `VonMisesMax` (cells) are on the mesh
-blocks for coloring by hand.
+blocks for coloring by hand, with the element forces when the run wrote them; check the stress and
+strain components in the reader's *Result Types* ([Result types](model.md#result-types)).
 
 ## 7. Find mesh problems
 

@@ -8,6 +8,24 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Added
 
+- NPV Forces and NPV Stress views (`view`/`render --preset forces stress`): each block colored by its
+  element forces (shells `MembraneForce`, lines `AxialForce`, bushes, springs) or by von Mises stress
+  (shells at the top fibre, solids, lines `MaxStress`); `nv.apply("stress", quantity=, fibre=,
+  strain=, component=)` chooses the array (each block over its exact range; lines and springs draw
+  only their elements with a value). The views turn on the types they need in the reader's *Result
+  Types* (the stresses, or the strains with `strain=True`, swapping the ones they turned on) and
+  name them in their text (#65).
+- Element forces, stresses and strains as result types (roadmap task 9). Attached by default when
+  the run wrote them: `ShellForce` (`MembraneForce BendingMoment TransverseShear`), `LineForce`
+  (bars, beams and rods: `AxialForce Torque ShearForce BendingMomentA BendingMomentB`),
+  `BushForce` (on the Bushes points) and `SpringForce` (CELAS1/2). Chosen with `--result-types` or
+  *Result Types*: `ShellStress` (per fibre: `StressBottom/Top`, principals, max shear, von Mises),
+  `SolidStress` (`Stress` tensor, `PrincipalStress`, `MaxShearStress`, `VonMises`), `LineStress`
+  (`AxialStress TorsionalStress MaxStress MinStress`) and the matching strains, from OP2 and
+  MSC/NX HDF5 alike, in the frame Nastran writes them in. Every force, stress or strain table no
+  type reads (composite plies, complex tables, STRCUR plate strains, CSHEAR, ...) is reported in the
+  warnings (and, in the reader too, the root `Warnings`) instead of dropped silently, and `convert`
+  names the types it left out (#64).
 - Pressure loads and GRAV drawn: PLOAD, PLOAD2 and PLOAD4 (shells, THRU ranges, solid faces, corner
   pressures, N1-N3 directions) become the `Pressures/SID_n`/`LOAD_n` blocks, a polygon per loaded
   face with `Pressure CornerPressure PressureDirection PressureForce` and the set's
@@ -138,6 +156,8 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Fixed
 
+- `VonMisesMax` reads MSC/NX HDF5 shell stress tables that spell the shear `TXY1`/`TXY2` (TRIA3
+  and the corner layouts), which it dropped before (#64).
 - A VTKHDF series whose steps fill different numbers of arrays (stresses on shells and solids at a
   static step, none at the modes) read the later steps wrongly (the NaN fill stayed, or garbage):
   vtkHDFWriter mis-offsets a field array whose size changes, so every field array now has one size

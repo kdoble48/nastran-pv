@@ -53,6 +53,10 @@ VIEW_INFO = {
                      "to the tip."),
     "check": ("Model check", "Free edges and faces, coincident grids, duplicate elements, dangling connectors and "
                              "floating parts, one color per check, with counts."),
+    "forces": ("Forces", "Element forces of the step: shells by membrane force, lines by axial force, bushes and "
+                         "springs by their force, in the element frame."),
+    "stress": ("Stress", "Von Mises stress of the step: shells at the top fibre, solids at the centre, lines by their "
+                         "largest longitudinal stress."),
     "diff": ("Diff", "What changed from a reference model: elements added, changed or changed through their "
                      "property, removed elements in red, with the mass change."),
 }

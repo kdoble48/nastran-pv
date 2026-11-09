@@ -133,6 +133,12 @@ def _message(text, error=False):
     (out.DisplayErrorText if error else out.DisplayWarningText)(text + "\n")
 
 
+def _capped(lines, cap=25):
+    """The first ``cap`` lines, and a "... N more" line for the rest."""
+    lines = list(lines)
+    return lines[:cap] + ([f"... {len(lines) - cap} more"] if len(lines) > cap else [])
+
+
 def _missing(exc):
     """Report a dependency that cannot be imported; RequestData returns this (0: failed)."""
     _message(_HELP.format(missing=getattr(exc, "name", "a dependency"), err=exc), error=True)
@@ -395,6 +401,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
             self._lists[cat] = sel
         self._listed_key = None
         self._reported_key = None
+        self._reported_results = None  # (results file key, its messages) last reported
         self._load_error = ""  # last RequestData failure, for LoadError (empty after a good read)
         self._names = {}
         self._tree = None
@@ -830,20 +837,26 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         self._sel_error = None
         return self._sel_ids
 
-    def _report_messages(self, deck, mb):
-        """The deck's warnings, then the card report (what no block draws), in one Output Messages entry."""
+    def _report_messages(self, deck, mb, results_messages=()):
+        """The deck's warnings and the results file's messages (tables no result type reads, ...),
+        then the card report (what no block draws), in one Output Messages entry."""
         from nastran_pv import cards
 
-        lines = deck.warnings[:25]
-        if len(deck.warnings) > 25:
-            lines.append(f"... {len(deck.warnings) - 25} more")
+        warnings = list(deck.warnings) + list(results_messages)
+        lines = _capped(warnings)
         skipped = cards.read(mb)
         if skipped:
             lines.append(cards.summary(skipped))
         if lines:
             shown = "\n  ".join(lines)
-            count = len(deck.warnings) + bool(skipped)
+            count = len(warnings) + bool(skipped)
             _message(f"nastran-pv: {os.path.basename(self._filename)}: {count} message(s)\n  {shown}")
+
+    def _report_results(self, messages):
+        """A new results file's (or a re-read one's) messages, when the model itself was not rebuilt."""
+        if messages:
+            shown = "\n  ".join(_capped(messages))
+            _message(f"nastran-pv: {os.path.basename(self._op2name)}: {len(messages)} message(s)\n  {shown}")
 
     def RequestData(self, request, inInfo, outInfo):
         if not self._filename:
@@ -864,6 +877,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
             self._list_categories(mb, deck)
             res = self._get_response()
             time_value = None
+            messages = []
             if res is not None and res.steps:
                 info = outInfo.GetInformationObject(0)
                 t = 0.0
@@ -873,8 +887,12 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
                 self._select_result_types(res)
                 res.attach(mb, step, deck)
                 time_value = res.times[step]
-                if rebuilt:
-                    deck.warnings += res.skipped
+                messages = list(res.skipped)
+            # the results file and its messages: a random response rebuilt with other settings
+            # (same file, same messages) is no new report
+            results_key = (self._results_key, tuple(messages))
+            new_results = results_key != self._reported_results
+            self._reported_results = results_key
             vis = self._visibility()
             key = (self._mb_key, vis.key())
             if key != self._tree_key:
@@ -883,6 +901,11 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
                 for w in self._tree.warnings:
                     _message(f"nastran-pv: {w}")
             pdc = self._tree.output(mb)
+            if messages:  # as convert, the root Warnings has the results' messages too: on this output
+                from nastran_pv.vtkutil import add_string_array  # only (the cached model's arrays stay as built)
+
+                pdc.GetFieldData().RemoveArray("Warnings")
+                add_string_array(pdc.GetFieldData(), "Warnings", list(deck.warnings) + messages)
         except Exception as exc:
             import traceback
 
@@ -891,7 +914,9 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
             return 0
         self._load_error = ""
         if rebuilt:
-            self._report_messages(deck, mb)
+            self._report_messages(deck, mb, messages)
+        elif new_results:
+            self._report_results(messages)
         output = vtkPartitionedDataSetCollection.GetData(outInfo, 0)
         output.ShallowCopy(pdc)
         if time_value is not None:

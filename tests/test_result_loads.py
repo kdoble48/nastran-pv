@@ -130,7 +130,7 @@ def test_unselected_types_leave_no_arrays_or_resultants(results, deck):
 def test_files_without_the_tables_get_nothing_new(deck):
     mb = build_multiblock(deck)
     res = Op2Results(make_op2())
-    assert res.available == ("Displacement", "VonMisesMax")
+    assert res.available == ("Displacement", "VonMisesMax", "ShellStress")  # its plate stress: ShellStress too
     res.attach(mb, 0, deck)
     shells = get_block(mb, "Shells")
     assert all(shells.GetPointData().GetArray(a) is None for a in NEW_ARRAYS)

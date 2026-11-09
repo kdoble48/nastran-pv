@@ -1,0 +1,65 @@
+$ Synthetic run deck for the force, stress and strain result types (tests/test_element_results.py).
+$ One element of each family the types cover; the results are synthesized by
+$ tests/op2_fixture.py (make_element_op2) and tests/h5_fixture.py (write_element_h5).
+$   Shells:     CQUAD4 1, CTRIA3 2, CQUAD4 3 (PCOMP: composite)
+$   Solids:     CHEXA 11
+$   Lines:      CBAR 21, CBEAM 22, CROD 23
+$   Bushes:     CBUSH 31 (GA-GB), CBUSH 32 (grounded)
+$   Connectors: CELAS1 41, CELAS2 42, MPC set 41 (its legs carry EID 41 too: no spring force there)
+SOL 101
+CEND
+TITLE = nastran-pv element results
+DISP = ALL
+FORCE = ALL
+STRESS = ALL
+STRAIN = ALL
+BEGIN BULK
+$ ---- shells (z = 0)
+GRID,1,,0.,0.,0.
+GRID,2,,1.,0.,0.
+GRID,3,,1.,1.,0.
+GRID,4,,0.,1.,0.
+GRID,5,,2.,0.,0.
+GRID,6,,3.,0.,0.
+GRID,7,,3.,1.,0.
+CQUAD4,1,1,1,2,3,4
+CTRIA3,2,1,2,5,3
+CQUAD4,3,3,5,6,7,3
+PSHELL,1,1,0.01,1
+PCOMP,3,,,,,,,,
+,1,0.005,0.,,1,0.005,90.
+MAT1,1,7.0e10,,0.3,2700.
+$ ---- solid (unit cube at z = 10)
+GRID,101,,0.,0.,10.
+GRID,102,,0.,1.,10.
+GRID,103,,1.,1.,10.
+GRID,104,,1.,0.,10.
+GRID,105,,0.,0.,11.
+GRID,106,,0.,1.,11.
+GRID,107,,1.,1.,11.
+GRID,108,,1.,0.,11.
+CHEXA,11,11,101,102,103,104,105,106,
+,107,108
+PSOLID,11,1
+$ ---- lines (z = 20, along +x)
+GRID,201,,0.,0.,20.
+GRID,202,,1.,0.,20.
+GRID,203,,2.,0.,20.
+GRID,204,,3.,0.,20.
+CBAR,21,21,201,202,0.,1.,0.
+PBAR,21,1,1.,0.1,0.1,0.2
+CBEAM,22,22,202,203,0.,1.,0.
+PBEAM,22,1,1.,0.1,0.1,,0.2
+CROD,23,23,203,204
+PROD,23,1,1.,0.2
+$ ---- bushes
+GRID,211,,0.,0.,21.
+PBUSH,31,K,1.0e6,1.0e6,1.0e6,10.,10.,10.
+CBUSH,31,31,201,211,0.,1.,0.
+CBUSH,32,31,204,,,,,0
+$ ---- springs and an MPC whose set id equals CELAS1 41
+CELAS1,41,41,211,1,202,1
+PELAS,41,1000.
+CELAS2,42,100.,203,3,204,3
+MPC,41,201,1,1.,202,1,-1.
+ENDDATA

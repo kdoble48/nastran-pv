@@ -18,16 +18,20 @@ What a step writes is declared by the result types of :mod:`nastran_pv.result_ty
 * point data ``SPCForce``/``SPCMoment``, ``MPCForce``/``MPCMoment`` and
   ``AppliedForce``/``AppliedMoment`` (OLOAD), rotated like displacements, NaN on
   grids without output, plus their root ``<array>Resultant`` sums about the basic
-  origin (types ``SPCForce``, ``MPCForce``, ``AppliedLoad``).
+  origin (types ``SPCForce``, ``MPCForce``, ``AppliedLoad``);
+* the element forces of shells, lines, bushes and springs (``ShellForce``, ``LineForce``,
+  ``BushForce``, ``SpringForce``); the stress and strain components are chosen with ``select``.
 
 The readers only yield a type's raw rows for a step (``_rows``); ``values`` joins, sorts and
-reduces them, and :func:`attach_step` rotates and writes them. ``select`` picks the types.
+reduces them, and :func:`attach_step` rotates and writes them. ``select`` picks the types. Each
+reader names the force, stress and strain tables no type reads in ``skipped``.
 """
 from __future__ import annotations
 
 import fnmatch
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 
@@ -180,24 +184,65 @@ def _op2_results(op2, patterns):
                 yield pat, name, result
 
 
-def _header_columns(obj, columns):
-    """Indices of ``columns`` in the table's headers, or None when one is missing."""
+def _headers(obj):
+    """The table's ``get_headers()``, or None (some OES classes do not implement headers)."""
     try:
         get = getattr(obj, "get_headers", None)
-        headers = list(get() if callable(get) else getattr(obj, "headers", []))
-    except Exception:  # some OES classes do not implement headers
+        return list(get() if callable(get) else getattr(obj, "headers", []))
+    except Exception:
         return None
-    if not hasattr(obj, "data") or any(c not in headers for c in columns):
+
+
+def _header_columns(obj, columns):
+    """Indices of ``columns`` in the table's headers, or None when one is missing."""
+    headers = _headers(obj)
+    if headers is None or not hasattr(obj, "data") or any(c not in headers for c in columns):
         return None
     return [headers.index(c) for c in columns]
 
 
+def _pick_columns(obj, picks):
+    """Per pick of ``picks``, the header indices of its columns (``result_types.resolve``; None
+    for a NaN column), or None when the table lacks one."""
+    headers = _headers(obj)
+    named = result_types.resolve_picks(picks, headers) if headers is not None and hasattr(obj, "data") else None
+    if named is None:
+        return None
+    return tuple(tuple(None if c is None else headers.index(c) for c in cols) for _, cols in named)
+
+
 def _ids(obj, rtype):
-    """Grid ids (point types) or element ids (cell types) of a pyNastran table's rows."""
-    if rtype.location == "point":
+    """Grid ids (types keyed by NID) or element ids (by EID) of a pyNastran table's rows."""
+    if rtype.id_array == "NID":
         ng = getattr(obj, "node_gridtype", None)
         return ng[:, 0] if ng is not None and np.ndim(ng) == 2 else None
     return _element_ids(obj)
+
+
+def _subcases(subcases) -> str:
+    """``subcase 1``, ``subcases 1, 2, 3``, or the first five and the count."""
+    u = sorted(set(int(s) for s in subcases))
+    shown = ", ".join(str(s) for s in u[:5]) + (f", ... ({len(u)} subcases)" if len(u) > 5 else "")
+    return f"subcase{'s' if len(u) > 1 else ''} {shown}"
+
+
+def _subcase(key) -> int:
+    return int(key) if np.isscalar(key) else key[0]
+
+
+class Op2Table(NamedTuple):
+    """A pyNastran table a result type reads: its result name and subcase key, the table, the
+    header indices to take (``columns``; None: every column) or, for a type with picks, one tuple
+    of indices per pick, the step kind (types that can define steps) and, with picks, the
+    :class:`~nastran_pv.result_types.PickPlan` of its rows (made once: the rows do not change
+    between steps)."""
+
+    name: str
+    key: object
+    obj: object
+    columns: object
+    kind: str | None
+    plan: result_types.PickPlan | None = None
 
 
 class Op2Results(_Results):
@@ -210,6 +255,7 @@ class Op2Results(_Results):
         self.tables = {t.name: self._find_tables(t) for t in self.registry}
         self.steps = self._collect_steps()
         self.available = tuple(t.name for t in self.registry if self.tables[t.name])
+        self.skipped += self._unread()
 
     @classmethod
     def read(cls, path, registry=None) -> "Op2Results":
@@ -220,32 +266,57 @@ class Op2Results(_Results):
         return cls(op2, path, registry)
 
     # ------------------------------------------------------------ discovery
-    def _find_tables(self, rtype) -> list:
-        """(result name, subcase key, table, column indices or None, step kind) of every usable
-        table; the kind is None for a type that cannot define steps."""
+    def _find_tables(self, rtype) -> list[Op2Table]:
+        """Every usable table of ``rtype``, over its sources: real, with ids, the ``requires``
+        headers and every column or pick column; the kind is None for a type that cannot define
+        steps."""
         found = []
-        for pat, name, result in _op2_results(self.op2, rtype.op2.tables):
-            kind = rtype.op2.kind(pat) if rtype.defines_steps else None
-            for key, obj in result.items():
-                if getattr(obj, "is_complex", False):
-                    if rtype.steps:
-                        sc = int(key) if np.isscalar(key) else key[0]
-                        self.skipped.append(f"{kind} subcase {sc}: complex results are not supported")
-                    continue
-                if not rtype.steps and _ids(obj, rtype) is None:
-                    continue
-                cols = None
-                if rtype.op2.columns:
-                    cols = _header_columns(obj, rtype.op2.columns)
-                    if cols is None:
+        for src in rtype.op2_sources:
+            for pat, name, result in _op2_results(self.op2, src.tables):
+                kind = src.kind(pat) if rtype.defines_steps else None
+                for key, obj in result.items():
+                    if getattr(obj, "is_complex", False):
+                        if rtype.steps:
+                            self.skipped.append(f"{kind} subcase {_subcase(key)}: complex results are not supported")
                         continue
-                found.append((name, key, obj, cols, kind))
+                    ids = _ids(obj, rtype)
+                    if not rtype.steps and ids is None:
+                        continue
+                    if src.requires and _header_columns(obj, src.requires) is None:
+                        continue
+                    if src.picks:
+                        cols = _pick_columns(obj, src.picks)
+                        if cols is None:
+                            continue
+                        plan = result_types.pick_plan(ids, [pos for pos, _ in src.picks])
+                        found.append(Op2Table(name, key, obj, cols, kind, plan))
+                        continue
+                    cols = None
+                    if src.columns:
+                        cols = _header_columns(obj, src.columns)
+                        if cols is None:
+                            continue
+                    found.append(Op2Table(name, key, obj, cols, kind))
         return found
+
+    def _unread(self) -> list[str]:
+        """One message per force, stress or strain table no type of the registry reads
+        (``result_types.unread_reason``), with its subcases."""
+        read = {(t.name, t.key) for tables in self.tables.values() for t in tables}
+        reasons = {}
+        for _, name, result in _op2_results(self.op2, result_types.REPORTED_OP2):
+            for key, obj in result.items():
+                reason = result_types.unread_reason(
+                    name, (name, key) in read, complex_=getattr(obj, "is_complex", False),
+                    curvature=(_headers(obj) or [""])[0] == "fiber_curvature")
+                if reason is not None:
+                    reasons.setdefault((name, reason), []).append(_subcase(key))
+        return [f"{name}, {_subcases(scs)}: {reason}" for (name, reason), scs in reasons.items()]
 
     def _steps_of(self, rtype) -> list[Step]:
         steps = []
-        for name, key, res, _, kind in self.tables[rtype.name]:
-            sc = int(key) if np.isscalar(key) else key[0]
+        for name, key, res, _, kind, _ in self.tables[rtype.name]:
+            sc = _subcase(key)
             ntimes = res.data.shape[0]
             times = np.asarray(getattr(res, "_times", []), dtype=float)
             cycles = getattr(res, "mode_cycles", None)
@@ -267,19 +338,22 @@ class Op2Results(_Results):
     def _rows(self, rtype, step):
         """A step-defining type reads the step's own table at its index; the others every table
         of the step's subcase, at the row whose time value matches the step's."""
-        for name, key, obj, cols, _ in self.tables[rtype.name]:
-            if key != step.key:
+        for table in self.tables[rtype.name]:
+            if table.key != step.key:
                 continue
             if self._gives_steps(rtype):
-                if name != step.table:
+                if table.name != step.table:
                     continue
                 itime = step.itime
             else:
-                itime = _time_index(obj, step)
+                itime = _time_index(table.obj, step)
                 if itime is None:
                     continue
-            data = obj.data[itime]
-            yield _ids(obj, rtype), (data if cols is None else data[:, cols])
+            data = table.obj.data[itime]
+            if table.plan is not None:
+                yield table.plan.ids, result_types.pick_values(data, table.plan, table.columns)
+            else:
+                yield _ids(table.obj, rtype), (data if table.columns is None else data[:, table.columns])
 
 
 # ------------------------------------------------------------------ attaching
@@ -306,18 +380,22 @@ def _write(mb, names, targets, rtype, got) -> None:
         if not write or not in_place:
             for spec in rtype.arrays:
                 attrs.RemoveArray(spec.name)
-        ids = attrs.GetArray(rtype.id_array)
-        if not write or ids is None:
+        if not write:
             continue
-        idx = vtkutil.match_ids(got[0], vtkutil.to_numpy(ids))
+        ids = rtype.block_ids(block)
+        if ids is None:
+            continue
+        idx = vtkutil.match_ids(got[0], ids)
         ok = idx >= 0
         vals = np.full((len(idx), got[1].shape[1]), rtype.fill)
         vals[ok] = got[1][idx[ok]]
         for spec in rtype.arrays:
             v = vals[:, _columns(spec.columns)]
-            if spec.magnitude:
+            if spec.derive:
+                v = result_types.derive(spec, v)
+            elif spec.magnitude:
                 v = np.linalg.norm(v, axis=1)
-            elif v.shape[1] == 1:
+            if v.ndim == 2 and v.shape[1] == 1:
                 v = v[:, 0]
             vtkutil.add_array(attrs, spec.name, v, skip_all_nan=bool(np.isnan(rtype.fill)))
 
