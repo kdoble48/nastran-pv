@@ -196,6 +196,8 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Fixed
 
+- `convert --random` no longer repeats the results file's warnings (unread tables, ...) after its
+  own: the random response warns only what it adds (#72).
 - `VonMisesMax` reads MSC/NX HDF5 shell stress tables that spell the shear `TXY1`/`TXY2` (TRIA3
   and the corner layouts), which it dropped before (#64).
 - A VTKHDF series whose steps fill different numbers of arrays (stresses on shells and solids at a

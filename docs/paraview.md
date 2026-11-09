@@ -348,8 +348,11 @@ the selection commands make no filter of their own.
   makes its own time steps one cycle of *Frames Per Cycle* phases, drawing *Amplitude* ×
   sin(2π phase) × `Displacement`, so the play button vibrates the mode. A complex step (it
   carries `Displacement_Real` and `_Imag`) turns through its phase instead: *Amplitude* ×
-  Re(U e^(i(θ + *Phase* + 360° phase))), θ the step's `PhaseAngle`. *Phase* (degrees) draws a
-  complex step at θ + *Phase* without vibrating; real steps ignore it. Auto Scale sizes a
+  Re(U e^(i(θ + *Phase* + 360° phase))), θ the step's `PhaseAngle` (the reader's *Phase Angle*, or
+  the `convert --phase` of a VTKHDF series). *Phase* (degrees) draws a complex step at θ + *Phase*
+  without vibrating; real steps ignore it. A `.pvd` series opened with ParaView's own reader has no
+  root fields, so there θ counts as 0. NPV Animate Mode leaves a complex step at the frame of its
+  largest displacement. Auto Scale sizes a
   complex step by its amplitude (`Displacement_Mag`).
 
 * **Nastran Scope** is the overlays' copy of the model. Its mesh blocks keep what the reader

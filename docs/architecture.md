@@ -84,7 +84,9 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   datasets are derived from each source (`FR + i FI`, `results_h5._complex_paths`). Step kinds
   come from the table and its analysis code (`result_types.step_kind`: `frequency`,
   `complex_eigenvector`, `transient`), labels from `results.step_label`; root `PhaseAngle` and
-  `Time` exist only on complex and transient steps. `results.PhaseSweep` re-attaches one complex
+  `Time` exist only on complex and transient steps. A non-step table pairs with a step by subcase,
+  time value (HDF5: domain signature) and form (`results._same_form`: complex with complex,
+  transient with transient). `results.PhaseSweep` re-attaches one complex
   step at N phases (the results interface, `convert --phase-sweep`).
 - `fields/`: `derived.py` (material, quality, size, cg, pidmass), `tables.py` (`read_table` and
   `map_table` by EID/PID/MID/NID/FAMILY/GROUP; text columns become codes plus a `<name>Names`
@@ -172,8 +174,9 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   `scale` x `Displacement` (blocks without one follow their grids by NID); `peak_scale` gives the
   8 %-of-the-model scale; `Deformer` gathers a model's moving points once and `apply(scale)` is
   per frame (the plugin keeps one per input object + MTime); a complex step's
-  `Displacement_Real/_Imag` (own or by grid) let `apply(scale, phase)` draw any phase, and
-  `peak_scale` sizes it by `Displacement_Mag`. The views draw through the plugin's *Nastran Deform* (`NPV deform`),
+  `Displacement_Real/_Imag` (own or by grid) let `apply(scale, phase)` draw any phase,
+  `peak_scale` sizes it by `Displacement_Mag`, `reference_phase` finds the `PhaseAngle` its arrays
+  were attached at (root, or a VTKHDF block's copy) and `peak_phase` its largest swing. The views draw through the plugin's *Nastran Deform* (`NPV deform`),
   so `nastran_views.animate_modes` vibrates whatever view is shown; analysis filters stay on the
   undeformed model. `play_mode` (after Animate Mode) sets every Nastran Deform downstream of the
   reader to *Vibrate Mode*: the filter holds its input at *Mode Time* (`RequestUpdateExtent`) and

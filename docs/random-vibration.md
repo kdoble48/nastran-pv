@@ -125,6 +125,8 @@ There is no mode table, `DominantMode` or input RMS: the solver did the superpos
 * One random subcase, the first; the others and every other random table (velocities, CRM, ATO,
   element stresses and forces) are listed in the warnings.
 * OP2 only: an MSC/NX HDF5 file's random output is not read yet.
+* In ParaView, switching between *Random Output* and *Random ASD* on one reader replaces the
+  other response's arrays and root fields (`DominantMode`, the `RANDOM_` tables, `RandomSource`).
 
 ```bash
 nastran-pv convert run.bdf --results sol111.op2 --random-output --all-steps -o out/random.vtkhdf
