@@ -2359,6 +2359,122 @@ def comparison_detail_checks(pv, nv):
     cmp._delete_derived()
 
 
+def _diffs_drawn(nv, view):
+    """The Nastran Diffs upstream of what ``view`` shows."""
+    found = []
+    for src in nv.shown_sources(view):
+        for node in nv.upstream(src):
+            if nv._xml_name(node) == nv.DIFF_XML:
+                if node not in found:
+                    found.append(node)
+                break
+    return found
+
+
+def comparison_review_checks(pv, nv):
+    """Review of #67, on A, B (the same-named pair) and C (diff_a.bdf), opened in that order: a pair's
+    NPV Diff never takes a diff of another pair, two comparisons that share B keep their own objects,
+    Nastran Scope after a Diff and a Deform scopes what it is given, seeds parse like the grow filter
+    and the module registry holds no Diff's models."""
+    from op2_fixture import make_op2
+
+    keep = set(pv.GetSources().values())
+    tmp = tempfile.mkdtemp()  # not removed: ParaView keeps the OP2 open
+    op2 = os.path.join(tmp, "review.op2")
+    make_op2().write_op2(op2)
+    cmp = _Cmp(pv, nv, "same_name", op2, None, keep)
+    a, b = cmp.a, cmp.b
+    c = nv.load_reader(os.path.join(HERE, "data", "diff_a.bdf"), op2)
+    one = pv.CreateRenderView()
+    pv.SetActiveView(one)
+    pv.SetActiveSource(b)
+    nv.apply("diff", view=one)
+    bc = nv.scene_of(one).diff
+    check(nv.diff_sides(bc) == (b, c), "NPV Diff on B compares it with C, the newest model")
+    two = pv.CreateRenderView()
+    pv.SetActiveView(two)
+    left, right = nv.side_by_side(reference=a, view=two)
+    check(nv.scene_of(left).diff is None and nv.subject(left) == a and nv.subject(right) == b,
+          "Side by Side against A: a pair of A and B, no diff yet")
+    nv.apply("diff", view=left)
+    ba = nv.scene_of(left).diff
+    check(ba is not None and nv.diff_sides(ba) == (b, a) and nv.diff_sides(bc) == (b, c)
+          and nv.subject(left) == a and nv.scene_of(right).diff == ba,
+          "NPV Diff in the pair compares B with A; B's diff against C is left as it was")
+    nv.apply("masses", view=one)
+    nv.apply("masses", view=right)
+    nv.apply("pid", view=one)
+    check(_diffs_drawn(nv, one) == [bc] and _diffs_drawn(nv, right) == [ba],
+          "two comparisons sharing B draw from their own diffs, whichever ran last")
+    user = pv.NastranDiff(Input=b, Reference=c)  # a user's own diff of B with C: the newest one B is in
+    three = pv.CreateRenderView()
+    pv.SetActiveView(three)
+    pv.SetActiveSource(b)
+    nv.apply("diff", view=three)
+    nv.apply("masses", view=one)  # B's NPV diff against C again in view one
+    check(nv.scene_of(three).diff == user and _diffs_drawn(nv, three) == [user] and _diffs_drawn(nv, one) == [bc],
+          "the same B and C through two diffs (NPV diff, a user's): each view keeps its own objects")
+    nv.clear(three)
+    pv.Delete(three)
+    model = nv.Model(b, diff=ba, role="B")
+    check(nv._seeds_not_in(model, "EID 1; GRID 4, 9") == "grid 9 not in B",
+          f"seeds parse like the grow filter: {nv._seeds_not_in(model, 'EID 1; GRID 4, 9')!r}")
+    steps = rm.timesteps(b)
+    moved = pv.NastranDeform(Input=ba, ScaleFactor=50.0)
+    scope = pv.NastranScope(Input=moved)
+    for r in (a, b):
+        r.ShowOnlyElements = "1 2"
+    for src in (ba, moved, scope):
+        src.UpdatePipeline(steps[0])
+    top = [round(s.GetDataInformation().GetBounds()[5], 3) for s in (ba, moved, scope)]
+    cells = [s.GetDataInformation().GetNumberOfCells() for s in (moved, scope)]
+    check(top[1] > top[0] and top[2] == top[1] and cells[1] < cells[0],
+          f"Nastran Scope after Diff -> Deform cuts the moved input (top z {top}, cells {cells}), "
+          "not the diff's cached, unmoved cut")
+    for r in (a, b):
+        r.ShowOnlyElements = ""
+    import nastran_pv.glyphs as ng  # the builtin session runs the plugin in this interpreter
+
+    converted = os.path.join(tmp, "b.vtm")  # a converted B: the comparison's whole output is new every run
+    convert(["convert", os.path.join(HERE, "data", "same_name", "b", "model.bdf"), "-o", converted, "-q"])
+    fb = nv.load_reader(converted)
+    fd = pv.NastranDiff(Input=fb, Reference=a)
+    fs = pv.NastranScope(Input=fd)
+    a.ShowOnlyElements = "1 2"  # A's scope cuts the removed items: the scope's cut path
+    fs.UpdatePipeline()
+    calls, real = [], ng.model_diagonal
+    ng.model_diagonal = lambda *x, **k: calls.append(1) or real(*x, **k)
+    try:
+        for show in (0, 1, 0, 1):
+            fd.ShowSame = show
+            fs.UpdatePipeline()
+    finally:
+        ng.model_diagonal = real
+        a.ShowOnlyElements = ""
+    check(not calls, f"a converted B: Show toggles keep the model diagonal ({len(calls)} walks)")
+    for s in (fs, fd, fb):
+        pv.Delete(s)
+    import weakref
+
+    algo = ba.GetClientSideObject()
+    registry = type(algo).__init__.__globals__.get("_DIFF_OUTPUTS")
+    tag = getattr(algo, "_tag", None)
+    check(registry is not None and isinstance(registry.get(tag), weakref.ref) and registry[tag]() is algo,
+          "the module registry only points at the Diff (a weak reference): its models go with the filter")
+    del algo
+    nv.single(view=left)
+    for v in (one, left):
+        nv.clear(v)
+    gone = lambda s: any(n == ba for n in nv.upstream(s))  # noqa: E731
+    cmp._delete_derived(lambda s: gone(s) and s != ba)
+    pv.Delete(ba)
+    for v in (one, left):
+        pv.Delete(v)
+    nv._SCENES.clear()
+    cmp.keep -= {a, b}
+    cmp._delete_derived()
+
+
 def comparison_checks(pv, nv):
     """The comparison audit matrix (scene layers R3/R4): every command in each starting state (one
     model; after NPV Diff; side by side with each view active; NPV Diff plus Show Only) on diff_a/b,
@@ -2831,6 +2947,7 @@ def main():
     topology_checks(pv, nv)
     diff_checks(pv, nv)
     comparison_detail_checks(pv, nv)
+    comparison_review_checks(pv, nv)
     comparison_checks(pv, nv)
     clear_checks(pv, nv, reader)
     preset_checks(pv, nv)

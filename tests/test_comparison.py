@@ -80,6 +80,19 @@ def test_reattach_puts_the_new_step_on_the_cached_output(pair):
     assert shells.GetCellData().GetArray("DiffStatus") is not None and out.GetFieldData().GetArray("DIFF_Added")
 
 
+def test_own_arrays_include_what_annotate_overwrote(pair):
+    """A diff output used as B again (a converted or saved diff) already has DiffStatus: annotate
+    writes its own, and a cache hit keeps that one, not the source's stale copy."""
+    a, _, out = pair
+    source = shallow_clone(out)  # B carries the A -> B DiffStatus (ADDED shell 4)
+    again = shallow_clone(source)
+    annotate(again, source)  # compared with itself: everything the same
+    own = own_arrays(again, source)
+    assert "DiffStatus" in own["Shells"]["cell"] and "GridStatus" in own["Shells"]["point"]
+    reattach(again, source, own)
+    assert set(arr(get_block(again, "Shells"), "DiffStatus", "cell").tolist()) == {SAME}
+
+
 # ------------------------------------------------------------------ the comparison's scope
 def test_removed_mask_follows_a_scope(pair):
     a, _, out = pair
@@ -133,6 +146,62 @@ def test_scoped_copy_reslices_new_step_arrays(pair):
     assert again.GetPointData().GetArray("Displacement") is not None
     assert again.GetNumberOfPoints() == shells.GetNumberOfPoints() < src.GetNumberOfPoints()
     src.GetPointData().RemoveArray("Displacement")
+
+
+def test_scoped_copy_slices_a_step_once(pair):
+    """After a time step only the arrays that changed since the last output are sliced again: the
+    next output of the same step reuses them."""
+    a, b, out = pair
+    vis = tree.Visibility(show_only=frozenset({1, 2}))
+    copy = selection.ScopedCopy(out, selection.comparison_masks(out, vis, None, a, vis))
+    src = get_block(out, "Shells")
+    add_array(src.GetPointData(), "Displacement", np.ones((src.GetNumberOfPoints(), 3)))
+    try:
+        first = get_block(copy.output(out), "Shells").GetPointData().GetArray("Displacement")
+        second = get_block(copy.output(out), "Shells").GetPointData().GetArray("Displacement")
+        assert first.__this__ == second.__this__
+        add_array(src.GetPointData(), "Displacement", 2 * np.ones((src.GetNumberOfPoints(), 3)))
+        third = get_block(copy.output(out), "Shells").GetPointData().GetArray("Displacement")
+        assert third.__this__ != second.__this__ and to_numpy(third).max() == 2.0
+        src.GetPointData().RemoveArray("Displacement")
+        assert get_block(copy.output(out), "Shells").GetPointData().GetArray("Displacement") is None
+    finally:
+        src.GetPointData().RemoveArray("Displacement")
+
+
+# ------------------------------------------------------------------ the views' summaries
+def test_change_counts_and_text(pair):
+    from nastran_pv.diff import change_text, removed_count, status_counts
+
+    _, _, out = pair
+    masses = get_block(out, "Masses")
+    assert status_counts(masses, "POINTS") == {CHANGED: 1}
+    assert status_counts(out.GetBlock(0), "CELLS") == {SAME: 2, ADDED: 1}  # Shells
+    removed = get_block(out, "Removed")
+    assert removed_count(removed, "mass") == 1 and removed_count(removed, "bush") == 1
+    assert removed_count(None, "mass") == 0 and status_counts(None, "CELLS") == {}
+    assert change_text(status_counts(masses, "POINTS"), removed_count(removed, "mass")) == \
+        "changes: 1 changed; 1 removed (red)"
+    assert change_text({SAME: 3}, 0) == "changes: none"
+
+
+def test_missing_ids(pair):
+    """Seeds picked on A's removed items are not in B: shell 3 and grid 9 (the Removed block is A's)."""
+    _, _, out = pair
+    blocks = [ds for path, ds in iter_blocks(out) if path != "Removed"]
+    assert selection.missing_ids(blocks, "EID", [1, 3, 201]) == [3]
+    assert selection.missing_ids(blocks, "GRID", [1, 9]) == [9]
+    assert selection.missing_ids(blocks, "EID", []) == []
+
+
+def test_one_load_set_id():
+    from nastran_pv.fields.common import load_set_id, set_id_of_name
+    from vtkmodules.vtkCommonDataModel import vtkPolyData
+
+    ds = vtkPolyData()
+    assert load_set_id(ds, "LOAD_1001") == 1001 and set_id_of_name("SID_7") == 7 and set_id_of_name("x") == -1
+    add_array(ds.GetFieldData(), "LoadSet", np.array([5]))
+    assert load_set_id(ds, "LOAD_1001") == 5
 
 
 # ------------------------------------------------------------------ glyphs show the change

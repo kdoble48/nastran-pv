@@ -12,7 +12,7 @@ import numpy as np
 
 from . import vtkutil
 from .coords import COUNT
-from .fields.common import field_strings, get_array
+from .fields.common import field_strings, get_array, load_set_id
 
 ITEM_TYPES = ("element", "mass", "rigid", "connector", "bush", "load", "spc")
 ELEMENT_ITEM, MASS_ITEM, RIGID_ITEM, CONNECTOR_ITEM, BUSH_ITEM, LOAD_ITEM, SPC_ITEM = range(len(ITEM_TYPES))
@@ -102,11 +102,7 @@ def load_sets(blocks):
         nid, force = get_array(pd, "NID"), get_array(pd, "Force")
         if n and (nid is None or force is None):
             return None
-        sid = get_array(fd, "LoadSet")
-        try:
-            sid = int(sid[0]) if sid is not None and len(sid) else int(name.rsplit("_", 1)[1])
-        except ValueError:
-            sid = -1
+        sid = load_set_id(ds, name)
         grav = get_array(fd, "GravityAcceleration")
         out[name] = {
             "sid": sid, "nid": (nid if nid is not None else np.zeros(0)).astype(np.int64),
@@ -137,9 +133,8 @@ def add_pressures(sets, blocks) -> None:
     for path, ds in blocks.items():
         if path.startswith("Pressures/"):
             name = path.split("/", 1)[1]
-            sid = get_array(ds.GetFieldData(), "LoadSet")
             res = get_array(ds.GetFieldData(), "ResultantForce")
-            entry = _set_entry(sets, name, int(sid[0]) if sid is not None and len(sid) else -1)
+            entry = _set_entry(sets, name, load_set_id(ds, name))
             entry["P"] = res.reshape(-1)[:3].astype(float) if res is not None and res.size >= 3 else np.zeros(3)
 
 

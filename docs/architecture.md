@@ -113,9 +113,13 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   status, reason bits and the Removed block (display only). The proxy caches the annotated B per
   model content (a reader's whole multiblock, which visibility and time steps leave as it is; else
   the input object + MTime) + `Tolerances`; on a cache hit `reattach` puts the reader's per-step
-  arrays back on it (`own_arrays`: what annotate wrote stays). Its output 0 carries `NPVDiff`, naming
-  a registry entry (the whole annotated B, both readers' registry tags, A's whole model, the Show
-  settings) for the comparison's *Nastran Scope*.
+  arrays back on a shallow clone of it, never on the kept output that earlier outputs share
+  (`own_arrays`: what annotate wrote, by identity, stays). Its output 0 carries `NPVDiff`, naming a
+  weak reference to the filter, whose `_entry` (the whole annotated B, both readers' registry tags,
+  A's whole model, the Show settings, the output's leaf signature) the comparison's *Nastran Scope*
+  uses: its cached cut only for the Diff's own output (`_leaf_signature`: ParaView hands the next
+  filter new datasets with the same points), a fresh cut for a moved copy (`_structure` matches),
+  else the input as it is.
 - `selection.py`: selection from a file of IDs. `read_ids` reads CSV/TSV/text/Excel/JSON (ranges,
   `THRU`/`BY`; the key comes from the column header) into an `IdList`; `item_masks` matches it per
   block (EID/PID/MID/FAMILY/GROUP, NID with `grids="all"|"any"`; masses, SPCs and loads on the grids
@@ -207,10 +211,13 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
     the Removed block.
   - Comparisons (R3): `Scene.role` ("A"/"B"), `partner` (the other view's id: `_SCENES` holds both
     views of a pair) and `diff`. `_begin_comparison` (NPV Diff) takes the Diff a model is in
-    (`diff_with`, either side) or makes one. B's side is a `Model(diff=, role="B")` whose data and
+    (`diff_with`, either side) or, for a given pair of models, `diff_for(b, a)` (one with exactly
+    those sides, else a new one). B's side is a `Model(diff=, role="B")` whose data and
     every extract and overlay come from `compared(reader, diff)`: `NPV diff scope` (Nastran Scope on
     the Diff) then `NPV deform diff` (a B deform, so `set_deformation` moves it); its objects are
-    named `NPV diff <what>`, and overlays are colored by `DiffStatus` (the glyph filters carry it).
+    named `NPV diff <what> [B]` for B's own NPV diff and `NPV diff <id> <what> [B]` for any other
+    (`_diff_what`), so comparisons sharing B keep apart, and overlays are colored by `DiffStatus`
+    (the glyph filters carry it).
     `_draw` adds A's removed items (`removed_layer`: a Threshold on `ItemType`, `REMOVED_ITEMS`):
     the elements under every coloring, an overlay's kind with the overlay. A pair (`side_by_side`)
     runs every `apply` in both views (`_pair`), A's side as a single model plus the removed layer,

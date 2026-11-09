@@ -783,6 +783,35 @@ def show_only(b, statuses=ALL_STATUSES, reasons: int = 0, removed: bool = True):
     return visit(b)
 
 
+def status_counts(data, association) -> dict:
+    """``{DiffStatus: count}`` of a block, or of a multiblock's leaves (``association`` "POINTS" or
+    "CELLS"): what an overlay draws in a comparison, for its summary."""
+    leaves = [] if data is None else [ds for _, ds in iter_blocks(data)] if data.IsA("vtkMultiBlockDataSet") \
+        else [data]
+    counts = {}
+    for ds in leaves:
+        status = get_array(ds.GetPointData() if association == "POINTS" else ds.GetCellData(), "DiffStatus")
+        if status is not None:
+            for s, c in zip(*np.unique(np.asarray(status).astype(np.int64), return_counts=True)):
+                counts[int(s)] = counts.get(int(s), 0) + int(c)
+    return counts
+
+
+def removed_count(removed, item: str) -> int:
+    """How many of A's removed items (a diff's ``Removed`` block, or None) are of ``item``
+    (``diff_items.ITEM_TYPES``: "element", "mass", ...)."""
+    from .diff_items import ITEM_TYPES
+
+    types = get_array(removed.GetCellData(), "ItemType") if removed is not None else None
+    return 0 if types is None else int((np.asarray(types) == ITEM_TYPES.index(item)).sum())
+
+
+def change_text(counts: dict, removed: int = 0) -> str:
+    """'changes: 1 changed, 2 added; 1 removed (red)' from :func:`status_counts` and a removed count."""
+    parts = [f"{counts[s]} {STATUS_NAMES[s]}" for s in (ADDED, CHANGED, PROPERTY) if counts.get(s)]
+    return "changes: " + (", ".join(parts) or "none") + (f"; {removed} removed (red)" if removed else "")
+
+
 # --------------------------------------------------------------- cached outputs
 def _attrs(ds):
     """``(key, attribute container)`` of a block's point, cell and field data (field only for a root)."""
@@ -802,10 +831,23 @@ def _paired(annotated, source):
                                         if path in blocks]
 
 
+def _written(a_attr, s_attr) -> set:
+    """Names of ``a_attr``'s arrays that are not ``s_attr``'s own array of that name: what was added
+    or replaced since ``a_attr`` was a shallow copy of ``s_attr``."""
+    out = set()
+    for name in _names(a_attr):
+        mine, theirs = a_attr.GetAbstractArray(name), s_attr.GetAbstractArray(name)
+        if theirs is None or mine.__this__ != theirs.__this__:
+            out.add(name)
+    return out
+
+
 def own_arrays(annotated, source) -> dict:
     """What :func:`annotate` wrote on ``annotated`` (a ``shallow_clone`` of ``source``, annotated):
-    ``{block path ("" for the root): {"point"/"cell"/"field": names}}`` of the arrays ``source`` lacks."""
-    return {path: {key: _names(a_attr) - _names(s_attr) for (key, a_attr), (_, s_attr) in zip(_attrs(a), _attrs(s))}
+    ``{block path ("" for the root): {"point"/"cell"/"field": names}}`` of the arrays that are not
+    ``source``'s: new ones, and those annotate replaced under a name ``source`` already had (a diff
+    output used as B carries its own ``DiffStatus``). Call it right after annotate."""
+    return {path: {key: _written(a_attr, s_attr) for (key, a_attr), (_, s_attr) in zip(_attrs(a), _attrs(s))}
             for path, s, a in _paired(annotated, source)}
 
 
@@ -818,13 +860,13 @@ def reattach(annotated, source, own) -> None:
     for path, s, a in _paired(annotated, source):
         mine = own.get(path, {})
         for (key, a_attr), (_, s_attr) in zip(_attrs(a), _attrs(s)):
-            have = _names(s_attr)
-            for name in _names(a_attr) - have - mine.get(key, set()):
+            written = mine.get(key, set())
+            for name in _names(a_attr) - _names(s_attr) - written:
                 a_attr.RemoveArray(name)
             for i in range(s_attr.GetNumberOfArrays()):
                 arr = s_attr.GetAbstractArray(i)
                 name = arr.GetName()
-                if not name:
+                if not name or name in written:  # annotate's own, though the source has one of that name
                     continue
                 held = a_attr.GetAbstractArray(name)
                 if held is None or held.__this__ != arr.__this__:

@@ -481,16 +481,27 @@ def scoped(model):
 _scope_filter = scoped  # _extract's ``scoped`` argument hides the function
 
 
+def _diff_what(diff, what):
+    """The name of a comparison object (``NPV <it> [B]``): ``diff <what>`` for B's own ``NPV diff``,
+    ``diff <id> <what>`` for any other Nastran Diff (a user's, or one against another A), so two
+    comparisons that share B keep their own objects."""
+    b = diff_sides(diff)[0]
+    own = pv.FindSource(_name(_ReaderOnly(b), "diff")) if b is not None else None
+    key = "" if own is not None and own == diff else f"{diff.GetGlobalIDAsString()} "
+    return f"diff {key}{what}".strip()
+
+
 def compared(reader, diff, undeformed=False):
     """What B's side of a comparison draws (rule R3): ``NPV diff scope`` (*Nastran Scope* on the Nastran
     Diff: the diff's whole output cut by B's scope, A's removed items by A's, then the Diff's Show
     settings) and ``NPV deform diff`` on it, which moves with B's other deforms. ``undeformed``: the
-    scope itself. Both are named after B (``reader``)."""
+    scope itself. Both are named after B (``reader``) and the Diff (:func:`_diff_what`)."""
     owner = _ReaderOnly(reader)
-    scope = _feed(_named(owner, "diff scope", lambda: pv.NastranScope(Input=diff), SCOPE_XML), diff)
+    scope = _feed(_named(owner, _diff_what(diff, "scope"), lambda: pv.NastranScope(Input=diff), SCOPE_XML), diff)
     if undeformed:
         return scope
-    return _feed(_named(owner, "deform diff", lambda: pv.NastranDeform(Input=scope), DEFORM_XML), scope)
+    return _feed(_named(owner, f"deform {_diff_what(diff, '')}", lambda: pv.NastranDeform(Input=scope), DEFORM_XML),
+                 scope)
 
 
 def _feed(proxy, src):
@@ -527,7 +538,7 @@ def _overlay(model, what, make, xml=None):
     side of a comparison: ``NPV diff <what>``, on :func:`compared`."""
     if model.from_diff:
         src = compared(model.reader, model.diff)
-        what = f"diff {what}"
+        what = _diff_what(model.diff, what)
     else:
         src = scoped(model)
     src.UpdatePipeline(model.time)  # a pass-through, or the cached cut, once the scope has run
@@ -545,7 +556,8 @@ def _extract(model, *blocks, what=None, undeformed=False, scoped=False):
     name = what or "+".join(blocks)
     if model.from_diff:
         src = compared(model.reader, model.diff, undeformed)
-        return _named(model, f"diff {'undeformed ' if undeformed else ''}{name}", lambda: extract_blocks(src, blocks))
+        return _named(model, _diff_what(model.diff, f"{'undeformed ' if undeformed else ''}{name}"),
+                      lambda: extract_blocks(src, blocks))
     if undeformed:  # through a deform filter at scale 0, which holds the mode while it vibrates
         rest = _named(model, "undeformed model", lambda: pv.NastranDeform(Input=model.reader))
         return _named(model, f"undeformed {name}", lambda: extract_blocks(rest, blocks))
@@ -999,25 +1011,9 @@ def _status_colors(d, association, view):
 def _changes(model, data, association, item):
     """'changes: 1 changed, 1 added; 1 removed (red)': the DiffStatus counts of an overlay's items
     (``data``: a block or a multiblock of them) and A's removed items of ``item`` (ItemType)."""
-    from vtkmodules.util.numpy_support import vtk_to_numpy
+    from nastran_pv.diff import change_text, removed_count, status_counts
 
-    from nastran_pv.diff import STATUS_NAMES
-    from nastran_pv.diff_items import ITEM_TYPES
-
-    counts = {}
-    for ds in _leaves(data):
-        attr = ds.GetPointData() if association == "POINTS" else ds.GetCellData()
-        a = attr.GetArray("DiffStatus")
-        if a is not None:
-            for s, c in zip(*np.unique(vtk_to_numpy(a).astype(int), return_counts=True)):
-                counts[int(s)] = counts.get(int(s), 0) + int(c)
-    removed = model.block("Removed")
-    gone = 0
-    if removed is not None and removed.GetCellData().GetArray("ItemType") is not None:
-        gone = int((vtk_to_numpy(removed.GetCellData().GetArray("ItemType")) == ITEM_TYPES.index(item)).sum())
-    parts = [f"{counts[s]} {STATUS_NAMES[s]}" for s in range(1, 4) if counts.get(s)]
-    line = "changes: " + (", ".join(parts) or "none")
-    return line + (f"; {gone} removed (red)" if gone else "")
+    return change_text(status_counts(data, association), removed_count(model.block("Removed"), item))
 
 
 def view_masses(model, view, mode=None, relative=None, law=None, minimum=None, minimum_mass=None, color_by=None):
@@ -1763,30 +1759,26 @@ def view_parts(model, view, exclude=()):
 def _not_in(model, key, ids):
     """'EID 3 not in B': the seed ids (EIDs, else grids) ``model`` lacks, as for a seed picked on A's
     removed items in B's view of a comparison (rule R3); "" when it has them all."""
-    from vtkmodules.util.numpy_support import vtk_to_numpy
-
+    from nastran_pv.selection import missing_ids
     from nastran_pv.tree import format_ids
 
-    want = {int(i) for i in ids}
-    have = set()
     blocks = [model.block(n) for n in model.names if n != "Removed"]  # not A's items in B's side
-    for ds in (leaf for blk in blocks for leaf in _leaves(blk)):
-        attrs = (ds.GetCellData(), ds.GetPointData()) if key == "EID" else (ds.GetPointData(),)
-        for attr in attrs:
-            a = attr.GetArray("EID" if key == "EID" else "NID")
-            if a is not None:
-                have.update(int(v) for v in np.unique(vtk_to_numpy(a)))
-    missing = sorted(want - have)
+    missing = missing_ids(blocks, key, ids)
     if not missing:
         return ""
     return f"{'EID' if key == 'EID' else 'grid'} {format_ids(missing)} not in {model.role or 'this model'}"
 
 
-def _seed_ids(text):
-    """``(key, ids)`` of a Seed IDs text such as "EID 1 2" or "GRID 4" (ranges are left out)."""
-    parts = (text or "").split()
-    key = parts[0].upper() if parts and not parts[0].isdigit() else "EID"
-    return key, [int(p) for p in parts if p.isdigit()]
+def _seeds_not_in(model, text):
+    """:func:`_not_in` for a Seed IDs text ("EID 1 2; GRID 4"); "" for a text the grow filter
+    reports itself."""
+    from nastran_pv.topology.graph import Seeds
+
+    try:
+        seeds = Seeds.parse(text)
+    except ValueError:
+        return ""
+    return "; ".join(t for t in (_not_in(model, "EID", seeds.eids), _not_in(model, "GRID", seeds.grids)) if t)
 
 
 def view_grow(model, view, seeds=None, exclude=()):
@@ -1807,8 +1799,7 @@ def view_grow(model, view, seeds=None, exclude=()):
     hops = _gather(fetch(g), "Hops", "CELLS")
     top = int(hops.max()) if hops.size else -1
     seeds = g.SeedIDs if len(g.SeedIDs) <= 40 else g.SeedIDs[:37] + "..."
-    key, ids = _seed_ids(g.SeedIDs)
-    missing = _not_in(model, key, ids) if key in ("EID", "GRID", "NID") else ""
+    missing = _seeds_not_in(model, g.SeedIDs)
     info_text(model, view, f"Grow from {seeds}\nup to {top} element hops" + (f"\n{missing}" if missing else ""))
     return g
 
@@ -2347,6 +2338,22 @@ def diff_sides(diff):
     return (a, b) if getattr(diff, "SwapInputs", 0) else (b, a)
 
 
+def diff_for(b, a):
+    """A Nastran Diff of B against A, Swap Inputs aware: the newest one that compares those two, else a
+    new ``NPV diff [B]`` (``NPV diff vs <A> [B]`` when that name already compares B with another
+    model), never one of another pair."""
+    found = [d for d in pv.GetSources().values() if _xml_name(d) == DIFF_XML and diff_sides(d) == (b, a)]
+    if found:
+        return max(found, key=lambda d: int(d.GetGlobalIDAsString()))
+    owner_ = _ReaderOnly(b)
+    taken = pv.FindSource(_name(owner_, "diff"))
+    name = "diff" if taken is None else f"diff vs {_label(a)}"
+    diff = _named(owner_, name, lambda: pv.NastranDiff(Input=b, Reference=a))
+    if diff_sides(diff) != (b, a):  # "NPV diff vs <A>" left by a model of that name that was closed
+        diff.Input, diff.Reference, diff.SwapInputs = b, a, 0
+    return diff
+
+
 def diff_of(model, reference=None):
     """The diff of ``model`` (B): an existing Nastran Diff on it, else a new ``NPV diff`` against
     ``reference`` (default: :func:`reference_model`). None when there is nothing to compare with."""
@@ -2354,12 +2361,7 @@ def diff_of(model, reference=None):
     if found and reference is None:
         return found[-1]
     reference = reference or reference_model(model.reader)
-    if reference is None:
-        return None
-    d = _named(model, "diff", lambda: pv.NastranDiff(Input=model.reader, Reference=reference))
-    if _input_of(d, "Reference") != reference:
-        d.Reference = reference
-    return d
+    return diff_for(model.reader, reference) if reference is not None else None
 
 
 def diff_summary(diff, data=None):
@@ -2402,7 +2404,7 @@ def removed_layer(diff, view, items=None, opacity=0.4):
     b = diff_sides(diff)[0]
     owner_ = _ReaderOnly(b)
     src = compared(b, diff)
-    removed = _named(owner_, "diff removed", lambda: extract_blocks(src, ["Removed"]))
+    removed = _named(owner_, _diff_what(diff, "removed"), lambda: extract_blocks(src, ["Removed"]))
     removed.UpdatePipeline(getattr(view, "ViewTime", 0.0))
     if not removed.GetDataInformation().GetNumberOfCells():
         return None
@@ -2411,7 +2413,7 @@ def removed_layer(diff, view, items=None, opacity=0.4):
         codes = [ITEM_TYPES.index(i) for i in items]
         if not codes:
             return None
-        target = _named(owner_, "diff removed " + " ".join(items), lambda: pv.Threshold(Input=removed))
+        target = _named(owner_, _diff_what(diff, "removed " + " ".join(items)), lambda: pv.Threshold(Input=removed))
         target.Scalars = ["CELLS", "ItemType"]
         target.LowerThreshold, target.UpperThreshold = min(codes), max(codes)
         target.UpdatePipeline(getattr(view, "ViewTime", 0.0))
@@ -2786,11 +2788,8 @@ def _begin_comparison(view, reader=None, reference=None):
     if scene.diff is not None and reference is None:
         return []
     sides = _sides(scene)
-    if sides is not None and scene.diff is None:  # a pair without a diff: its two models
-        b, a = sides
-        diff = diff_with(b)
-        if diff is None or diff_sides(diff) != (b, a):
-            diff = _named(_ReaderOnly(b), "diff", lambda: pv.NastranDiff(Input=b, Reference=a))
+    if sides is not None and scene.diff is None:  # a pair without a diff: its two models, in their roles
+        diff = diff_for(*sides)
     else:
         target = subject(view, reader)
         diff = diff_with(target) if reference is None else None
@@ -2798,9 +2797,7 @@ def _begin_comparison(view, reader=None, reference=None):
             ref = reference or reference_model(target)
             if ref is None:
                 return []
-            diff = _named(_ReaderOnly(target), "diff", lambda: pv.NastranDiff(Input=target, Reference=ref))
-            if _input_of(diff, "Reference") != ref:
-                diff.Reference = ref
+            diff = diff_for(target, ref)
     out = []
     for v in _pair(view):
         s = scene_of(v)

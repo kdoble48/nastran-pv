@@ -18,6 +18,7 @@ from vtkmodules.vtkCommonDataModel import vtkPolyData
 from vtkmodules.vtkFiltersSources import vtkArrowSource, vtkSphereSource
 
 from . import vtkutil
+from .fields.common import load_set_id, set_id_of_name
 
 MASS_SIZE_MODES = ("auto", "physical", "relative")
 
@@ -627,18 +628,11 @@ def _leaves(mb):
     return iter_blocks(mb) if mb.IsA("vtkMultiBlockDataSet") else [("", mb)]
 
 
-def _name_id(name) -> int:
-    try:
-        return int(str(name).rsplit("_", 1)[1])
-    except (IndexError, ValueError):
-        return -1
-
-
 def load_set_names(mb) -> list[str]:
     """The load sets of a model, by set id: those with a ``Loads`` block (nodal loads, or GRAV
     only), a ``Pressures`` block or a GRAV row."""
     names = [n for n, _ in load_sets_of(mb)] + [n for n, _ in pressure_sets_of(mb)] + [g[0] for g in gravity_sets_of(mb)]
-    return sorted(dict.fromkeys(names), key=_name_id)
+    return sorted(dict.fromkeys(names), key=set_id_of_name)
 
 
 def default_load_set(mb) -> str | None:
@@ -654,13 +648,6 @@ def default_load_set(mb) -> str | None:
             if name in drawable:
                 return name
     return next((n for n in load_set_names(mb) if n in drawable), None)
-
-
-def _set_id(ds, name) -> int:
-    a = ds.GetFieldData().GetArray("LoadSet")
-    if a is not None and a.GetNumberOfTuples():
-        return int(a.GetTuple1(0))
-    return _name_id(name)
 
 
 def _face_centroids(ds) -> np.ndarray:
@@ -728,7 +715,7 @@ def load_glyphs(sets, diag: float, show: str = "force", size: float = 0.08, scal
             if vec is not None:
                 vec = np.nan_to_num(vec.reshape(-1, 3).astype(float))
                 peak[k] = max(peak.get(k, 0.0), float(np.linalg.norm(vec, axis=1).max()))  # over every point
-                rows.append((k, xyz, vec[idx], nid, _set_id(ds, name), status))
+                rows.append((k, xyz, vec[idx], nid, load_set_id(ds, name), status))
     for name, ds in pressures:
         n = ds.GetNumberOfCells()
         cd = ds.GetCellData()
@@ -743,7 +730,7 @@ def load_glyphs(sets, diag: float, show: str = "force", size: float = 0.08, scal
         vec = force / np.where(f > 0, f, 1.0)[:, None] * p[:, None]  # |pressure| along the face force
         peak[2] = max(peak.get(2, 0.0), float(p.max()))  # over every face
         status = {s: get_array(cd, s, np.full(n, -1)).astype(np.int64)[idx] for s in carried}
-        rows.append((2, _face_centroids(ds)[idx], vec[idx], np.full(len(idx), -1), _set_id(ds, name), status))
+        rows.append((2, _face_centroids(ds)[idx], vec[idx], np.full(len(idx), -1), load_set_id(ds, name), status))
     for name, sid, accel in (gravity if cg is not None else ()):
         a = np.asarray(accel, dtype=float).reshape(1, 3)
         peak[3] = max(peak.get(3, 0.0), float(np.linalg.norm(a)))

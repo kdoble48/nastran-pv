@@ -31,7 +31,7 @@ import numpy as np
 from vtkmodules.vtkCommonDataModel import vtkMultiBlockDataSet
 
 from . import vtkutil
-from .fields.common import MESH, field_strings, get_array, iter_blocks, mpc_legs
+from .fields.common import MESH, field_strings, get_array, iter_blocks, load_set_id, mpc_legs
 from .tree import _cut, _item_kind, format_ids, item_labels, parse_ids
 
 KEYS = ("EID", "NID", "PID", "MID", "FAMILY", "GROUP")
@@ -542,16 +542,6 @@ def _all_grids_kept(ds, grids) -> np.ndarray:
 REMOVED = "Removed"  # the diff's block of A's removed items (nastran_pv.diff.annotate)
 
 
-def _load_set_id(ds, name) -> int:
-    sid = get_array(ds.GetFieldData(), "LoadSet")
-    if sid is not None and len(sid):
-        return int(sid[0])
-    try:
-        return int(name.rsplit("_", 1)[1])
-    except (IndexError, ValueError):
-        return -1
-
-
 def _kept_keys(mb, masks) -> dict:
     """``{ItemType: kept keys}`` of a model under ``masks`` (:func:`scope_masks`): EIDs of elements,
     masses, rigid elements, connectors and bushes; ``(set, grid)`` of load and SPC points."""
@@ -575,7 +565,7 @@ def _kept_keys(mb, masks) -> dict:
             continue
         nid = np.asarray(nid)[m].astype(np.int64)
         if path.startswith("Loads/"):
-            sid = _load_set_id(ds, path.split("/", 1)[1])
+            sid = load_set_id(ds, path.split("/", 1)[1])
             out[LOAD_ITEM].update((sid, int(n)) for n in nid)
         elif path == "Constraints":
             sets = get_array(ds.GetPointData(), "SPCSet", np.full(ds.GetNumberOfPoints(), -1))
@@ -651,6 +641,23 @@ def comparison_masks(mb, vis, names=None, a_mb=None, a_vis=None, a_names=None):
     return masks
 
 
+def missing_ids(blocks, key: str, ids) -> list[int]:
+    """The ``ids`` (EIDs for ``key`` "EID", else grids) that no dataset of ``blocks`` (blocks or
+    multiblocks) carries: in a comparison, seeds picked on A's removed items are not in B."""
+    want = {int(i) for i in ids}
+    have = set()
+    for blk in blocks:
+        if blk is None:
+            continue
+        for _, ds in iter_blocks(blk) if blk.IsA("vtkMultiBlockDataSet") else [("", blk)]:
+            attrs = (ds.GetCellData(), ds.GetPointData()) if key == "EID" else (ds.GetPointData(),)
+            for attr in attrs:
+                values = get_array(attr, "EID" if key == "EID" else "NID")
+                if values is not None:
+                    have.update(np.unique(np.asarray(values).astype(np.int64)).tolist())
+    return sorted(want - have)
+
+
 def _n_items(ds) -> int:
     return ds.GetNumberOfPoints() if _item_kind(ds) == "point" else ds.GetNumberOfCells()
 
@@ -658,7 +665,7 @@ def _n_items(ds) -> int:
 class ScopedCopy:
     """A multiblock cut by ``masks`` (one piece per block, empty blocks dropped, root and block field
     data kept). :meth:`output` brings the cut up to date with the source's arrays, which per-step
-    results replace in place: only the arrays that changed since the cut are sliced again."""
+    results replace in place: only the arrays that changed since the last output are sliced again."""
 
     def __init__(self, mb, masks):
         from .tree import _pointers
@@ -671,7 +678,7 @@ class ScopedCopy:
                 self.leaves[path] = (piece, cells, points, _pointers(ds))
 
     def output(self, mb) -> vtkMultiBlockDataSet:
-        from .tree import _changed, _sync
+        from .tree import _changed, _pointers, _sync
 
         def visit(src, prefix):
             out = vtkMultiBlockDataSet()
@@ -691,9 +698,12 @@ class ScopedCopy:
                 if leaf is None:
                     continue
                 piece, cells, points, before = leaf
+                new, gone = _changed(blk, before)
                 ds = vtkutil.shallow_copy(piece)
                 ds.GetFieldData().ShallowCopy(blk.GetFieldData())
-                _sync(blk, ds, *_changed(blk, before), cells, points)
+                _sync(blk, ds, new, gone, cells, points)
+                if any(new.values()) or any(gone.values()):  # the next output starts from this step
+                    self.leaves[path] = (vtkutil.shallow_copy(ds), cells, points, _pointers(blk))
                 vtkutil.add_block(out, name, ds)
             return out
 
