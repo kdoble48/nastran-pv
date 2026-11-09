@@ -164,6 +164,8 @@ All notable changes to nastran-pv are listed here. The format follows
   without `tests/data`; `license` is an SPDX expression (built by setuptools 77 or newer); the
   version is written once, as `nastran_pv.__version__`, which `pyproject.toml` reads; the
   README's links are absolute, so they work on PyPI (#69).
+- The README and the Install page lead with `pip install nastran-pv`; installing from a clone
+  moves to *From a clone* (#70).
 
 ### Fixed
 
