@@ -68,9 +68,19 @@ A [selection file](cli.md#selection-from-an-id-file) (`--select`) adds the root 
 With an OP2 or HDF5 file loaded, the mesh blocks, `Masses`, `Rigid` and `Constraints` get point
 `Displacement Rotation DisplacementMagnitude`, the mesh blocks cell `VonMisesMax` (when the results
 have stresses), `BeamSections` gets the rigid-section `Displacement` of its points, and the root
-gets `ResultLabel ResultStep` and `Frequency` (modes only).
+gets `ResultLabel ResultStep` and `Frequency` (modes only). Each comes from a
+[result type](#result-types), which `--result-types` and the reader's *Result Types* choose.
 
 The [field options](fields.md) add further arrays on top of these.
+
+## Result types
+
+| Type | Arrays | From (OP2 / MSC HDF5) |
+|---|---|---|
+| `Displacement` | point `Displacement` (T1-T3), `Rotation` (R1-R3), `DisplacementMagnitude`, rotated from each grid's CD into basic; 0 on grids without output | `displacements`, `eigenvectors` / `NODAL/DISPLACEMENT`, `NODAL/EIGENVECTOR`; these define the result steps |
+| `VonMisesMax` | cell `VonMisesMax` on the mesh blocks: the largest value over the element's layers, fibres and nodes; NaN without output | every stress table with a von Mises column / `ELEMENTAL/STRESS/*`, computed from the components |
+
+Both are attached by default. The types are declared in `src/nastran_pv/result_types.py`.
 
 ## Derived quantities
 

@@ -44,10 +44,17 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   `NSMPerArea|NSMPerLength NSMMass NSMSource` and the `NSM_*` root tables. It runs in
   `build_multiblock` before the masses; its warnings use `deck.warn(..., mass=True)`, which lists
   them first.
-- `results.py` / `results_h5.py`: `Op2Results` and `H5Results` share a base (`results._Results`)
-  and its interface (`steps`, `times`, `skipped`, `step_data`, `attach`). The shared `attach_step` writes `Displacement` and
-  `VonMisesMax`, rotating vectors from CD into basic when a deck is passed. `open_results`
-  dispatches on the file suffix.
+- `result_types.py` / `results.py` / `results_h5.py`: what is attached is declared, one
+  `ResultType` per kind of result in `result_types.REGISTRY` (today `Displacement` and
+  `VonMisesMax`): its OP2 tables and H5 datasets, blocks, location, arrays, reduction and frame.
+  `Op2Results` and `H5Results` share a base (`results._Results`) and its interface (`steps`, `times`,
+  `skipped`, `available`, `select`, `values`, `attach`); each only finds a type's tables and
+  yields raw rows per step (`_rows`). `_Results.values` joins, sorts and reduces them, and the
+  shared `attach_step` rotates them from CD into basic (when a deck is passed) and writes every
+  attached type, dropping the arrays of the others. `select` (CLI `--result-types`, the reader's
+  *Result Types*) holds on the results object, so the series writers honour it. `open_results`
+  dispatches on the file suffix. Design and the recipe for a new type:
+  `docs/design/2026-11-08-result-registry.md`.
 - `fields/`: `derived.py` (material, quality, size, cg, pidmass), `tables.py` (`read_table` and
   `map_table` by EID/PID/MID/NID/FAMILY/GROUP; text columns become codes plus a `<name>Names`
   table), `db.py` (SQLite or SQLAlchemy), and `calc.py` (`calculate` with a restricted-namespace
