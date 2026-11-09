@@ -1933,21 +1933,28 @@ def deleted_filter_checks(pv, reader):
     filters = {"reader": fresh, "NastranMassGlyphs": pv.NastranMassGlyphs(Input=fresh),
                "NastranLoadGlyphs": pv.NastranLoadGlyphs(Input=fresh),  # checklists
                "NastranGrow": pv.NastranGrow(Input=fresh, SeedIDs="EID 1"),  # card types checklist
-               "NastranDeform": pv.NastranDeform(Input=fresh, ScaleFactor=2.0)}
+               "NastranDeform": pv.NastranDeform(Input=fresh, ScaleFactor=2.0),
+               "NastranDiff": pv.NastranDiff(Input=fresh, Reference=fresh)}  # Kinds and Reasons checklists
+    filters["NastranScope"] = pv.NastranScope(Input=filters["NastranDiff"])  # a comparison's layers
     states = {}
     for name, proxy in filters.items():
         proxy.UpdatePipeline()
         states[name] = proxy.GetClientSideObject().__dict__
     del proxy  # it would keep the last filter, and so the reader, alive
     check(states["NastranDeform"].get("_deformer") is not None, "Nastran Deform caches its deformer")
+    check(states["NastranDiff"].get("_cache") is not None, "Nastran Diff caches its comparison (both models)")
+    registry = type(filters["NastranDiff"].GetClientSideObject()).__init__.__globals__["_DIFF_OUTPUTS"]
+    diff_ref = registry[states["NastranDiff"]["_tag"]]
     deck = weakref.ref(states["reader"]["_deck"])
-    for name in ("NastranMassGlyphs", "NastranLoadGlyphs", "NastranGrow", "NastranDeform", "reader"):
+    for name in ("NastranScope", "NastranDiff", "NastranMassGlyphs", "NastranLoadGlyphs", "NastranGrow",
+                 "NastranDeform", "reader"):
         pv.Delete(filters.pop(name))
     del fresh
     gc.collect()
     for name, state in states.items():
         check(not state, f"a deleted {name} is freed and drops its cached state (left: {sorted(state)})")
     check(deck() is None, "a deleted reader frees its deck")
+    check(diff_ref.Get() is None, "the Diff registry's weak reference to a deleted Nastran Diff is empty")
     pv.SetActiveSource(reader)
 
 
@@ -2486,12 +2493,12 @@ def comparison_review_checks(pv, nv):
     check(not calls, f"a converted B: Show toggles keep the model diagonal ({len(calls)} walks)")
     for s in (fs, fd, fb):
         pv.Delete(s)
-    import weakref
+    from vtkmodules.vtkCommonCore import vtkWeakReference
 
     algo = ba.GetClientSideObject()
     registry = type(algo).__init__.__globals__.get("_DIFF_OUTPUTS")
     tag = getattr(algo, "_tag", None)
-    check(registry is not None and isinstance(registry.get(tag), weakref.ref) and registry[tag]() is algo,
+    check(registry is not None and isinstance(registry.get(tag), vtkWeakReference) and registry[tag].Get() is algo,
           "the module registry only points at the Diff (a weak reference): its models go with the filter")
     del algo
     nv.single(view=left)

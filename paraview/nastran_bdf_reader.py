@@ -21,10 +21,9 @@ import importlib.machinery
 import itertools
 import os
 import sys
-import weakref
 
 from paraview.util.vtkAlgorithm import VTKPythonAlgorithmBase, smdomain, smhint, smproperty, smproxy
-from vtkmodules.vtkCommonCore import vtkDataArraySelection, vtkOutputWindow
+from vtkmodules.vtkCommonCore import vtkDataArraySelection, vtkOutputWindow, vtkWeakReference
 from vtkmodules.vtkCommonDataModel import (vtkDataObject, vtkFieldData, vtkMultiBlockDataSet,
                                            vtkPartitionedDataSetCollection)
 from vtkmodules.vtkCommonExecutionModel import vtkStreamingDemandDrivenPipeline
@@ -195,15 +194,17 @@ def _reader_tag(data):
     return data.GetFieldData().GetAbstractArray(WHOLE_MODEL_TAG).GetValue(0)
 
 
-# A Nastran Diff's output 0 carries a DIFF_TAG field string naming the filter here (a weak reference,
-# so the registry keeps nothing alive). The filter's ``_entry`` holds the whole annotated B (before the
+# A Nastran Diff's output 0 carries a DIFF_TAG field string naming the filter here: a vtkWeakReference,
+# so the registry keeps nothing alive (a Python weakref would die with the wrapper, which ParaView drops
+# while the algorithm lives on; Get() brings it back), and a deleted Diff empties its ``__dict__``
+# (vtkutil.drop_state_on_delete). The filter's ``_entry`` holds the whole annotated B (before the
 # Show filters), the registry tags of its two readers (None for a converted file), A's whole multiblock,
 # the Show settings and its output's leaf signature. Nastran Scope directly after the Diff (a
 # comparison's drawn layers) masks the whole output by both readers' current scopes, then filters it as
 # the Diff's Show settings say. The tag passes through other filters (and into saved files), so only
 # input with the Diff's own leaves counts.
 DIFF_TAG = "NPVDiff"
-_DIFF_OUTPUTS = {}  # tag -> weakref to the NastranPVDiff
+_DIFF_OUTPUTS = {}  # tag -> vtkWeakReference to the NastranPVDiff
 
 
 def _leaf_signature(mb):
@@ -228,7 +229,7 @@ def _diff_entry(data):
     from it: compare :func:`_leaf_signature` before using its cached data), else None."""
     tag = data.GetFieldData().GetAbstractArray(DIFF_TAG) if data.IsA("vtkMultiBlockDataSet") else None
     ref = _DIFF_OUTPUTS.get(tag.GetValue(0)) if tag is not None and tag.GetNumberOfValues() else None
-    return getattr(ref(), "_entry", None) if ref is not None else None
+    return getattr(ref.Get(), "_entry", None) if ref is not None else None
 
 
 def _reader_scope(data):
@@ -2451,9 +2452,10 @@ class NastranPVDiff(_Settable, VTKPythonAlgorithmBase):
         self._cache = None  # (key, annotated B, table rows, A, B's source, what annotate wrote)
         self._entry = None  # what Nastran Scope after it needs (see DIFF_TAG)
         self._tag = f"{id(self)}-{next(_GENERATION)}"  # unique, even when an id comes again
-        for gone in [k for k, ref in _DIFF_OUTPUTS.items() if ref() is None]:
+        for gone in [k for k, ref in _DIFF_OUTPUTS.items() if ref.Get() is None]:
             del _DIFF_OUTPUTS[gone]
-        _DIFF_OUTPUTS[self._tag] = weakref.ref(self)
+        ref = _DIFF_OUTPUTS[self._tag] = vtkWeakReference()
+        ref.Set(self)
 
     def FillInputPortInformation(self, port, info):
         info.Set(self.INPUT_REQUIRED_DATA_TYPE(), "vtkDataObject")

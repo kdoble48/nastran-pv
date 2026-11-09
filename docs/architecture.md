@@ -115,7 +115,7 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   the input object + MTime) + `Tolerances`; on a cache hit `reattach` puts the reader's per-step
   arrays back on a shallow clone of it, never on the kept output that earlier outputs share
   (`own_arrays`: what annotate wrote, by identity, stays). Its output 0 carries `NPVDiff`, naming a
-  weak reference to the filter, whose `_entry` (the whole annotated B, both readers' registry tags,
+  `vtkWeakReference` to the filter (a Python weakref dies with the wrapper ParaView drops), whose `_entry` (the whole annotated B, both readers' registry tags,
   A's whole model, the Show settings, the output's leaf signature) the comparison's *Nastran Scope*
   uses: its cached cut only for the Diff's own output (`_leaf_signature`: ParaView hands the next
   filter new datasets with the same points), a fresh cut for a moved copy (`_structure` matches),
@@ -301,7 +301,8 @@ Every gotcha found so far, by area. The few that bite on any change are also in 
   C++ (an observer, a logger the deck keeps), because Python's garbage collector cannot see it: a
   deleted reader or checklist filter was never freed, caches and all. Checklist observers use
   `vtkutil.modified_callback` (a `vtkWeakReference`), and `load_deck` lets go of the caller's
-  progress when the read ends. pv_smoke deletes a reader and its filters and checks they are freed.
+  progress when the read ends. pv_smoke deletes a reader and its filters (a Diff and its Scope too)
+  and checks they are freed.
 - VTK reports the observers added through a wrapper to Python's garbage collector
   (`PyVTKObject_Traverse`). When the cyclic collector frees a wrapper, it clears those observers
   first, so a `DeleteEvent` observer would run cleared and crash. `vtkutil` keeps each
