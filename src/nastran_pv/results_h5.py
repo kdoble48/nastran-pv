@@ -6,8 +6,9 @@ Reads the MSC schema under ``/NASTRAN/RESULT``:
   TIME_FREQ_EIGR MODE ...``)
 * the tables each result type of :mod:`nastran_pv.result_types` names:
   ``NODAL/DISPLACEMENT`` and ``NODAL/EIGENVECTOR`` (``ID X Y Z RX RY RZ
-  DOMAIN_ID``; real only, ``*_CPLX`` tables are reported as skipped), the nodal SPC/MPC forces
-  and applied loads, ``ELEMENTAL/STRESS/<TYPE>`` for ``VonMisesMax`` (any table with ``EID`` and
+  DOMAIN_ID``), the nodal SPC/MPC forces, applied loads, velocities and accelerations, and their
+  complex ``*_CPLX`` datasets (every field ``F`` as ``FR + i FI``; ``DOMAINS`` ``ANALYSIS`` 5 a
+  frequency, 9 a complex mode, 6 a transient time), ``ELEMENTAL/STRESS/<TYPE>`` for ``VonMisesMax`` (any table with ``EID`` and
   ``DOMAIN_ID``; von Mises is computed from the components by ``result_types.von_mises_table``:
   plates from ``X1 Y1 XY1`` / ``X2 Y2 XY2`` (both fibres), solids from
   ``X Y Z TXY TYZ TZX``; array-valued fields (corner/centre points) take the maximum), and
@@ -26,8 +27,8 @@ from typing import NamedTuple
 import numpy as np
 
 from . import result_types
-from .result_types import von_mises_table
-from .results import Step, _mode_frequency, _Results
+from .result_types import CPLX, von_mises_table
+from .results import Step, _mode_frequency, _Results, step_label
 
 __all__ = ["H5Results", "von_mises_table", "ROOT", "pick_fields"]
 
@@ -35,16 +36,26 @@ ROOT = "/NASTRAN/RESULT"
 ID_FIELDS = {"NID": "ID", "EID": "EID"}  # the id field of the tables of a type keyed by NID or EID
 
 
-def _paths(res, patterns):
-    """(pattern, dataset path) under ``res`` for paths and ``GROUP/*`` patterns, in order."""
+def _paths(res, patterns, is_complex=None):
+    """(pattern, dataset path) under ``res`` for paths and ``GROUP/*`` patterns, in order;
+    ``is_complex`` True or False keeps only the ``_CPLX`` datasets of a group, or only the others."""
     for pat in patterns:
         if pat.endswith("/*"):
             group = pat[:-2]
             if group in res and hasattr(res[group], "keys"):  # a group, not a dataset
                 for name in res[group]:
-                    yield pat, f"{group}/{name}"
+                    if is_complex is None or name.endswith(CPLX) == is_complex:
+                        yield pat, f"{group}/{name}"
         elif pat in res:
             yield pat, pat
+
+
+def _complex_paths(res, src):
+    """(the source's own pattern, complex dataset path) of a source: ``<dataset>_CPLX`` and the
+    ``_CPLX`` members of its groups."""
+    for pat, cplx in zip(src.datasets, result_types.complex_datasets(src.datasets)):
+        for _, path in _paths(res, (cplx,), is_complex=True):
+            yield pat, path
 
 
 def _slot(values, pos, used):
@@ -83,10 +94,16 @@ def pick_fields(rows, picks, slots="") -> np.ndarray:
     return np.column_stack(cols) if cols else np.zeros((len(rows), 0))
 
 
+def complex_fields(rows, picks, slots="") -> np.ndarray:
+    """:func:`pick_fields` of a ``_CPLX`` dataset: each field ``F`` as ``FR + i FI``."""
+    return (pick_fields(rows, result_types.complex_picks(picks, "R"), slots)
+            + 1j * pick_fields(rows, result_types.complex_picks(picks, "I"), slots))
+
+
 class H5Table(NamedTuple):
     """A dataset a result type reads: its path, the ids and domain id of each row, the values
-    (None for a picked table until a step needs them: ``source`` says how to pick them), and the
-    step kind (types that can define steps)."""
+    (None for a picked table until a step needs them: ``source`` says how to pick them), the
+    declared step kind (types that can define steps) and whether it is a complex dataset."""
 
     path: str
     ids: np.ndarray
@@ -94,6 +111,7 @@ class H5Table(NamedTuple):
     values: np.ndarray | None
     kind: str | None
     source: result_types.H5Source | None = None
+    is_complex: bool = False
 
 
 class H5Results(_Results):
@@ -118,42 +136,55 @@ class H5Results(_Results):
     def _read_tables(self, res, rtype) -> list[H5Table]:
         """Every table of ``rtype`` the file has. Values from ``fields`` or ``compute`` are read
         now; a picked table keeps only its ids and domain ids (two fields), its values are picked
-        when a step first needs them (:meth:`_values`), so types left unselected cost no read."""
+        when a step first needs them (:meth:`_values`), so types left unselected cost no read.
+        A type with ``complex`` parts also reads each source's ``_CPLX`` datasets."""
         found = []
-        id_field = ID_FIELDS[rtype.id_array]
         for src in rtype.h5_sources:
-            for pat, path in _paths(res, src.datasets):
-                ds = res[path]
-                if not hasattr(ds, "dtype") or ds.dtype.names is None:
-                    continue
-                names = set(ds.dtype.names)
-                if not {id_field, "DOMAIN_ID"} <= names:
-                    continue
-                kind = src.kind(pat) if rtype.defines_steps else None
-                if src.picks:
-                    if result_types.resolve_picks(src.picks, names) is None:
-                        continue
-                    if src.accept is not None and not src.accept(ds):
-                        continue
-                    found.append(H5Table(path, np.asarray(ds[id_field], dtype=np.int64),
-                                         np.asarray(ds["DOMAIN_ID"], dtype=np.int64), None, kind, src))
-                    continue
-                rows = ds[()]
-                if src.compute is not None:
-                    vals = src.compute(rows)
-                    if vals is None:
-                        continue  # a layout the type does not handle (bars, beams, composites...)
-                elif set(src.fields) <= names:
-                    vals = np.column_stack([rows[f].astype(float) for f in src.fields])
-                else:
-                    continue
-                found.append(H5Table(path, rows[id_field].astype(np.int64), rows["DOMAIN_ID"].astype(np.int64),
-                                     np.asarray(vals, dtype=float), kind))
-            if rtype.steps:
-                for path in src.datasets:
-                    if f"{path}_CPLX" in res:
-                        self.skipped.append(f"{path.rsplit('/', 1)[-1]}_CPLX: complex results are not supported")
+            if src.reads(False):
+                for pat, path in _paths(res, src.datasets, is_complex=False):
+                    found += self._table(res, rtype, src, pat, path, False)
+            if rtype.complex and src.reads(True):
+                for pat, path in _complex_paths(res, src):
+                    found += self._table(res, rtype, src, pat, path, True)
+            elif rtype.steps:
+                for path in result_types.complex_datasets(src.datasets):
+                    if path in res:
+                        self.skipped.append(f"{path.rsplit('/', 1)[-1]}: complex results are not supported")
         return found
+
+    def _table(self, res, rtype, src, pat, path, is_complex) -> list[H5Table]:
+        """``[H5Table]`` of one dataset of ``src``, or ``[]`` when it lacks a field (complex: the
+        ``R`` and ``I`` field of each) or a source's ``accept`` refuses it."""
+        ds = res[path]
+        if not hasattr(ds, "dtype") or ds.dtype.names is None:
+            return []
+        names = set(ds.dtype.names)
+        id_field = ID_FIELDS[rtype.id_array]
+        if not {id_field, "DOMAIN_ID"} <= names:
+            return []
+        kind = src.kind(pat) if rtype.defines_steps else None
+        if src.picks or (is_complex and src.fields):
+            picks = src.picks or ((0, tuple(src.fields)),)
+            wanted = [result_types.complex_picks(picks, p) for p in "RI"] if is_complex else [picks]
+            if any(result_types.resolve_picks(w, names) is None for w in wanted):
+                return []
+            if src.accept is not None and not src.accept(ds):
+                return []
+            return [H5Table(path, np.asarray(ds[id_field], dtype=np.int64), np.asarray(ds["DOMAIN_ID"], dtype=np.int64),
+                            None, kind, src, is_complex)]
+        if is_complex:  # a compute(rows) source has no complex form
+            return []
+        rows = ds[()]
+        if src.compute is not None:
+            vals = src.compute(rows)
+            if vals is None:
+                return []  # a layout the type does not handle (bars, beams, composites...)
+        elif set(src.fields) <= names:
+            vals = np.column_stack([rows[f].astype(float) for f in src.fields])
+        else:
+            return []
+        return [H5Table(path, rows[id_field].astype(np.int64), rows["DOMAIN_ID"].astype(np.int64),
+                        np.asarray(vals, dtype=float), kind)]
 
     def _unread(self, res) -> list[str]:
         """One message per element force, stress or strain dataset no type of the registry reads
@@ -181,7 +212,11 @@ class H5Results(_Results):
 
             with h5py.File(self.path, "r") as h5:
                 rows = h5[ROOT][table.path][()]
-            self._picked[key] = pick_fields(rows, table.source.picks, table.source.slots)
+            src = table.source
+            if table.is_complex:
+                self._picked[key] = complex_fields(rows, src.picks or ((0, tuple(src.fields)),), src.slots)
+            else:
+                self._picked[key] = pick_fields(rows, src.picks, src.slots)
         return self._picked[key]
 
     # ----------------------------------------------------------------- domains
@@ -222,11 +257,18 @@ class H5Results(_Results):
                 get = (lambda n, default=0: d[n].item() if d is not None and n in d.dtype.names else default)
                 sc = int(get("SUBCASE", 0))
                 value = float(get("TIME_FREQ_EIGR", np.nan))
-                if kind == "eigenvector":
+                actual = result_types.step_kind(kind, table.is_complex, int(get("ANALYSIS", 0)))
+                if actual == "eigenvector":
                     mode = int(get("MODE", 0))
                     freq = _mode_frequency([value], None, 0)
                     steps.append(Step(f"Subcase {sc} mode {mode} ({freq:.6g} Hz)", kind, int(did), 0, freq,
                                       value, path))
+                elif actual != kind:  # frequency, complex mode (|EIGI| / 2 pi) or transient time
+                    mode = int(get("MODE", 0))
+                    freq = {"frequency": value, "complex_eigenvector": abs(float(get("EIGI", np.nan))) / (2 * np.pi)
+                            }.get(actual, np.nan)
+                    steps.append(Step(step_label(actual, sc, value, mode=mode, freq=freq), actual, int(did), 0,
+                                      freq, value, path))
                 else:
                     stp = int(get("STEP", 0))
                     label = f"Subcase {sc}" + (f" step {stp}" if stp else "")
