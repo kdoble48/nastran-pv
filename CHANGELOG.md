@@ -76,6 +76,11 @@ All notable changes to nastran-pv are listed here. The format follows
 - Nonstructural mass indexes card targets instead of scanning every element (#20).
 - Faster solid element mass (#19).
 - Gallery scene URLs are tagged with the build version (#3).
+- The module `nastran_pv.topology.check` is now `nastran_pv.topology.checks`, so the `check`
+  function no longer hides it (`from nastran_pv.topology import check` is unchanged); `--rules`
+  without `--parts` or `--grow` is an error instead of being ignored; the run store's `elements`
+  table holds the Connectors elements (not MPC equations; `pid` NULL where there is no property)
+  and `n_elements` counts elements, not rigid-element legs (#57).
 
 ### Fixed
 
@@ -90,6 +95,13 @@ All notable changes to nastran-pv are listed here. The format follows
   coloring's text, NPV Clear no longer acts on a deleted reader (nor leaves its text shown), and an
   EID list the reader cannot parse, a selection file it cannot read or a failed read no longer
   counts as a scope, which is worked out without running the reader (#56).
+- Model tools follow-ups: Parts' link table is computed in numpy (1.5 s to 19 ms on a 271k-cell
+  model with every cell excluded); FreeEdges counts a CQUAD8 edge once; the dangling and coincident
+  checks take one MPC equation, not its set, as one element, and selecting MPC legs seeds their grids
+  instead of `EID <set id>`; an unchecked card type the current model lacks no longer fails the
+  topology filters; Exclude PIDs names a bad entry and, like `exclude_pids=`, takes ranges; `check`
+  and `--only` take comma lists, `check` warns that `within=` needs seeds and gives zero counts on a
+  model without elements; graph blocks without a type array, EID or DOF warn, once (#57).
 - Deck vs converted file parity: a `.vtkhdf` gives the same model, tables, CLI output, filters and views as its deck. Root and block field data no longer mix on read, options that need the deck are refused instead of ignored, `--step` picks the step of a converted series, and the warnings and `store add` deck carry over.
 - Model Check on the deck reader reported every model-tree piece seam as a free edge or face; Parts numbering and Path no longer depend on cell order.
 - Decks with latin-1 characters (`$ Kräfte`) failed to load on Linux and macOS, because pyNastran reads the file header with the locale's encoding (#42).

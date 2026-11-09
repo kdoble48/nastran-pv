@@ -1721,7 +1721,7 @@ class NastranPVGroupStats(_FieldFilter):
 
 
 # ---------------------------------------------------- topology filters
-# copies of topology.graph.GROUPS / topology.check.CHECKS: the proxies are built before nastran_pv
+# copies of topology.graph.GROUPS / topology.checks.CHECKS: the proxies are built before nastran_pv
 # (and scipy) can be imported; tests/test_plugin_constants.py keeps them in sync
 _GROUPS = ("shells", "solids", "lines", "rigid", "bushes", "connectors")
 _WITHIN = ("", "pid", "mid", "family", "group")  # StayWithin entries -> Rules.within
@@ -1846,11 +1846,17 @@ class _TopologyFilter(_FieldFilter):
 
     def _rules(self):
         from nastran_pv.topology import Rules
+        from nastran_pv.topology.graph import parse_pids
 
         off = {self._cards.GetArrayName(i) for i in range(self._cards.GetNumberOfArrays())
                if not self._cards.GetArraySetting(i)}
+        if self._graph is not None:  # the checklist keeps the cards of an earlier input: not an error
+            off &= set(self._graph.card_names)
         off |= {g for g, on in self._groups.items() if not on}
-        pids = frozenset(int(p) for p in self._exclude_pids.replace(",", " ").split())
+        try:
+            pids = parse_pids(self._exclude_pids)
+        except ValueError as exc:
+            raise ValueError(f"Exclude PIDs {self._exclude_pids!r}: {exc}") from None
         return Rules(exclude=frozenset(off), exclude_pids=pids, within=_WITHIN[self._within],
                      max_hops=self._max_hops if self._limit else None)
 
@@ -1859,12 +1865,17 @@ class _TopologyFilter(_FieldFilter):
             _message(f"nastran-pv {self.LABEL}: {w}")
 
     def _apply(self, mb, outInfo):
-        from nastran_pv.topology import Graph
+        from nastran_pv.topology import Graph, NoElementsError
 
         self._list_cards(mb)
         mtime = self.GetInputDataObject(0, 0).GetMTime()
         if self._graph_key != mtime:  # a gathered tree comes out the same every time
-            self._graph, self._graph_key = Graph.from_multiblock(mb), mtime
+            try:
+                self._graph = Graph.from_multiblock(mb)
+            except NoElementsError:  # Model Check counts zeros; the others report it
+                self._graph = None
+            self._graph_key = mtime
+            self._report(self._graph.warnings if self._graph is not None else [])  # once per graph
         return self._run(mb, self._graph, outInfo)
 
 

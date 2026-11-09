@@ -61,7 +61,7 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   eval; `group_stats`). Everything works on VTK data and mutates it in place; use `shallow_clone`
   when the input must stay intact.
 - `topology/`: `graph.py` (the bipartite grid↔cell graph of any multiblock, plus `Rules` and `Seeds`),
-  `grow.py`, `parts.py`, `path.py` and `check.py`. Results are written back as arrays and `PART_*`/`LINK_*`/`CHECK_*`
+  `grow.py`, `parts.py`, `path.py` and `checks.py`. Results are written back as arrays and `PART_*`/`LINK_*`/`CHECK_*`
   tables, like `fields`.
 - `sections/`: CBAR/CBEAM cross sections. `shapes.py` (the 22 PBARL/PBEAML outlines, element y up /
   z right), `props.py` (exact polygon properties; Q4 warping FE for J, shear center, Cw; cached per

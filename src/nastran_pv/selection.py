@@ -31,7 +31,7 @@ import numpy as np
 from vtkmodules.vtkCommonDataModel import vtkMultiBlockDataSet
 
 from . import vtkutil
-from .fields.common import MESH, field_strings, get_array, iter_blocks
+from .fields.common import MESH, field_strings, get_array, iter_blocks, mpc_legs
 from .tree import _cut, _item_kind, format_ids, item_labels, parse_ids
 
 KEYS = ("EID", "NID", "PID", "MID", "FAMILY", "GROUP")
@@ -242,10 +242,8 @@ def _element_eids(ds, kind):
     if eid is None:
         return None
     eid = np.asarray(eid).astype(np.int64)
-    codes = get_array(ds.GetCellData(), "ConnectorType") if kind == "cell" else None
-    if codes is not None:
-        names = field_strings(ds, "ConnectorTypeNames")
-        mpc = np.array([0 <= c < len(names) and names[c] == "MPC" for c in codes], dtype=bool)
+    mpc = mpc_legs(ds) if kind == "cell" else None
+    if mpc is not None:
         eid = np.where(mpc, -1, eid)
     return eid
 

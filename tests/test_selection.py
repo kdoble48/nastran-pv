@@ -185,6 +185,10 @@ def test_pid_mid_family_group(run_mb):
 def test_mpc_legs_are_not_elements(topo_mb):
     masks, _ = selection.item_masks(topo_mb, selection.IdList("EID", frozenset({1})), attach=False)
     assert counts(masks) == {"Shells": 1}  # MPC 1's leg carries EID 1 too
+    # a Connectors block without ConnectorTypeNames: the codes resolve through the global table
+    get_block(topo_mb, "Connectors").GetFieldData().RemoveArray("ConnectorTypeNames")
+    masks, _ = selection.item_masks(topo_mb, selection.IdList("EID", frozenset({1})), attach=False)
+    assert counts(masks) == {"Shells": 1}
 
 
 # ------------------------------------------------------------------ keep / mark

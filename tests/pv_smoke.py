@@ -67,6 +67,66 @@ def _root(src, name, port=0):
     return vtk_to_numpy(rm.nv.fetch(src, port).GetFieldData().GetArray(name)).tolist()
 
 
+def _messages(fn):
+    """The text VTK's output window receives (filter warnings and errors) while ``fn`` runs."""
+    from vtkmodules.vtkCommonCore import vtkOutputWindow, vtkStringOutputWindow
+
+    old = vtkOutputWindow.GetInstance()  # this reference keeps it alive while the string window stands in
+    win = vtkStringOutputWindow()
+    vtkOutputWindow.SetInstance(win)
+    try:
+        fn()
+    finally:
+        vtkOutputWindow.SetInstance(old)
+    return win.GetOutput()
+
+
+def stale_card_check(pv, topo):
+    """A card type left unchecked in the checklist after the input changed to a model without it (here
+    CFOO, a run-time appended code of a .vtm written elsewhere) is no 'unknown card type' error."""
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    from nastran_pv import vtkutil
+    from nastran_pv.assemble import build_multiblock, get_block
+    from nastran_pv.deck import load_deck
+    from nastran_pv.fields.common import field_strings, replace_array
+    from nastran_pv.vtkio import write_vtm
+
+    mb = build_multiblock(load_deck(os.path.join(HERE, "data", "topology.bdf"), echo=False))
+    shells = get_block(mb, "Shells")
+    names = field_strings(shells, "ElementTypeNames") + ["CFOO"]
+    shells.GetFieldData().RemoveArray("ElementTypeNames")
+    vtkutil.set_field_strings(shells, "ElementTypeNames", names)
+    codes = vtk_to_numpy(shells.GetCellData().GetArray("ElementType")).astype(np.int32)
+    codes[-1] = len(names) - 1
+    replace_array(shells.GetCellData(), "ElementType", codes)
+    other = rm.load_reader(str(write_vtm(mb, os.path.join(tempfile.mkdtemp(), "cfoo.vtm"))))
+    g = pv.NastranGrow(Input=other, SeedIDs="EID 1")
+    g.UpdatePipeline()
+    g.UpdatePipelineInformation()
+    cards = list(g.GetProperty("CardTypesInfo"))[0::2]
+    check("CFOO" in cards, f"a .vtm's own card names are listed: {cards}")
+    g.CardTypes = [c for c in cards if c != "CFOO"]
+    g.Input = topo
+    errors = _messages(g.UpdatePipeline)
+    check("unknown card type" not in errors and _by_eid(g, "Shells", "Hops").get(11) == 3,
+          f"a stale unchecked card type is ignored on another model: {errors!r}")
+    pv.Delete(g)
+    pv.Delete(other)
+
+    # a graph's warnings come once, when it is built, not on every slider step
+    shells.GetCellData().RemoveArray("ElementType")
+    untyped = rm.load_reader(str(write_vtm(mb, os.path.join(tempfile.mkdtemp(), "untyped.vtm"))))
+    g = pv.NastranGrow(Input=untyped, SeedIDs="EID 1", LimitHops=1, MaxHops=5)
+    first = _messages(g.UpdatePipeline)
+    g.MaxHops = 6
+    second = _messages(g.UpdatePipeline)
+    check(first.count("Shells: no ElementType") == 1 and "Shells: no ElementType" not in second,
+          f"graph warnings once per graph: {first!r} then {second!r}")
+    pv.Delete(g)
+    pv.Delete(untyped)
+
+
 def topology_checks(pv, nv):
     import time
 
@@ -113,7 +173,25 @@ def topology_checks(pv, nv):
     g.SeedIDs = "EID x"
     g.UpdatePipeline()
     check(True, "bad seed text reports and passes the data through")
-    for src in (g, p, path, mc):
+    g.SeedIDs = "EID 1"
+    g.ExcludePIDs = "2;6"
+    check(_by_eid(g, "Shells", "Hops")[11] == -1, "Exclude PIDs takes 2;6 (PID 2 holds EID 11)")
+    g.ExcludePIDs = "7;x"
+    errors = _messages(g.UpdatePipeline)
+    check("Exclude PIDs '7;x': not an ID or a range: 'x'" in errors, f"Exclude PIDs 7;x names the bad PID: {errors!r}")
+    g.ExcludePIDs = ""
+    stale_card_check(pv, topo)
+    masses = os.path.join(tempfile.mkdtemp(), "masses.bdf")
+    with open(masses, "w") as f:
+        f.write("GRID,1,,0.,0.,0.\nCONM2,1,1,,1.\n")
+    mr = rm.load_reader(masses)
+    mc0 = pv.NastranModelCheck(Input=mr)
+    mc0.UpdatePipeline()
+    table = rm.nv.fetch(mc0, 1)
+    counts = table.GetColumnByName("Count") if table is not None else None
+    check(counts is not None and table.GetNumberOfRows() == 6 and
+          all(counts.GetValue(i) == 0 for i in range(6)), "Model Check on a model without elements: six zero counts")
+    for src in (mc0, mr, g, p, path, mc):
         pv.Delete(src)
 
     view = pv.CreateRenderView()
@@ -130,6 +208,15 @@ def topology_checks(pv, nv):
     pv.QuerySelect(QueryString="(NID == 4) | (NID == 42)", FieldType="POINT", InsideOut=False)
     ids = nv.selected_ids()
     check(ids == ("GRID", [4, 42]), f"point selection -> grids: {ids}")
+    legs = nv.extract_blocks(topo, ["Connectors"])
+    pv.Show(legs, view)
+    pv.SetActiveSource(legs)
+    pv.QuerySelect(QueryString="(EID == 1)", FieldType="CELL", InsideOut=False)  # MPC set 1: grid 34 -> 1
+    ids = nv.selected_ids()
+    check(ids == ("GRID", [1, 34]), f"an MPC leg selection -> its grids, not EID <set id>: {ids}")
+    pv.Delete(legs)
+    pv.SetActiveSource(topo)
+    pv.QuerySelect(QueryString="(NID == 4) | (NID == 42)", FieldType="POINT", InsideOut=False)
     nv.path_from_selection()
     path_src = pv.FindSource(nv._name(nv.Model(topo), "path"))
     check((path_src.FromGrid, path_src.ToGrid) == (4, 42) and _root(path_src, "PathLength") == [9],
@@ -160,6 +247,10 @@ def topology_checks(pv, nv):
     check(rm.nv.fetch(parts_src, 1).GetNumberOfRows() == 3, "parts view exclude=['rigid'] -> 3 parts")
     nv.apply("grow", reader=topo, view=view, seeds="PID 6")
     check(grow_src.SeedIDs == "PID 6", "grow view seeds= sets Seed IDs")
+    grow_src.SeedIDs, grow_src.ExcludePIDs = "EID 31", "1"  # reaches MPC set 1's leg, not CQUAD4 1
+    _, eids = nv.reached_eids(topo)
+    check(eids == {31}, f"reached EIDs leave out the MPC leg (EID: its set id 1): {sorted(eids)}")
+    grow_src.ExcludePIDs = ""
     nv.apply("check", reader=topo, view=view)
     check(es.has_content(view), "check view counts as content for the gallery exporter")
     return topo

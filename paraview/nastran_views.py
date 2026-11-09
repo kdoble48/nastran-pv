@@ -758,27 +758,32 @@ def index_colors(source=None, view=None):
     return categorical(rep, array, values, labels_for(model, array, values), association=assoc, view=view)
 
 
-def _gather(data, array, assoc):
+def _leaves(data):
+    """The datasets of a (composite) data object."""
+    it = data.NewIterator() if data is not None and data.IsA("vtkCompositeDataSet") else None
+    if it is None:
+        return [data] if data is not None else []
+    leaves = []
+    it.InitTraversal()
+    while not it.IsDoneWithTraversal():
+        leaves.append(it.GetCurrentDataObject())
+        it.GoToNextItem()
+    return leaves
+
+
+def _gather(data, array, assoc, drop=None):
+    """The values of a one-component ``array`` over the leaves of ``data`` (unique per leaf);
+    ``drop(leaf)`` may give a mask of the cells to leave out."""
     from vtkmodules.util.numpy_support import vtk_to_numpy
 
     out = []
-
-    def visit(obj):
-        if obj is None:
-            return
-        if obj.IsA("vtkCompositeDataSet"):
-            it = obj.NewIterator()
-            it.InitTraversal()
-            while not it.IsDoneWithTraversal():
-                visit(it.GetCurrentDataObject())
-                it.GoToNextItem()
-            return
+    for obj in _leaves(data):
         attr = obj.GetCellData() if assoc == "CELLS" else obj.GetPointData()
         a = attr.GetArray(array)
         if a is not None and a.GetNumberOfComponents() == 1:
-            out.append(np.unique(vtk_to_numpy(a)))
-
-    visit(data)
+            values = vtk_to_numpy(a)
+            mask = drop(obj) if drop is not None else None
+            out.append(np.unique(values if mask is None else values[~mask]))
     return np.concatenate(out) if out else np.zeros(0)
 
 
@@ -1540,16 +1545,7 @@ def _vertex_eids(data):
     from vtkmodules.util.numpy_support import vtk_to_numpy
 
     out = set()
-    it = data.NewIterator() if data is not None and data.IsA("vtkCompositeDataSet") else None
-    leaves = []
-    if it is None:
-        leaves = [data] if data is not None else []
-    else:
-        it.InitTraversal()
-        while not it.IsDoneWithTraversal():
-            leaves.append(it.GetCurrentDataObject())
-            it.GoToNextItem()
-    for ds in leaves:
+    for ds in _leaves(data):
         eid = ds.GetPointData().GetArray("EID") if ds is not None else None
         if eid is None or ds.GetCellData().GetArray("EID") is not None or not ds.GetNumberOfCells():
             continue
@@ -1559,10 +1555,13 @@ def _vertex_eids(data):
 
 
 def selected_ids():
-    """("EID", ids) for a cell selection, ("GRID", ids) for a point selection on the active source."""
+    """("EID", ids) for a cell selection, ("GRID", ids) for a point selection on the active source.
+    MPC legs name no element, so a selection of only MPC legs gives their grids."""
     data, sel = _fetch_selection()
     if "POINT" not in _selection_kinds(sel):
-        eids = sorted({int(v) for v in _gather(data, "EID", "CELLS")} | _vertex_eids(data))
+        from nastran_pv.fields.common import mpc_legs
+
+        eids = sorted({int(v) for v in _gather(data, "EID", "CELLS", drop=mpc_legs)} | _vertex_eids(data))
         if eids:
             return "EID", eids
     return "GRID", sorted({int(v) for v in _gather(data, "NID", "POINTS")})
@@ -1666,7 +1665,7 @@ def reached_eids(reader=None):
     MPC legs are left out: their EID is the MPC set id."""
     from vtkmodules.util.numpy_support import vtk_to_numpy
 
-    from nastran_pv.fields.common import field_strings, iter_blocks
+    from nastran_pv.fields.common import iter_blocks, mpc_legs
     from nastran_pv.tree import as_multiblock
 
     model = Model(reader or find_reader())
@@ -1674,16 +1673,14 @@ def reached_eids(reader=None):
     if g is None or not (g.SeedIDs or "").strip():
         raise RuntimeError("Nothing grown yet: select a grid or elements, then click 'NPV Grow from Selection'.")
     out = set()
-    for path, ds in iter_blocks(as_multiblock(fetch(g))):
+    for _, ds in iter_blocks(as_multiblock(fetch(g))):
         for attr in (ds.GetCellData(), ds.GetPointData()):
             hops, eid = attr.GetArray("Hops"), attr.GetArray("EID")
             if hops is None or eid is None:
                 continue
             keep = vtk_to_numpy(hops) >= 0
-            if path == "Connectors" and attr is ds.GetCellData():
-                names = field_strings(ds, "ConnectorTypeNames")
-                codes = vtk_to_numpy(attr.GetArray("ConnectorType"))
-                keep &= np.array([names[c] != "MPC" if 0 <= c < len(names) else True for c in codes], bool)
+            if attr is ds.GetCellData() and (mpc := mpc_legs(ds)) is not None:
+                keep &= ~mpc
             out.update(int(e) for e in vtk_to_numpy(eid)[keep])
             break  # cell EIDs when the block has them, else point EIDs (masses, bushes)
     return model.reader, out
