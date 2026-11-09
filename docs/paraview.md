@@ -14,7 +14,8 @@ one-click views on the Macros toolbar. For step-by-step walkthroughs, see
 3. In the Properties panel, switch blocks on or off and optionally set *OP2 File Name*, which
    takes an `.op2` or MSC/NX `.h5` file. Each result step (subcase, load step or mode) becomes a
    time step, and *Result Types* lists the [result types](model.md#result-types) the file has
-   (all checked: uncheck one to leave its arrays off). *NSMSet* picks the bulk nonstructural mass set
+   (each at its default: displacements, `VonMisesMax` and forces checked, the stress and strain
+   components not; check or uncheck one to add or leave off its arrays). *NSMSet* picks the bulk nonstructural mass set
    ([Nonstructural mass](model.md#nonstructural-mass)), *BushStiffnessReference* is `convert --k-ref`
    (0 = the softest stiffness), and *Random ASD* turns the modes into a random response
    ([Random vibration](random-vibration.md)).
@@ -200,6 +201,8 @@ an `NPV ...` filter selected finds the model upstream of it.
 | NPV Thickness | Shell thickness |
 | NPV NSM | Nonstructural mass: shells by NSM per area, lines by NSM per length (two legends); totals by source and per NSM set, or the defined sets when none is selected. The reader's *NSMSet* picks the bulk set (-1 = Case Control `NSM=`, or the only set of a bulk-only file; 0 = none; see [Nonstructural mass](model.md#nonstructural-mass)) |
 | NPV Results | Deformed shape colored by displacement over the undeformed outline, for the current time step; each step's largest displacement is drawn at 8 % of the model size (*NPV deform* > *Auto Scale*; uncheck it to type a *Scale Factor*, which rerunning NPV Results keeps; the overlays and colorings clicked afterwards keep the deformation, NPV Clear sets it back to 0, and NPV Results then turns Auto Scale back on) |
+| NPV Forces | Element forces of the current step ([result types](model.md#result-types)), each block by its own array over a ghost of the model: shells by `MembraneForce` (magnitude), lines by `AxialForce`, bushes by `BushForce` and springs by `SpringForce`, in the element frame; the lines and springs draw only their elements with a force (an MPC leg stays the thin ghost). Another array or component: the *Color By* menu, or `nv.apply("forces", shell="bending", line="BendingMomentA", component=0)` (`shell`: membrane, bending, shear; `component` is checked against each array's size). It turns on the force types in the reader's *Result Types* when they are unchecked |
+| NPV Stress | Von Mises stress of the current step: shells at the top fibre (`VonMisesTop`), solids at the centre (`VonMises`), bars, beams and rods by `MaxStress`. It turns on the stress types in the reader's *Result Types* (off by default), and the strain types instead with `strain=True`: the info text names the types it turned on. A type the view turned on stays on (uncheck it in *Result Types* to drop its arrays) until the other stress-or-strain choice of the view turns it off again; a type you checked yourself stays, and other views leave them alone. A file without stress components shows `VonMisesMax`, the envelope. From Python: `nv.apply("stress", quantity="principal", fibre="bottom")` (`quantity`: vonmises, principal (the major one, or `component=1`), maxshear, components), `strain=True` for the strains (principal by default) |
 | NPV Random RMS | Random response (reader *Random ASD* set, see [Random vibration](random-vibration.md)): the mesh colored by acceleration RMS on a log scale, with the drive, input RMS and captured mass. Drive, damping and g are the reader's *Random* properties, since the reader computes the response |
 | NPV Random Sweep | The response ASD at the current frequency frame on one fixed log range, with the frame's frequency: press play to sweep |
 | NPV Animate Mode | Vibrates the mode the time controls are on, in the view as it is (masses, PID, loads, results, a show-only subset, anything you switched on): two cycles at 24 frames/s. It then leaves the **play button** looping that mode: the time steps become the 24 phases of one cycle (the time widget reads *Phase*), and the mode and its frequency stay in the upper right corner. A converted single-step file (`convert --results` without `--all-steps`) has one mode. From Python: `nv.play_mode(3, frames=36)` |
@@ -234,7 +237,7 @@ What a render view shows is a *scene* made of layers, and each macro edits one l
 
 | Layer | What it is | Changed by |
 |---|---|---|
-| Coloring | How the mesh itself is drawn; exactly one | NPV Family, Group, PID, MID, Element Type, Thickness, NSM, Results, Random RMS, Random Sweep, Parts, Grow, Model Check, Path from Selection, Diff |
+| Coloring | How the mesh itself is drawn; exactly one | NPV Family, Group, PID, MID, Element Type, Thickness, NSM, Results, Forces, Stress, Random RMS, Random Sweep, Parts, Grow, Model Check, Path from Selection, Diff |
 | Overlays | Glyphs and lines drawn on the mesh; any number | NPV Masses, Bushes, Bush Rotations, Beams, Loads, SPC, Rigid |
 | Scope | What part of the model is in play: the reader's checklists, its Show Only / Hide element lists and its *Selection File* | the visibility macros ([Model tree and visibility](#model-tree-and-visibility)) |
 | Time | The time step, the deformation scale and mode animation | NPV Results, the animation macros, the time controls |

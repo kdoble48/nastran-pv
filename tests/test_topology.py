@@ -414,6 +414,46 @@ def test_parallel_elements_are_not_duplicates(tmp_path):
     assert res.summary[0]["Count"] == 1 and arr(dup, "EID", "cell").tolist() == [12]
 
 
+DUPLICATES = """\
+GRID,1,,0.,0.,0.
+GRID,2,,1.,0.,0.
+GRID,3,,1.,1.,0.
+GRID,4,,0.,1.,0.
+GRID,5,,0.,0.,1.
+MAT1,1,1.e7,,0.3,1.
+PSHELL,1,1,0.1
+PSHELL,2,1,0.1
+PROD,4,1,0.1
+PBAR,3,1,0.1,1.e-3,1.e-3,2.e-3
+PSOLID,5,1
+CQUAD4,1,1,1,2,3,4
+CTRIA3,5,1,1,2,3
+CQUAD4,4,2,1,2,3,4
+CQUAD4,2,1,2,3,4,1
+CQUADR,7,1,1,2,3,4
+CTRIA3,6,1,3,1,2
+CQUAD4,3,1,4,3,2,1
+CBAR,9,3,2,1,0.,0.,1.
+CBAR,8,3,1,2,0.,0.,1.
+CROD,10,4,1,2
+CTETRA,20,5,1,2,3,5
+CTETRA,21,5,5,3,2,1
+CTRIA3,30,1,2,4,1
+"""
+
+
+def test_duplicates_match_grid_sets_and_point_at_the_first(tmp_path):
+    """Same card, PID and grid set in any order: CQUAD4 2 and 3 repeat 1, CTRIA3 6 repeats 5,
+    CBAR 8 repeats 9 (9 comes first in the deck), CTETRA 21 repeats 20. Not duplicates: another
+    PID (CQUAD4 4), another card on the same grids (CQUADR 7, CROD 10), another grid set (CTRIA3 30)."""
+    p = tmp_path / "dups.bdf"
+    p.write_text(DUPLICATES)
+    res = check(build_multiblock(load_deck(p, echo=False)), checks=("DuplicateElements",))
+    dup = get_block(res.findings, "DuplicateElements")
+    got = dict(zip(arr(dup, "EID", "cell").tolist(), arr(dup, "DuplicateOf", "cell").tolist()))
+    assert res.summary[0]["Count"] == 5 and got == {2: 1, 3: 1, 6: 5, 8: 9, 21: 20}
+
+
 def test_path_max_hops_matches_grow(topo_mb):
     """Grow from grid 1 reaches grid 3 at hop 1 (2 elements), so path 1 -> 3 fits in max_hops=1."""
     grow(topo_mb, "GRID 1", Rules(max_hops=1))

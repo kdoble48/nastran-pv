@@ -95,3 +95,26 @@ jobs:
           print('plugin folder:', scripts)
           print('vendor folder:', vendor)
           "
+
+  perf:
+    # The performance budget (docs/performance.md#ci-check): stage times on a synthetic deck,
+    # normalized by a calibration loop. One runner type and the versions RECORDED was measured with
+    # (tests/perf-constraints.txt) keep the reference stable; -s prints each stage's ratio to the
+    # log. Advisory: a failure shows on the PR for the reviewer but does not fail the run, so a
+    # slow runner or an upstream slowdown cannot block a merge.
+    name: performance budget (ubuntu / py3.12)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            tests/perf-constraints.txt
+      - name: Install
+        run: python -m pip install -e ".[test]" -c tests/perf-constraints.txt
+      - name: Performance budget
+        run: python -m pytest -m perf -q -ra -s tests/test_performance.py

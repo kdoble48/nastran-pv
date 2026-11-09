@@ -88,11 +88,130 @@ class CellTable:
         return len(self.eids)
 
 
+def elements_of(model, types) -> tuple[list, list]:
+    """(EIDs, elements) of the card ``types`` in deck order, as two plain lists: a tuple per element
+    would set off garbage collections over a large model's millions of pyNastran objects."""
+    elements = model.elements
+    eids = [eid for eid, elem in elements.items() if elem.type in types]
+    return eids, [elements[eid] for eid in eids]
+
+
+class CellRows:
+    """The cells of one mesh block, built a card type at a time: per VTK type the positions of its
+    cells in the block's element list, their grid ids in VTK order (one row per cell) and those
+    grids' point indices in the deck (-1: not in ``deck.nids``)."""
+
+    def __init__(self):
+        self.groups: dict[int, tuple] = {}  # VTK type -> (positions, grid ids, point indices)
+
+    def add(self, vtk_type: int, positions: np.ndarray, ids: np.ndarray, points: np.ndarray) -> None:
+        if not len(positions):
+            return
+        parts = (positions, ids, points)
+        if vtk_type in self.groups:  # several cards draw as one VTK type (CQUAD4, CQUADR, ...)
+            parts = [np.concatenate([old, new]) for old, new in zip(self.groups[vtk_type], parts)]
+        self.groups[vtk_type] = tuple(parts)  # in any order: cells() puts the cells in element order
+
+    def __len__(self) -> int:
+        return sum(len(g[0]) for g in self.groups.values())
+
+    def cells(self):
+        """(positions ascending, VTK type per cell, sizes, flat grid ids and point indices in cell
+        order)."""
+        groups = list(self.groups.items())
+        pos = np.concatenate([g[0] for _, g in groups])
+        vtk = np.concatenate([np.full(len(g[0]), t, dtype=np.int64) for t, g in groups])
+        sizes = np.concatenate([np.full(len(g[0]), g[1].shape[1], dtype=np.int64) for _, g in groups])
+        order = np.argsort(pos, kind="stable")
+        pos, vtk, sizes = pos[order], vtk[order], sizes[order]
+        starts = np.cumsum(sizes) - sizes
+        flat_ids, flat_points = np.empty(int(sizes.sum()), dtype=np.int64), np.empty(int(sizes.sum()), dtype=np.int64)
+        for _, (p, ids, points) in groups:  # an element gives at most one cell: positions are unique
+            at = starts[np.searchsorted(pos, p)][:, None] + np.arange(ids.shape[1])
+            flat_ids[at], flat_points[at] = ids, points
+        return pos, vtk, sizes, flat_ids, flat_points
+
+
+def node_matrix(lists, width: int) -> tuple[np.ndarray, np.ndarray]:
+    """(k, ``width``) int64 grid ids of ``k`` elements' node lists, 0 for a blank grid (None or 0)
+    and past a list's end; and each list's length."""
+    lens = np.fromiter(map(len, lists), dtype=np.int64, count=len(lists))
+    ids = np.zeros((len(lists), width), dtype=np.int64)
+    for size in np.unique(lens).tolist():
+        rows = np.flatnonzero(lens == size)
+        part = [lists[r] for r in rows]
+        try:
+            block = np.array(part, dtype=np.int64).reshape(len(rows), size)
+        except TypeError:  # blank grids are None
+            block = np.array([[n or 0 for n in nodes] for nodes in part], dtype=np.int64).reshape(len(rows), size)
+        ids[rows, :min(size, width)] = block[:, :width]
+    return ids, lens
+
+
+def known_grids(deck: Deck) -> np.ndarray:
+    """Sorted ids of the deck's GRIDs (``model.nodes``): ``match_ids(known, ids) >= 0`` is
+    ``n in model.nodes`` for an array of ids (0, a blank, is never a grid)."""
+    nodes = deck.model.nodes
+    if len(deck.nids) == len(nodes):  # deck.nids are those ids (scalar points are not nodes)
+        return deck.nids
+    return np.sort(np.fromiter(nodes, dtype=np.int64, count=len(nodes)))
+
+
+def grid_checks(deck: Deck, known: np.ndarray, ids: np.ndarray, lens: np.ndarray, ncorner: int, nfull: int):
+    """Per entry of a (k, >= nfull) ``ids`` matrix its point index in the deck (-1: none) and
+    whether the grid exists; per element whether all corners exist, a given midside grid does not
+    exist (corners ok), all ``nfull`` grids exist (corners ok). Blanks are never looked up."""
+    given = ids != 0
+    points = np.full(ids.shape, -1, dtype=np.int64)
+    points[given] = deck.lookup(ids[given])
+    if known is deck.nids:
+        exists = points >= 0
+    else:  # a GRID that is also a scalar point exists but has no point: the mesh raises, as index did
+        exists = np.zeros(ids.shape, dtype=bool)
+        exists[given] = vtkutil.match_ids(known, ids[given]) >= 0
+    ok = exists[:, :ncorner].all(axis=1)
+    mid = ok & (given[:, ncorner:nfull] & ~exists[:, ncorner:nfull]).any(axis=1)
+    full = ok & (lens >= nfull) & exists[:, :nfull].all(axis=1)
+    return points, exists, ok, mid, full
+
+
+def points_of(deck: Deck, ids: np.ndarray, points: np.ndarray) -> np.ndarray:
+    """``points`` (``deck.index(ids)``, already looked up); ``deck.index`` itself, which raises its
+    KeyError, when one of them is not in the deck."""
+    return points if not len(points) or points.min() >= 0 else deck.index(ids)
+
+
+def warn_skipped(deck: Deck, eids, elems, skipped: np.ndarray, midside: np.ndarray) -> None:
+    """In element order: one warning per element skipped for a missing corner grid, then one per
+    card type for the elements drawn without a missing midside grid (``eids``, ``elems``: from
+    :func:`elements_of`)."""
+    for i in np.flatnonzero(skipped).tolist():
+        deck.warn(f"{elems[i].type} {eids[i]}: missing grid(s), skipped")
+    missing: dict[str, list[int]] = {}
+    for i in np.flatnonzero(midside).tolist():
+        missing.setdefault(elems[i].type, []).append(eids[i])
+    warn_midside(deck, missing)
+
+
+def factorize(values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """(distinct values, the index of each value among them): ``np.unique`` with a flat inverse."""
+    u, inverse = np.unique(values, return_inverse=True)
+    return u, inverse.reshape(-1)
+
+
+def per_unique(values: np.ndarray, fn, dtype) -> np.ndarray:
+    """``np.array([fn(v) for v in values], dtype)``, calling ``fn`` once per distinct value."""
+    if not len(values):
+        return np.zeros(0, dtype=dtype)
+    u, inverse = factorize(values)
+    return np.array([fn(v) for v in u], dtype=dtype)[inverse]
+
+
 def add_mid_density(cd, model, mids: np.ndarray) -> None:
     """``MID`` and its ``Density`` (NaN where unknown) cell arrays."""
     vtkutil.add_array(cd, "MID", mids)
-    rho = {m: material_density(model, m) for m in np.unique(mids)}
-    vtkutil.add_array(cd, "Density", np.array([rho[m] for m in mids], dtype=float), skip_all_nan=True)
+    vtkutil.add_array(cd, "Density", per_unique(mids, lambda m: material_density(model, m), float),
+                      skip_all_nan=True)
 
 
 def warn_midside(deck: Deck, missing: dict) -> None:
@@ -126,22 +245,43 @@ def grid_legs(deck: Deck, pairs, what: str, unknown: str = "unknown grids"):
 
 
 def compact_mesh(deck: Deck, table: CellTable):
-    """Turn a CellTable into (ugrid, local point ids per cell, used global indices).
+    """Turn a CellTable into (ugrid, local point ids per cell, used global indices)."""
+    sizes = np.fromiter((len(n) for n in table.nodes), dtype=np.int64, count=len(table))
+    flat_nids = np.fromiter((nid for n in table.nodes for nid in n), dtype=np.int64, count=int(sizes.sum()))
+    return mesh_from_cells(deck, table.eids, table.pids, table.type_codes, table.vtk_types, sizes, flat_nids,
+                           table.type_names)
+
+
+def rows_mesh(deck: Deck, eids, elems, rows: CellRows):
+    """:func:`mesh_from_cells` of the :class:`CellRows` of ``elems`` (and their ``eids``): (ugrid,
+    the positions of its cells in ``elems``, their EIDs and PIDs as lists)."""
+    pos, vtk, sizes, flat_ids, flat_points = rows.cells()
+    kept = pos.tolist()
+    cell_eids, cell_pids = [eids[i] for i in kept], [elems[i].Pid() for i in kept]
+    codes = {t: code_of(ELEMENT_TYPES, t) for t in dict.fromkeys(elems[i].type for i in kept)}
+    ug, *_ = mesh_from_cells(deck, cell_eids, cell_pids, [codes[elems[i].type] for i in kept], vtk, sizes,
+                             flat_ids, ELEMENT_TYPES, flat_points)
+    return ug, pos, cell_eids, cell_pids
+
+
+def mesh_from_cells(deck: Deck, eids, pids, type_codes, vtk_types, sizes, flat_nids, type_names, points=None):
+    """(ugrid, local point ids per cell, offsets, used global indices) of cells given as grid ids
+    (``points``: their point indices, when already looked up).
 
     Only the referenced grids become points; the ``NID`` point array and the
     ``EID``/``PID``/``ElementType`` cell arrays are attached.
     """
-    sizes = np.fromiter((len(n) for n in table.nodes), dtype=np.int64, count=len(table))
-    flat_nids = np.fromiter((nid for n in table.nodes for nid in n), dtype=np.int64, count=int(sizes.sum()))
-    gidx = deck.index(flat_nids)
-    used, local = np.unique(gidx, return_inverse=True)
-    ug = vtkutil.unstructured_grid(deck.xyz[used], np.asarray(table.vtk_types), sizes, local)
+    gidx = deck.index(flat_nids) if points is None else points_of(deck, flat_nids, points)
+    mask = np.zeros(len(deck.nids), dtype=bool)  # np.unique(gidx, return_inverse=True), without a sort
+    mask[gidx] = True
+    used, local = np.flatnonzero(mask), (np.cumsum(mask, dtype=np.int64) - 1)[gidx]
+    ug = vtkutil.unstructured_grid(deck.xyz[used], np.asarray(vtk_types), sizes, local)
     pd, cd = ug.GetPointData(), ug.GetCellData()
     vtkutil.add_array(pd, "NID", deck.nids[used])
-    vtkutil.add_array(cd, "EID", np.asarray(table.eids, dtype=np.int64))
-    vtkutil.add_array(cd, "PID", np.asarray(table.pids, dtype=np.int64))
-    vtkutil.add_array(cd, "ElementType", np.asarray(table.type_codes, dtype=np.int32))
-    vtkutil.set_field_strings(ug, "ElementTypeNames", table.type_names)
+    vtkutil.add_array(cd, "EID", np.asarray(eids, dtype=np.int64))
+    vtkutil.add_array(cd, "PID", np.asarray(pids, dtype=np.int64))
+    vtkutil.add_array(cd, "ElementType", np.asarray(type_codes, dtype=np.int32))
+    vtkutil.set_field_strings(ug, "ElementTypeNames", type_names)
     offsets = np.zeros(len(sizes) + 1, dtype=np.int64)
     np.cumsum(sizes, out=offsets[1:])
     return ug, local, offsets, used

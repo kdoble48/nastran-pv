@@ -19,8 +19,10 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
     INCLUDEs on pyNastran main.
   - pyNastran log warnings are captured, truncated, into `Deck.warnings`.
   - The `Deck` object holds sorted `nids` and `xyz` in basic coordinates (SPOINTs dropped).
-    `lookup`/`index` map grid ids to rows, and `basis(cid, at_xyz)` gives local axes, including
-    curvilinear systems.
+    `lookup`/`index` map grid ids to rows (call them once for many ids: a numpy call per id
+    costs more than the id), and `basis(cid, at_xyz)` gives local axes, including curvilinear
+    systems. For a cylindrical or spherical system `basis` is `bases(cid, xyz)` at one point, so
+    `results.to_basic` and the shells' MCID axes take every point at once with the same bits.
 - `families.py`: parses pre-processor `$ ... family <NAME>` comments (ICEM/TACS decks such as uCRM-9)
   into `FamilyId`/`GroupId` cell arrays and `FamilyNames`/`GroupNames` on the Shells block only.
   These back the FAMILY/GROUP keys of `map_table` and the `family` view.
@@ -33,8 +35,11 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   Labels are sanitized to `[A-Za-z0-9_]` (`wing.bdf` -> `wing_bdf`): VTK strips `.` from node names.
   `parent_labels` falls back to the block fields because ParaView's `.vtm` reader drops root field data.
 - `builders/*`: one module per block. They build VTK data only through `vtkmodules`/`vtkutil`,
-  which keeps the same code working in pip-vtk and in pvpython. Mesh builders go through
-  `common.CellTable` → `compact_mesh`. `categories.py` holds the *global* ElementType and RigidType
+  which keeps the same code working in pip-vtk and in pvpython. Shells and Solids check their grids
+  a card type at a time in numpy (`common.node_matrix` of the elements' raw `nodes`, `grid_checks`,
+  `CellRows` → `rows_mesh`): no Python work per element beyond reading it, which is what made a
+  270k-hex model slow ([Performance](performance.md)). Lines go through `common.CellTable` →
+  `compact_mesh`. `categories.py` holds the *global* ElementType and RigidType
   code tables; codes must be consistent across blocks for indexed LUTs.
 - `builders/loads.py` and `builders/pressures.py`: a `LoadSet` per SID (nodal FORCE*/MOMENT*,
   GRAV, and the faces PLOAD/PLOAD2/PLOAD4 load, keyed by element, face grids and direction so a
@@ -50,9 +55,19 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   `build_multiblock` before the masses; its warnings use `deck.warn(..., mass=True)`, which lists
   them first.
 - `result_types.py` / `results.py` / `results_h5.py`: what is attached is declared, one
-  `ResultType` per kind of result in `result_types.REGISTRY` (today `Displacement`,
-  `VonMisesMax`, `SPCForce`, `MPCForce` and `AppliedLoad`): its OP2 tables and H5 datasets, blocks,
-  location, arrays, reduction, frame and (forces and moments at grids) a root resultant.
+  `ResultType` per kind of result in `result_types.REGISTRY` (`Displacement`, `VonMisesMax`,
+  `SPCForce`, `MPCForce`, `AppliedLoad`, the element forces, and the stress and strain components
+  per block family): its OP2 tables and H5 datasets (one source, or one per element family),
+  blocks, location, id key, arrays, reduction, frame and (forces and moments at grids) a root
+  resultant. One row per element comes from `picks` (position and columns: a shell's two centre
+  fibre rows, a beam's ends; column names through `result_types.resolve` in both readers; OP2 rows
+  through a `PickPlan` made once per table, HDF5 array slots through `results_h5.pick_fields`, read
+  when a step first needs the type), and principals, max shear and von Mises from
+  `ArraySpec.derive` in `_write`. Table entries are `Op2Table`/`H5Table` named tuples. A cell type
+  keyed by EID matches blocks through `ResultType.block_ids` (MPC legs, whose EID is a set id, get
+  -1). Each reader also reports every force/stress/strain table no type reads (`_unread`, with
+  the shared `result_types.unread_reason`); the deck reader keeps those messages in its root
+  `Warnings`, as `convert` does.
   `Op2Results` and `H5Results` share a base (`results._Results`) and its interface (`steps`, `times`,
   `skipped`, `available`, `select`, `values`, `attach`); each only finds a type's tables and
   yields raw rows per step (`_rows`). `_Results.values` joins, sorts and reduces them, and the
@@ -314,7 +329,16 @@ Every gotcha found so far, by area. The few that bite on any change are also in 
     from `op2_fixture`, so the ParaView CI job runs pvpython with `GITHUB_ACTOR` unset.
   - `Subcase.has_parameter` returns a list.
   - Stress tables expose `get_headers()`; von Mises exists only when `stress_bits[4]` is set.
+    A plate strain table's first header is `fiber_curvature` when its rows are mid-plane strain
+    and curvature (STRCUR), `fiber_distance` when they are the two fibres.
+  - Corner output keeps an element's rows together, centre first (plates: the two fibre rows of
+    each node in turn); a CBEAM's rows are its stations, end A first and end B last.
   - Composite tables use `element_layer`.
+  - Synthesizing tables (`tests/op2_fixture.py`): most force classes have no `add_static_case`,
+    `_add_case` sets the wrong `num_wide` for rods, bars, beams and solids (`write_op2` then writes
+    an unreadable table), and `RealBeamStressArray.add_static_case` mangles its rows; the fixture
+    builds the data codes itself. Ids must be int32: the writer packs int64 ids (numpy's default
+    int on Linux and macOS, not on Windows with numpy 1.x) as two words.
   - Family comments attach to the *first element* of each group.
   - OP2 subcase keys can be numpy ints.
   - PMASS is looked up in `model.properties_mass` (CMASS1 refs may be missing after a partial xref).
@@ -335,6 +359,14 @@ Every gotcha found so far, by area. The few that bite on any change are also in 
     `read_model` and the plugin) moves them back and drops a series step's NaN fill.
   - Rewritten HDF5 files need `track_order=True` on the file and all groups.
   - On read-back the assembly root node is named `assembly`, so select blocks with `//Name`.
+  - Two writes of the same model differ in bytes (HDF5 stamps its objects with times): compare
+    VTKHDF output by reading it back, not by hash. `.vtm` output is byte-reproducible.
+- Vectorizing without changing a bit: numpy's `(3,) @ (3, 3)` (BLAS gemv) and `(n, 3) @ (3, 3)`
+  (gemm) or `einsum` round differently in the last bit. A per-point rotation done for many points at
+  once stays a stacked `(n, 1, 3) @ (n, 3, 3)` matmul, which runs gemv per point (`Deck.bases`,
+  `results.to_basic`; `Deck.basis` is `bases` at one point, and the tests compare them with
+  `np.array_equal`). `np.asarray` of a list of Python ints is int32 on Windows with numpy 1.x, so a
+  refactor keeps the lists where the old code made its arrays from lists.
 - Bash heredocs containing `\n` inside Python string literals get mangled by the tool runner. Write
   patch scripts to the scratchpad with the Write tool instead.
 - ParaView ships numpy and h5py but not scipy; pyNastran needs scipy. `install_deps.py` pins scipy

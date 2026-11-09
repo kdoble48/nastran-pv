@@ -13,8 +13,8 @@ from vtkmodules.vtkCommonDataModel import (
 from .. import vtkutil
 from ..deck import RECTANGULAR, Deck
 from ..families import Families
-from .common import (CellTable, add_mid_density, compact_mesh, property_info, shell_mass_per_area, unit,
-                     warn_midside)
+from .common import (CellRows, add_mid_density, elements_of, factorize, grid_checks, known_grids, node_matrix,
+                     points_of, property_info, rows_mesh, shell_mass_per_area, unit, warn_skipped)
 
 # etype -> (corner count, linear vtk type, full node count, quadratic vtk type). A cell is
 # quadratic when all its grids are given, else linear; a CQUAD without its centre grid G9 is an
@@ -33,60 +33,62 @@ PARTIAL = {"CQUAD": (8, VTK_QUADRATIC_QUAD)}
 
 
 def build_shells(deck: Deck, families: Families):
+    """Every shell element whose corner grids exist: quadratic when all its grids exist, a CQUAD
+    without G9 as an 8-node quad. The grids are checked a card type at a time in numpy, on the
+    elements' raw ``nodes``."""
     model = deck.model
-    table = CellTable()
-    grids = model.nodes
-    corners: list[list[int]] = []
-    ncorners: list[int] = []
-    theta_mcid: list = []
-    midside: dict[str, list[int]] = {}  # given midside grids that do not exist
-    for eid, elem in model.elements.items():
-        spec = SHELLS.get(elem.type)
-        if spec is None:
+    eids, elems = elements_of(model, SHELLS)
+    types = np.array([elem.type for elem in elems], dtype=object)
+    known = known_grids(deck)
+    skipped, midside = np.zeros(len(elems), dtype=bool), np.zeros(len(elems), dtype=bool)
+    corners = np.zeros((len(elems), 4), dtype=np.int64)  # G1-G4, a triangle's G1 repeated
+    corner_points = np.zeros((len(elems), 4), dtype=np.int64)
+    ncorner_of = np.zeros(len(elems), dtype=np.int64)
+    rows = CellRows()
+    for etype, (ncorner, lin_type, nfull, quad_type) in SHELLS.items():
+        pos = np.flatnonzero(types == etype)
+        if not len(pos):
             continue
-        ncorner, lin_type, nfull, quad_type = spec
-        nids = list(elem.node_ids)
-        corner = nids[:ncorner]
-        if not all(n in grids for n in corner):
-            deck.warn(f"{elem.type} {eid}: missing grid(s), skipped")
-            continue
-        full = nids[:nfull]
-        if any(n and n not in grids for n in full[ncorner:]):
-            midside.setdefault(elem.type, []).append(eid)
-        part = PARTIAL.get(elem.type)
-        if quad_type is not None and len(full) == nfull and all(n in grids for n in full):
-            table.add(eid, elem.Pid(), elem.type, quad_type, full)
-        elif part is not None and all(n in grids for n in nids[:part[0]]):
-            table.add(eid, elem.Pid(), elem.type, part[1], nids[:part[0]])
-        else:
-            table.add(eid, elem.Pid(), elem.type, lin_type, corner)
-        corners.append(corner + [corner[0]] * (4 - ncorner))
-        ncorners.append(ncorner)
-        theta_mcid.append(getattr(elem, "theta_mcid", 0.0))
-    warn_midside(deck, midside)
+        ids, lens = node_matrix([elems[i].nodes for i in pos.tolist()], nfull)
+        points, exists, ok, mid, full = grid_checks(deck, known, ids, lens, ncorner, nfull)
+        skipped[pos[~ok]] = True
+        midside[pos[mid]] = True
+        quad = full if quad_type is not None else np.zeros(len(pos), dtype=bool)
+        rows.add(quad_type, pos[quad], ids[quad], points[quad])
+        part = PARTIAL.get(etype)
+        partial = np.zeros(len(pos), dtype=bool)
+        if part is not None:
+            partial = ok & ~quad & (lens >= part[0]) & exists[:, :part[0]].all(axis=1)
+            rows.add(part[1], pos[partial], ids[partial][:, :part[0]], points[partial][:, :part[0]])
+        linear = ok & ~quad & ~partial
+        rows.add(lin_type, pos[linear], ids[linear][:, :ncorner], points[linear][:, :ncorner])
+        g = [0, 1, 2, 3] if ncorner == 4 else [0, 1, 2, 0]
+        corners[pos[ok]], corner_points[pos[ok]] = ids[ok][:, g], points[ok][:, g]
+        ncorner_of[pos[ok]] = ncorner
+    warn_skipped(deck, eids, elems, skipped, midside)
 
-    if not len(table):
+    if not len(rows):
         return None
 
-    ug, *_ = compact_mesh(deck, table)
+    ug, kept, cell_eids, cell_pids = rows_mesh(deck, eids, elems, rows)
     cd = ug.GetCellData()
 
-    eids = np.asarray(table.eids)
-    pids = np.asarray(table.pids)
-    vtkutil.add_array(cd, "FamilyId", np.array([families.family_id(e) for e in eids], dtype=np.int32))
-    vtkutil.add_array(cd, "GroupId", np.array([families.group_id(e) for e in eids], dtype=np.int32))
+    pids, cell_eids = np.asarray(cell_pids), np.asarray(cell_eids)
+    vtkutil.add_array(cd, "FamilyId", np.array([families.family_id(e) for e in cell_eids], dtype=np.int32))
+    vtkutil.add_array(cd, "GroupId", np.array([families.group_id(e) for e in cell_eids], dtype=np.int32))
     vtkutil.set_field_strings(ug, "FamilyNames", families.names)
     vtkutil.set_field_strings(ug, "GroupNames", families.groups)
 
-    info = {pid: property_info(model, pid) for pid in np.unique(pids)}
-    mids = np.array([info[p][0] for p in pids], dtype=np.int64)
-    add_mid_density(cd, model, mids)
-    vtkutil.add_array(cd, "Thickness", np.array([info[p][1] for p in pids], dtype=float), skip_all_nan=True)
-    mpa = {pid: shell_mass_per_area(model, pid) for pid in info}
-    vtkutil.add_array(cd, "MassPerArea", np.array([mpa[p] for p in pids], dtype=float), skip_all_nan=True)
+    u, inverse = factorize(pids)  # one property_info per PID (a PCOMP expands its plies)
+    info = [property_info(model, p) for p in u]
+    add_mid_density(cd, model, np.array([mid for mid, _ in info], dtype=np.int64)[inverse])
+    vtkutil.add_array(cd, "Thickness", np.array([t for _, t in info], dtype=float)[inverse], skip_all_nan=True)
+    vtkutil.add_array(cd, "MassPerArea", np.array([shell_mass_per_area(model, p) for p in u], dtype=float)[inverse],
+                      skip_all_nan=True)
 
-    p = deck.xyz[deck.index(np.asarray(corners).ravel())].reshape(-1, 4, 3)
-    normal, xaxis = element_axes(p, np.asarray(ncorners))
+    theta_mcid = [getattr(elems[i], "theta_mcid", 0.0) for i in kept.tolist()]
+    p = deck.xyz[points_of(deck, corners[kept].ravel(), corner_points[kept].ravel())].reshape(-1, 4, 3)
+    normal, xaxis = element_axes(p, ncorner_of[kept])
     vtkutil.add_array(cd, "Normal", normal)
     vtkutil.add_array(cd, "ElementXAxis", xaxis)
     vtkutil.add_array(cd, "MaterialAxis", material_axes(deck, normal, xaxis, p.mean(axis=1), theta_mcid,
@@ -140,7 +142,7 @@ def material_axes(deck: Deck, normal, xaxis, centroids, theta_mcid, g1g2=None) -
         if mcid == 0 or coord.type in RECTANGULAR:
             a = np.broadcast_to(deck.basis(int(mcid))[0], (len(sel), 3))
         else:
-            a = np.array([deck.basis(int(mcid), c)[0] for c in centroids[sel]])
+            a = deck.bases(int(mcid), centroids[sel])[:, 0]
         n = normal[sel]
         proj = a - np.sum(a * n, axis=1, keepdims=True) * n
         ok = np.linalg.norm(proj, axis=1) > 1e-12

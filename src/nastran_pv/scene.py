@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 COLORINGS = ("family", "group", "pid", "mid", "elementtype", "thickness", "nsm", "results",
-             "random", "randomsweep", "parts", "grow", "path", "check", "diff")
+             "random", "randomsweep", "parts", "grow", "path", "check", "diff", "forces", "stress")
 OVERLAYS = ("masses", "bushes", "bushrotations", "beams", "loads", "spc", "rigid")
 GHOST = "ghost"
 ARRAY = "array"  # the mesh colored by any cell or point array (side by side's ``array=``); no macro
