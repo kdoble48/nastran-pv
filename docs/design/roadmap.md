@@ -35,7 +35,7 @@ and CI proves all of this on every push.
 | 2. ParaView in CI, setup on Linux and macOS | Done | #59 |
 | 3. 0.2.0 on PyPI | The release infrastructure is merged; the release waits on the user: the PyPI and TestPyPI pending publishers and the GitHub environments (`docs/versioning.md#releasing`), then `0.2.0rc1` and `0.2.0` | #69, #70 (draft) |
 | 4. Scene layers PR 2: comparison | Done | #67 |
-| 5. Scene layers PR 3: time and annotations | In progress | #75 |
+| 5. Scene layers PR 3: time and annotations | Done | #75 |
 | 6. Known-issue sweep | Done | #56 (part A), #57 (part B) |
 | 7. Unsupported-card report, cheap coverage | Done | #61 |
 | 8. Result-type registry and selector | Done | #60 |
@@ -51,24 +51,22 @@ and CI proves all of this on every push.
 
 1. Task 3: register the publishers and environments, publish `0.2.0rc1` to TestPyPI, check it on
    a clean Windows and Linux machine, publish `0.2.0` (#70).
-2. Merge task 5 (#75).
-3. Task 15's pull requests merged, then the gallery assets uploaded with the user's go-ahead
+2. Task 15's pull requests merged, then the gallery assets uploaded with the user's go-ahead
    (`python docs/build_gallery.py --ucrm9 ... --mystran ... --upload`, the exact command is in
    #77), so the site shows the result scenes. Frequency response, transient and complex
    results have no gallery scene: MYSTRAN solves none of them.
-4. The betas: the 0.3 to 0.6 milestones are all merged, so decide whether to tag them one by one
+3. The betas: the 0.3 to 0.6 milestones are all merged, so decide whether to tag them one by one
    (each with a CHANGELOG section of its own) or to go from 0.2.0 straight to `1.0.0rc1`.
-5. A last look at the public API before the policy hardens at 1.0: the names on `docs/api.md`,
+4. A last look at the public API before the policy hardens at 1.0: the names on `docs/api.md`,
    the CLI flags, the view names and the arrays. Anything to rename is renamed in a 0.x release
-   with a deprecated alias (`docs/versioning.md#deprecation`), not after 1.0. Known candidate:
-   `Rules(within_pids=True)` and the `within_pids` token, an undeprecated old spelling of
-   `within=pid`.
-6. The Goal's check on clean Windows, Linux and macOS machines: `pip install nastran-pv`,
+   with a deprecated alias (`docs/versioning.md#deprecation`), not after 1.0. #76 deprecates the
+   old `within_pids` spellings (removed in 1.0.0).
+5. The Goal's check on clean Windows, Linux and macOS machines: `pip install nastran-pv`,
    `nastran-pv setup`, a deck opened in ParaView and converted from the CLI, and an OP2 and an
    HDF5 run of each kind (static, frequency response, transient, composite) shown with the
    one-click views. CI runs `pv_smoke.py` against ParaView on Linux only (`paraview.yml`), so
    Windows and macOS rest on this manual check unless a ParaView job is added for them.
-7. `1.0.0rc1` to TestPyPI, the check from TestPyPI, then `1.0.0` to PyPI
+6. `1.0.0rc1` to TestPyPI, the check from TestPyPI, then `1.0.0` to PyPI
    (`docs/versioning.md#releasing`).
 
 ## Shipped since 2026-10-09
