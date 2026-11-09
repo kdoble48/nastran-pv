@@ -9,15 +9,20 @@ All notable changes to nastran-pv are listed here. The format follows
 ### Added
 
 - Card report: every card no block draws is counted per card type and reason (not drawn, scalar
-  points, grounded, patch form, matrix input, superelement, not read), with its first ids.
-  `convert` prints it, `stats` on stderr, the reader in Output Messages, and the root table
-  `SKIPPED_Card SKIPPED_Count SKIPPED_Reason SKIPPED_IDs` plus `SkippedCardCount` keep it in
-  `.vtm`/VTKHDF. It replaces the scattered CMASS3/4, CWELD, CFAST patch, SPC and load-type
-  warnings, and covers what was dropped without a word (CTRIAX6, CQUADX, CBUSH1D/2D, CHBDY*,
-  GENEL, DMIG, superelements, grounded springs, cards pyNastran rejected). New `Plotels` block
-  (PLOTEL lines, `--no-plotels`, reader *Plotels*); CQUAD with nine grids is a biquadratic cell
-  (quadratic without G9); CDAMP5 joins the Connectors; MPCADD is resolved into the root
-  `MPCADD_ID MPCADD_Set` table, with `ActiveMPCSets` from Case Control (#61).
+  points, grounded, patch form, heat transfer, matrix input, superelement, not read), with its
+  first ids. `convert` prints it, `stats` and `check` on stderr, the reader in Output Messages,
+  and the root table `SKIPPED_Card SKIPPED_Count SKIPPED_Reason SKIPPED_IDs` plus
+  `SkippedCardCount` keep it in `.vtm`/VTKHDF. It replaces the scattered CMASS3/4, CWELD, CFAST
+  patch, SPC and load-type warnings, and covers what was dropped without a word (CTRIAX6, CQUADX,
+  CBUSH1D/2D, CHBDY*, CDAMP5, GENEL, DMIG, superelements, grounded springs, springs, masses, MPC
+  terms and PLOTELs on scalar points, cards pyNastran rejected). New `Plotels` block (PLOTEL
+  lines, `--no-plotels`, reader *Plotels*, not traversed by the model tools); CQUAD with nine
+  grids is a biquadratic cell (quadratic without G9), and a missing midside grid of a shell or
+  solid now warns; MPCADD is resolved into the root `MPCADD_ID MPCADD_Set` table, with
+  `ActiveMPCSets` from Case Control (#61).
+- Scene layers (#54): the *NPV Clear* macro, the one full reset of a view (it hides every layer and
+  sets the deformation back to 0, deleting nothing), and the *Nastran Scope* filter, the overlays'
+  copy of the model cut by the reader's scope (`selection.scope_masks`).
 - Include-file groups: a deck read from two or more files gets `FileId` (and `FileNames`,
   `FileParents`, root `FILE_Name FILE_Path FILE_Parent`), so each element, mass, rigid element and
   connector belongs to the INCLUDE file that holds its card. The reader gains a *Visible Files*
@@ -60,6 +65,12 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Changed
 
+- Views combine instead of redrawing (#54): a coloring (PID, Thickness, Results, ...) replaces the
+  coloring and keeps the overlays, an overlay (Masses, Loads, SPC, ...) adds itself and a second
+  toolbar click removes it, and only NPV Clear (and Side by Side) resets the view. Overlays follow
+  the reader's scope: with a group, a Show Only list or a selection file, NPV Masses, Bushes, Rigid,
+  SPC and Loads draw what hangs off the kept elements (through RBE2/RBE3/CBUSH chains), and EIDs the
+  scope names win.
 - NPV Loads and NPV SPC draw through *NPV load glyphs* and *NPV spc glyphs* (Nastran filters)
   instead of ParaView Glyph objects; NPV Results scales each time step to 8 % of the model (Nastran
   Deform *Auto Scale*); Mass Glyphs' *RelativeSize* is now *Size* (saved states and scripts that set *RelativeSize* need *Size*);
@@ -74,9 +85,30 @@ All notable changes to nastran-pv are listed here. The format follows
 - Nonstructural mass indexes card targets instead of scanning every element (#20).
 - Faster solid element mass (#19).
 - Gallery scene URLs are tagged with the build version (#3).
+- The module `nastran_pv.topology.check` is now `nastran_pv.topology.checks`, so the `check`
+  function no longer hides it (`from nastran_pv.topology import check` is unchanged); `--rules`
+  without `--parts` or `--grow` is an error instead of being ignored; the run store's `elements`
+  table holds the Connectors elements (not MPC equations; `pid` NULL where there is no property)
+  and `n_elements` counts elements, not rigid-element legs (#57).
 
 ### Fixed
 
+- Overlays follow the scope as the reader applies it: a selection file of PIDs, MIDs, families,
+  groups or grids now applies to masses, bushes, SPCs and loads too (adding what it lists to the
+  grid join); a hidden or unticked rigid element or bush no longer carries the grid chain; one kept
+  by Show Only keeps the masses on its grids; MPC legs match the EID lists by their set id, as in
+  the reader; beam sections follow their beams; connector and bush lines to grids of hidden
+  elements deform with them. A coloring that writes no text no longer leaves the previous
+  coloring's text, NPV Clear no longer acts on a deleted reader (nor leaves its text shown), and an
+  EID list the reader cannot parse, a selection file it cannot read or a failed read no longer
+  counts as a scope, which is worked out without running the reader (#56).
+- Model tools follow-ups: Parts' link table is computed in numpy (1.5 s to 19 ms on a 271k-cell
+  model with every cell excluded); FreeEdges counts a CQUAD8 edge once; the dangling and coincident
+  checks take one MPC equation, not its set, as one element, and selecting MPC legs seeds their grids
+  instead of `EID <set id>`; an unchecked card type the current model lacks no longer fails the
+  topology filters; Exclude PIDs names a bad entry and, like `exclude_pids=`, takes ranges; `check`
+  and `--only` take comma lists, `check` warns that `within=` needs seeds and gives zero counts on a
+  model without elements; graph blocks without a type array, EID or DOF warn, once (#57).
 - Deck vs converted file parity: a `.vtkhdf` gives the same model, tables, CLI output, filters and views as its deck. Root and block field data no longer mix on read, options that need the deck are refused instead of ignored, `--step` picks the step of a converted series, and the warnings and `store add` deck carry over.
 - Model Check on the deck reader reported every model-tree piece seam as a free edge or face; Parts numbering and Path no longer depend on cell order.
 - Decks with latin-1 characters (`$ Kräfte`) failed to load on Linux and macOS, because pyNastran reads the file header with the locale's encoding (#42).

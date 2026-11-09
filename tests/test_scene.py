@@ -50,6 +50,19 @@ def test_info_writer_forgotten_with_its_layer():
     assert s.info is None
 
 
+def test_replaced_coloring_forgets_its_info():
+    """A coloring that wrote the info text takes it along when another coloring replaces it (the
+    view then hides the text, unless the new coloring writes its own); an overlay's text stays."""
+    s = Scene(coloring=Layer("family", ["mesh"]))
+    s.info = "family"
+    s.set_coloring(Layer("pid", ["mesh"]))
+    assert s.info is None
+    s.add_overlay(Layer("masses", ["mass glyphs"]))
+    s.info = "masses"
+    s.set_coloring(Layer("thickness", ["shells"]))
+    assert s.info == "masses"
+
+
 def test_clear_macro_installed():
     import importlib.util, pathlib
     path = pathlib.Path(__file__).parents[1] / "paraview" / "install_macros.py"

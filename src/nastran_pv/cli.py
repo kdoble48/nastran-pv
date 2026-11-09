@@ -146,6 +146,7 @@ def apply_field_options(mb, args) -> list[str]:
         try:
             rules = Rules.parse(args.rules)
             graph = Graph.from_multiblock(mb)
+            notes += graph.warnings
             if args.parts:
                 res = parts(mb, rules, graph=graph)
                 notes += [f"parts: {res.count} part(s), {len(res.links)} link(s)"] + res.warnings
@@ -154,6 +155,8 @@ def apply_field_options(mb, args) -> list[str]:
                 notes += [f"grow: {res.cells} cell(s) reached, max {res.max_hop} hop(s)"] + res.warnings
         except ValueError as exc:
             raise SystemExit(f"nastran-pv: {exc}") from None
+    elif getattr(args, "rules", None):
+        raise SystemExit("nastran-pv: --rules needs --parts or --grow")
     for expr in args.calc or []:
         notes.append(f"calc {expr!r} on {', '.join(calculate(mb, expr))}")
     return notes
@@ -469,6 +472,8 @@ def cmd_check(args) -> int:
         res = check(mb, Rules.parse(args.rules), tol=args.tol, checks=args.only or CHECKS)
     except ValueError as exc:
         raise SystemExit(f"nastran-pv check: {exc}") from None
+    for w in res.warnings:
+        print(f"warning: {w}", file=sys.stderr)
     _print_rows(res.summary)
     if args.output:
         print(f"wrote {write_vtm(res.findings, Path(args.output))}")

@@ -150,3 +150,67 @@ def test_negative_nsm_set_exits(tmp_path, capsys):
 def test_bad_rules_exit(tmp_path):
     with pytest.raises(SystemExit, match="max_hops"):
         main(["convert", TOPO, "--parts", "--rules", "max_hops=x", "-o", str(tmp_path / "x.vtm")])
+
+
+def test_rules_without_parts_or_grow_exit(tmp_path):
+    with pytest.raises(SystemExit, match="--rules needs --parts or --grow"):
+        main(["convert", TOPO, "--rules", "exclude=rigid", "-o", str(tmp_path / "x.vtm")])
+
+
+def test_check_warnings_and_a_model_without_elements(tmp_path, capsys):
+    assert main(["check", TOPO, "--rules", "within=pid"]) == 0
+    assert "within=pid needs seeds; ignored for check" in capsys.readouterr().err
+    masses = tmp_path / "masses.bdf"
+    masses.write_text("GRID,1,,0.,0.,0.\nCONM2,1,1,,1.\n")
+    assert main(["check", str(masses), "--strict"]) == 0
+    rows = [line.split() for line in capsys.readouterr().out.splitlines()[1:]]
+    assert {r[0]: r[1] for r in rows if r} == dict.fromkeys(
+        ("FreeEdges", "FreeFaces", "CoincidentGrids", "DuplicateElements", "DanglingConnectors", "FloatingParts"), "0")
+
+
+def test_store_keeps_connectors(tmp_path):
+    """Springs, dampers, gaps and fasteners are elements in the store; MPC equations (EID: the set
+    id, here 1 like CQUAD4 1) are not. n_elements counts elements, not rigid or connector legs."""
+    db = tmp_path / "runs.sqlite"
+    assert main(["store", "add", TOPO, "--db", str(db), "--no-vtm", "-q"]) == 0
+    with Store(db) as st:
+        _, rows = st.query("SELECT block, eid, pid, etype FROM elements WHERE block IN ('Rigid', 'Connectors') "
+                           "ORDER BY eid")
+        # no property: NULL, for CELAS2 (its PID placeholder 0) as for RBE2
+        assert rows == [("Rigid", 100, None, "RBE2"), ("Connectors", 300, None, "CELAS2"),
+                        ("Connectors", 301, None, "CELAS2")]
+        assert st.runs()[0]["n_elements"] == 13  # 8 shells, CHEXA, CBAR, RBE2, 2 CELAS2
+
+
+def test_store_leaves_out_mpc_legs_without_a_type_table(tmp_path):
+    """A Connectors block without ConnectorTypeNames: the codes resolve through the global table, so
+    MPC set 1 is still not stored as element 1."""
+    from nastran_pv.assemble import build_multiblock
+    from nastran_pv.deck import load_deck
+
+    mb = build_multiblock(load_deck(TOPO, echo=False))
+    get_block(mb, "Connectors").GetFieldData().RemoveArray("ConnectorTypeNames")
+    with Store(tmp_path / "runs.sqlite") as st:
+        st.add_run(mb, TOPO, save_vtm=False)
+        _, rows = st.query("SELECT eid FROM elements WHERE block = 'Connectors' ORDER BY eid")
+    assert rows == [(300,), (301,)]
+
+
+def test_check_only_takes_comma_lists(capsys):
+    assert main(["check", TOPO, "--only", "FreeEdges,CoincidentGrids"]) == 0
+    names = [line.split()[0] for line in capsys.readouterr().out.splitlines()[1:] if line.strip()]
+    assert names == ["FreeEdges", "CoincidentGrids"]
+
+
+def test_graph_warnings_are_reported_once(tmp_path, capsys):
+    """--parts and --grow share one graph, so a block without its type array warns once."""
+    from nastran_pv.assemble import build_multiblock
+    from nastran_pv.deck import load_deck
+    from nastran_pv.vtkio import write_vtm
+
+    mb = build_multiblock(load_deck(TOPO, echo=False))
+    get_block(mb, "Shells").GetCellData().RemoveArray("ElementType")
+    src = write_vtm(mb, tmp_path / "no_types.vtm")
+    assert main(["convert", str(src), "--parts", "--grow", "EID 1", "-o", str(tmp_path / "x.vtm"), "-q"]) == 0
+    out = capsys.readouterr()
+    assert (out.out + out.err).count("Shells: no ElementType") == 1

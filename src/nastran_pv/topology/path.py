@@ -8,7 +8,7 @@ from scipy.sparse import csgraph
 
 from ..fields.common import replace_array
 from .common import extract_reached, write_cells, write_points
-from .graph import Graph, Rules
+from .graph import Graph, Rules, graph_for
 
 
 @dataclass
@@ -23,7 +23,7 @@ def path(mb, grid_a: int, grid_b: int, rules: Rules | None = None, graph: Graph 
     """Write ``OnPath`` cell/point arrays and root ``PathLength`` for the shortest path a -> b.
     ``extract`` also returns a copy of ``mb`` with only the path's cells."""
     rules = rules or Rules()
-    graph = graph or Graph.from_multiblock(mb)
+    graph, warnings = graph_for(mb, graph)
     ends = graph.grid_index([grid_a, grid_b])
     missing = [g for g, r in zip((grid_a, grid_b), ends) if r < 0]
     if missing:
@@ -33,7 +33,7 @@ def path(mb, grid_a: int, grid_b: int, rules: Rules | None = None, graph: Graph 
     touching[np.unique(graph.incidence[:, ends].nonzero()[0])] = True
     values = rules.seed_values(graph, touching)
     allowed = rules.allowed(graph, values)
-    warnings = [msg] if (msg := rules.empty_within(values)) else []
+    warnings += [msg] if (msg := rules.empty_within(values)) else []
     # like grow from grid_a: grid_b is in reach when its hop is <= max_hops (max_hops + 1 elements)
     limit = np.inf if rules.max_hops is None else 2 * rules.max_hops + 2
     adjacency = graph.adjacency(allowed)

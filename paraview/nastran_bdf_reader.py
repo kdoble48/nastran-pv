@@ -515,6 +515,18 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         treating the empty output as a model without masses, bushes, ..."""
         return self._load_error
 
+    @smproperty.intvector(name="ScopeActive", information_only="1")
+    def GetScopeActive(self):
+        """1 when the visibility settings hide anything, as a read applies them: an EID list it cannot
+        parse or a Selection File it cannot read is ignored, so it is no scope; 0 after a failed read.
+        Worked out from the settings, so asking does not run the reader. The views read it."""
+        if not self._filename or self._load_error:
+            return 0
+        try:
+            return int(not self._visibility(quiet=True).everything)
+        except ImportError:  # RequestData reports it
+            return 0
+
     @smproperty.doublevector(name="TimestepValues", information_only="1", si_class="vtkSITimeStepsProperty")
     def GetTimestepValues(self):
         res = self._get_response(quiet=True)
@@ -651,7 +663,8 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
             self._listing = False
         self._listed_key = self._mb_key
 
-    def _visibility(self):
+    def _visibility(self, quiet=False):
+        """The Visibility of the settings; ``quiet``: report no unparseable list or unreadable file."""
         from nastran_pv.tree import Visibility, parse_ids
 
         hidden = {}
@@ -664,13 +677,14 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
             try:
                 ids[what] = parse_ids(text)
             except ValueError as exc:
-                _message(f"nastran-pv: {what}: {exc}; ignored", error=True)
+                if not quiet:
+                    _message(f"nastran-pv: {what}: {exc}; ignored", error=True)
                 ids[what] = set()
         show = frozenset(ids["ShowOnlyElements"]) if ids["ShowOnlyElements"] else None
-        return Visibility(hidden, show, frozenset(ids["HiddenElements"]), select=self._selection(),
+        return Visibility(hidden, show, frozenset(ids["HiddenElements"]), select=self._selection(quiet),
                           select_hide=self._sel_mode == 1, select_grids=("all", "any")[self._sel_grids % 2])
 
-    def _selection(self):
+    def _selection(self, quiet=False):
         """The SelectionFile's IdList (re-read when the file or the key changes), None when off."""
         if not self._sel_file or self._sel_mode == 2:
             return None
@@ -685,7 +699,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
                 self._sel_read = key
         except Exception as exc:
             problem = (key, str(exc))
-            if problem != self._sel_error:  # once per change of file, key or error
+            if problem != self._sel_error and not quiet:  # once per change of file, key or error
                 self._sel_error = problem
                 _message(f"nastran-pv: SelectionFile {self._sel_file}: {exc}; ignored", error=True)
             return None
@@ -1277,7 +1291,8 @@ class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
         out = vtkDataObject.GetData(outInfo, 0)
         key = (inp, inp.GetMTime())
         if self._deformer is None or self._deformer[:2] != key:  # new input or new time step
-            self._deformer = key + (Deformer(inp),)
+            whole = _registry_entry(inp)  # the reader's output: legs to grids of hidden elements move too
+            self._deformer = key + (Deformer(inp, grids=whole[0] if whole is not None else None),)
         scale, phase = self._scale, None
         if self._auto:
             if self._auto_scale is None or self._auto_scale[:3] != key + (self._peak,):
@@ -1314,7 +1329,9 @@ def _double_array(name, value):
 @smdomain.datatype(dataTypes=["vtkDataObject"], composite_data_supported=True)
 class NastranPVScope(_Settable, VTKPythonAlgorithmBase):
     """The overlays' copy of the reader's model: mesh blocks keep what the reader keeps, and masses,
-    connectors, SPCs and loads stay when they hang off a kept element (named EIDs win, hidden EIDs go).
+    connectors, SPCs and loads stay when they hang off a kept element or a kept rigid element or bush.
+    What Show Only names by EID wins in its block, what a Show only Selection File of grids, properties
+    or groups lists is added, and what the checklists, Hidden Elements or a Hide file hide always goes.
     It goes after Nastran Deform on the reader and moves by its scale; any other input passes through."""
 
     def __init__(self):
@@ -1361,8 +1378,8 @@ class NastranPVScope(_Settable, VTKPythonAlgorithmBase):
             if found is not None:
                 self._mark_diagonal(out, mb)
             return 1
-        if self._deformer is None or self._deformer[:3] != (mb, key, generation):
-            self._deformer = (mb, key, generation, Deformer(self._tree[2].output(mb)))
+        if self._deformer is None or self._deformer[:3] != (mb, key, generation):  # grids of hidden cells too
+            self._deformer = (mb, key, generation, Deformer(self._tree[2].output(mb), grids=mb))
         scale = inp.GetFieldData().GetArray(DEFORM_SCALE)
         out.ShallowCopy(self._deformer[3].apply(scale.GetValue(0) if scale is not None else 0.0))
         self._mark_diagonal(out, mb)
@@ -1683,7 +1700,7 @@ class NastranPVGroupStats(_FieldFilter):
 
 
 # ---------------------------------------------------- topology filters
-# copies of topology.graph.GROUPS / topology.check.CHECKS: the proxies are built before nastran_pv
+# copies of topology.graph.GROUPS / topology.checks.CHECKS: the proxies are built before nastran_pv
 # (and scipy) can be imported; tests/test_plugin_constants.py keeps them in sync
 _GROUPS = ("shells", "solids", "lines", "rigid", "bushes", "connectors")
 _WITHIN = ("", "pid", "mid", "family", "group")  # StayWithin entries -> Rules.within
@@ -1808,11 +1825,17 @@ class _TopologyFilter(_FieldFilter):
 
     def _rules(self):
         from nastran_pv.topology import Rules
+        from nastran_pv.topology.graph import parse_pids
 
         off = {self._cards.GetArrayName(i) for i in range(self._cards.GetNumberOfArrays())
                if not self._cards.GetArraySetting(i)}
+        if self._graph is not None:  # the checklist keeps the cards of an earlier input: not an error
+            off &= set(self._graph.card_names)
         off |= {g for g, on in self._groups.items() if not on}
-        pids = frozenset(int(p) for p in self._exclude_pids.replace(",", " ").split())
+        try:
+            pids = parse_pids(self._exclude_pids)
+        except ValueError as exc:
+            raise ValueError(f"Exclude PIDs {self._exclude_pids!r}: {exc}") from None
         return Rules(exclude=frozenset(off), exclude_pids=pids, within=_WITHIN[self._within],
                      max_hops=self._max_hops if self._limit else None)
 
@@ -1821,12 +1844,17 @@ class _TopologyFilter(_FieldFilter):
             _message(f"nastran-pv {self.LABEL}: {w}")
 
     def _apply(self, mb, outInfo):
-        from nastran_pv.topology import Graph
+        from nastran_pv.topology import Graph, NoElementsError
 
         self._list_cards(mb)
         mtime = self.GetInputDataObject(0, 0).GetMTime()
         if self._graph_key != mtime:  # a gathered tree comes out the same every time
-            self._graph, self._graph_key = Graph.from_multiblock(mb), mtime
+            try:
+                self._graph = Graph.from_multiblock(mb)
+            except NoElementsError:  # Model Check counts zeros; the others report it
+                self._graph = None
+            self._graph_key = mtime
+            self._report(self._graph.warnings if self._graph is not None else [])  # once per graph
         return self._run(mb, self._graph, outInfo)
 
 

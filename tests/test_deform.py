@@ -113,6 +113,28 @@ def test_peak_scale_is_zero_without_results():
     assert peak_scale(mb, 0.1) == 0.0
 
 
+def test_deformer_looks_grids_up_in_the_whole_model(model):
+    """A cut of the model (Nastran Scope's) without shell 2, RBE2 301 and the SPCs has no piece with
+    a Displacement on grid 3, so CBUSH 501's line (3-8) follows grid 3 only through ``grids``."""
+    from nastran_pv.deform import Deformer
+
+    deck, mb = model
+    eid = vtkutil.to_numpy(get_block(mb, "Shells").GetCellData().GetArray("EID"))
+    masks = {"Shells": eid != 2, "Rigid": np.zeros(5, bool), "Constraints": np.zeros(4, bool)}
+    cut = tree.build_tree(mb, names=tree.names_from_deck(deck), masks=masks).output(mb)
+    z0 = dict(zip(_nid(get_block(mb, "BushLines")), _xyz(get_block(mb, "BushLines"))[:, 2]))
+
+    def dz(deformer):
+        lines = get_block(tree.gather(deformer.apply(1.0))[0], "BushLines")
+        nid = _nid(lines)
+        return nid, _xyz(lines)[:, 2] - np.array([z0[n] for n in nid])
+
+    nid, moved = dz(Deformer(cut, grids=mb))
+    np.testing.assert_allclose(moved, np.where(nid <= 7, 0.1 * nid, 0.0), atol=1e-6)
+    nid, alone = dz(Deformer(cut))
+    assert alone[nid == 3] == pytest.approx(0.0)  # the cut alone does not know grid 3
+
+
 def test_deformer_reused_across_scales_matches_deform(model):
     # one Deformer per mode, many frames: each apply() equals a fresh deform() at that scale
     from nastran_pv.deform import Deformer
