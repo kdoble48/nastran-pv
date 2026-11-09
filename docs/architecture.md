@@ -234,6 +234,9 @@ Every gotcha found so far, by area. The few that bite on any change are also in 
   trame-vtk is vendored only with `install_deps.py --site`. An open ParaView GUI locks the `.pyd`
   files in `paraview/_vendor`, so re-vendoring then fails partway and can leave scipy broken.
 - pyNastran quirks:
+  - pyNastran main turns on its developer self-checks when `GITHUB_ACTOR` (or `TRAVIS`, `APPVEYOR`)
+    is set (`pyNastran.IS_CI`). One of them, `_check_result_slice`, fails on the synthetic OP2
+    from `op2_fixture`, so the ParaView CI job runs pvpython with `GITHUB_ACTOR` unset.
   - `Subcase.has_parameter` returns a list.
   - Stress tables expose `get_headers()`; von Mises exists only when `stress_bits[4]` is set.
   - Composite tables use `element_layer`.

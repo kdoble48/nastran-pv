@@ -65,7 +65,9 @@ jobs:
           python -m pip install build
           python -m build --wheel --outdir dist
           python -m venv ~/venv
-          ~/venv/bin/python -m pip install "$(ls dist/*.whl)[h5]"
+          # pv_smoke converts with this Python on ParaView 5.x: a VTK before 9.7, whose wedge winding
+          # both ParaViews share (docs/install.md), and 9.5+ to write VTKHDF
+          ~/venv/bin/python -m pip install "$(ls dist/*.whl)[h5]" "vtk>=9.5,<9.7"
       - name: nastran-pv setup
         run: |
           cd ~
@@ -75,6 +77,7 @@ jobs:
       - name: pv_smoke, headless
         env:
           VTK_DEFAULT_OPENGL_WINDOW: vtkOSOpenGLRenderWindow   # 6.0: OSMesa (the 5.13 osmesa build has only that)
+          PYTHONFAULTHANDLER: "1"   # a crash prints the Python stack
         run: |
           pv=$(ls -d ~/ParaView-*/)
           vendor=$(sed -n 's/^vendor folder: //p' ~/setup.log)

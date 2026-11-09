@@ -92,7 +92,8 @@ All notable changes to nastran-pv are listed here. The format follows
 - Empty 3D window on categorical gallery views (#2).
 - `install_deps.py` on macOS asked for scipy wheels for macOS 11, and scipy has none for Apple
   silicon below macOS 12, so it found no scipy; it now asks for this Mac's version. Linux on
-  aarch64 gets aarch64 wheels, and `install_deps.py` uses the CLI's pvpython search. An empty
+  aarch64 gets aarch64 wheels, and `install_deps.py` uses the CLI's pvpython search and shows
+  pvpython's own error (a missing system library, ...) when it fails to start. An empty
   `XDG_CONFIG_HOME` put the macros in the current folder (#59).
 
 ## [0.1.0]

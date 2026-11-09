@@ -94,7 +94,8 @@ under `~/Library`.
 
 ParaView 6.0 has one Linux build. It chooses X, EGL or its bundled OSMesa at run time, so on a
 machine without a display set `VTK_DEFAULT_OPENGL_WINDOW=vtkOSOpenGLRenderWindow` and put its
-`lib/mesa` on `LD_LIBRARY_PATH`. ParaView 5.13 has separate `osmesa` and `egl` builds. CI runs
+`lib/mesa` on `LD_LIBRARY_PATH`. ParaView 5.13 has separate `osmesa` and `egl` builds. Its
+osmesa build needs the system's `libglapi.so.0` (`apt install libglapi-mesa` on Ubuntu). CI runs
 `tests/pv_smoke.py` this way on both (`.github/workflows/paraview.yml`).
 
 ## ParaView-side dependencies
