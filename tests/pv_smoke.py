@@ -1054,8 +1054,9 @@ def diff_checks(pv, nv):
     check(right in pv.GetViews() and right != left and pv.GetActiveSource() is b, "side by side: a second view, B selected")
     names = {v: k[0] for k, v in pv.GetSources().items()}
     sides = [sorted(names.get(s, "?") for s in nv.shown_sources(v)) for v in (left, right)]
-    check(sides == [["NPV info [diff_a.bdf]", "NPV mesh [diff_a.bdf]"],
-                    ["NPV diff elements [diff_b.bdf]", "NPV info [diff_b.bdf]"]], f"A left, B's diff right: {sides}")
+    check(sides == [["NPV Shells [diff_a.bdf]", "NPV diff removed element [diff_b.bdf]", "NPV info [diff_a.bdf]"],
+                    ["NPV diff Shells [diff_b.bdf]", "NPV diff removed element [diff_b.bdf]", "NPV info [diff_b.bdf]"]],
+          f"A's shells left, B's from the diff right, A's removed elements in both: {sides}")
     rgb = list(pv.GetColorTransferFunction("Thickness").RGBPoints)
     check(abs(rgb[0] - 0.1) < 1e-9 and abs(rgb[-4] - 0.25) < 1e-9, f"shared Thickness range {rgb[0]}..{rgb[-4]}")
     again = nv.side_by_side(array="ElementMass", view=left)
@@ -1207,7 +1208,7 @@ def diff2_checks(pv, nv):
     text = pv.FindSource(nv._name(nv.Model(b), "info")).Text
     check("loads: 2 added, 3 removed, 2 changed" in text and "coords: 1 added" in text
           and "masses:" not in text, f"diff v2 view text {text!r}")
-    mesh = pv.FindSource(nv._name(nv.Model(b), "diff mesh"))
+    mesh = pv.FindSource(nv._name(nv.Model(b), "diff items"))
     shown = nv.block_names(nv.fetch(mesh))
     check({"Rigid", "Connectors", "Bushes", "Constraints"} <= set(shown), f"diff v2 view blocks {shown}")
     pv.Delete(view)
@@ -1862,6 +1863,340 @@ def scene_review_checks(pv, nv, reader):
     pv.SetActiveSource(reader)
 
 
+# ---------------------------------------------------------------- comparisons (scene layers R3, R4)
+CMP_PAIRS = {"diff": ("diff_a.bdf", "diff_b.bdf"), "diff2": ("diff2_a.bdf", "diff2_b.bdf"),
+             "same_name": (os.path.join("same_name", "a", "model.bdf"), os.path.join("same_name", "b", "model.bdf"))}
+CMP_STATES = ("single", "diff", "pair_left", "pair_right", "diff_show_only")
+# commands that change the session or the scope: each runs in a freshly built state (the others in turn)
+CMP_SCOPE = ("show_only_selected", "hide_selected", "show_all", "show_only_property", "show_only_material",
+             "show_only_reached", "hide_reached", "show_only_file", "hide_file")  # write both models in a comparison
+CMP_SESSION = ("diff", "side_by_side", "single", "clear", "highlight_file", "grow_from_selection",
+               "path_from_selection") + CMP_SCOPE
+
+
+class _Cmp:
+    """One pair of open models (A, B with the OP2 fixture) and the comparison states built on them."""
+
+    def __init__(self, pv, nv, pair, op2, ids, keep):
+        self.pv, self.nv, self.ids = pv, nv, ids
+        a_path, b_path = (os.path.join(HERE, "data", p) for p in CMP_PAIRS[pair])
+        self.a, self.b = nv.load_reader(a_path, op2), nv.load_reader(b_path, op2)
+        self.keep = set(keep) | {self.a, self.b}  # the earlier checks' objects stay
+        self.views = {}
+
+    def _delete_derived(self, only=None):
+        """Delete the objects made since (``only``: those it accepts), consumers first."""
+        pv = self.pv
+        for _ in range(60):
+            srcs = [s for s in pv.GetSources().values() if s not in self.keep and (only is None or only(s))]
+            if not srcs:
+                return
+            inputs = {i.GetGlobalIDAsString() for s in pv.GetSources().values() for prop in ("Input", "Reference")
+                      for i in [self.nv._input_of(s, prop)] if i is not None}
+            for s in srcs:
+                if s.GetGlobalIDAsString() not in inputs:
+                    pv.Delete(s)
+
+    def build(self, state, view):
+        """``view`` (and a partner for the pair states) in ``state``; returns the view a command runs in.
+        The NPV objects stay (they are reused, as in a session), but the one-model state has no diff."""
+        pv, nv = self.pv, self.nv
+        for v in list(pv.GetViews()):
+            if v != view:
+                pv.Delete(v)
+        try:
+            pv.RemoveCameraLink(nv.SIDE_LINK)
+        except Exception:
+            pass
+        for src in nv._sources_with_selection().values():
+            pv.ClearSelection(src)
+        nv._SCENES.clear()
+        for s in nv.shown_sources(view):
+            pv.Hide(s, view)
+        for r in (self.a, self.b):
+            nv.stop_mode_animation(r, view)
+        if state == "single":
+            self._delete_derived(lambda s: any(nv._xml_name(n) == nv.DIFF_XML for n in nv.upstream(s)))
+        for r in (self.a, self.b):
+            r.ShowOnlyElements = r.HiddenElements = ""
+            r.SelectionMode, r.SelectionFile = "Off", ""
+            r.UpdatePipelineInformation()
+            for prop in nv.VISIBILITY_PROPS:
+                setattr(r, prop, nv._listed(r, prop))
+        nv._set_time(view, 0.0)
+        pv.SetActiveView(view)
+        pv.SetActiveSource(self.b)
+        nv.apply("pid", view=view)  # what a user has before comparing: B, colored
+        self.views = {"B": view}
+        if state == "single":
+            return view
+        pv.SetActiveSource(self.b)
+        nv.apply("diff", view=view)
+        nv.apply("masses", view=view)
+        if state == "diff":
+            return view
+        if state == "diff_show_only":
+            self.select_cells(view)
+            nv.show_only_selected()
+            return view
+        left, right = nv.side_by_side(view=view)
+        self.views = {"A": left, "B": right}
+        run = right if state == "pair_right" else left
+        pv.SetActiveView(run)
+        return run
+
+    def selectable(self, view):
+        """The mesh shown in ``view`` (what a user picks shells 1 and 2 on), else any shown object with EIDs."""
+        names = {s.GetGlobalIDAsString(): k[0] for k, s in self.pv.GetSources().items()}
+        found = []
+        for rep in list(getattr(view, "Representations", None) or []):
+            try:
+                vis, inp = rep.Visibility, rep.Input
+            except AttributeError:
+                continue
+            if vis and inp is not None and self.nv._xml_name(inp) != "TextSource" and "EID" in inp.CellData.keys() \
+                    and inp.GetDataInformation().GetNumberOfCells():
+                found.append(inp)
+        mesh = [s for s in found if any(w in names.get(s.GetGlobalIDAsString(), "") for w in ("mesh", "Shells"))]
+        return (mesh or found or [None])[0]
+
+    def select_cells(self, view):
+        src = self.selectable(view)
+        self.pv.SetActiveSource(src)  # the user picks in the view: ParaView makes the picked source active
+        self.pv.SelectThresholds(Thresholds=[1.0, 2.0], ArrayName="EID", FieldType="CELL", Source=src)
+
+    def select_points(self, view):
+        src = self.selectable(view)
+        self.pv.SetActiveSource(src)
+        self.pv.SelectThresholds(Thresholds=[1.0, 2.0], ArrayName="NID", FieldType="POINT", Source=src)
+
+    def commands(self, tmp):
+        nv = self.nv
+
+        def picked(fn, points=False):
+            def run():
+                (self.select_points if points else self.select_cells)(self.pv.GetActiveView())
+                return fn()
+            return run
+
+        def reached(fn):
+            def run():
+                picked(nv.grow_from_selection)()
+                return fn()
+            return run
+
+        def play_then_stop():
+            nv.play_mode(frames=4)
+            return nv.stop_mode_animation()
+
+        out = {name: (lambda name=name: nv.apply(name, toggle=True)) for name in nv.VIEWS}
+        out.update({
+            "animate_mode": lambda: nv.animate_mode(cycles=1, frames=4),
+            "animate_modes": lambda: nv.animate_modes(frames=4, fps=0),
+            "play_then_stop": play_then_stop, "stop_mode_animation": nv.stop_mode_animation,
+            "save_mode_animations": lambda: nv.save_mode_animations(frames=4, folder=os.path.join(tmp, "gifs")),
+            "index_colors": nv.index_colors, "grow_from_selection": picked(nv.grow_from_selection),
+            "path_from_selection": picked(nv.path_from_selection, points=True),
+            "show_only_selected": picked(nv.show_only_selected), "hide_selected": picked(nv.hide_selected),
+            "show_all": nv.show_all, "show_only_property": picked(nv.show_only_property),
+            "show_only_material": picked(nv.show_only_material), "show_only_reached": reached(nv.show_only_reached),
+            "hide_reached": reached(nv.hide_reached), "show_only_file": lambda: nv.show_only_file(self.ids),
+            "hide_file": lambda: nv.hide_file(self.ids), "highlight_file": lambda: nv.highlight_file(self.ids),
+            "side_by_side": nv.side_by_side, "clear": nv.clear, "single": nv.single,
+        })
+        return out
+
+    def invariants(self, state, command, problems):
+        """What every command must leave (the audit's failure patterns): no third view, one diff with
+        its roles, each view of a comparison drawing its own model, scope written to both models."""
+        pv, nv = self.pv, self.nv
+        tag = f"{state}/{command}"
+        views = list(pv.GetViews())
+        if len(views) > 2:
+            problems.append(f"{tag}: {len(views)} views (a third view)")
+        diffs = [s for s in pv.GetSources().values() if nv._xml_name(s) == nv.DIFF_XML]
+        if len(diffs) > 1 or any(nv.diff_sides(d) != (self.b, self.a) for d in diffs):
+            problems.append(f"{tag}: {len(diffs)} Nastran Diff(s), roles {[nv.diff_sides(d) == (self.b, self.a) for d in diffs]}")
+        names = {s.GetGlobalIDAsString(): k[0] for k, s in pv.GetSources().items()}
+        for v in views:
+            scene = nv.scene_of(v)
+            if scene.role is None:
+                continue
+            own = self.a if scene.role == "A" else self.b
+            for s in nv.shown_sources(v):
+                name = names.get(s.GetGlobalIDAsString(), "?")
+                if nv._xml_name(s) == "TextSource" or s in (self.a, self.b):
+                    continue
+                who = nv.owner(s)
+                if who != own and not (scene.role == "B" and "diff removed" in name):
+                    problems.append(f"{tag}: {name} of the other model in {scene.role}'s view")
+        comparison = not state.endswith("single") and command != "single"
+        if comparison and command in CMP_SCOPE:
+            lists = [(r.ShowOnlyElements, r.HiddenElements) for r in (self.a, self.b)]
+            if lists[0] != lists[1]:
+                problems.append(f"{tag}: scope not mirrored to both models {lists}")
+        if comparison and command in nv.VIEWS:
+            view = pv.GetActiveView()
+            scene = nv.scene_of(view)
+            if scene.diff is None:
+                problems.append(f"{tag}: the comparison ended")
+            elif scene.role == "B" and command in ("masses", "bushes", "loads", "spc", "rigid") and command in scene.overlays:
+                colors = [pv.GetDisplayProperties(o, view).ColorArrayName[1] for o in scene.overlays[command].objects
+                          if "removed" not in names.get(o.GetGlobalIDAsString(), "") and nv._xml_name(o) != "TextSource"
+                          and pv.GetDisplayProperties(o, view).ColorArrayName[1]]
+                if colors and "DiffStatus" not in colors:
+                    problems.append(f"{tag}: overlay colored by {colors}, not DiffStatus")
+
+
+def comparison_detail_checks(pv, nv):
+    """What the comparison draws, on the same-named pair (tests/data/same_name: A -> B removes shell 3,
+    CONM2 202 and CBUSH 501, adds shell 4, makes CONM2 201 heavier), and that a scope change or a time
+    step does not compare again."""
+    import nastran_pv.diff as nd
+    from op2_fixture import make_op2
+
+    keep = set(pv.GetSources().values())
+    tmp = tempfile.mkdtemp()  # not removed: ParaView keeps the OP2 open
+    op2 = os.path.join(tmp, "detail.op2")
+    make_op2().write_op2(op2)
+    cmp = _Cmp(pv, nv, "same_name", op2, None, keep)
+    a, b = cmp.a, cmp.b
+    check(nv._name(nv._ReaderOnly(a), "x") != nv._name(nv._ReaderOnly(b), "x"),
+          f"same-named decks get their own NPV objects: {nv._name(nv._ReaderOnly(b), 'x')!r}")
+    view = pv.CreateRenderView()
+    pv.SetActiveView(view)
+    pv.SetActiveSource(b)
+    nv.apply("diff", view=view)
+    d = nv.scene_of(view).diff
+    check(nv.diff_sides(d) == (b, a) and nv.scene_of(view).role == "B", "NPV Diff: a comparison of B with A")
+    m = nv.apply("masses", view=view)
+    glyphs = pv.FindSource(nv._name(m, "diff mass glyphs"))
+    check(_point_values(glyphs, "EID") == {201} and _point_values(glyphs, "DiffStatus") == {2}
+          and pv.GetDisplayProperties(glyphs, view).ColorArrayName[1] == "DiffStatus",
+          "NPV Masses in a comparison: CONM2 201 changed (orange), colored by DiffStatus")
+    gone = pv.FindSource(nv._name(m, "diff removed mass"))
+    check(gone is not None and nv._gather(nv.fetch(gone), "EID", "CELLS").tolist() == [202]
+          and "1 removed (red)" in _info(nv, m), "A's removed CONM2 202 red in the masses overlay")
+    pv.SetActiveSource(a)  # roles are the Diff's: A selected changes nothing
+    sources = set(pv.GetSources())
+    nv.apply("diff", view=view)
+    check(set(pv.GetSources()) == sources and nv.scene_of(view).diff == d and nv.subject(view) == b,
+          "NPV Diff with A selected: the same diff, B's view")
+    calls, real = [], nd.annotate
+    nd.annotate = lambda *x, **k: calls.append(1) or real(*x, **k)
+    try:
+        for r in (a, b):
+            r.ShowOnlyElements = "1 2"
+        pv.Render(view)
+        mesh = pv.FindSource(nv._name(m, "diff mesh"))
+        removed = pv.FindSource(nv._name(m, "diff removed"))
+        nv.apply("pid", view=view)
+        check(sorted(nv._gather(nv.fetch(mesh), "EID", "CELLS").tolist()) == [1, 2]
+              and sorted(nv._gather(nv.fetch(removed), "EID", "CELLS").tolist()) == [202, 501],
+              "Show Only 1 2 on both: B's shells 1 2; A's removed bush and mass on them, not shell 3")
+        steps = rm.timesteps(b)
+        nv._set_time(view, steps[1])
+        late = nv.Model(b, steps[1], diff=d, role="B").array("Shells", "Displacement")
+        nv._set_time(view, steps[0])
+        early = nv.Model(b, steps[0], diff=d, role="B").array("Shells", "Displacement")
+        check(not calls and late is not None and not np.allclose(late, early),
+              f"scope and time step: no new comparison ({len(calls)}), each step's Displacement on the diff")
+    finally:
+        nd.annotate = real
+    for r in (a, b):
+        r.ShowOnlyElements = ""
+    nv.apply("pid", view=view)
+    removed_elements = pv.FindSource(nv._name(m, "diff removed element"))
+    pv.SetActiveSource(removed_elements)  # a pick on A's removed shell 3
+    pv.SelectThresholds(Thresholds=[3.0, 3.0], ArrayName="EID", FieldType="CELL", Source=removed_elements)
+    check(nv.selected_reader() == a, "a pick on the removed items is A's")
+    nv.grow_from_selection()
+    check("EID 3 not in B" in _info(nv, m), f"grow from A's removed shell in B's view: {_info(nv, m)!r}")
+    pv.ClearSelection(removed_elements)
+    nv.apply("masses", view=view)
+    left, right = nv.side_by_side(view=view)
+    views = len(pv.GetViews())
+    pv.SetActiveView(right)
+    again = nv.side_by_side()
+    link = nv.servermanager.ProxyManager().SMProxyManager.GetRegisteredLink(nv.SIDE_LINK)
+    check(again == (left, right) and len(pv.GetViews()) == views and link is not None,
+          "Side by Side from the right view: the same pair, no third view, linked")
+    names = {s.GetGlobalIDAsString(): k[0] for k, s in pv.GetSources().items()}
+    shown = {v: sorted(names[s.GetGlobalIDAsString()] for s in nv.shown_sources(v)) for v in (left, right)}
+    check(nv._name(nv._ReaderOnly(a), "mass glyphs") in shown[left]
+          and nv._name(nv._ReaderOnly(b), "diff mass glyphs") in shown[right]
+          and nv._name(nv._ReaderOnly(b), "diff removed mass") in shown[left],
+          "the pair: A's masses and its removed mass left, B's changed masses right")
+    nv.apply("bushes", view=right)  # every command in both views
+    shown_left = [names.get(s.GetGlobalIDAsString(), "") for s in nv.shown_sources(left)]
+    check(nv._name(nv._ReaderOnly(a), "bush glyphs") in shown_left and "bushes" in nv.scene_of(left).overlays,
+          "NPV Bushes in B's view draws A's bushes in A's view too")
+    nv.single(view=right)
+    check(right not in pv.GetViews() and nv.scene_of(left).role is None and nv.subject(left) == b,
+          "NPV Single in a pair: one view, B as one model")
+    pv.Delete(left)
+    nv._SCENES.clear()
+    cmp.keep -= {a, b}
+    cmp._delete_derived()
+
+
+def comparison_checks(pv, nv):
+    """The comparison audit matrix (scene layers R3/R4): every command in each starting state (one
+    model; after NPV Diff; side by side with each view active; NPV Diff plus Show Only) on diff_a/b,
+    diff2_a/b and the same-named pair, with the invariants of :meth:`_Cmp.invariants`."""
+    import time
+    import traceback
+
+    from op2_fixture import make_op2
+
+    keep = set(pv.GetSources().values())
+    tmp = tempfile.mkdtemp()  # not removed: ParaView keeps the OP2 open
+    op2 = os.path.join(tmp, "cmp.op2")
+    make_op2().write_op2(op2)
+    ids = os.path.join(tmp, "ids.csv")
+    with open(ids, "w") as f:
+        f.write("EID\n1\n2\n")
+    view = pv.CreateRenderView()
+    view.ViewSize = [600, 400]
+    start = time.time()
+    problems, reported, runs, spent = [], {}, 0, {}
+    for pair in CMP_PAIRS:
+        cmp = _Cmp(pv, nv, pair, op2, ids, keep)
+        commands = cmp.commands(tmp)
+        for state in CMP_STATES:
+            run_view = cmp.build(state, view)
+            for name, fn in commands.items():  # the view commands in turn, a fresh state after a session change
+                pv.SetActiveView(run_view)
+                runs += 1
+                t0 = time.time()
+                try:
+                    fn()
+                except (RuntimeError, ValueError) as exc:  # what the macro reports in Output Messages
+                    reported.setdefault(f"{name}: {str(exc).splitlines()[0][:90]}", []).append(f"{pair}/{state}")
+                except Exception:
+                    problems.append(f"{pair}/{state}/{name}: {traceback.format_exc()[-600:]}")
+                cmp.invariants(f"{pair}/{state}", name, problems)
+                t1 = time.time()
+                if name in CMP_SESSION:
+                    run_view = cmp.build(state, view)
+                spent[name] = spent.get(name, 0.0) + t1 - t0
+                spent["(build)"] = spent.get("(build)", 0.0) + time.time() - t1
+            print(f"   {pair}/{state}: {len(commands)} commands", flush=True)
+        cmp.build("single", view)
+        nv.clear(view)
+        cmp.keep -= {cmp.a, cmp.b}
+        cmp._delete_derived()
+    for msg, where in sorted(reported.items()):
+        print(f"   reported: {msg} ({len(where)}x, e.g. {where[0]})")
+    print("   slowest: " + ", ".join(f"{k} {v:.0f} s" for k, v in sorted(spent.items(), key=lambda kv: -kv[1])[:8]))
+    for p in problems[:30]:
+        print(f"   PROBLEM {p}")
+    check(not problems, f"comparison matrix: {runs} runs in {time.time() - start:.0f} s, {len(problems)} problem(s)")
+    pv.Delete(view)
+    nv._SCENES.clear()
+    check(set(pv.GetSources().values()) == keep, "comparison matrix: its pipeline objects deleted")
+
+
 def main():
     reader = rm.load_reader(DECK)
     model = rm.Model(reader)
@@ -2261,6 +2596,8 @@ def main():
     random_checks(pv, nv)
     topology_checks(pv, nv)
     diff_checks(pv, nv)
+    comparison_detail_checks(pv, nv)
+    comparison_checks(pv, nv)
     clear_checks(pv, nv, reader)
     preset_checks(pv, nv)
     active_source_checks(pv, nv)

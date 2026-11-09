@@ -134,6 +134,26 @@ def _registry_entry(data):
     return found if found is not None and found[1] == _signature(data) else None
 
 
+def _reader_tag(data):
+    """The registry tag of the reader whose output ``data`` is (or passes through unchanged), else None."""
+    if _registry_entry(data) is None:
+        return None
+    return data.GetFieldData().GetAbstractArray(WHOLE_MODEL_TAG).GetValue(0)
+
+
+# A Nastran Diff's output 0 carries a DIFF_TAG field string naming its entry here: the whole annotated B
+# (before the Show filters), the registry tags of its two readers (None for a converted file), A's whole
+# multiblock and the Show settings. Nastran Scope after the Diff (a comparison's drawn layers) masks the
+# whole output by both readers' current scopes, then filters it as the Diff's Show settings say.
+DIFF_TAG = "NPVDiff"
+_DIFF_OUTPUTS = {}
+
+
+def _diff_entry(data):
+    tag = data.GetFieldData().GetAbstractArray(DIFF_TAG) if data.IsA("vtkMultiBlockDataSet") else None
+    return _DIFF_OUTPUTS.get(tag.GetValue(0)) if tag is not None and tag.GetNumberOfValues() else None
+
+
 def _reader_scope(data):
     """``(multiblock, Visibility, names, generation)`` of the reader whose output ``data`` is (moved
     points allowed: Nastran Deform keeps the signature), else None."""
@@ -1314,13 +1334,16 @@ class NastranPVScope(_Settable, VTKPythonAlgorithmBase):
     connectors, SPCs and loads stay when they hang off a kept element or a kept rigid element or bush.
     What Show Only names by EID wins in its block, what a Show only Selection File of grids, properties
     or groups lists is added, and what the checklists, Hidden Elements or a Hide file hide always goes.
-    It goes after Nastran Deform on the reader and moves by its scale; any other input passes through."""
+    It goes after Nastran Deform on the reader and moves by its scale. On a Nastran Diff's output (a
+    comparison) it cuts B's blocks by B's reader scope the same way and A's removed items by A's reader
+    scope, then applies the Diff's Show settings. Any other input passes through."""
 
     def __init__(self):
         VTKPythonAlgorithmBase.__init__(self, nInputPorts=1, nOutputPorts=1, outputType="vtkDataObject")
         self._tree = None  # (whole multiblock, Visibility key, Tree)
         self._deformer = None  # (whole multiblock, Visibility key, generation, Deformer)
         self._diagonal = None  # (whole multiblock, its diagonal)
+        self._comparison = None  # (whole diff output, A's model, both Visibility keys, ScopedCopy or None)
 
     def FillInputPortInformation(self, port, info):
         info.Set(self.INPUT_REQUIRED_DATA_TYPE(), "vtkDataObject")
@@ -1347,6 +1370,10 @@ class NastranPVScope(_Settable, VTKPythonAlgorithmBase):
         out = vtkDataObject.GetData(outInfo, 0)
         if inp is None:
             return 1
+        diff = _diff_entry(inp)
+        if diff is not None:
+            return self._compared(inp, out, diff)
+        self._comparison = None
         found = _reader_scope(inp)
         if found is not None:
             mb, vis, names, generation = found
@@ -1370,6 +1397,27 @@ class NastranPVScope(_Settable, VTKPythonAlgorithmBase):
             out.GetInformation().Set(vtkDataObject.DATA_TIME_STEP(), info.Get(vtkDataObject.DATA_TIME_STEP()))
         return 1
 
+    def _compared(self, inp, out, entry):
+        """A comparison's drawn layers: the Diff's whole output cut by both readers' scopes (a converted
+        A has none: B's scope applies to its removed items, by id), then the Diff's Show settings."""
+        from nastran_pv.diff import show_only
+        from nastran_pv.selection import ScopedCopy, comparison_masks
+
+        whole, b_tag, a_tag, a_mb, show = entry
+        b_reg, a_reg = _WHOLE_MODEL.get(b_tag), _WHOLE_MODEL.get(a_tag)
+        vis_b, names_b = (b_reg[2], b_reg[3]) if b_reg is not None else (None, None)
+        vis_a, names_a = (a_reg[2], a_reg[3]) if a_reg is not None else (vis_b, names_b)
+        keys = tuple(v.key() if v is not None else None for v in (vis_b, vis_a))
+        if self._comparison is None or self._comparison[:3] != (whole, a_mb, keys):
+            masks = comparison_masks(whole, vis_b, names_b, a_mb, vis_a, names_a)
+            self._comparison = (whole, a_mb, keys, None if masks is None else ScopedCopy(whole, masks))
+        cut = self._comparison[3]
+        out.ShallowCopy(inp if cut is None else show_only(cut.output(whole), *show))  # nothing hidden: as is
+        self._mark_diagonal(out, b_reg[0] if b_reg is not None else whole)
+        info = inp.GetInformation()
+        if info.Has(vtkDataObject.DATA_TIME_STEP()):
+            out.GetInformation().Set(vtkDataObject.DATA_TIME_STEP(), info.Get(vtkDataObject.DATA_TIME_STEP()))
+        return 1
 
     def _mark_diagonal(self, out, mb):
         """The whole model's diagonal on ``out``'s root, so glyph sizes do not follow the scope."""
@@ -2137,8 +2185,9 @@ class NastranPVDiff(_Settable, VTKPythonAlgorithmBase):
     Output 0: B's blocks (a multiblock) with ``DiffStatus``, ``DiffReason`` and the deltas on the
     mesh, masses, rigid elements, connectors, bushes, SPCs and loads, plus a ``Removed`` block of A's
     removed items, filtered by the Show group; output 1: every difference as a table (coordinate
-    systems included). The comparison is cached per inputs and Compare/Tolerances settings, so the
-    Show group only re-filters it.
+    systems included). The comparison is cached per model content (a reader's whole model: its
+    visibility and time step do not change it) and Compare/Tolerances settings, so the Show group only
+    re-filters it, and a time step only puts that step's results on it.
     """
 
     def __init__(self):
@@ -2176,16 +2225,27 @@ class NastranPVDiff(_Settable, VTKPythonAlgorithmBase):
                           floor=self._floor, ignore_moves=bool(self._ignore_moves),
                           kinds=frozenset(k for k, label in zip(_DIFF_KINDS, _DIFF_KIND_LABELS) if label in on))
 
+    @staticmethod
+    def _content(data):
+        """What a comparison depends on: a reader's whole model (the same multiblock while the deck and
+        the reader's options are the same: visibility and time steps leave it), else the data itself
+        and its MTime (a converted file, another filter)."""
+        found = _registry_entry(data)
+        return ("model", found[0]) if found is not None else (data, data.GetMTime())
+
     def _compare(self, b_in, a_in, tol):
-        """``(annotated B, table rows)``, computed again only when an input or ``tol`` changed."""
-        from nastran_pv.diff import annotate, table_rows
+        """``(annotated B, table rows, A's whole model)``, computed again only when a model's content or
+        ``tol`` changed. Per-step arrays (results, random response) are put back on the kept output."""
+        from nastran_pv.diff import annotate, own_arrays, reattach, table_rows
         from nastran_pv.fields import shallow_clone
 
-        key = (b_in, b_in.GetMTime(), a_in, a_in.GetMTime(), tol)
+        key = (self._content(b_in), self._content(a_in), tol)
         if self._cache is not None and self._cache[0] == key:
-            return self._cache[1:]
-        (b, b_cut), (a, a_cut) = _whole_model(b_in), _whole_model(a_in)
-        b = shallow_clone(b)  # never add arrays to the reader's cached model
+            _, b, rows, a, source, own = self._cache
+            reattach(b, source, own)  # the reader may have moved to another time step
+            return b, rows, a
+        (source, b_cut), (a, a_cut) = _whole_model(b_in), _whole_model(a_in)
+        b = shallow_clone(source)  # never add arrays to the reader's cached model
         if b_cut or a_cut:
             _message("nastran-pv Diff: an input comes through another filter, so the diff sees only the "
                      "elements that filter passes (not those the reader hides). Apply Nastran Diff directly "
@@ -2198,8 +2258,8 @@ class NastranPVDiff(_Settable, VTKPythonAlgorithmBase):
                 _message(f"nastran-pv Diff: {note}")
         except Exception as exc:  # report, pass B through unchanged
             _message(f"nastran-pv Diff: {exc}", error=True)
-        self._cache = (key, b, rows)
-        return b, rows
+        self._cache = (key, b, rows, a, source, own_arrays(b, source))
+        return b, rows, a
 
     def RequestData(self, request, inInfo, outInfo):
         from vtkmodules.vtkCommonDataModel import vtkTable
@@ -2213,10 +2273,22 @@ class NastranPVDiff(_Settable, VTKPythonAlgorithmBase):
             return 1
         if self._swap:
             b_in, a_in = a_in, b_in
-        b, rows = self._compare(b_in, a_in, self._tolerances())
+        b, rows, a = self._compare(b_in, a_in, self._tolerances())
         _fill_table(vtkTable.GetData(outInfo, 1), rows)
         reasons = sum(1 << i for i, r in enumerate(_DIFF_REASONS) if r in set(_checked(self._reasons)))
-        statuses = [i for i, s in enumerate(_DIFF_STATUSES[:4]) if self._show[s]]
-        vtkMultiBlockDataSet.GetData(outInfo, 0).ShallowCopy(
-            show_only(b, statuses, reasons, removed=bool(self._show["removed"])))
+        statuses = tuple(i for i, s in enumerate(_DIFF_STATUSES[:4]) if self._show[s])
+        removed = bool(self._show["removed"])
+        out = vtkMultiBlockDataSet.GetData(outInfo, 0)
+        out.ShallowCopy(show_only(b, statuses, reasons, removed=removed))
+        tag = f"{id(self)}"  # for Nastran Scope after it: the whole output, both readers, A's model
+        _DIFF_OUTPUTS[tag] = (b, _reader_tag(b_in), _reader_tag(a_in), a, (statuses, reasons, removed))
+        from vtkmodules.vtkCommonDataModel import vtkFieldData
+
+        from nastran_pv import vtkutil
+
+        fd = vtkFieldData()  # a copy: the root's field data is the cached output's
+        fd.ShallowCopy(out.GetFieldData())
+        fd.RemoveArray(DIFF_TAG)
+        vtkutil.add_string_array(fd, DIFF_TAG, [tag])
+        out.SetFieldData(fd)
         return 1

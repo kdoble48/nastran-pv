@@ -171,9 +171,8 @@ Restart ParaView, open a deck, select the reader (or anything downstream of it) 
 A button edits what the view shows instead of starting over
 ([How views combine](#how-views-combine)): a coloring (PID, Thickness, Results, ...) replaces the
 coloring, and an overlay (Masses, Loads, SPC, ...) adds itself to it, with its glyphs, lookup table,
-legend and a short summary; clicking an overlay's button again removes it. Apart from *NPV Side by
-Side*, which still resets its two views (comparisons follow the scene in a later release), nothing
-else resets the view: *NPV Clear* is the reset. Running a view again reuses its pipeline objects, which are named `NPV ...`, and keeps
+legend and a short summary; clicking an overlay's button again removes it. Nothing resets the view
+but *NPV Clear*. Running a view again reuses its pipeline objects, which are named `NPV ...`, and keeps
 what you changed on them. A macro ends with the filter it is about selected (*NPV mass glyphs*,
 *NPV load glyphs*, *NPV beam sections*, *NPV grow*, the Nastran Diff, *NPV deform* for Results and
 the animation macros), so its Properties panel is open with the settings that tune that view
@@ -213,8 +212,9 @@ an `NPV ...` filter selected finds the model upstream of it.
 | NPV Clear | Empties the active view: every layer (the coloring and every overlay) is hidden and the deformation goes back to 0. It deletes nothing, so the next view reuses the NPV objects |
 | NPV Only Property | Unchecks every property except those of the selected elements |
 | NPV Only Material | Unchecks every material except those of the selected elements |
-| NPV Diff | What changed from a second open model (A) to the active one (B): B's elements, rigid elements, connectors, bushes, SPCs and loads by `DiffStatus` (same, added, changed, property), A's removed items red and translucent, the counts and the mass change; the Nastran Diff's *Compare*, *Show* and *Tolerances* settings tune it ([Model diff](diff.md#paraview)) |
-| NPV Side by Side | A and B (or B's diff) in two views with linked cameras, colored by the active view's array over one shared range ([Side by side](diff.md#side-by-side)) |
+| NPV Diff | Makes the view a comparison of the active model (B) with a second open model (A): B's elements, rigid elements, connectors, bushes, SPCs and loads by `DiffStatus` (same, added, changed, property), A's removed items red and translucent, the counts and the mass change. Every later macro in the view draws from the diff ([Comparing two models](#comparing-two-models)); the Nastran Diff's *Compare*, *Show* and *Tolerances* settings tune it ([Model diff](diff.md#paraview)) |
+| NPV Side by Side | A in the view and B in a second view beside it, cameras linked, with the view's coloring (over one legend or range) and overlays; every later macro draws in both. Run from either view of the pair, it draws the same pair again ([Side by side](diff.md#side-by-side)) |
+| NPV Single | Ends the comparison: the view shows B as one model again, with the same overlays (DiffStatus becomes PID); in a pair the right view closes. Deletes nothing: NPV Diff starts the comparison again |
 | NPV Show Only Reached / NPV Hide Reached | Shows only, or hides, what *NPV grow* reached; with *Stay Within* that is "everything connected to this point inside its group" ([Model tools](tools.md#paraview)) |
 | NPV Show Only File / NPV Hide File | Shows only, or hides, what the reader's *Selection File* lists ([above](#selection-from-an-id-file)); set the file on the reader first, since macros cannot open a file dialog |
 | NPV Highlight File | Selects what the *Selection File* lists, as a ParaView selection on the reader (grids for a GRID file, elements otherwise), without hiding anything |
@@ -246,14 +246,49 @@ What a render view shows is a *scene* made of layers, and each macro edits one l
   until a coloring replaces it.
 - A **new view starts undeformed**. After that only NPV Results changes the deformation: an overlay
   or a coloring clicked on a deformed view keeps it.
-- A macro for **another model** (a second reader selected) starts a new scene in that view: the first
-  model's layers are hidden.
+- **The model follows the view.** A view keeps the model it shows, whichever object is selected; a
+  macro for **another model** (a second reader selected in the Pipeline Browser since the last macro)
+  starts a new scene in that view: the first model's layers are hidden.
 - **NPV Clear** is the reset: it hides every layer and puts the deformation back to 0, and
-  deletes nothing. (*NPV Side by Side* also resets its two views, until comparisons follow the
-  scene.)
+  deletes nothing. A comparison stays one (NPV Single ends it); in a side-by-side pair it clears
+  both views.
 - The first macro in a view with **no scene yet** (a new view, another model, a reopened state)
   hides the model sources and `NPV ...` objects shown there, since no layer holds them. The reader's
   own surface is never a layer, so a macro always hides it (also after *NPV Highlight File*).
+
+### Comparing two models
+
+*NPV Diff* turns the view into a comparison of two open models: **B**, the changed one (the
+Nastran Diff's *Input*), and **A**, the reference (its *Reference*). The comparison lasts until
+*NPV Single*, or until the Nastran Diff is deleted. In it:
+
+- **The roles are the Diff's.** With A selected, NPV Diff and NPV Side by Side reuse the Nastran Diff
+  that compares the two models; they never make a reversed one (use the Diff's *Swap Inputs*).
+- **Every layer of B's view is drawn from the diff.** NPV Diff colors B by `DiffStatus`; any other
+  coloring (PID, Thickness, Results, ...) colors B's mesh by that array, still from the diff, so the
+  Diff's *Show* settings apply to it. A's removed elements stay red and translucent under every
+  coloring.
+- **Overlays show the change.** NPV Masses, Bushes, Bush Rotations, Beams, Loads, SPC and Rigid draw
+  B's items colored by `DiffStatus` (the heavier engine mass orange, a new stringer's bush green), and
+  A's removed items of that kind in red; the summary counts the changes.
+- **One scope for both models, by ID.** NPV Show Only, Hide, Show All, Only Property/Material, Show
+  Only/Hide Reached and the Selection File macros write the same lists to A's and B's readers. The
+  comparison itself stays whole-model; the drawn layers follow the scope: B's items by B's reader,
+  A's removed items by A's. A checklist ticked by hand on one reader applies to that model only.
+- **Picks belong to their model.** Cells picked on the red removed items are A's, so Show Only of them
+  shows those EIDs in both models; NPV Grow from Selection seeded with them in B's view says
+  *EID ... not in B*.
+- **Side by side** puts A in the left view and B in the right one, cameras linked. Every macro run in
+  either view is drawn in both, each side from its own model: A's side as a single model plus its
+  removed items, B's from the diff, the coloring over one legend or range. Running NPV Side by Side
+  again from either view draws the same pair again in place.
+- **Changing a layer does not compare again.** The Nastran Diff runs again only when a model's content
+  changes (a new deck, other reader options, a tolerance); the scope and the time step only cut and
+  update the kept comparison (uCRM-9: 1.3 s to compare, then 0.2 s for NPV Masses and 0.9 s for a
+  scope change).
+
+Results and mode animation in a comparison move B's side only, and the per-view summary lists only
+the last layer's text; both are to come.
 
 ## Filter properties
 

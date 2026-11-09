@@ -56,6 +56,7 @@ class Scene:
     role: str | None = None   # "A" or "B" in a comparison, None for one model
     partner: str | None = None  # the other view of a side-by-side pair (its id), else None
     diff: object = None       # the Nastran Diff the comparison follows (None: one model, or a pair without one)
+    side: object = None       # a pair without a diff: the model this side shows
 
     @property
     def empty(self) -> bool:
@@ -100,7 +101,7 @@ class Scene:
         return _orphans(old.objects, self._layers())
 
     def clear(self) -> list:
-        """Forget every layer and the model; the session (role, partner, diff) stays."""
+        """Forget every layer and the model; the session (role, partner, diff, side) stays."""
         out = []
         for layer in self._layers():
             out += [o for o in layer.objects if o not in out]
@@ -108,5 +109,5 @@ class Scene:
         return out
 
     def end_comparison(self) -> None:
-        """Back to one model: no role, partner or diff (the layers stay until they are drawn again)."""
-        self.role, self.partner, self.diff = None, None, None
+        """Back to one model: no role, partner, diff or side (the layers stay until they are drawn again)."""
+        self.role, self.partner, self.diff, self.side = None, None, None, None

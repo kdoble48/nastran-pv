@@ -158,7 +158,8 @@ The `Removed` block holds A's removed items in A's coordinates: elements, rigid-
 connector legs, and a point for each removed concentrated mass, bush, load point and SPC point. It
 has `EID PID ElementType ElementMass DiffStatus DeltaElementMass`, `ItemType` (0 element, 1 mass,
 2 rigid, 3 connector, 4 bush, 5 load, 6 spc; names in `ItemTypeNames`) and `SID` (the load or SPC
-set, -1 otherwise), and point `NID`. Show it translucent over B to see what went away. The
+set, -1 otherwise), and point `NID` (a removed mass's grid, a removed bush's GA). Show it translucent
+over B to see what went away. The
 `DeltaElementMass` of B's elements and of `Removed` add up to the change in element mass (it is 0
 for the items that have no mass). A removed coordinate system is a report row only.
 
@@ -177,7 +178,16 @@ changed, blue property, red removed): the elements, and the rigid-element, conne
 lines, bushes, SPC points and loaded grids drawn over them. It draws the removed items red and
 translucent, and lists the counts of each kind either model has and the mass change. The reference is the other open model, or the most recently opened
 one when more than two are open. To pick A yourself, apply the filter (below) first; the view then
-uses it.
+uses it. With A selected, NPV Diff reuses the Nastran Diff that compares the two models instead of
+making a reversed one.
+
+The view is then a **comparison** until *NPV Single* (or until the Nastran Diff is deleted): every
+NPV macro in it draws from the diff ([Comparing two models](paraview.md#comparing-two-models)).
+NPV PID, Thickness and the other colorings color B's mesh by their array, with A's removed elements
+staying red; NPV Masses, Bushes, Loads, SPC, Rigid and Beams color B's items by `DiffStatus` and add
+A's removed items of their kind in red. The visibility macros (Show Only, Hide, Show All, the
+Selection File ones) write the same IDs to both readers, and the drawn layers follow them: B's items
+by B's scope, A's removed items by A's. Cells picked on the removed items are A's.
 
 From the shell, `--against` opens A too:
 
@@ -202,8 +212,12 @@ listed in Output Messages. Its Properties panel has three groups:
   nothing. The table (output 1) always lists every difference.
 - **Tolerances** (advanced, the gear button): the [settings](#settings) of the CLI.
 
-The comparison is kept per inputs and Compare/Tolerances settings, so changing a Show setting
-only filters it again. NPV Diff reruns keep these settings, and its summary says what is shown.
+The comparison is kept per model content and Compare/Tolerances settings: it runs again only when a
+model changes (another deck, other reader options) or a setting of those groups does. Changing a
+Show setting only filters it again; a reader's visibility (its checklists and ID lists) and the time
+step do not run it either, and each step's results are put on the kept output. On uCRM-9 coarse
+the comparison takes 1.3 s once, and a scope change after it 0.9 s instead of 2.1 s.
+NPV Diff reruns keep these settings, and its summary says what is shown.
 From Python: `pv.NastranDiff(Input=b, Reference=a, Kinds=["Elements", "Loads"], ShowSame=0)`.
 
 Applied directly to a deck reader, the diff compares the whole model, including elements the
@@ -214,15 +228,21 @@ says so.
 
 ### Side by side
 
-**NPV Side by Side** shows A in the active view and B in a second view beside it. The cameras are
-linked, and both are colored by one array over one shared range: the array the active view shows,
-else `DiffStatus` when B has a diff, else `PID`. When B has a diff, the right view shows the diff output, and coloring by `DiffStatus`
-shows A's removed elements on the left and B's changes on the right. Run it again after changing
-the coloring: it reuses the second view.
+**NPV Side by Side** shows A in the active view and B in a second view beside it, cameras linked.
+Both views get the active view's coloring and overlays, each from its own model: A's side as a
+single model with its removed items in red, B's side from the diff when there is one. The coloring
+has one legend (PID, MID, ...) or one range (Thickness, ...) over both; with no coloring it is
+`DiffStatus` when B has a diff (A's removed items on the left, B's changes on the right), else
+`PID`. From then on **every macro run in either view is drawn in both**: NPV Masses in the left view
+adds the masses to A's side and the changed masses to B's. Running NPV Side by Side again, from
+either view, draws the same pair again in place and keeps the camera link; it never makes a third
+view. *NPV Single* closes the right view and shows B alone in the left one.
 
 ```python
 import nastran_views as nv
-nv.apply("diff")                        # B active, A open
+nv.apply("diff")                        # B active, A open: the view becomes a comparison
 nv.side_by_side(array="Thickness")      # one Thickness range for both
-nv.side_by_side(array="DiffStatus")     # removed on the left, changes on the right
+nv.side_by_side(array="DiffStatus")     # removed items on the left, changes on the right
+nv.apply("masses")                      # in both views
+nv.single()                             # back to one view of B
 ```

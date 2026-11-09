@@ -73,11 +73,11 @@ def test_clear_macro_installed():
 
 
 def test_clear_keeps_the_comparison_and_end_comparison_drops_it():
-    s = Scene(model="B", coloring=Layer("diff", ["diff mesh"]), role="B", partner="7", diff="the diff")
+    s = Scene(model="B", coloring=Layer("diff", ["diff mesh"]), role="B", partner="7", diff="the diff", side="B")
     assert s.comparison and s.clear() == ["diff mesh"] and s.empty and s.model is None
-    assert (s.role, s.partner, s.diff) == ("B", "7", "the diff")
+    assert (s.role, s.partner, s.diff, s.side) == ("B", "7", "the diff", "B")
     s.end_comparison()
-    assert not s.comparison and (s.role, s.partner, s.diff) == (None, None, None)
+    assert not s.comparison and (s.role, s.partner, s.diff, s.side) == (None, None, None, None)
 
 
 def test_layer_args_redraw_what_the_scene_shows():

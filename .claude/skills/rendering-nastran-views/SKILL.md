@@ -71,7 +71,9 @@ file, not full fuel.
 
 `masses bushes bushrotations beams loads spc rigid family group pid mid elementtype thickness nsm results random randomsweep parts check diff`
 (`random`/`randomsweep` need `--results MODES --random ASD`, see `docs/random-vibration.md`; `diff` needs
-`--against A`, and `nv.side_by_side(array=...)` puts A and B in two linked views, see `docs/diff.md`)
+`--against A`; after it every view in that render view draws from the diff, and
+`nv.side_by_side(array=...)` puts A and B in two linked views that draw every later view, see
+`docs/diff.md#side-by-side`; `nv.single()` ends the comparison)
 (`grow` and `path` are GUI views seeded by the selection macros). `family` and `group`
 need ICEM/TACS family comments (uCRM-9 has them; Linderholt does not). `results` needs
 `--results run.op2|run.h5` and optionally `--step N`. `bushes`/`bushrotations` need CBUSH cards (rotations: PBUSH K4–K6). An empty view
@@ -86,7 +88,9 @@ with `cannot read DECK: <error>` and writes no PNG.
   Views edit the view's scene: a coloring (pid, thickness, results, ...) replaces the coloring, but
   overlays (masses, bushes, beams, loads, spc, rigid) accumulate in one view, so use a fresh view
   per picture (`nv.white_view(size)`, as `render_model.render` does) or `nv.clear(view)` between
-  pictures (`docs/paraview.md#how-views-combine`). Read the pvpython quirks in
+  pictures (`docs/paraview.md#how-views-combine`). A view keeps its model whatever is selected, so
+  pass `reader=` to name the model (another one starts a new scene; a comparison view refuses a
+  third model until `nv.single(view)`). Read the pvpython quirks in
   docs/architecture.md#gotchas first (proxy-label constructor names, `block_names`, `timesteps`,
   `solid`, `nv.fetch`). The reader outputs the model tree, so use `nv.Model(reader)` (a gathered
   multiblock) or `nv.fetch` + `nastran_pv.tree.as_multiblock` instead of a bare `Fetch`, and

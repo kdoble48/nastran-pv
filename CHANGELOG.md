@@ -8,6 +8,16 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Added
 
+- Comparisons follow the scene (scene layers PR 2, rules R3 and R4): after *NPV Diff* every macro in
+  the view draws from the diff (colorings by their array, overlays by `DiffStatus` with A's removed
+  items of their kind in red), cut by both models' scope; the visibility macros write A's and B's
+  readers by ID, picks on A's removed items are A's, and the model a macro acts on follows the view.
+  *NPV Side by Side* draws every later macro in both views and is drawn again in place from either
+  view; the new *NPV Single* macro ends a comparison. The Nastran Diff compares again only when a
+  model's content changes, not on a scope change or a time step (uCRM-9 coarse: a scope change after
+  NPV Diff 2.1 s -> 0.9 s, NPV Masses 0.9 s -> 0.2 s). The mass, bush, load and SPC glyphs and beam
+  sections carry `DiffStatus`, and the diff's Removed block knows the grid of a removed mass or bush.
+  `tests/data/same_name/` holds a same-named pair (#PR).
 - Scene layers (#54): the *NPV Clear* macro, the one full reset of a view (it hides every layer and
   sets the deformation back to 0, deleting nothing), and the *Nastran Scope* filter, the overlays'
   copy of the model cut by the reader's scope (`selection.scope_masks`).
@@ -55,7 +65,7 @@ All notable changes to nastran-pv are listed here. The format follows
 
 - Views combine instead of redrawing (#54): a coloring (PID, Thickness, Results, ...) replaces the
   coloring and keeps the overlays, an overlay (Masses, Loads, SPC, ...) adds itself and a second
-  toolbar click removes it, and only NPV Clear (and Side by Side) resets the view. Overlays follow
+  toolbar click removes it, and only NPV Clear resets the view. Overlays follow
   the reader's scope: with a group, a Show Only list or a selection file, NPV Masses, Bushes, Rigid,
   SPC and Loads draw what hangs off the kept elements (through RBE2/RBE3/CBUSH chains), and EIDs the
   scope names win.
