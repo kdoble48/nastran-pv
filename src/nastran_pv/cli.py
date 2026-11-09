@@ -56,8 +56,8 @@ def progress_for(args) -> Progress:
     return args._progress
 
 
-DECK_ONLY = (("results", "--results"), ("random", "--random"), ("nsm_set", "--nsm-set"), ("k_ref", "--k-ref"),
-             ("no_nodal_arrays", "--no-nodal-arrays"))
+DECK_ONLY = (("results", "--results"), ("result_types", "--result-types"), ("random", "--random"),
+             ("nsm_set", "--nsm-set"), ("k_ref", "--k-ref"), ("no_nodal_arrays", "--no-nodal-arrays"))
 
 
 def deck_only_flags(args) -> list[str]:
@@ -99,13 +99,16 @@ def load_model(args, verbose=False):
     for flag in BLOCK_FLAGS:
         if getattr(args, f"no_{flag}", False):
             setattr(opts, flag, False)
+    types = result_types_given(args)
+    if types is not None and not getattr(args, "results", None):
+        raise SystemExit("nastran-pv: --result-types needs --results")
     mb = build_multiblock(deck, opts, progress=progress)
     results = None
     if getattr(args, "results", None):
         from .results import attach_op2
 
         with progress.stage(f"results {Path(args.results).name}"):
-            results = attach_op2(mb, deck, args.results, args.step)
+            results = attach_op2(mb, deck, args.results, args.step, types)
         if getattr(args, "random", None):
             from .randvib import random_response
 
@@ -120,6 +123,18 @@ def load_model(args, verbose=False):
         raise SystemExit("--random needs --results with normal modes (SOL 103)")
     progress.done()
     return mb, deck, results
+
+
+def result_types_given(args):
+    """The --result-types names (registry order), None when not given; unknown names exit."""
+    if getattr(args, "result_types", None) is None:
+        return None
+    from .result_types import parse
+
+    try:
+        return parse(args.result_types)
+    except ValueError as exc:
+        raise SystemExit(f"nastran-pv: --result-types: {exc}") from None
 
 
 def apply_field_options(mb, args) -> list[str]:
@@ -175,12 +190,16 @@ def apply_select_options(mb, args):
 
 def add_model_arguments(p, results=True):
     from .launch import add_random_arguments, nsm_set_id
+    from .result_types import REGISTRY, parse
 
     p.add_argument("input", help="run deck (.bdf/.dat with INCLUDEs), bulk-data file, or a .vtm/.vtkhdf "
                                  "written by nastran-pv")
     if results:
         p.add_argument("--results", "--op2", dest="results", help="OP2 or MSC/NX HDF5 (.h5) results to attach")
         p.add_argument("--step", type=int, default=0, help="result step (mode/subcase index) to attach")
+        p.add_argument("--result-types", nargs="+", metavar="TYPE",
+                       help=f"result types to attach, by name: {' '.join(t.name for t in REGISTRY)}, or all "
+                            f"(default: {' '.join(parse(None))})")
         add_random_arguments(p.add_argument_group("random vibration (from the --results modes)"))
     p.add_argument("--k-ref", type=float, default=None, help="bush stiffness reference for log scaling")
     p.add_argument("--nsm-set", type=nsm_set_id, default=None, metavar="ID",
@@ -311,7 +330,7 @@ def _load_other(path, args):
     """The other model of a diff (deck, .vtm or VTKHDF), built with the same block/NSM options.
     Options that do not change what a diff compares (results, display scaling, nodal arrays) are
     not passed on, so a deck can be compared with a converted reference."""
-    unused = ("results", "random", "step", "all_steps", "k_ref", "no_nodal_arrays")
+    unused = ("results", "result_types", "random", "step", "all_steps", "k_ref", "no_nodal_arrays")
     other = argparse.Namespace(**{k: v for k, v in vars(args).items() if k not in unused})
     other.input = path
     if Path(path).suffix.lower() in MODEL_SUFFIXES:

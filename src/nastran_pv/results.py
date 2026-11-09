@@ -6,24 +6,29 @@ mode) becomes one *step*. Steps are exposed to ParaView as time values
 modes) in the field data, so the VCR controls page through modes and
 ``Warp By Vector`` on ``Displacement`` animates them.
 
-For the selected step the mesh blocks receive
+What a step writes is declared by the result types of :mod:`nastran_pv.result_types`
+(``REGISTRY``). Today the mesh blocks receive
 
 * point data ``Displacement`` (T1-T3), ``Rotation`` (R1-R3),
   ``DisplacementMagnitude``, rotated from each grid's CD system into basic
-  when the deck is supplied;
+  when the deck is supplied (type ``Displacement``);
 * cell data ``VonMisesMax``: the largest von Mises value over all
   layers/nodes reported for the element in any stress table of that subcase
-  and time (only when stress output exists).
+  and time, only when stress output exists (type ``VonMisesMax``).
+
+The readers only yield a type's raw rows for a step (``_rows``); ``values`` joins, sorts and
+reduces them, and :func:`attach_step` rotates and writes them. ``select`` picks the types.
 """
 from __future__ import annotations
 
+import fnmatch
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
-from . import vtkutil
-from .assemble import MESH_BLOCKS, block_names, get_block
+from . import result_types, vtkutil
+from .assemble import block_names, get_block
 from .sections import sweep
 
 
@@ -35,6 +40,7 @@ class Step:
     itime: int
     frequency: float = float("nan")
     time: float = float("nan")  # OP2 time/load/mode value, used to pair stress tables
+    table: str = ""  # the step-defining table it comes from (OP2 result name or HDF5 dataset)
 
 
 def _mode_frequency(eigns, cycles, i) -> float:
@@ -48,13 +54,54 @@ def _mode_frequency(eigns, cycles, i) -> float:
 
 
 class _Results:
-    """What the OP2 and HDF5 readers share; each sets ``steps`` and has ``step_data``."""
+    """What the OP2 and HDF5 readers share. Each sets ``steps``, ``skipped``, ``registry`` (the
+    result types it reads) and ``available`` (those the file has), and yields a type's raw rows
+    for a step from ``_rows``."""
 
     steps: list
+    registry: tuple = result_types.REGISTRY
+    available: tuple = ()
+    selected: tuple | None = None  # type names to attach; None: the registry's defaults
+    named: tuple = ()  # the types selected by name (not by "all"), which the file should have
 
     @property
     def times(self) -> list[float]:
         return [float(i) for i in range(len(self.steps))]
+
+    def select(self, names=None):
+        """Attach only the types ``names`` from now on (``result_types.parse``: a list or a
+        comma-separated string, ``all``); None restores the defaults. Returns ``self``."""
+        self.selected = None if names is None else result_types.parse(names, self.registry)
+        self.named = () if names is None or result_types.says_all(names) else self.selected
+        return self
+
+    def attached(self) -> list:
+        """The result types the next :meth:`attach` writes: selected and in the file."""
+        want = result_types.parse(None, self.registry) if self.selected is None else self.selected
+        return [t for t in self.registry if t.name in want and t.name in self.available]
+
+    def missing(self) -> list[str]:
+        """Types selected by name that the file does not have."""
+        return [n for n in self.named if n not in self.available]
+
+    def values(self, rtype, step):
+        """(sorted ids, (n, k) float values) of ``rtype`` at ``step``, in the systems the file
+        writes them in, or None when the file has none for the step. Rows from several tables are
+        joined; ``rtype.reduce == "max"`` keeps each id's largest value per column."""
+        rows = list(self._rows(rtype, step))
+        if not rows:
+            return None
+        ids = [np.asarray(i, dtype=np.int64) for i, _ in rows]
+        vals = [np.asarray(v, dtype=float).reshape(len(v), -1) for _, v in rows]
+        if rtype.reduce == "max":
+            return max_per_eid(ids, vals)
+        ids, vals = np.concatenate(ids), np.concatenate(vals)
+        order = np.argsort(ids)
+        return ids[order], vals[order]
+
+    def _rows(self, rtype, step):
+        """(ids, values) blocks of ``rtype`` at ``step``; values (n,) or (n, k)."""
+        raise NotImplementedError
 
     def attach(self, mb, step_index: int = 0, deck=None) -> None:
         """Attach one step. With ``deck``, vectors are rotated from each grid's
@@ -63,44 +110,116 @@ class _Results:
 
 
 def max_per_eid(eids: list, vals: list) -> tuple[np.ndarray, np.ndarray]:
-    """(sorted unique eids, the largest value of each) over lists of eid/value arrays."""
+    """(sorted unique eids, the largest value of each) over lists of eid/value arrays; values
+    may be (n,) or (n, k) (the maximum of each column)."""
     if not eids:
         return np.zeros(0, dtype=np.int64), np.zeros(0)
     uniq, inv = np.unique(np.concatenate(eids), return_inverse=True)
-    vmax = np.full(len(uniq), -np.inf)
-    np.maximum.at(vmax, inv, np.concatenate(vals))
+    values = np.concatenate(vals)
+    vmax = np.full((len(uniq),) + values.shape[1:], -np.inf)
+    np.maximum.at(vmax, inv.reshape(-1), values)
     return uniq, vmax
 
 
+# ------------------------------------------------------------------ OP2
+def _get_result(op2, name):
+    """``op2.get_result(name)``, or the attribute path on objects without it; None if absent."""
+    try:
+        get = getattr(op2, "get_result", None)
+        if callable(get):
+            return get(name)
+        obj = op2
+        for part in name.split("."):
+            obj = getattr(obj, part)
+        return obj
+    except Exception:  # a table name this pyNastran version does not have
+        return None
+
+
+def _op2_results(op2, patterns):
+    """(name, {key: table}) of each pyNastran result the names or fnmatch patterns give, in order."""
+    seen = []
+    for pat in patterns:
+        names = [t for t in op2.get_table_types() if fnmatch.fnmatchcase(t, pat)] \
+            if any(c in pat for c in "*?[") else [pat]
+        for name in names:
+            if name in seen:
+                continue
+            seen.append(name)
+            result = _get_result(op2, name)
+            if isinstance(result, dict):
+                yield name, result
+
+
+def _header_columns(obj, columns):
+    """Indices of ``columns`` in the table's headers, or None when one is missing."""
+    try:
+        get = getattr(obj, "get_headers", None)
+        headers = list(get() if callable(get) else getattr(obj, "headers", []))
+    except Exception:  # some OES classes do not implement headers
+        return None
+    if not hasattr(obj, "data") or any(c not in headers for c in columns):
+        return None
+    return [headers.index(c) for c in columns]
+
+
+def _ids(obj, rtype):
+    """Grid ids (point types) or element ids (cell types) of a pyNastran table's rows."""
+    if rtype.location == "point":
+        ng = getattr(obj, "node_gridtype", None)
+        return ng[:, 0] if ng is not None and np.ndim(ng) == 2 else None
+    return _element_ids(obj)
+
+
 class Op2Results(_Results):
-    def __init__(self, op2, path=None):
+    def __init__(self, op2, path=None, registry=None):
         """Wrap an already-read pyNastran ``OP2`` object (see :meth:`read`)."""
         self.path = Path(path) if path else None
         self.op2 = op2
+        self.registry = result_types.REGISTRY if registry is None else tuple(registry)
         self.skipped: list[str] = []
+        self.tables = {t.name: self._find_tables(t) for t in self.registry}
         self.steps = self._collect_steps()
-        self.stress_tables = self._collect_stress()
+        self.available = tuple(t.name for t in self.registry if self.tables[t.name])
 
     @classmethod
-    def read(cls, path) -> "Op2Results":
+    def read(cls, path, registry=None) -> "Op2Results":
         from cpylog import SimpleLogger
         from pyNastran.op2.op2 import read_op2
 
         op2 = read_op2(str(path), build_dataframe=False, debug=None, log=SimpleLogger(level="error"))
-        return cls(op2, path)
+        return cls(op2, path, registry)
 
     # ------------------------------------------------------------ discovery
-    def _tables(self, kind):
-        return self.op2.eigenvectors if kind == "eigenvector" else self.op2.displacements
+    def _find_tables(self, rtype) -> list:
+        """(result name, subcase key, table, column indices or None) of every usable table."""
+        found = []
+        for name, result in _op2_results(self.op2, rtype.op2.tables):
+            for key, obj in result.items():
+                if getattr(obj, "is_complex", False):
+                    if rtype.steps:
+                        sc = int(key) if np.isscalar(key) else key[0]
+                        kind = result_types.STEP_KINDS.get(name, name)
+                        self.skipped.append(f"{kind} subcase {sc}: complex results are not supported")
+                    continue
+                if not rtype.steps and _ids(obj, rtype) is None:
+                    continue
+                cols = None
+                if rtype.op2.columns:
+                    cols = _header_columns(obj, rtype.op2.columns)
+                    if cols is None:
+                        continue
+                found.append((name, key, obj, cols))
+        return found
 
     def _collect_steps(self) -> list[Step]:
         steps = []
-        for kind in ("displacement", "eigenvector"):
-            for key, res in self._tables(kind).items():
+        for rtype in self.registry:
+            if not rtype.steps:
+                continue
+            for name, key, res, _ in self.tables[rtype.name]:
+                kind = result_types.STEP_KINDS.get(name, "displacement")
                 sc = int(key) if np.isscalar(key) else key[0]
-                if getattr(res, "is_complex", False):
-                    self.skipped.append(f"{kind} subcase {sc}: complex results are not supported")
-                    continue
                 ntimes = res.data.shape[0]
                 times = np.asarray(getattr(res, "_times", []), dtype=float)
                 cycles = getattr(res, "mode_cycles", None)
@@ -112,89 +231,104 @@ class Op2Results(_Results):
                         freq = _mode_frequency(eigns, cycles, it)
                         mode = int(modes[it]) if len(modes) > it else it + 1
                         label = f"Subcase {sc} mode {mode} ({freq:.6g} Hz)"
-                        steps.append(Step(label, kind, key, it, freq, t))
+                        steps.append(Step(label, kind, key, it, freq, t, name))
                     else:
                         label = f"Subcase {sc}" + (f" step {t:g}" if ntimes > 1 else "")
-                        steps.append(Step(label, kind, key, it, time=t))
+                        steps.append(Step(label, kind, key, it, time=t, table=name))
         return steps
 
-    def _collect_stress(self):
-        out = []
-        for table in self.op2.get_table_types():
-            if not table.startswith("stress."):
-                continue
-            result = self.op2.get_result(table)
-            if not isinstance(result, dict):
-                continue
-            for key, obj in result.items():
-                if getattr(obj, "is_complex", False) or _element_ids(obj) is None:
-                    continue
-                try:
-                    get = getattr(obj, "get_headers", None)
-                    headers = list(get() if callable(get) else getattr(obj, "headers", []))
-                except Exception:  # some OES classes do not implement headers
-                    continue
-                if "von_mises" in headers and hasattr(obj, "data"):
-                    out.append((table, key, obj, headers.index("von_mises")))
-        return out
-
-    # ------------------------------------------------------------ attaching
-    def element_von_mises(self, step: Step) -> tuple[np.ndarray, np.ndarray]:
-        """(sorted eids, max von Mises) over all stress tables of the step."""
-        eids, vals = [], []
-        for _, key, obj, col in self.stress_tables:
+    # ------------------------------------------------------------ values
+    def _rows(self, rtype, step):
+        """A step-defining type reads the step's own table at its index; the others every table
+        of the step's subcase, at the row whose time value matches the step's."""
+        for name, key, obj, cols in self.tables[rtype.name]:
             if key != step.key:
                 continue
-            itime = _time_index(obj, step)
-            if itime is None:
-                continue
-            eids.append(np.asarray(_element_ids(obj), dtype=np.int64))
-            vals.append(np.asarray(obj.data[itime, :, col], dtype=float))
-        return max_per_eid(eids, vals)
-
-    def step_data(self, step: Step):
-        """(sorted nids, (n, 6) T1-T3/R1-R3 in the output systems, vm eids, vm values)."""
-        res = self._tables(step.kind)[step.key]
-        nids = np.asarray(res.node_gridtype[:, 0], dtype=np.int64)
-        order = np.argsort(nids)
-        data = np.array(res.data[step.itime], dtype=float)[order]
-        return (nids[order], data, *self.element_von_mises(step))
+            if rtype.steps:
+                if name != step.table:
+                    continue
+                itime = step.itime
+            else:
+                itime = _time_index(obj, step)
+                if itime is None:
+                    continue
+            data = obj.data[itime]
+            yield _ids(obj, rtype), (data if cols is None else data[:, cols])
 
 
-def attach_step(results, mb, step_index: int, deck=None) -> None:
-    """Shared by the OP2 and HDF5 readers: write one step's arrays onto ``mb``."""
-    if not results.steps:
-        return
-    step = results.steps[int(np.clip(step_index, 0, len(results.steps) - 1))]
-    nids, data, vm_eids, vm = results.step_data(step)
-    if deck is not None:
-        data = to_basic(deck, nids, data)
+# ------------------------------------------------------------------ attaching
+def _columns(columns):
+    """A slice for a contiguous run of column indices (a view, as numpy slicing gives), else the list."""
+    c = list(columns)
+    return slice(c[0], c[-1] + 1) if c == list(range(c[0], c[-1] + 1)) else c
 
-    names = block_names(mb)
-    for name in MESH_BLOCKS + ("Masses", "Rigid", "Constraints"):
+
+def _write(mb, names, targets, rtype, got) -> None:
+    """Write ``rtype``'s arrays from ``got`` (sorted ids, values) on its blocks, and drop them
+    from the other ``targets`` and everywhere when ``got`` is None. A step-defining type exists
+    at every step, so its arrays are replaced in place; the others are removed and added again,
+    so they come after it."""
+    write_blocks = rtype.blocks if got is not None else ()
+    for name in targets:
         if name not in names:
             continue
         block = get_block(mb, name)
-        nid_arr = block.GetPointData().GetArray("NID")
-        if nid_arr is None:
+        attrs = rtype.attributes(block)
+        write = name in write_blocks
+        if not write or not rtype.steps:
+            for spec in rtype.arrays:
+                attrs.RemoveArray(spec.name)
+        ids = attrs.GetArray(rtype.id_array)
+        if not write or ids is None:
             continue
-        idx = vtkutil.match_ids(nids, vtkutil.to_numpy(nid_arr))
-        vals = np.zeros((len(idx), 6))
+        idx = vtkutil.match_ids(got[0], vtkutil.to_numpy(ids))
         ok = idx >= 0
-        vals[ok] = data[idx[ok], :6]
-        pd = block.GetPointData()
-        vtkutil.add_array(pd, "Displacement", vals[:, :3])
-        vtkutil.add_array(pd, "Rotation", vals[:, 3:6])
-        vtkutil.add_array(pd, "DisplacementMagnitude", np.linalg.norm(vals[:, :3], axis=1))
-        eid_arr = block.GetCellData().GetArray("EID")
-        block.GetCellData().RemoveArray("VonMisesMax")
-        if name in MESH_BLOCKS and len(vm_eids) and eid_arr is not None:
-            j = vtkutil.match_ids(vm_eids, vtkutil.to_numpy(eid_arr))
-            cell_vm = np.where(j >= 0, vm[np.maximum(j, 0)], np.nan)
-            vtkutil.add_array(block.GetCellData(), "VonMisesMax", cell_vm, skip_all_nan=True)
+        vals = np.full((len(idx), got[1].shape[1]), rtype.fill)
+        vals[ok] = got[1][idx[ok]]
+        for spec in rtype.arrays:
+            v = vals[:, _columns(spec.columns)]
+            if spec.magnitude:
+                v = np.linalg.norm(v, axis=1)
+            elif v.shape[1] == 1:
+                v = v[:, 0]
+            vtkutil.add_array(attrs, spec.name, v, skip_all_nan=bool(np.isnan(rtype.fill)))
+
+
+def remove_result_arrays(mb, registry=result_types.REGISTRY) -> None:
+    """Drop every array the registry's types write from their blocks of ``mb`` (a random response
+    replaces them)."""
+    names = block_names(mb)
+    for rtype in registry:
+        for name in rtype.blocks:
+            if name in names:
+                attrs = rtype.attributes(get_block(mb, name))
+                for spec in rtype.arrays:
+                    attrs.RemoveArray(spec.name)
+
+
+def attach_step(results, mb, step_index: int, deck=None) -> None:
+    """Shared by the OP2 and HDF5 readers: write one step's arrays onto ``mb``, one result type of
+    ``results.registry`` after the other; the types not attached (unselected, or none in the file
+    for this step) leave no array behind."""
+    if not results.steps:
+        return
+    step = results.steps[int(np.clip(step_index, 0, len(results.steps) - 1))]
+    names = block_names(mb)
+    wanted = {t.name for t in results.attached()}
+    targets = list(dict.fromkeys(b for t in results.registry for b in t.blocks))
+    for rtype in results.registry:
+        got = results.values(rtype, step) if rtype.name in wanted else None
+        if got is not None and rtype.frame == "grid_cd" and deck is not None:
+            got = (got[0], to_basic(deck, got[0], got[1]))
+        _write(mb, names, targets, rtype, got)
 
     if "BeamSections" in names and "Lines" in names:
-        sweep.attach_displacement(get_block(mb, "BeamSections"), get_block(mb, "Lines"))
+        sections, lines = get_block(mb, "BeamSections"), get_block(mb, "Lines")
+        if lines.GetPointData().GetArray("Displacement") is None:  # Displacement not attached
+            for arr_name in ("Displacement", "DisplacementMagnitude"):
+                sections.GetPointData().RemoveArray(arr_name)
+        else:
+            sweep.attach_displacement(sections, lines)
 
     fd = mb.GetFieldData()
     for arr_name in ("ResultLabel", "Frequency", "ResultStep"):
@@ -254,11 +388,16 @@ def to_basic(deck, nids: np.ndarray, data: np.ndarray) -> np.ndarray:
     return data
 
 
-def attach_op2(mb, deck, op2_path, step_index: int = 0):
-    """Read an OP2 or HDF5 results file and attach one step; returns the results object."""
+def attach_op2(mb, deck, op2_path, step_index: int = 0, types=None):
+    """Read an OP2 or HDF5 results file and attach one step; returns the results object.
+    ``types``: the result types to attach (``results.select``); None attaches the defaults."""
     results = open_results(op2_path)
+    if types is not None:
+        results.select(types)
     for msg in results.skipped:
         deck.warn(msg)
+    for name in results.missing():
+        deck.warn(f"{op2_path}: no {name} results to attach")
     if not results.steps:
         deck.warn(f"{op2_path}: no displacement/eigenvector output found")
     results.attach(mb, step_index, deck)
