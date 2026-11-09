@@ -256,7 +256,8 @@ Every gotcha found so far, by area. The few that bite on any change are also in 
   - Synthesizing tables (`tests/op2_fixture.py`): most force classes have no `add_static_case`,
     `_add_case` sets the wrong `num_wide` for rods, bars, beams and solids (`write_op2` then writes
     an unreadable table), and `RealBeamStressArray.add_static_case` mangles its rows; the fixture
-    builds the data codes itself.
+    builds the data codes itself. Ids must be int32: the writer packs int64 ids (numpy's default
+    int on Linux and macOS, not on Windows with numpy 1.x) as two words.
   - Family comments attach to the *first element* of each group.
   - OP2 subcase keys can be numpy ints.
   - PMASS is looked up in `model.properties_mass` (CMASS1 refs may be missing after a partial xref).
