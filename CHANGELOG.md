@@ -52,7 +52,7 @@ All notable changes to nastran-pv are listed here. The format follows
   `install_deps.py` vendors into a per-user folder, one per ParaView Python (so ParaView 5.13 and
   6.0 both work from one install), and `NASTRAN_PV_VENDOR_DIR` overrides it; `setup` prints the
   plugin path, and `setup --dry-run` works without ParaView. CI builds the wheel and checks it in
-  a fresh venv (#PR).
+  a fresh venv (#58).
 
 ### Changed
 
@@ -72,7 +72,7 @@ All notable changes to nastran-pv are listed here. The format follows
 - Gallery scene URLs are tagged with the build version (#3).
 - `vtk` is a dependency (the `vtk` extra still works), since every `nastran-pv` command imports it;
   `import nastran_pv` no longer imports pyNastran (`Deck` and `load_deck` load on first use); a
-  `NASTRAN_PV_PARAVIEW_DIR` without the plugin is an error (#PR).
+  `NASTRAN_PV_PARAVIEW_DIR` without the plugin is an error (#58).
 
 ### Fixed
 
