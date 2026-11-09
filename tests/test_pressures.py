@@ -241,3 +241,22 @@ def test_nodal_arrows_unchanged_by_the_new_kinds(mb):
     assert arr(out, "ArrowCount", "field")[0] == 1 and set(arr(out, "LoadKind")) == {0}
     names = out.GetFieldData().GetAbstractArray("LoadKindNames")
     assert [names.GetValue(i) for i in range(names.GetNumberOfValues())] == ["force", "moment", "pressure", "gravity"]
+
+
+@pytest.mark.parametrize("sid", [10, 20, 30, 40, 100])
+def test_set_resultants_match_pynastran(mb, sid):
+    """pyNastran's own load summation (``sum_forces_moments``, PLOAD* and FORCE, no GRAV) agrees with
+    the drawn resultant: the Pressures block's plus the Loads block's ResultantForce."""
+    from pyNastran.bdf.bdf import BDF
+    from pyNastran.bdf.mesh_utils.loads import sum_forces_moments
+
+    model = BDF(debug=None)
+    model.read_bdf(str(DATA / "pressures.bdf"), xref=True)
+    want, _ = sum_forces_moments(model, np.zeros(3), sid, include_grav=False)
+    name = f"{'LOAD' if sid == 100 else 'SID'}_{sid}"
+    got = np.zeros(3)
+    for block in ("Pressures", "Loads"):
+        ds = get_block(get_block(mb, block), name)
+        if ds is not None:
+            got += arr(ds, "ResultantForce", "field").reshape(-1)
+    np.testing.assert_allclose(got, want, atol=1e-9)
