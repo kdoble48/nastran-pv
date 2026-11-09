@@ -77,41 +77,66 @@ jobs:
       - name: Diagnostics (temporary) - write the scripts
         if: matrix.paraview == '6.0.1'
         run: |
-          cat > ~/parity_only.py <<'EOF'
-          import os, subprocess, sys
+          cat > ~/exp.py <<'EOF'
+          # beams.bdf only: write beams.vtkhdf (MODE: inproc, pvpython, venv, none), then run the first
+          # parity filters on the deck reader and, unless MODE is none, on ParaView's reader of the file
+          import os, subprocess, sys, tempfile
           sys.path.insert(0, os.path.abspath("tests"))
           import pv_smoke
           from paraview import simple as pv
           import nastran_views as nv
+          mode = sys.argv[1]
           pv_smoke.rm.load_reader(pv_smoke.DECK)  # loads the plugin: nastran_pv and the vendored pyNastran
-          if os.environ.get("OUT_OF_PROCESS"):
-              def convert(args):
-                  env = dict(os.environ, PYTHONPATH=os.path.abspath("src"))
-                  return subprocess.check_call([os.environ["NASTRAN_PV_PYTHON"], "-m", "nastran_pv", *args], env=env)
-              pv_smoke.convert = convert
-          pv_smoke.parity_checks(pv, nv)
-          print("parity only: done")
+          deck = os.path.abspath("tests/data/beams.bdf")
+          path = os.path.join(tempfile.mkdtemp(), "beams.vtkhdf")
+          args = ["convert", deck, "-o", path, "-q"]
+          vendor = os.environ["NASTRAN_PV_SITE_PACKAGES"]
+          code = ("import sys; sys.path[:0] = ['src']; sys.path.append(%r); "
+                  "from nastran_pv.cli import main; main(%r)" % (vendor, args))
+          if mode == "inproc":
+              from nastran_pv.cli import main
+              main(args)
+          elif mode == "pvpython":
+              subprocess.check_call([os.environ["PVPYTHON"], "-c", code])
+          elif mode == "venv":
+              subprocess.check_call([os.environ["NASTRAN_PV_PYTHON"], "-m", "nastran_pv", *args],
+                                    env=dict(os.environ, PYTHONPATH=os.path.abspath("src")))
+          r = nv.load_reader(deck)
+          inputs = [r] + ([nv.load_reader(path)] if mode != "none" else [])
+          for rnd in range(4):
+              for ctor, base, ports in pv_smoke.PARITY_FILTERS[:7]:
+                  made = [getattr(pv, ctor)(Input=i, **base) for i in inputs]
+                  for m in made:
+                      m.UpdatePipeline()
+                  for m in made:
+                      pv.Delete(m)
+                  print("round", rnd, ctor, flush=True)
+          print("EXP OK", mode, flush=True)
           EOF
           cat > ~/pvrun.sh <<'EOF'
           pv=$(ls -d ~/ParaView-*/)
           export LD_LIBRARY_PATH="${pv}lib/mesa${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           export NASTRAN_PV_SITE_PACKAGES="$(sed -n 's/^vendor folder: //p' ~/setup.log)" NASTRAN_PV_PYTHON=~/venv/bin/python
-          export VTK_DEFAULT_OPENGL_WINDOW=vtkOSOpenGLRenderWindow PYTHONFAULTHANDLER=1
+          export VTK_DEFAULT_OPENGL_WINDOW=vtkOSOpenGLRenderWindow PYTHONFAULTHANDLER=1 PVPYTHON="${pv}bin/pvpython"
           unset GITHUB_ACTOR
-          "${pv}bin/pvpython" "$@" 2>&1 | grep -E "^(ok|FAIL|parity)|Fatal|File \"|Segmentation|Abort|malloc|free\(|corrupt" | tail -40
+          "${pv}bin/pvpython" "$@" 2>&1 | grep -E "^(round|EXP)|Fatal|File \"|Segmentation|Abort|Error|error" | tail -25
           EOF
-      - name: "D1 (temporary): parity only, convert in process"
+      - name: "E1 (temporary): write in process"
         if: matrix.paraview == '6.0.1'
         continue-on-error: true
-        run: bash ~/pvrun.sh ~/parity_only.py
-      - name: "D2 (temporary): parity only, convert out of process"
+        run: bash ~/pvrun.sh ~/exp.py inproc
+      - name: "E2 (temporary): write in another pvpython"
         if: matrix.paraview == '6.0.1'
         continue-on-error: true
-        run: OUT_OF_PROCESS=1 bash ~/pvrun.sh ~/parity_only.py
-      - name: "D3 (temporary): pv_smoke with glibc's malloc checks"
+        run: bash ~/pvrun.sh ~/exp.py pvpython
+      - name: "E3 (temporary): write with the venv"
         if: matrix.paraview == '6.0.1'
         continue-on-error: true
-        run: LD_PRELOAD=/lib/x86_64-linux-gnu/libc_malloc_debug.so.0 MALLOC_CHECK_=3 bash ~/pvrun.sh tests/pv_smoke.py
+        run: bash ~/pvrun.sh ~/exp.py venv
+      - name: "E4 (temporary): deck reader only"
+        if: matrix.paraview == '6.0.1'
+        continue-on-error: true
+        run: bash ~/pvrun.sh ~/exp.py none
       - name: pv_smoke, headless
         env:
           VTK_DEFAULT_OPENGL_WINDOW: vtkOSOpenGLRenderWindow   # 6.0: OSMesa (the 5.13 osmesa build has only that)
