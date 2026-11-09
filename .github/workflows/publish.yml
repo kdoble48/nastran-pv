@@ -5,19 +5,15 @@ name: publish
 #   - a tag vX.Y.ZrcN -> TestPyPI, through the `testpypi` environment;
 #   - a tag vX.Y.Z    -> PyPI, through the `pypi` environment;
 #   - a manual run    -> TestPyPI only (the branch's version; TestPyPI takes each version once).
-# The tag must be v + the version in pyproject.toml, or nothing is published (tests/check_dists.py).
-# Pull requests that touch the packaging run `build` alone, so CI proves the release build; they
-# never reach a publish job. Release steps: docs/versioning.md#releasing.
+# The tag must be v + nastran_pv.__version__, or nothing is published (tests/check_dists.py).
+# Every pull request builds and checks the dists in tests.yml's wheel job; only one that changes
+# this workflow or check_dists.py also runs `build` here (never a publish job), so a change to the
+# release path is proven before a tag. Release steps: docs/versioning.md#releasing.
 on:
   push:
     tags: ["v*"]
   pull_request:
     paths:
-      - "pyproject.toml"
-      - "setup.py"
-      - "MANIFEST.in"
-      - "README.md"
-      - "CHANGELOG.md"
       - "tests/check_dists.py"
       - ".github/workflows/publish.yml"
   workflow_dispatch:
@@ -59,13 +55,15 @@ jobs:
         run: >-
           python tests/check_dists.py dist/*
           --event "$GITHUB_EVENT_NAME" --ref "$GITHUB_REF" --github-output "$GITHUB_OUTPUT"
-      - name: Install the wheel into a fresh venv and run the CLI
+      - name: Install the wheel into a fresh venv; the CLI runs and finds the plugin in it
         run: |
           python -m venv "$RUNNER_TEMP/venv"
           "$RUNNER_TEMP/venv/bin/python" -m pip install dist/*.whl
           cd "$RUNNER_TEMP"   # outside the checkout
+          unset NASTRAN_PV_PARAVIEW_DIR NASTRAN_PV_VENDOR_DIR
           "$RUNNER_TEMP/venv/bin/nastran-pv" --help
-          "$RUNNER_TEMP/venv/bin/nastran-pv" setup --dry-run
+          "$RUNNER_TEMP/venv/bin/nastran-pv" setup --dry-run | tee setup.txt
+          grep -E "^plugin: .*site-packages.nastran_pv.paraview.nastran_bdf_reader\.py" setup.txt
       - uses: actions/upload-artifact@v7
         with:
           name: dists

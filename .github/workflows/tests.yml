@@ -23,8 +23,8 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
         include:
-          # pyNastran 1.4.1 needs numpy < 2, which has no wheels past Python 3.12: these use main,
-          # installed first so that `pip install -e .` keeps it
+          # pyNastran 1.4.1 needs numpy < 2, which has no wheels past Python 3.12: these use main, at
+          # the commit pinned in .github/pynastran-main.txt, installed first so `pip install -e .` keeps it
           - python: "3.13"
             pynastran: main
           - python: "3.14"
@@ -35,22 +35,23 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
           cache: pip
-          cache-dependency-path: pyproject.toml
-      - name: pyNastran main
+          cache-dependency-path: |
+            pyproject.toml
+            .github/pynastran-main.txt
+      - name: pyNastran main (pinned)
         if: matrix.pynastran == 'main'
-        run: python -m pip install "pyNastran @ git+https://github.com/SteveDoyle2/pyNastran.git@main"
+        run: python -m pip install -r .github/pynastran-main.txt
       - name: Install
         run: python -m pip install -e ".[test]"
       - name: Lint
         shell: bash
         run: python -m pyflakes src paraview/*.py tests
       - name: Test
-        shell: bash
-        # pyNastran main runs its developer self-checks when GITHUB_ACTOR is set (pyNastran.IS_CI), and
-        # one of them (_check_result_slice) fails on the synthetic OP2; a user's install never sees it
+        # GITHUB_ACTOR is set, so pyNastran main runs its own self-checks (pyNastran.IS_CI) on every
+        # OP2 the tests read, as it does in a user's GitHub Actions
         run: |
           python -c "import pyNastran, numpy, vtk; print('pyNastran', pyNastran.__version__, 'numpy', numpy.__version__, 'vtk', vtk.vtkVersion.GetVTKVersion())"
-          env -u GITHUB_ACTOR python -m pytest -q -ra
+          python -m pytest -q -ra
 
   wheel:
     # the wheel alone (no clone, no NASTRAN_PV_PARAVIEW_DIR) must carry and find the ParaView plugin
@@ -75,13 +76,14 @@ jobs:
           mkdir -p paraview/_vendor/scipy paraview/__pycache__ src/nastran_pv/__pycache__
           touch paraview/_vendor/scipy/__init__.py paraview/__pycache__/nastran_views.cpython-312.pyc \
                 src/nastran_pv/__pycache__/cli.cpython-312.pyc
-          python -m pip install build
+          # readme-renderer[md] renders the Markdown README as PyPI does (plain twine skips it)
+          python -m pip install build twine "readme-renderer[md]"
           python -m build --outdir dist
           python -m build --wheel --outdir dist-tree
+      - name: twine check --strict
+        run: python -m twine check --strict dist/* dist-tree/*
       - name: The wheels carry the plugin, the sdist what MANIFEST.in promises, and nothing generated
-        run: |
-          python -m zipfile -l dist/*.whl | grep nastran_pv/paraview/
-          python tests/check_dists.py dist/* dist-tree/*.whl
+        run: python tests/check_dists.py dist/* dist-tree/*.whl
       - name: Install it into a fresh venv and find the plugin there
         run: |
           python -m venv "$RUNNER_TEMP/venv"

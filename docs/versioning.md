@@ -38,8 +38,9 @@ version when that is cheap, and the CHANGELOG says so.
 
 - Every pull request that changes behavior adds a line to the *Unreleased* section of
   `CHANGELOG.md`, under *Added*, *Changed*, *Fixed* or *Removed*, ending with the PR number.
-- A release renames *Unreleased* to the new version and date, and sets the same version in
-  `pyproject.toml` and `src/nastran_pv/__init__.py` ([Releasing](#releasing)).
+- A release renames *Unreleased* to the new version and date, and sets that version as
+  `__version__` in `src/nastran_pv/__init__.py`, the one place it is written (`pyproject.toml`
+  reads it from there). See [Releasing](#releasing).
 
 ## Releasing
 
@@ -54,17 +55,27 @@ anywhere. Each release is tried as a release candidate on TestPyPI first.
 | *Run workflow* on the Actions tab | TestPyPI only, the branch's version | `testpypi` |
 
 Its build job builds the sdist and the wheel once, runs `twine check --strict` and
-`tests/check_dists.py`, and installs the wheel into a fresh venv to run the CLI; the publish job
-uploads those same files. The tag must be `v` followed by the version in `pyproject.toml`, or
-nothing is published, so the release candidate and the release each have their own version
-commit. TestPyPI and PyPI take each version only once: a fix after `rc1` becomes `rc2`.
+`tests/check_dists.py`, installs the wheel into a fresh venv, and checks that the CLI finds the
+plugin there; the publish job uploads those same files. The tag must be `v` followed by
+`nastran_pv.__version__`, or nothing is published, so the release candidate and the release each
+have their own version commit. TestPyPI and PyPI take each version only once: a fix after `rc1`
+becomes `rc2`.
+
+Before the first release, and before its release pull request merges, register the publishers.
+That pull request makes `pip install nastran-pv` the documented install, and the docs site
+deploys on merge. Registering first also claims the name.
+
+- On PyPI and on TestPyPI, add a *pending publisher* (account settings, *Publishing*) for the
+  project `nastran-pv`: owner `kdoble48`, repository `nastran-pv`, workflow `publish.yml`, and
+  environment `pypi` on PyPI or `testpypi` on TestPyPI.
+- On GitHub, create the two environments under *Settings > Environments*. Give `pypi` a required
+  reviewer and limit it to tags `v*`, so that a release waits for an approval.
 
 For a release `X.Y.Z`:
 
-1. A pull request sets the version to `X.Y.Zrc1` in `pyproject.toml` and
-   `src/nastran_pv/__init__.py`. In `CHANGELOG.md` it renames *Unreleased* to
-   `[X.Y.Z] - YYYY-MM-DD`, adds an empty *Unreleased* above it, and updates the compare links at
-   the bottom. Merge it.
+1. A pull request sets `__version__ = "X.Y.Zrc1"` in `src/nastran_pv/__init__.py`. In
+   `CHANGELOG.md` it renames *Unreleased* to `[X.Y.Z] - YYYY-MM-DD`, adds an empty *Unreleased*
+   above it, and updates the compare links at the bottom. Merge it.
 2. Tag the merge commit. The workflow publishes it to TestPyPI:
 
    ```bash
@@ -83,18 +94,10 @@ For a release `X.Y.Z`:
    nastran-pv view <clone>/tests/data/tiny_run.bdf --view masses
    ```
 
-4. A pull request sets the version to `X.Y.Z` in both files and the date in the CHANGELOG
-   heading. Merge it.
+4. A pull request sets `__version__ = "X.Y.Z"` and the date in the CHANGELOG heading. Merge it.
 5. Tag the merge commit. The workflow publishes it to PyPI:
 
    ```bash
    git switch main && git pull --ff-only
    git tag vX.Y.Z && git push origin vX.Y.Z
    ```
-
-The first release also needs a one-time setup. On PyPI and on TestPyPI, add a trusted
-publisher for the project `nastran-pv`: owner `kdoble48`, repository `nastran-pv`, workflow
-`publish.yml`, and environment `pypi` on PyPI or `testpypi` on TestPyPI. Before the project
-exists, that is a *pending publisher* (account settings, *Publishing*). On GitHub, create the two
-environments under *Settings > Environments*. Give `pypi` a required reviewer and limit it to
-tags `v*`, so that a release waits for an approval.

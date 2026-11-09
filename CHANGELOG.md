@@ -121,7 +121,7 @@ All notable changes to nastran-pv are listed here. The format follows
   and the wheel once and publishes them with trusted publishing, a `vX.Y.ZrcN` tag to TestPyPI and
   a `vX.Y.Z` tag to PyPI ([Releasing](docs/versioning.md#releasing)). The package metadata gains
   classifiers, project URLs and keywords, and test CI also runs Python 3.13 and 3.14, with
-  pyNastran `main` (#69).
+  pyNastran `main` at a pinned commit and pyNastran's own self-checks on (#69).
 
 ### Changed
 
@@ -160,6 +160,7 @@ All notable changes to nastran-pv are listed here. The format follows
   to the new [Architecture](docs/architecture.md) page (#53).
 - The sdist carries `CHANGELOG.md`, and no longer the `tests/test*.py` files, which could not run
   without `tests/data`; `license` is an SPDX expression (built by setuptools 77 or newer); the
+  version is written once, as `nastran_pv.__version__`, which `pyproject.toml` reads; the
   README's links are absolute, so they work on PyPI (#69).
 
 ### Fixed
