@@ -68,8 +68,8 @@ the progress off, and `-v`/`--verbose` also echoes pyNastran's warnings as they 
 ParaView, the same stages and card counts drive the reader's progress bar.
 
 `convert` ends with the card report (every card no block draws, one line per card type and
-reason; see [Cards not drawn](model.md#cards-not-drawn)) and the deck's first ten warnings. `stats`
-prints both to stderr and `check` the warnings (so the table and `--csv` stay clean); on a
+reason, the first 25 rows; see [Cards not drawn](model.md#cards-not-drawn)) and the deck's first
+ten warnings. `stats` and `check` print both to stderr (so the table and `--csv` stay clean); on a
 converted file they are the ones it was written with. A failed cross-reference comes first, then the warnings
 that change the mass (NSM ids that match no element, excluded structural mass, impossible
 inertia), then pyNastran's own.

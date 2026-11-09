@@ -1333,9 +1333,9 @@ def card_report_checks(pv, nv):
         with open(log, encoding="utf-8", errors="replace") as f:
             text = f.read()
     check(model.names == ["Shells", "Connectors", "Plotels", "Constraints", "Loads"], f"cards: blocks {model.names}")
-    check(model.field("SkippedCardCount").tolist() == [22] and "CTRIAX6" in model.field_strings(None, "SKIPPED_Card"),
+    check(model.field("SkippedCardCount").tolist() == [24] and "CTRIAX6" in model.field_strings(None, "SKIPPED_Card"),
           "cards: the SKIPPED_ table on the reader's output")
-    check("22 card(s) of 18 type(s) not drawn: 2 CTRIAX6" in text, "cards: the card report in the reader's messages")
+    check("24 card(s) of 20 type(s) not drawn: 2 CTRIAX6" in text, "cards: the card report in the reader's messages")
     shells = model.block("Shells")
     check(sorted(shells.GetCellType(i) for i in range(shells.GetNumberOfCells())) == [23, 28],
           "cards: CQUAD drawn biquadratic (9 grids) and quadratic (no G9)")

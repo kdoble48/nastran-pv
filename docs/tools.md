@@ -33,6 +33,11 @@ Names are card types (`RBE2`, `CQUAD4`, `CELAS2`, ...) or groups, and the two mi
 | `bushes` | CBUSH |
 | `connectors` | MPC, CELAS1/2, CDAMP1/2, CGAP, CFAST (the `Connectors` block) |
 
+Only these blocks are traversed. PLOTELs (the `Plotels` block) are plot lines, not structure, and
+the cards in the [card report](model.md#cards-not-drawn) are not drawn, so they join nothing: a
+part held on by CWELDs, CFAST patches or heat-transfer elements is a floating part here. `check`
+prints the card report on stderr, so the cause is on screen.
+
 Hops count elements: the seed elements are hop 0, an element sharing a grid with a hop-k element
 is hop k+1, and a grid's hop is the lowest hop of its elements. `exclude=rigid` answers "what is
 connected to this without going through RBEs?".

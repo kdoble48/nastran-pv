@@ -15,8 +15,8 @@ out when the deck has nothing for it.
 | `Masses` | CONM2, CONM1, CMASS1/2 (one point at the CG) | point: `EID NID CID Mass MassScale Inertia InertiaEllipsoid EquivalentRadius Offset HasInertia`; field: `TotalMass` |
 | `MassOffsets` | grid-to-CG lines for offset CONM2s | `EID` |
 | `Rigid` | RBE2/RBE3/RBAR/... spider legs | cell: `EID RigidType DOF`; point: `NID` |
-| `Connectors` | MPC, CELAS1/2, CDAMP1/2/5, CGAP, CFAST (GA/GB form) legs between two grids | cell: `EID ConnectorType DOF PID` (MPC legs: `EID` = MPC set id); point: `NID` |
-| `Plotels` | PLOTEL lines (no stiffness or mass, not traversed by the [model tools](tools.md)) | cell: `EID ElementType`; point: `NID` |
+| `Connectors` | MPC, CELAS1/2, CDAMP1/2, CGAP, CFAST (GA/GB form) legs between two grids | cell: `EID ConnectorType DOF PID` (MPC legs: `EID` = MPC set id); point: `NID` |
+| `Plotels` | PLOTEL lines (no stiffness or mass, not traversed by the [model tools](tools.md)) | cell: `EID`; point: `NID` |
 | `Bushes` | CBUSH spring locations | point: `EID PID GA GB K Axis1-3 K1dir…K6dir KTransTensor KRotTensor KTransLogTensor KRotLogTensor`; field: `KRef KLogMax KRotRef KRotLogMax` |
 | `BushLines` | CBUSH GA–GB lines | cell: `EID PID`; point: `NID` |
 | `Constraints` | SPC/SPC1/SPCADD/GRID PS points per set | point: `NID SPCSet SPC_DOF DOFCode CD`, plus `SPCEnforced` (6: the SPC enforced value per DOF) when a value is not 0 |
@@ -169,33 +169,38 @@ card report: `convert` prints it after the block list, `stats` on stderr, the re
 Output Messages, and the root table keeps it, so a converted file reports what its deck did.
 
 ```text
-22 card(s) of 18 type(s) not drawn:
+24 card(s) of 20 type(s) not drawn:
   Card     Count  Reason                      IDs
   CTRIAX6  2      not drawn                   EID 40 41
   PLOAD4   2      not drawn                   SID 9
   SPOINT   2      scalar points, no location  ID 101 102
+  CDAMP5   1      heat transfer               EID 30
   CELAS2   1      grounded, one grid          EID 31
   ...
 ```
 
-A deck with nothing skipped prints `card report: every card is drawn or used`.
+A deck with nothing skipped prints `card report: every card is drawn or used`. The CLI prints the
+first 25 rows; the root table keeps them all.
 
 One row per card type and reason, most cards first. `Count` is what pyNastran stored (elements,
 load entries, matrices, scalar points); `IDs` lists up to five ids (EID, SID for load and constraint
-sets, SE for superelements) and ends with `...` when there are more. The reasons:
+sets, SE for superelements; empty when the card has none) and ends with `...` when there are
+more. The reasons:
 
 | Reason | Cards |
 |---|---|
-| `not drawn` | card types no block shows: axisymmetric, plane and heat-transfer elements (CTRIAX/CTRIAX6/CQUADX, CPLSTN/CPLSTS, CHBDY*), CBUSH1D/2D, GENEL, CBEAM3, PLOAD*, TEMP, SPCD, LSEQ, SPCAX, SUPORT, dynamic loads (DAREA, TLOAD*, RLOAD*), CAERO panels and splines, contact bodies, bolts, any card type nastran-pv does not know |
-| `scalar points, no location` | SPOINT/EPOINT and what connects only them (CELAS3/4, CDAMP3/4, CMASS3/4), and CELAS1/2, CDAMP1/2/5 with an end on a scalar point. Scalar points have no coordinates, so these are counted, not drawn; their mass is not in `ModelMass` |
-| `grounded, one grid` | CELAS1/2, CDAMP1/2/5, CGAP with one grid (or two DOFs of one grid): no line to draw |
+| `not drawn` | card types no block shows: axisymmetric and plane elements (CTRIAX/CTRIAX6/CQUADX, CPLSTN/CPLSTS), CBUSH1D/2D, GENEL, CBEAM3, PLOAD*, TEMP, SPCD, LSEQ, SPCAX, SUPORT, dynamic loads (DAREA, TLOAD*, RLOAD*), CAERO panels and splines, contact bodies, bolts, any card type nastran-pv does not know |
+| `scalar points, no location` | SPOINT/EPOINT and what connects only them (CELAS3/4, CDAMP3/4, CMASS3/4), and CELAS1/2, CDAMP1/2, CMASS1/2, PLOTELs and MPC equations with a grid that is a scalar point (an MPC's other terms are still drawn; its row has the set id). Scalar points have no coordinates, so these are counted, not drawn; their mass is not in `ModelMass` |
+| `grounded, one grid` | CELAS1/2, CDAMP1/2, CGAP with one grid (or two DOFs of one grid): no line to draw |
+| `heat transfer` | CDAMP5 (a thermal capacitance), CHBDYE/G/P, QBDY1/2/3, QHBDY, QVOL, QVECT, and the thermal boundary conditions (CONV, CONVM, RADBC, RADM, TEMPBC). None is a structural link, so none joins the [model tools](tools.md)' graph |
 | `patch form, no GA/GB` | CFAST given by patches only |
 | `matrix input` | DMIG, DMI, DMIJ, DMIJI, DMIK, DMIAX |
 | `superelement` | the cards of a `BEGIN SUPER` section (data and control cards left out) and the superelement cards (SEBULK, SECONCT, SELOC, ...) |
 | `not read` | cards pyNastran rejected (unknown to it), and CWELD, which nastran-pv turns off because pyNastran 1.5 aborts the read on some of its forms |
 
 A card of a drawn type whose grid is missing is a warning instead: that is a broken deck, not a
-card nastran-pv cannot draw. Rows for forms of drawn cards (grounded, scalar point, patch) are made
+card nastran-pv cannot draw. So is a CTRIA6, CQUAD8, CQUAD or quadratic solid whose midside grid
+is given but not defined: it is drawn without its midside grids, with one warning per card type. Rows for forms of drawn cards (grounded, scalar point, patch) are made
 when their block is built, so `--no-connectors` drops them. `SkippedCardCount` is the total (0 when
 every card is drawn or used); a file without it predates the report. The design notes are in
 `docs/design/2026-11-08-card-report.md`.

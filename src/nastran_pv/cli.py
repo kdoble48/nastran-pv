@@ -242,8 +242,8 @@ def _table_lines(rows: list[dict], limit=None, indent="") -> list[str]:
     cols = list(rows[0])
     shown = rows if limit is None else rows[:limit]
     widths = [max([len(c)] + [len(_fmt(r.get(c))) for r in shown]) for c in cols]
-    out = [indent + "  ".join(c.ljust(w) for c, w in zip(cols, widths))]
-    out += [indent + "  ".join(_fmt(r.get(c)).ljust(w) for c, w in zip(cols, widths)) for r in shown]
+    out = [(indent + "  ".join(c.ljust(w) for c, w in zip(cols, widths))).rstrip()]
+    out += [(indent + "  ".join(_fmt(r.get(c)).ljust(w) for c, w in zip(cols, widths))).rstrip() for r in shown]
     if limit is not None and len(rows) > limit:
         out.append(f"{indent}... {len(rows) - limit} more rows")
     return out

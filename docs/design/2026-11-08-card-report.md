@@ -26,19 +26,29 @@ was missing from it.
 - **Counts are what pyNastran stored.** Elements, load entries, matrices (one DMIG, not its column
   cards), scalar points (an `SPOINT,101,102` card is two). Counting the containers instead of
   `card_count` also avoids pyNastran 1.4.1 counting the main model twice when it rereads a deck
-  with `BEGIN SUPER`. `card_count` is the fallback for a type with no container.
+  with `BEGIN SUPER`. `card_count` is the fallback for a type with no container. The element-like
+  slots (elements, masses, rigid elements, plotels) take their ids from pyNastran's
+  `_type_to_id_map`, so a reported CTRIAX6 never walks a million drawn elements on a reader
+  rebuild; the other slots are scanned (they hold only loads, constraints and the like). A container
+  key is an id only when it is a number or a name (DMIG); pyNastran keys SPCOFF by `"SPCOFF"`, and
+  such a row has no ids.
 - **Reasons**, one row per (card, reason): `not drawn`, `scalar points, no location`,
-  `grounded, one grid`, `patch form, no GA/GB`, `matrix input` (DMIG, DMI, DMIJ, DMIJI, DMIK,
+  `grounded, one grid`, `patch form, no GA/GB`, `heat transfer` (CDAMP5, CHBDYE/G/P, the QBDY/QHBDY/
+  QVOL/QVECT heat loads and the CONV/RADBC boundary slot), `matrix input` (DMIG, DMI, DMIJ, DMIJI, DMIK,
   DMIAX), `superelement` (the cards of each `BEGIN SUPER` section, data and control left out, and
   the SE cards), `not read` (rejected, and CWELD, which `load_deck` turns off). Up to five ids per
   row (EID, SID for list-valued slots such as loads, SE for superelements) and `...` for more.
 - **Forms of drawn cards** are recorded by the builder that cannot draw them, with
-  `Deck.skip(card, reason, id)`: CFAST patches, grounded CELAS1/2, CDAMP1/2/5 and CGAP (also two
-  DOFs of one grid), and those with an end on a scalar point. `build_multiblock` clears the record
+  `Deck.skip(card, reason, id)`: CFAST patches, grounded CELAS1/2, CDAMP1/2 and CGAP (also two
+  DOFs of one grid), and any reference to a scalar point: a spring or damper end, a CMASS1/2 grid,
+  a PLOTEL end, an MPC term (its other legs are still drawn; the row carries the MPC set id). `build_multiblock` clears the record
   first, so a rebuild (the reader on every option change) does not grow it. These rows depend on
   the block being built (`--no-connectors` drops them); the type-level rows do not.
 - **Missing grids stay warnings.** A CQUAD4 on an undefined grid is a broken deck, not an
-  unsupported card, and the existing per-element warning names it.
+  unsupported card, and the existing per-element warning names it. A scalar point is not a missing
+  grid, so it never gets that warning. A midside grid that is given but not defined (CTRIA6,
+  CQUAD8, CQUAD, quadratic solids) used to drop the element to a lower order silently; it now warns,
+  once per card type with the first EIDs, and the element is drawn without its midside grids.
 - **Folded into the report:** CMASS3/4 (masses.py), CWELD and the CFAST patch form
   (connectors.py), unsupported SPC types (one warning per card before), unsupported load and load
   combination types (loads.py). **Not folded:** NSM sets with an unsupported TYPE (PBEND, PCONEAX)
@@ -46,9 +56,11 @@ was missing from it.
   numeric OFFT stay warnings because the element is drawn (with OFFT GGG), only approximately.
 - **Where it shows.** Root table `SKIPPED_Card SKIPPED_Count SKIPPED_Reason SKIPPED_IDs` and
   `SkippedCardCount` (always written, 0 when nothing is skipped, so a file without it predates the
-  report, like `CoordSystemCount`). `convert` prints the table after the block list, `stats` on
-  stderr; both read it from the multiblock, so a converted file prints what its deck did (the parity
-  harness compares `convert` stdout). The reader adds one summary line after the deck's warnings
+  report, like `CoordSystemCount`). `convert` prints the table after the block list, `stats` and
+  `check` on stderr; all read it from the multiblock, so a converted file prints what its deck did
+  (the parity harness compares `convert` stdout). `check` needs it most: a part held on only by
+  CWELDs, CFAST patches or heat-transfer elements is a FloatingParts finding, and the report says
+  why. The CLI prints the first 25 rows and "... N more rows"; the root table keeps every row. The reader adds one summary line after the deck's warnings
   in Output Messages. The report is not in `Warnings`, which keeps the CLI's ten-warning cut for
   real warnings.
 
@@ -59,21 +71,25 @@ was missing from it.
   Control `MPC=`, -1 without, as `ActiveSPCSets`) and `MPCADD_ID MPCADD_Set` (one row per MPC set of
   each MPCADD, nested MPCADDs expanded once). A member set with no MPC card is kept and warned
   about (pyNastran 1.4 warns too; 1.5 does not).
-- **PLOTEL** gets its own block, `Plotels` (lines, cell `EID ElementType`, point `NID`). Not
+- **PLOTEL** gets its own block, `Plotels` (lines, cell `EID`, point `NID`). Not
   Lines: it has no property, area or density, so it would count as an element without structural
   mass and enter the mass totals and derived fields. Not Connectors: the topology tools traverse
   connectors, and a plot line between two parts would join them (FloatingParts would miss a real
   floating part). The block is in none of the mesh-block lists and not in `GRAPH_BLOCKS`; it has
-  `--no-plotels`, the reader toggle *Plotels*, `FileId` (PLOTEL ids share the element id space) and
-  the shared `ElementType` code PLOTEL, so `ElementTypes/PLOTEL` shows and hides it. The PLOTEL3/4/6/8
-  and PLOTTET/PYR/PEN/HEX shapes that pyNastran 1.5 reads are reported (1.4 rejects them).
+  `--no-plotels`, the reader toggle *Plotels* and `FileId` (PLOTEL ids share the element id space).
+  It has no `ElementType`: `ELEMENT_TYPES` also feeds the topology rules' known cards, and
+  `--rules exclude=PLOTEL` would then validate and do nothing; now it is an "unknown card type"
+  error. The PLOTEL3/4/6/8 and PLOTTET/PYR/PEN/HEX shapes that pyNastran 1.5 reads are reported
+  (1.4 rejects them).
 - **CQUAD** with all nine grids is a `VTK_BIQUADRATIC_QUAD`; without G9 (G5 to G8 given) a
   `VTK_QUADRATIC_QUAD`; otherwise the linear quad as before. Area, mass and centroid come from VTK's
   cell size, which integrates the curved cell.
-- **CDAMP5** between two grids is a connector leg (code appended to `CONNECTOR_TYPES`). The roadmap
-  groups it with the scalar-point cards, but its G1/G2 are grid *or* scalar points (unlike
-  CDAMP3/4's S1/S2), so it has a placement whenever both are grids; an end on a scalar point is
-  reported like CELAS1/2's.
+- **CDAMP5 is reported as `heat transfer`, not drawn.** Its G1/G2 can be grids, so it has a
+  placement, but it is a thermal capacitance (its PDAMP5 takes a MAT4/MAT5). As a Connectors leg the
+  topology graph would traverse it as a structural link, the same false join that keeps PLOTEL out
+  of Connectors. A heat-transfer block outside the graph, like Plotels, was the alternative; with
+  CHBDY* and the thermal boundary conditions also undrawn, one reason for all of them is clearer
+  than one drawn heat-transfer card.
 - **CELAS3/4, CDAMP3/4, CMASS3/4 and SPOINT/EPOINT are reported, not drawn.** They connect scalar
   points, which have no coordinates. Placing them would need a grid for each scalar point, and
   nothing in a deck gives one (an MPC that ties a scalar point to a grid DOF is an equation, not a
@@ -81,11 +97,15 @@ was missing from it.
 
 ## How
 
-- `cards.py`: `report(deck)` (rows), `write_table`/`read`, `lines` (the CLI table) and `summary`
-  (the reader's line). `drawn_types()` unions the builders' own tables (`SHELLS`, `SOLIDS`,
-  `LINE_TYPES`, `DRAWN_CONNECTORS`) with `DRAWN_OTHER`; it imports them lazily because the builders
-  import the reason constants.
-- Tests: `tests/data/cards.bdf` (one card of each kind; the 22 skipped cards and every row worked
+- `cards.py`: `report(deck)` (rows), `write_table`/`read`, `header` and `summary` (the reader's
+  line); the CLI table is `cli._table_lines`, shared with every other table the CLI prints.
+  `drawn_types()` unions the builders' own handled-types tables (`shells.SHELLS`, `solids.SOLIDS`,
+  `lines.LINE_TYPES`, `categories.CONNECTOR_TYPES`, `connectors.RESOLVED_TYPES`, `masses.MASS_TYPES`,
+  `bushes.BUSH_TYPES`, `plotels.PLOTEL_TYPES`, `constraints.SPC_TYPES`, `loads.LOAD_TYPES` and
+  `COMBINATION_TYPES`) and GRID; the builders dispatch on the same tables, so a card a builder
+  learns leaves the report by itself. It imports them lazily because the builders import the reason
+  constants.
+- Tests: `tests/data/cards.bdf` (one card of each kind; the 24 skipped cards and every row worked
   out by hand in `test_cards.REPORT`), the parity harness (`DECKS`) and pv_smoke (`card_report_checks`,
   and the deck in `parity_checks`). The report is the same with pyNastran 1.4.1 and 1.5, except for
   cards only one of them knows (PWELD is `not read` in 1.4.1).
