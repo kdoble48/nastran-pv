@@ -43,6 +43,7 @@ class Deck:
     skipped: dict = field(default_factory=dict)
     _n_mass: int = field(default=0, repr=False)  # where the next mass warning goes (see warn)
     _n_pinned: int = field(default=0, repr=False)  # leading load errors kept first (xref failure)
+    _rows: dict | None = field(default=None, init=False, repr=False, compare=False)  # see rows
 
     # ------------------------------------------------------------------ nodes
     def lookup(self, node_ids) -> np.ndarray:
@@ -56,6 +57,14 @@ class Deck:
             missing = np.asarray(node_ids)[idx < 0]
             raise KeyError(f"unknown GRID id(s): {missing[:10].tolist()}")
         return idx
+
+    @property
+    def rows(self) -> dict:
+        """``{grid id: point index}``: :meth:`lookup` of one id at a time without numpy's
+        per-call cost (cards read one by one). Built on first use."""
+        if self._rows is None:
+            self._rows = dict(zip(self.nids.tolist(), range(len(self.nids))))
+        return self._rows
 
     def node_xyz(self, node_ids) -> np.ndarray:
         return self.xyz[self.index(node_ids)]
@@ -91,6 +100,32 @@ class Deck:
             rows = np.array(
                 [[sp * ct, sp * st, cp], [cp * ct, cp * st, -sp], [-st, ct, 0.0]]
             )
+        return rows @ beta
+
+    def bases(self, cid: int, at_xyz) -> np.ndarray:
+        """:meth:`basis` of a non-rectangular ``cid`` at many points: (n, 3, 3) for (n, 3) basic
+        ``at_xyz``. Each point goes through the same arithmetic as :meth:`basis` (one 3x3 matmul
+        per point, not one batched product), so the axes are bit-identical to a loop over it."""
+        coord = self.model.coords.get(cid)
+        if coord is None:
+            raise KeyError(f"unknown coordinate system {cid}")
+        if coord.type in RECTANGULAR:
+            raise ValueError(f"coordinate system {cid} is rectangular: use basis")
+        beta = np.asarray(coord.beta(), dtype=float)
+        d = np.asarray(at_xyz, dtype=float) - np.asarray(coord.origin, dtype=float)
+        local = (d.reshape(-1, 1, 3) @ beta.T)[:, 0]
+        x, y, z = local[:, 0], local[:, 1], local[:, 2]
+        theta = np.arctan2(y, x)
+        ct, st = np.cos(theta), np.sin(theta)
+        rows = np.zeros((len(local), 3, 3))
+        if coord.type in CYLINDRICAL:
+            rows[:, 0, 0], rows[:, 0, 1], rows[:, 1, 0], rows[:, 1, 1], rows[:, 2, 2] = ct, st, -st, ct, 1.0
+        else:  # spherical, as in basis
+            polar = np.arctan2(np.hypot(x, y), z)
+            cp, sp = np.cos(polar), np.sin(polar)
+            rows[:, 0, 0], rows[:, 0, 1], rows[:, 0, 2] = sp * ct, sp * st, cp
+            rows[:, 1, 0], rows[:, 1, 1], rows[:, 1, 2] = cp * ct, cp * st, -sp
+            rows[:, 2, 0], rows[:, 2, 1] = -st, ct
         return rows @ beta
 
     def vector_to_basic(self, cid: int | None, vec, at_xyz=None) -> np.ndarray:

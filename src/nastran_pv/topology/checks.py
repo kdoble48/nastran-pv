@@ -133,16 +133,25 @@ def _coincident(blocks, graph, rules, tol):
 
 
 def _duplicates(blocks, graph, rules, tol):
-    seen, cells, dup_of = {}, [], []
-    for c in np.flatnonzero(graph.group_mask(MESH_GROUPS)):
-        # same card, PID and grids: a rod with a parallel damper or a stacked doubler is intentional
-        key = (int(graph.group[c]), int(graph.card[c]), int(graph.pid[c]), tuple(sorted(graph.cell_grids(c).tolist())))
-        if key in seen:
-            cells.append(c)
-            dup_of.append(int(graph.eid[seen[key]]))
-        else:
-            seen[key] = c
-    return len(cells), gather_cells(blocks, graph, cells, {"DuplicateOf": dup_of})
+    """Mesh cells with the same card, PID and set of grids as an earlier cell, and that cell's EID
+    (a rod with a parallel damper or a doubler stacked on its skin has its own card or PID, so it
+    is intentional). Cells are grouped per grid count, keys compared as sorted rows."""
+    mesh = np.flatnonzero(graph.group_mask(MESH_GROUPS))
+    indptr, indices = graph.incidence.indptr, graph.incidence.indices
+    sizes = indptr[mesh + 1] - indptr[mesh]
+    cells, first = [], []
+    for k in np.unique(sizes):
+        c = mesh[sizes == k]
+        grids = np.sort(indices[indptr[c][:, None] + np.arange(k)], axis=1)
+        key = np.column_stack([graph.group[c], graph.card[c], graph.pid[c], grids]).astype(np.int64)
+        _, earliest, inverse = np.unique(key, axis=0, return_index=True, return_inverse=True)
+        head = c[earliest[inverse.reshape(-1)]]  # the first cell with each cell's key
+        cells.append(c[head != c])
+        first.append(head[head != c])
+    cells, first = np.concatenate(cells or [mesh[:0]]), np.concatenate(first or [mesh[:0]])
+    order = np.argsort(cells)
+    cells, first = cells[order], first[order]
+    return len(cells), gather_cells(blocks, graph, cells.tolist(), {"DuplicateOf": graph.eid[first].tolist()})
 
 
 def _used_by_points(blocks, graph):

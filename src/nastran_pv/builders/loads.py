@@ -34,7 +34,8 @@ class LoadSet:
 
 
 def _xyz(deck: Deck, nid: int) -> np.ndarray:
-    return deck.xyz[deck.index([nid])[0]]
+    i = deck.rows.get(nid)  # an unknown or blank grid: index raises the error the skip warning quotes
+    return deck.xyz[i] if i is not None else deck.xyz[deck.index([nid])[0]]
 
 
 def _direction(deck: Deck, card) -> np.ndarray:

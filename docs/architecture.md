@@ -19,8 +19,10 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
     INCLUDEs on pyNastran main.
   - pyNastran log warnings are captured, truncated, into `Deck.warnings`.
   - The `Deck` object holds sorted `nids` and `xyz` in basic coordinates (SPOINTs dropped).
-    `lookup`/`index` map grid ids to rows, and `basis(cid, at_xyz)` gives local axes, including
-    curvilinear systems.
+    `lookup`/`index` map grid ids to rows (`rows` is the dict for one id at a time), and
+    `basis(cid, at_xyz)` gives local axes, including curvilinear systems; `bases(cid, xyz)` gives
+    them at many points with the same bits (`results.to_basic` rotates every grid of a
+    cylindrical or spherical CD at once).
 - `families.py`: parses pre-processor `$ ... family <NAME>` comments (ICEM/TACS decks such as uCRM-9)
   into `FamilyId`/`GroupId` cell arrays and `FamilyNames`/`GroupNames` on the Shells block only.
   These back the FAMILY/GROUP keys of `map_table` and the `family` view.
@@ -33,8 +35,11 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   Labels are sanitized to `[A-Za-z0-9_]` (`wing.bdf` -> `wing_bdf`): VTK strips `.` from node names.
   `parent_labels` falls back to the block fields because ParaView's `.vtm` reader drops root field data.
 - `builders/*`: one module per block. They build VTK data only through `vtkmodules`/`vtkutil`,
-  which keeps the same code working in pip-vtk and in pvpython. Mesh builders go through
-  `common.CellTable` → `compact_mesh`. `categories.py` holds the *global* ElementType and RigidType
+  which keeps the same code working in pip-vtk and in pvpython. Shells and Solids check their grids
+  a card type at a time in numpy (`common.node_matrix` of the elements' raw `nodes`, `grid_checks`,
+  `CellRows` → `rows_mesh`): no Python work per element beyond reading it, which is what made a
+  270k-hex model slow ([Performance](performance.md)). Lines go through `common.CellTable` →
+  `compact_mesh`. `categories.py` holds the *global* ElementType and RigidType
   code tables; codes must be consistent across blocks for indexed LUTs.
 - `assemble.py`: runs the builders according to `Options` and copies nodal SPC/load arrays onto the
   mesh blocks. It adds root field data: masses from `massprops.py` (numpy volumes when every solid is linear, else VTK cell sizes for the block; never
@@ -259,6 +264,13 @@ Every gotcha found so far, by area. The few that bite on any change are also in 
     `read_model` and the plugin) moves them back and drops a series step's NaN fill.
   - Rewritten HDF5 files need `track_order=True` on the file and all groups.
   - On read-back the assembly root node is named `assembly`, so select blocks with `//Name`.
+  - Two writes of the same model differ in bytes (HDF5 stamps its objects with times): compare
+    VTKHDF output by reading it back, not by hash. `.vtm` output is byte-reproducible.
+- Vectorizing without changing a bit: numpy's `(3,) @ (3, 3)` (BLAS gemv) and `(n, 3) @ (3, 3)`
+  (gemm) or `einsum` round differently in the last bit. A per-point rotation done for many points at
+  once stays a stacked `(n, 1, 3) @ (n, 3, 3)` matmul, which runs gemv per point (`Deck.bases`,
+  `results.to_basic`). `np.asarray` of a list of Python ints is int32 on Windows with numpy 1.x, so a
+  refactor keeps the lists where the old code made its arrays from lists.
 - Bash heredocs containing `\n` inside Python string literals get mangled by the tool runner. Write
   patch scripts to the scratchpad with the Write tool instead.
 - ParaView ships numpy and h5py but not scipy; pyNastran needs scipy. `install_deps.py` pins scipy

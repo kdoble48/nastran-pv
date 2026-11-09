@@ -24,7 +24,8 @@ from vtkmodules.vtkCommonDataModel import (
 )
 
 from ..deck import Deck
-from .common import CellTable, add_mid_density, compact_mesh, property_info, warn_midside
+from .common import (CellRows, add_mid_density, elements_of, grid_checks, known_grids, node_matrix, per_unique, points_of,
+                     property_info, rows_mesh, warn_skipped)
 
 # Nastran -> VTK node permutation for the full (quadratic) element.
 _HEX20 = list(range(8)) + list(range(8, 12)) + list(range(16, 20)) + list(range(12, 16))
@@ -81,57 +82,51 @@ def orientation(ncorner: int, p: np.ndarray) -> np.ndarray:
 
 
 def build_solids(deck: Deck):
+    """Every solid element whose corner grids exist; quadratic when all its grids exist. The grid
+    checks run per card type on the elements' raw ``nodes`` (no Python loop per element)."""
     model = deck.model
-    table = CellTable()
-    grids = model.nodes
-    midside: dict[str, list[int]] = {}  # given midside grids that do not exist
-    for eid, elem in model.elements.items():
-        spec = SOLIDS.get(elem.type)
-        if spec is None:
+    eids, elems = elements_of(model, SOLIDS)
+    types = np.array([elem.type for elem in elems], dtype=object)
+    known = known_grids(deck)
+    skipped, midside = np.zeros(len(elems), dtype=bool), np.zeros(len(elems), dtype=bool)
+    rows = CellRows()
+    for etype, (ncorner, lin_type, nfull, quad_type, perm) in SOLIDS.items():
+        pos = np.flatnonzero(types == etype)
+        if not len(pos):
             continue
-        ncorner, lin_type, nfull, quad_type, perm = spec
-        nids = list(elem.node_ids)
-        corner = nids[:ncorner]
-        if not all(n in grids for n in corner):
-            deck.warn(f"{elem.type} {eid}: missing grid(s), skipped")
-            continue
-        full = nids[:nfull]
-        if any(n and n not in grids for n in full[ncorner:]):
-            midside.setdefault(elem.type, []).append(eid)
-        if len(full) == nfull and all(n in grids for n in full):
-            table.add(eid, elem.Pid(), elem.type, quad_type, [full[i] for i in perm])
-        else:
-            table.add(eid, elem.Pid(), elem.type, lin_type, corner)
-    warn_midside(deck, midside)
+        ids, lens = node_matrix([elems[i].nodes for i in pos.tolist()], nfull)
+        points, _, ok, mid, full = grid_checks(deck, known, ids, lens, ncorner, nfull)
+        skipped[pos[~ok]] = True
+        midside[pos[mid]] = True
+        rows.add(quad_type, pos[full], ids[full][:, perm], points[full][:, perm])
+        linear = ok & ~full
+        rows.add(lin_type, pos[linear], ids[linear][:, :ncorner], points[linear][:, :ncorner])
+    warn_skipped(deck, eids, elems, skipped, midside)
 
-    if not len(table):
+    if not len(rows):
         return None
 
-    _fix_orientation(deck, table)
-    ug, *_ = compact_mesh(deck, table)
+    _fix_orientation(deck, rows)
+    ug, pos = rows_mesh(deck, eids, elems, rows)
     cd = ug.GetCellData()
-    pids = np.asarray(table.pids)
-    info = {pid: property_info(model, pid) for pid in np.unique(pids)}
-    missing = sorted(int(p) for p in info if int(p) not in model.properties)
+    pids = np.asarray([elems[i].Pid() for i in pos.tolist()])
+    missing = sorted(int(p) for p in np.unique(pids) if int(p) not in model.properties)
     if missing:
         deck.warn(f"solid property id(s) not defined (open the run deck?): {missing}")
-    mids = np.array([info[p][0] for p in pids], dtype=np.int64)
-    add_mid_density(cd, model, mids)
+    add_mid_density(cd, model, per_unique(pids, lambda p: property_info(model, p)[0], np.int64))
     return ug
 
 
-def _fix_orientation(deck: Deck, table: CellTable) -> None:
-    vtk_types = np.asarray(table.vtk_types)
+def _fix_orientation(deck: Deck, rows: CellRows) -> None:
+    """Reorder the cells whose base face winds the wrong way for VTK (``orientation``)."""
     nflipped = 0
-    for vtype in np.unique(vtk_types):
-        rows = np.nonzero(vtk_types == vtype)[0]
+    for vtype in sorted(rows.groups):
+        _, ids, points = rows.groups[vtype]
         flip = FLIP[int(vtype)]
         ncorner = {8: 8, 20: 8, 6: 6, 15: 6, 4: 4, 10: 4, 5: 5, 13: 5}[len(flip)]
-        corners = np.array([table.nodes[r][:ncorner] for r in rows], dtype=np.int64)
-        p = deck.xyz[deck.index(corners.ravel())].reshape(len(rows), ncorner, 3)
-        for r in rows[orientation(ncorner, p)]:
-            nodes = table.nodes[r]
-            table.nodes[r] = [nodes[i] for i in flip]
-            nflipped += 1
+        corner = points_of(deck, ids[:, :ncorner].ravel(), points[:, :ncorner].ravel())
+        wrong = orientation(ncorner, deck.xyz[corner].reshape(len(ids), ncorner, 3))
+        ids[wrong], points[wrong] = ids[wrong][:, flip], points[wrong][:, flip]
+        nflipped += int(wrong.sum())
     if nflipped:
         deck.warn(f"info: reordered {nflipped} solid element(s) to VTK orientation")

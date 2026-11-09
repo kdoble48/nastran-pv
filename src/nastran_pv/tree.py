@@ -19,6 +19,7 @@ and :func:`scatter` copies the arrays a filter added to that multiblock back ont
 """
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 
@@ -122,7 +123,7 @@ def category_values(mb, names=None) -> dict[str, list[str]]:
     found = {c: set() for c in CATEGORIES}
     for path, ds in iter_blocks(mb):
         for cat, labels in item_labels(path, ds, names).items():
-            found[cat].update(x for x in np.unique(labels) if x)
+            found[cat].update(x for x in set(labels.tolist()) if x)  # not np.unique: no sort of every item
     out = {c: sorted(v, key=natural_key) for c, v in found.items()}
     read_order = [valid_name(n) for n in includes.parent_labels(mb)]
     out["Files"] = [n for n in read_order if n in found["Files"]] + [n for n in out["Files"] if n not in read_order]
@@ -182,8 +183,8 @@ class Visibility:
 # ------------------------------------------------------------- subsetting
 def _take_cells(ca, sel):
     """Sizes and flat connectivity of cells ``sel`` of a vtkCellArray."""
-    offs = vtk_to_numpy(ca.GetOffsetsArray()).astype(np.int64)
-    conn = vtk_to_numpy(ca.GetConnectivityArray()).astype(np.int64)
+    offs = vtk_to_numpy(ca.GetOffsetsArray()).astype(np.int64, copy=False)  # only read: no copy
+    conn = vtk_to_numpy(ca.GetConnectivityArray()).astype(np.int64, copy=False)
     starts = offs[sel]
     sizes = offs[sel + 1] - starts
     first = np.cumsum(sizes) - sizes
@@ -346,18 +347,44 @@ class Tree:
         return pdc
 
 
+def _factorize(values: np.ndarray):
+    """(sorted distinct labels, index of each item's label): ``np.unique(values.astype(str),
+    return_inverse=True)`` without converting and sorting every item (a block has few labels)."""
+    items = values.tolist()
+    try:
+        u = sorted(set(items))
+    except TypeError:  # not all strings: compare them as numpy does
+        u = None
+    if u is None or not all(isinstance(s, str) for s in u):
+        u, inv = np.unique(values.astype(str), return_inverse=True)
+        return [str(s) for s in u], inv.reshape(-1)
+    index = {s: i for i, s in enumerate(u)}
+    return u, np.fromiter((index[s] for s in items), dtype=np.int64, count=len(items))
+
+
 def _piece_keys(labels: dict, kept: np.ndarray, cats) -> tuple[np.ndarray, list]:
-    """Group index per kept item and the label dict of each group, for categories ``cats``."""
+    """Group index per kept item and the label dict of each group, for categories ``cats``. Groups
+    are numbered in the lexicographic order of their (category label index, ...) rows."""
     cols, uniq = [], []
     for c in cats:
         if c in labels:
-            u, inv = np.unique(labels[c][kept].astype(str), return_inverse=True)
-            cols.append(inv.reshape(-1))
+            u, inv = _factorize(labels[c][kept])
+            cols.append(inv)
             uniq.append((c, u))
     if not cols or not len(kept):
         return np.zeros(len(kept), dtype=np.int64), [{}] if len(kept) else []
-    rows, group = np.unique(np.stack(cols, axis=1), axis=0, return_inverse=True)
-    keys = [{c: str(u[r[j]]) for j, (c, u) in enumerate(uniq) if u[r[j]]} for r in rows]
+    radix = [max(len(u), 1) for _, u in uniq]
+    if math.prod(radix) < 2 ** 62:  # one int64 key per item, in the rows' order: a 1-D unique
+        key = np.zeros(len(kept), dtype=np.int64)
+        for col, r in zip(cols, radix):
+            key = key * r + col
+        ukey, group = np.unique(key, return_inverse=True)
+        rows = np.zeros((len(ukey), len(cols)), dtype=np.int64)
+        for j in range(len(cols) - 1, -1, -1):
+            ukey, rows[:, j] = np.divmod(ukey, radix[j])
+    else:
+        rows, group = np.unique(np.stack(cols, axis=1), axis=0, return_inverse=True)
+    keys = [{c: u[r[j]] for j, (c, u) in enumerate(uniq) if u[r[j]]} for r in rows.tolist()]
     return group.reshape(-1), keys
 
 
@@ -407,9 +434,16 @@ def build_tree(mb, vis: Visibility | None = None, names=None, max_pieces: int = 
         blocks.append((path, ds, kind, labels, kept))
 
     cats = list(CATEGORIES)
+    memo = {}
+
+    def keys_of(i, cs):
+        """``_piece_keys`` of block ``i`` for categories ``cs``, computed once."""
+        if (i, tuple(cs)) not in memo:
+            memo[i, tuple(cs)] = _piece_keys(blocks[i][3], blocks[i][4], cs)
+        return memo[i, tuple(cs)]
 
     def count(cs):
-        return sum(len(_piece_keys(lab, kept, cs)[1]) for _, _, _, lab, kept in blocks)
+        return sum(len(keys_of(i, cs)[1]) for i in range(len(blocks)))
 
     dropped = []
     while cats and count(cats) > max_pieces:
@@ -420,8 +454,8 @@ def build_tree(mb, vis: Visibility | None = None, names=None, max_pieces: int = 
                  f"(the visibility checklists still apply)"] if dropped else []
 
     pieces = []
-    for path, ds, kind, labels, kept in blocks:
-        group, keys = _piece_keys(labels, kept, cats)
+    for i, (path, ds, kind, labels, kept) in enumerate(blocks):
+        group, keys = keys_of(i, cats)
         order = np.argsort(group, kind="stable")
         bounds = np.cumsum(np.bincount(group, minlength=len(keys)))
         for g in sorted(range(len(keys)), key=lambda g: natural_key("/".join(keys[g].values()))):
