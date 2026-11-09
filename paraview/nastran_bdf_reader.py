@@ -1049,9 +1049,10 @@ class NastranPVBushGlyphs(_GlyphFilter):
 @smdomain.datatype(dataTypes=["vtkDataObject"], composite_data_supported=True)
 @_with_glyph_size(0.08, 0.001, 0.5, 6, 3, 32)
 class NastranPVLoadGlyphs(_GlyphFilter):
-    """FORCE/MOMENT arrows of the checked load sets (Loads/* blocks), or with Source a result's
-    SPC forces, MPC forces or applied loads (OLOAD) at each grid with output: forces single-headed,
-    moments double-headed, tail on the grid. Size: length of the largest arrow as a fraction of the
+    """Arrows of the checked load sets: FORCE/MOMENT (Loads/* blocks; forces single-headed, moments
+    double-headed, tail on the grid), pressures (Pressures/* faces, head on the face) and GRAV (at
+    the model CG). With Source, a result's SPC forces, MPC forces or applied loads (OLOAD) at each
+    grid with output instead. Size: length of the largest arrow of each kind as a fraction of the
     model diagonal. Every Nth Point 0 keeps at most 1500 arrows per set."""
 
     BLOCK, REQUIRED = "Loads", "Force"
@@ -1062,6 +1063,8 @@ class NastranPVLoadGlyphs(_GlyphFilter):
         self._source = 0
         self._sets = _checklist(self)
         self._show = 0
+        self._pressures = 1
+        self._gravity = 1
         self._scale = 0
         self._stride = 0
         self._size = 0.08
@@ -1083,27 +1086,44 @@ class NastranPVLoadGlyphs(_GlyphFilter):
     @smproperty.intvector(name="Show", default_values=0)
     @smdomain.xml(_enum_xml(("Forces", "Moments", "Forces and moments")))
     def SetShow(self, v):
+        """The nodal loads to draw (FORCE*, MOMENT*); pressures and gravity have their own switches."""
         self._set("_show", int(v))
+
+    @smproperty.intvector(name="ShowPressures", default_values=1)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    @smhint.xml('<PropertyWidgetDecorator type="GenericDecorator" mode="visibility" property="Source" value="0"/>')
+    def SetShowPressures(self, v):
+        """An arrow per face PLOAD/PLOAD2/PLOAD4 loads (Pressures/* blocks), pushing on the face."""
+        self._set("_pressures", int(v))
+
+    @smproperty.intvector(name="ShowGravity", default_values=1)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    @smhint.xml('<PropertyWidgetDecorator type="GenericDecorator" mode="visibility" property="Source" value="0"/>')
+    def SetShowGravity(self, v):
+        """An arrow at the model CG along the GRAV acceleration of each checked set."""
+        self._set("_gravity", int(v))
 
     @smproperty.intvector(name="ArrowLength", default_values=0)
     @smdomain.xml(_enum_xml(("By magnitude", "Fixed")))
     def SetArrowLength(self, v):
-        """By magnitude: the largest force (and moment) gets Size; Fixed: every arrow gets Size."""
+        """By magnitude: the largest force (and moment, pressure, acceleration) gets Size; Fixed:
+        every arrow gets Size."""
         self._set("_scale", int(v))
 
     @smproperty.intvector(name="EveryNthPoint", default_values=0)
     @smdomain.intrange(min=0, max=1000)
     def SetEveryNthPoint(self, v):
-        """Draw every Nth loaded grid of each set; 0 = automatic (at most 1500 arrows a set)."""
+        """Draw every Nth loaded grid (and pressure face) of each set; 0 = automatic (at most 1500
+        arrows a set)."""
         self._set("_stride", max(int(v), 0))
 
     def _list(self, data):
         try:
-            from nastran_pv.glyphs import default_load_set, load_sets_of
+            from nastran_pv.glyphs import default_load_set, load_set_names
         except ImportError:
             return
         default = default_load_set(data)
-        _fill_checklist(self, self._sets, [n for n, _ in load_sets_of(data)], {default} if default else set())
+        _fill_checklist(self, self._sets, load_set_names(data), {default} if default else set())
 
     def _result_source(self):
         """The result type drawn (SPCForce, MPCForce, AppliedLoad), or None for the deck's sets."""
@@ -1111,24 +1131,39 @@ class NastranPVLoadGlyphs(_GlyphFilter):
         return None if source == "deck" else source
 
     def _block(self, data):
-        return data if self._result_source() else _GlyphFilter._block(self, data)
+        if self._result_source():
+            return data
+        if data.IsA("vtkMultiBlockDataSet"):  # nodal loads, pressure faces or GRAV: the whole model
+            from nastran_pv.glyphs import load_set_names
+
+            return data if load_set_names(data) else None
+        return _GlyphFilter._block(self, data)
 
     def _glyphs(self, block, diag, model):
-        from nastran_pv.glyphs import load_glyphs, load_sets_of, result_load_points
+        from nastran_pv.glyphs import (gravity_sets_of, load_glyphs, load_set_names, load_sets_of, model_cg,
+                                       pressure_sets_of, result_load_points)
         from nastran_pv.vtkutil import add_string_array
 
         rtype = self._result_source()
+        pressures, gravity, cg = [], [], None
         if rtype:  # the result's arrays on the model's blocks, one arrow per grid
             points = result_load_points(model, rtype)
             sets = [(rtype, points)] if points.GetNumberOfPoints() else []
+            names = [n for n, _ in sets]
         elif block.IsA("vtkMultiBlockDataSet"):
             on = set(_checked(self._sets))
             sets = [(n, ds) for n, ds in load_sets_of(model) if n in on]
+            if self._pressures:
+                pressures = [(n, ds) for n, ds in pressure_sets_of(model) if n in on]
+            if self._gravity:
+                gravity, cg = [g for g in gravity_sets_of(model) if g[0] in on], model_cg(model)
+            names = [n for n in load_set_names(model) if n in on]
         else:
             sets = [("Loads", block)]
+            names = ["Loads"]
         out = load_glyphs(sets, diag, _LOAD_SHOW[self._show % 3], self._size, _LOAD_SCALES[self._scale % 2],
-                          self._stride, self._resolution)
-        add_string_array(out.GetFieldData(), "LoadSetNames", [n for n, _ in sets])
+                          self._stride, self._resolution, pressures=pressures, gravity=gravity, cg=cg)
+        add_string_array(out.GetFieldData(), "LoadSetNames", names)
         return out
 
 

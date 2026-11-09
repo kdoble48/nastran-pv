@@ -12,6 +12,7 @@ from .builders.connectors import build_connectors, mpcadd_sets
 from .builders.constraints import build_constraints, nodal_spc_mask, spc_enforced, spc_sets
 from .builders.lines import build_lines
 from .builders.loads import build_load_block, load_sets, nodal_load_arrays
+from .builders.pressures import build_pressure_block
 from .builders.masses import build_masses
 from .builders.plotels import build_plotels
 from .builders.rigid import build_rigid
@@ -179,6 +180,15 @@ def build_multiblock(deck: Deck, opts: Options | None = None, progress: Progress
                 loads.add(f"{'LOAD' if ls.combined else 'SID'}_{sid}", build_load_block(deck, ls))
         if loads.mb.GetNumberOfBlocks():
             blocks.add("Loads", loads.mb)
+        pressures = _Blocks()  # the faces PLOAD/PLOAD2/PLOAD4 load, per set
+        with step("Pressures"):
+            for sid in sorted(lsets):
+                ls = lsets[sid]
+                if ls.pressure:
+                    name = f"{'LOAD' if ls.combined else 'SID'}_{sid}"
+                    pressures.add(name, build_pressure_block(deck, sid, ls.pressure.values()))
+        if pressures.mb.GetNumberOfBlocks():
+            blocks.add("Pressures", pressures.mb)
     # gravity per load set at the root too: a .vtm keeps no file (so no field data) for a GRAV-only set
     grav = [{"Set": sid, "Name": f"{'LOAD' if ls.combined else 'SID'}_{sid}", "Acceleration": np.sum(ls.grav, axis=0)}
             for sid, ls in sorted(lsets.items()) if ls.grav] if opts.loads else []
