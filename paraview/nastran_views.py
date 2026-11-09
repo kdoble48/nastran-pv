@@ -105,6 +105,7 @@ def load_reader(deck, op2=None, nsm_set=None, random=None):
         src.UpdatePipeline()
         if not is_model_file(src):
             raise RuntimeError(f"{os.path.basename(deck)} was not written by nastran-pv (no {' or '.join(MODEL_MARKS)})")
+        sync_labels()
         return src
     # paraview.simple names the constructor after the reader label
     reader = pv.NastranBulkDatanastranpv(FileName=deck)
@@ -119,6 +120,7 @@ def load_reader(deck, op2=None, nsm_set=None, random=None):
     if random:
         set_random(reader, **random)
     reader.UpdatePipelineInformation()
+    sync_labels()  # a second model.bdf: the first one's objects take their folder labels now
     return reader
 
 
@@ -293,16 +295,32 @@ class Model:
     In a comparison ``diff`` (the Nastran Diff) and ``role`` ("A" or "B") say which side this is. B's
     side (:attr:`from_diff`) reads, and its views draw from, the diff's output instead of the reader
     (:func:`compared`: cut by both models' scope, moved with B's deformation); A's side reads A's
-    reader as a single model does."""
+    reader as a single model does.
 
-    def __init__(self, reader, time=None, diff=None, role=None):
+    ``time`` is the view's (the layout's) time. A on the left of a side-by-side pair follows B's steps
+    by index (rule R5): it is read at its own step of the index of B's step at ``time`` (:attr:`step`,
+    1-based), and :attr:`unmatched` says it has no such step (its deforms then leave it where it is).
+    ``own_time``: ``time`` is this model's own time already."""
+
+    def __init__(self, reader, time=None, diff=None, role=None, own_time=False):
         self.reader = reader
         self.diff, self.role = diff, role
+        held = held_time(reader)  # the vibrating mode: the view time is a phase then
         if time is None:
-            time = held_time(reader)  # the vibrating mode: the view time is a phase then
+            time = held
         if time is None:
             view = pv.GetActiveView()
             time = getattr(view, "ViewTime", 0.0) if view is not None else 0.0
+        self.step, self.unmatched = None, False
+        lead = _followed(reader) if held is None and not own_time else None
+        if lead is not None:
+            from nastran_pv.deform import matched_index
+
+            i = matched_index(timesteps(lead), time)
+            if i is not None:
+                own = timesteps(reader)
+                self.step, self.unmatched = i + 1, i >= len(own)
+                time = own[i] if i < len(own) else time
         self.time = time
         src = compared(reader, diff) if self.from_diff else reader
         src.UpdatePipeline(time)
@@ -310,6 +328,11 @@ class Model:
         from nastran_pv.tree import as_multiblock
 
         self.data = as_multiblock(fetch(src))  # the reader outputs the model tree
+        if self.unmatched:  # the reader gave its nearest step: none of it is this step's (R5)
+            from nastran_pv.deform import without_arrays
+            from nastran_pv.results import step_arrays
+
+            self.data = without_arrays(self.data, *step_arrays())
         self.names = block_names(self.data)
         self._scoped = None  # (multiblock, block names) of NPV scope, fetched on first use
         self._scope_active = None  # scope_active(reader), asked once
@@ -393,13 +416,128 @@ class Model:
 
 
 # ------------------------------------------------------------ named objects
-def _name(model, what):
+_MODEL_SOURCES = {}  # source id -> whether it is a model source, once that is known
+_LABELS = {}  # model source id -> the label its NPV objects are named with
+
+
+def _model_source(proxy, gid):
+    """:func:`_is_model_source`, remembered per source once it is known (a file reader that has not
+    read yet is asked again)."""
+    known = _MODEL_SOURCES.get(gid)
+    if known is None:
+        xml = _xml_name(proxy)
+        if xml == READER_XML:
+            known = True
+        elif xml == "TextSource" or getattr(proxy, "Input", None) is not None:
+            known = False
+        elif is_model_file(proxy):
+            known = True
+        elif not any(p in proxy.ListProperties() for p in ("FileName", "FileNames")):
+            known = False  # a source of its own (a sphere, ...): never a model
+        else:
+            return False
+        _MODEL_SOURCES[gid] = known
+    return known
+
+
+_LABEL_CACHE = [None]  # the labels while a command runs (:func:`_command`): worked out once per command
+
+
+def _labels():
+    """``{model source id: label}`` of the open models (rule R6): the Pipeline Browser name, unless
+    models share it, then their files' paths told apart by their folders
+    (:func:`nastran_pv.labels.unique_labels`: ``a/model.bdf``, ``b/model.bdf``); the same file opened
+    again gets ``#<id>`` (the first keeps the plain label). A getter: inside a command it is the
+    labels the command started with; :func:`sync_labels` renames objects."""
+    if _LABEL_CACHE[0] is not None:
+        return _LABEL_CACHE[0]
+    return _work_out_labels()
+
+
+def sync_labels():
+    """Rename the NPV objects of each model whose label changed since its objects were named (another
+    ``model.bdf`` was opened or closed, the reader was renamed), so they are still found; returns the
+    labels. Every command runs it first (:func:`_command`), and :func:`load_reader` after opening."""
+    labels = _work_out_labels()
+    _relabel(labels, pv.GetSources())
+    return labels
+
+
+def _command(fn):
+    """A command (a view, a macro): the labels are synced once when it starts and read from that map
+    while it runs (commands open, close or rename no model); nested commands share it."""
+    import functools
+
+    @functools.wraps(fn)
+    def run(*args, **kwargs):
+        if _LABEL_CACHE[0] is not None:
+            return fn(*args, **kwargs)
+        _LABEL_CACHE[0] = sync_labels()
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _LABEL_CACHE[0] = None
+
+    return run
+
+
+def _work_out_labels():
+    from nastran_pv.labels import unique_labels
+
     sources = pv.GetSources()
-    label = next((k[0] for k, v in sources.items() if v == model.reader), "deck")
-    twins = [v for k, v in sources.items() if k[0] == label and _is_model_source(v)]
-    if len(twins) > 1 and model.reader != min(twins, key=lambda v: int(v.GetGlobalIDAsString())):
-        label = f"{label} #{model.reader.GetGlobalIDAsString()}"  # same deck opened again
-    return f"NPV {what} [{label}]"
+    groups, seen = {}, set()
+    for key, proxy in sources.items():
+        gid = proxy.GetGlobalIDAsString()
+        seen.add(gid)
+        if _model_source(proxy, gid):
+            groups.setdefault(key[0], []).append((int(gid), proxy))
+    for gid in [g for g in _MODEL_SOURCES if g not in seen]:
+        del _MODEL_SOURCES[gid]  # deleted
+    out = {}
+    for name, members in groups.items():
+        members.sort(key=lambda m: m[0])
+        labels = unique_labels([_model_path(p) or name for _, p in members]) if len(members) > 1 else [name]
+        taken = set()
+        for (gid, _), label in zip(members, labels):
+            if label in taken:
+                label = f"{label} #{gid}"  # the same file opened again
+            taken.add(label)
+            out[str(gid)] = label
+    return out
+
+
+def _relabel(labels, sources):
+    """Rename the ``NPV <what> [<old label>]`` objects of each model whose label changed."""
+    for gid in [g for g in _LABELS if g not in labels]:
+        del _LABELS[gid]  # closed: its leftover objects keep their names
+    changed = {gid: (_LABELS[gid], new) for gid, new in labels.items() if gid in _LABELS and _LABELS[gid] != new}
+    for gid, label in labels.items():
+        _LABELS.setdefault(gid, label)
+    if not changed:
+        return
+    renames = []
+    for key, proxy in sources.items():
+        for old, new in changed.values():
+            if key[0].startswith("NPV ") and key[0].endswith(f" [{old}]"):
+                renames.append((proxy, f"{key[0][:-len(old) - 3]} [{new}]"))
+                break
+    for proxy, name in renames:
+        pv.RenameSource(name, proxy)
+    for gid, (_, new) in changed.items():
+        _LABELS[gid] = new
+
+
+def _label(src, default="model"):
+    """The label of a model source (rule R6, :func:`_labels`), else its Pipeline Browser name."""
+    gid = src.GetGlobalIDAsString() if src is not None else None
+    label = _labels().get(gid)
+    if label is None:
+        label = next((k[0] for k, v in pv.GetSources().items() if v == src), default)
+    return label
+
+
+def _name(model, what):
+    return f"NPV {what} [{_label(model.reader, 'deck')}]"
 
 
 _FINISHED = [None]  # what the last command left selected: the user picked nothing since while it is active
@@ -595,7 +733,7 @@ def shown_sources(view):
 # ------------------------------------------------------------ scene layers
 _SCENES = {}  # view.GetGlobalIDAsString() -> nastran_pv.scene.Scene
 _RECORDING = None  # the list _show appends to inside _recorded, else None
-_INFO_WRITES = 0  # info_text calls so far: apply tells from it which layer wrote the info text
+_SUMMARY = [None]  # (text, where) the view function drawing inside _recorded wrote (info_text)
 
 
 def scene_of(view):
@@ -685,11 +823,14 @@ def owner(src):
 
 def _named_owner(src):
     """The model an ``NPV <what> [<label>]`` object is named after, or None."""
-    name = next((k[0] for k, v in pv.GetSources().items() if v == src), "") if src is not None else ""
+    sources = pv.GetSources()
+    name = next((k[0] for k, v in sources.items() if v == src), "") if src is not None else ""
     if not name.startswith("NPV "):
         return None
-    for proxy in pv.GetSources().values():
-        if _is_model_source(proxy) and name.endswith(_name(_ReaderOnly(proxy), "")[len("NPV "):].strip()):
+    labels = _labels()
+    for proxy in sources.values():
+        label = labels.get(proxy.GetGlobalIDAsString())
+        if label is not None and name.endswith(f" [{label}]"):
             return proxy
     return None
 
@@ -729,16 +870,17 @@ def _show(src, view):
 
 
 def _recorded(fn):
-    """(what the :func:`_show` calls inside ``fn()`` showed, in order and once each, ``fn()``)."""
+    """(what the :func:`_show` calls inside ``fn()`` showed, in order and once each, ``fn()``, the
+    ``(text, where)`` its :func:`info_text` wrote last or None)."""
     global _RECORDING
     if _RECORDING is not None:
         raise RuntimeError("_recorded calls do not nest")
-    _RECORDING = []
+    _RECORDING, _SUMMARY[0] = [], None
     try:
         result = fn()
-        return list(_RECORDING), result
+        return list(_RECORDING), result, _SUMMARY[0]
     finally:
-        _RECORDING = None
+        _RECORDING, _SUMMARY[0] = None, None
 
 
 def _hide(objects, view):
@@ -788,6 +930,7 @@ def _clear_view(view):
     view.OrientationAxesVisibility = 1
 
 
+@_command
 def clear(view=None):
     """NPV Clear: empty ``view`` (default: active) of every layer, with the model undeformed (scale 0);
     in a side-by-side pair both views. Deletes nothing and keeps the comparison (NPV Single ends it);
@@ -846,14 +989,89 @@ def ghost_mesh(model, view, opacity=0.2):
 
 
 def info_text(model, view, text, where="Upper Left Corner"):
-    global _INFO_WRITES
-    _INFO_WRITES += 1
-    t = _named(model, "info", lambda: pv.Text())
-    t.Text = text
+    """What a view function says about its layer. While a command draws the layer (:func:`_recorded`)
+    it is the layer's summary, which the view's one info text lists with the other layers'
+    (:func:`write_info`, rule R6); outside a command it is written to the view's info text as it is."""
+    if _RECORDING is not None:
+        _SUMMARY[0] = (text, where)
+        return None
+    return _set_info(view, text, where)
+
+
+def _view_label(view):
+    """The view's name in ParaView (``RenderView1``), else its id."""
+    try:
+        name = servermanager.ProxyManager().SMProxyManager.GetProxyName("views", view.SMProxy)
+    except Exception:
+        name = ""
+    return name or f"view {view.GetGlobalIDAsString()}"
+
+
+def info_name(view):
+    """``NPV info [<view>]``: the name of the view's one info text (rule R6: per view, not per model)."""
+    return f"NPV info [{_view_label(view)}]"
+
+
+def info_of(view):
+    """The text ``view``'s NPV info shows, "" when it shows none."""
+    t = pv.FindSource(info_name(view))
+    return t.Text if t is not None and t in shown_sources(view) else ""
+
+
+def _set_info(view, text, where="Upper Left Corner"):
+    """Show ``text`` as the view's NPV info (hide it for an empty text); returns the text source."""
+    name = info_name(view)
+    t = pv.FindSource(name)
+    if not text:
+        if t is not None:
+            pv.Hide(t, view)
+        return t
+    if t is None:
+        t = pv.Text()
+        pv.RenameSource(name, t)
+    if t.Text != text:
+        t.Text = text
     d = pv.Show(t, view)
     d.WindowLocation = where
     d.FontSize = 13
+    d.Justification = "Left"
     return t
+
+
+def _no_step_text(model):
+    """What A's side of a pair says when it has no step of B's index (rule R5)."""
+    n = len(timesteps(model.reader))
+    return f"no step {model.step} here (it has {n}): not moved" if n else "no results here: not moved"
+
+
+def _header(scene, model=None):
+    """The first entry of a comparison view's info text (rule R6), kept whatever the coloring: the diff
+    summary in B's view (counts and mass change), the reference's label in A's view of a pair (and that
+    it has no step of B's index), each side's label in a pair without a diff; None for one model."""
+    sides = _sides(scene) if scene.role is not None else None
+    if not sides:
+        return None
+    b, a = sides
+    if scene.role == "A":
+        if a is None:
+            return None
+        text = f"A: {_label(a)} (the reference)"
+        if model is not None and model.reader == a and model.unmatched:
+            text += "\n" + _no_step_text(model)
+        return text
+    if scene.diff is not None:
+        own = model is not None and model.from_diff and model.diff == scene.diff
+        return _diff_text(scene.diff, model if own else None)
+    return f"B: {_label(b)}" if b is not None else None
+
+
+def write_info(view, model=None):
+    """Write ``view``'s one info text (rule R6) from its scene: the comparison header first
+    (:func:`_header`), then the coloring's summary and one per overlay (``Scene.summary``: the layer
+    drawn last in full, the others by their first line); hidden when there is nothing to say.
+    ``model``: the view's model as the command read it (B's side: the diff output's tables)."""
+    text, where = scene_of(view).summary(_header(scene_of(view), model))
+    return _set_info(view, text, where)
 
 
 # ------------------------------------------------------------------- colour
@@ -943,16 +1161,33 @@ def labels_for(model, array, values):
     return [f"{prefix[array]} {v}" if array in prefix else str(v) for v in values]
 
 
+def _shown_rep(src, view):
+    """``src``'s visible representation in ``view``, or None. Walks the view's representations:
+    GetRepresentation would make (and execute) one for a source the view does not show."""
+    for rep in list(getattr(view, "Representations", None) or []):
+        try:
+            if rep.Visibility and rep.Input == src:
+                return rep
+        except AttributeError:  # scalar bars and other non-data representations
+            continue
+    return None
+
+
+@_command
 def index_colors(source=None, view=None):
-    """Give the active representation's colour array an indexed, annotated LUT."""
+    """Give a colour array an indexed, annotated LUT: that of the active source (``source``) where the
+    view shows it colored by an array, else of the view's coloring layer. It shows nothing (rule R7:
+    an unshown active source, such as the reader, stays unshown)."""
     view = view or pv.GetActiveView()
     source = source or pv.GetActiveSource()
-    if source is None:
-        raise RuntimeError("Select a pipeline object coloured by an integer array first.")
-    rep = pv.GetRepresentation(source, view)
+    rep = _shown_rep(source, view) if source is not None and view is not None else None
+    if rep is None or not rep.ColorArrayName[1]:
+        layer = _coloring_reps(view)[1] if view is not None else []
+        rep, source = layer[0] if layer else (None, source)
+    if rep is None:
+        raise RuntimeError("Nothing shown in this view is coloured by an array: color it first (e.g. NPV PID), "
+                           "or select the colored object.")
     assoc, array = rep.ColorArrayName
-    if not array:
-        raise RuntimeError("The selected object is not coloured by an array (choose e.g. PID first).")
     data = fetch(source)
     values = sorted({int(v) for v in _gather(data, array, assoc)})
     if len(values) > 1024:
@@ -1560,9 +1795,8 @@ def view_nsm(model, view, top=8):
             text += f"\n    set {int(sids[i])}: {masses[i]:.6g}"
         if len(order) > top:
             text += f"\n    ... {len(order) - top} more (NSM_SET / NSM_SetMass in the field data)"
-    t = info_text(model, view, text + "\nMass units as in the deck (WTMASS not applied)"
-                                      f"\nOther set: {pick}")
-    pv.GetDisplayProperties(t, view).Justification = "Left"
+    info_text(model, view, text + "\nMass units as in the deck (WTMASS not applied)"
+                                  f"\nOther set: {pick}")
 
 
 def peak_deformation(model):
@@ -1573,16 +1807,41 @@ def peak_deformation(model):
 
     main = pv.FindSource(_name(model, "deform"))
     fraction = float(main.AutoScalePeak) if main is not None else 0.08
-    return peak_scale(model.data, fraction)
+    data = model.data
+    if model.has("Removed"):  # B's side of a comparison: B's own scale, not A's removed items'
+        from vtkmodules.vtkCommonDataModel import vtkMultiBlockDataSet
+
+        data = vtkMultiBlockDataSet()
+        for i, name in enumerate(model.names):
+            if name != "Removed":
+                data.SetBlock(data.GetNumberOfBlocks(), model.data.GetBlock(i))
+    return peak_scale(data, fraction)
+
+
+def _share_scale(views, models):
+    """One deformation scale for NPV Results in a pair (rule R5): A's deforms at the scale B's view
+    applied (its Auto Scale peak at this step, or the Scale Factor typed on B), the scale B's diff
+    layers and A's removed items in them move with, so A's mesh and its removed items stay together."""
+    lead, others = _layout_models(views[0])
+    b = next((m for m in models if m is not None and m.reader == lead), None)
+    if b is None or not others:
+        return
+    main = pv.FindSource(_name(b, "deform"))
+    scale = float(main.ScaleFactor) if main is not None and not main.AutoScale else peak_deformation(b)
+    for a in others:
+        set_deformation(_ReaderOnly(a), scale)
 
 
 def view_results(model, view, scale=None):
     """The mesh deformed and coloured by displacement over an undeformed wireframe. 'NPV deform'
     scales each step to 8 % of the model (Auto Scale), unless ``scale`` is given or Auto Scale was
-    turned off there and a Scale Factor typed, which a rerun keeps."""
+    turned off there and a Scale Factor typed, which a rerun keeps. A on the left of a pair is drawn
+    at B's scale (:func:`_share_scale`, once both views are drawn), also at a step it does not have:
+    it does not move and shows no results there, and follows the time controls back to one it has."""
     mesh_blocks = [b for b in MESH if model.has(b)]
+    follower = not model.from_diff and _followed(model.reader) is not None
     peak = peak_deformation(model)
-    if not mesh_blocks or peak <= 0:
+    if not mesh_blocks or peak <= 0 and not model.unmatched:
         if timesteps(model.reader) or model.field_strings(None, "ResultLabel"):
             info_text(model, view, "No displacement at this step: the results have none for it "
                                    "(stresses or forces only?). Step to another one.")
@@ -1592,12 +1851,12 @@ def view_results(model, view, scale=None):
         return
     mesh = _extract(model, *mesh_blocks, what="mesh")  # creates the deform filter on a fresh view
     main = deformed(model)
-    if scale is None and not main.AutoScale and main.ScaleFactor:
+    if scale is None and not follower and not main.AutoScale and main.ScaleFactor:
         scale = main.ScaleFactor  # typed on NPV deform with Auto Scale off: keep it
-    if scale is None:
-        set_deformation(model, peak, auto=True)
-    else:
+    if scale is not None:
         set_deformation(model, scale)
+    elif not follower:  # A of a pair: B's scale (_share_scale)
+        set_deformation(model, peak, auto=True)
     d = _show(mesh, view)
     d.Representation = "Surface"
     d.Opacity = 1.0
@@ -1606,7 +1865,13 @@ def view_results(model, view, scale=None):
     ghost.Representation = "Wireframe"
     ghost.Opacity = 0.15
     solid(ghost, [0.3, 0.3, 0.3])
+    if model.unmatched:  # the view's text says A has no such step
+        return main
     label = model.field_strings(None, "ResultLabel")
+    if follower and scale is None:
+        info_text(model, view, f"{label[0] if label else ''}\nDeformation at B's scale (one for the pair)",
+                  "Upper Center")
+        return main
     shown = peak if scale is None else scale
     info_text(model, view, f"{label[0] if label else ''}\nDeformation x{shown:.3g}"
               + ("" if scale is None else " (Auto Scale off on 'NPV deform')"), "Upper Center")
@@ -1822,7 +2087,7 @@ def free_body(seeds, reader=None, **props):
 
 def _step_label(model, view):
     """The step's label (``mode_label``: with the frequency of a mode)."""
-    step = current_step(model.reader, view)
+    step = model.step or current_step(model.reader, view)
     return mode_label(model, step if step is not None else 1)
 
 
@@ -1923,8 +2188,7 @@ def _info_lines(model, view, header, shown, turned_on, choose):
     text = f"{_step_label(model, view)} {header}\n" + "\n".join(shown)
     if turned_on:
         text += f"\nTurned on in the reader's Result Types: {', '.join(turned_on)} (uncheck them there to drop them)"
-    t = info_text(model, view, text + f"\n{choose}: Color By")
-    pv.GetDisplayProperties(t, view).Justification = "Left"
+    info_text(model, view, text + f"\n{choose}: Color By")
 
 
 def view_forces(model, view, shell=None, line=None, component=None):
@@ -2119,8 +2383,7 @@ def view_plies(model, view, ply=None, quantity=None, component=None, axes=True, 
         text += f"\nTurned on in the reader's Result Types: {', '.join(_TURNED_ON['plies'])}"
     # the same line on a deck and on a file converted from it (the views show the same on both)
     text += "\nThe ply: the reader's Ply, or convert --ply for a converted file (0: each element's critical ply)"
-    t = info_text(model, view, text)
-    pv.GetDisplayProperties(t, view).Justification = "Left"
+    info_text(model, view, text)  # the view's text is left-justified (write_info)
     return obj
 
 
@@ -2410,6 +2673,7 @@ def _targets(view):
     return [selected_reader()]
 
 
+@_command
 def grow_from_selection():
     kind, ids = selected_ids()
     view = pv.GetActiveViewOrCreate("RenderView")
@@ -2420,6 +2684,7 @@ def grow_from_selection():
     apply("grow", reader=targets[0], view=view, reset_camera=False)
 
 
+@_command
 def path_from_selection():
     kind, ids = selected_ids()
     if kind != "GRID" or len(ids) != 2:
@@ -2477,6 +2742,7 @@ def _refresh(readers):
     _finish(readers[0])
 
 
+@_command
 def show_only_selected():
     """Femap Show Only: the selected elements and nothing else (loads and SPCs stay); in a comparison
     on both models, by EID."""
@@ -2490,6 +2756,7 @@ def show_only_selected():
     _refresh(readers)
 
 
+@_command
 def hide_selected():
     """Femap Hide: add the selected elements to the reader's Hidden Elements (both models' in a
     comparison)."""
@@ -2502,6 +2769,7 @@ def hide_selected():
     _refresh(readers)
 
 
+@_command
 def show_all(reader=None):
     """Clear the element ID lists and check every property, material, type, family, group and file
     (of both models in a comparison)."""
@@ -2558,6 +2826,7 @@ def reached_eids(reader=None):
     return model.reader, out
 
 
+@_command
 def show_only_reached():
     """Femap-style isolate: show only what NPV Grow reached (e.g. grown from a grid within a group)."""
     from nastran_pv.tree import format_ids
@@ -2572,6 +2841,7 @@ def show_only_reached():
     _refresh(readers)
 
 
+@_command
 def hide_reached():
     """Add everything NPV Grow reached to the reader's Hidden Elements."""
     from nastran_pv.tree import format_ids, parse_ids
@@ -2585,11 +2855,13 @@ def hide_reached():
     _refresh(readers)
 
 
+@_command
 def show_only_property():
     """Femap Show Only Property: uncheck every property but those of the selected elements."""
     return _show_only_category("PID", "VisibleProperties", "property")
 
 
+@_command
 def show_only_material():
     """Uncheck every material but those of the selected elements."""
     return _show_only_category("MID", "VisibleMaterials", "material")
@@ -2654,12 +2926,14 @@ def _file_mode(path, key, reader, mode, what):
     return readers[0], file_ids(readers[0])
 
 
+@_command
 def show_only_file(path=None, key=None, reader=None):
     """Show only what an ID file lists, with the masses, SPCs and loads on its grids (the reader's
     Selection File unless ``path`` is given). Combines with the checklists and ID boxes."""
     return _file_mode(path, key, reader, "Show only", "Show Only File")[1]
 
 
+@_command
 def hide_file(path=None, key=None, reader=None):
     """Hide what an ID file lists (masses, SPCs and loads stay unless the file names them)."""
     return _file_mode(path, key, reader, "Hide", "Hide File")[1]
@@ -2689,27 +2963,50 @@ def _vertex_cell_ids(reader, array, runs):
     return out
 
 
+HIGHLIGHT_RGB = [1.0, 0.0, 1.0]  # NPV highlight: what Highlight File selected
+
+
+@_command
 def highlight_file(path=None, key=None, reader=None, view=None):
     """Select what an ID file lists as a ParaView selection on the reader (grids for a NID file,
-    elements otherwise), so Grow/Path from Selection and Show Only/Hide work on it."""
-    from nastran_pv.selection import threshold_selections
-
+    elements otherwise), so Grow/Path from Selection and Show Only/Hide work on it, and draw it
+    (magenta) as ``NPV highlight``, extracted from the model as the view draws it (moved with it): the
+    reader itself is not shown (rule R7). In a side-by-side pair each view highlights its own model;
+    the active view's reader ends selected."""
     reader, ids = _file_mode(path, key, reader, "Off", "Highlight File")
     view = view or pv.GetActiveViewOrCreate("RenderView")
-    parts = threshold_selections(Model(reader).data, ids)
-    if not parts:
-        raise RuntimeError(f"Nothing to highlight: {ids.describe()} match nothing in the model.")
-    rep = pv.GetDisplayProperties(reader, view)
-    if not rep.Visibility:
-        pv.Show(reader, view)
-    pv.SetActiveSource(reader)
-    if len(parts) == 1:
-        array, field, runs = parts[0]
-        pv.SelectThresholds(Thresholds=[float(v) for r in runs for v in r], ArrayName=array, FieldType=field,
-                            Source=reader)
-    else:  # also EIDs/PIDs that masses and bushes keep on their (vertex) points
-        from paraview import selection as pvsel
+    pair = _pair(view)
+    targets = [(v, subject(v)) for v in pair] if len(pair) > 1 else [(view, reader)]
+    lit = [_highlight(r, v, ids) for v, r in reversed(targets)]  # the active view's last: its reader selected
+    pv.SetActiveView(view)
+    if not any(lit):
+        raise RuntimeError(f"Nothing to highlight: {ids.describe()} match nothing in "
+                           + ("either model." if len(targets) > 1 else "the model."))
+    return ids
 
+
+def _highlight(reader, view, ids):
+    """Highlight ``ids`` of ``reader``'s model in ``view``; False (its previous highlight hidden) when
+    they match nothing there, as a pair side may (elements only B has)."""
+    from nastran_pv.selection import threshold_selections
+
+    model = Model(reader)
+    parts = threshold_selections(model.data, ids)
+    if not parts:
+        old = pv.FindSource(_name(model, "highlight"))
+        if old is not None:
+            pv.Hide(old, view)
+        if _selection_of(reader) is not None:
+            pv.ClearSelection(reader)
+        return False
+    from paraview import selection as pvsel
+
+    if len(parts) == 1:  # set on the reader directly: pv.SelectThresholds would show it in the view
+        array, field, runs = parts[0]
+        one = pvsel._createSelection("ThresholdSelectionSource", ArrayName=array, FieldType=field,
+                                     Thresholds=[float(v) for r in runs for v in r])
+        reader.SMProxy.SetSelectionInput(0, one.SMProxy, 0)
+    else:  # also EIDs/PIDs that masses and bushes keep on their (vertex) points
         srcs = []
         for array, field, runs in parts:
             if field == "CELL":
@@ -2721,8 +3018,20 @@ def highlight_file(path=None, key=None, reader=None, view=None):
         names = [f"s{i}" for i in range(len(srcs))]
         both = pvsel._createSelection("AppendSelections", Input=srcs, SelectionNames=names, Expression="|".join(names))
         reader.SMProxy.SetSelectionInput(0, both.SMProxy, 0)
+    src = deformed(model)  # the model as the view draws it (the same blocks, moved)
+    shown = _named(model, "highlight", lambda: pv.ExtractSelection(Input=src))
+    _feed(shown, src)
+    shown.Selection = _selection_of(reader)
+    d = pv.Show(shown, view)
+    d.Representation = "Surface"
+    d.Opacity = 1.0
+    d.LineWidth = 3.0
+    d.PointSize = 8.0
+    d.RenderPointsAsSpheres = 1
+    solid(d, HIGHLIGHT_RGB, view)
+    pv.SetActiveSource(reader)  # its selection is what Grow/Path from Selection and Show Only/Hide use
     pv.Render(view)
-    return ids
+    return True
 
 
 # --------------------------------------------------------------- model diff
@@ -2742,10 +3051,6 @@ REMOVED_ITEMS = {"masses": ("mass",), "bushes": ("bush",), "bushrotations": ("bu
 # the coloring a side by side array is drawn with: the view that colors the mesh by it, else "array"
 ARRAY_VIEWS = {"PID": "pid", "MID": "mid", "ElementType": "elementtype", "FamilyId": "family", "GroupId": "group",
                "Thickness": "thickness", "DiffStatus": "diff"}
-
-
-def _label(src):
-    return next((k[0] for k, v in pv.GetSources().items() if v == src), "model")
 
 
 def _input_of(proxy, prop="Input"):
@@ -2818,8 +3123,10 @@ def diff_summary(diff, data=None):
     return read_field_table(data, "DIFF_"), read_field_table(data, "DIFFMASS_")
 
 
-def _diff_text(diff, model):
-    rows, masses = diff_summary(diff, model.data if model.from_diff else None)
+def _diff_text(diff, model=None):
+    """The comparison's summary: B vs A, the counts per kind and the mass change (``model``: B's side,
+    whose data holds the diff's tables already; else they are fetched)."""
+    rows, masses = diff_summary(diff, model.data if model is not None and model.from_diff else None)
     b_src, a_src = diff_sides(diff)
     lines = [f"{_label(b_src)} vs {_label(a_src)}"]
     for r in rows:
@@ -2901,13 +3208,12 @@ def view_diff(model, view, reference=None):
         ghost_mesh(model, view, opacity=0.35)
         info_text(model, view, NO_REFERENCE)
         return
-    if model.role == "A":
+    if model.role == "A":  # the view's text says "A: <label> (the reference)" first
         ghost_mesh(model, view, opacity=0.25)
         removed_layer(model.diff, view, opacity=1.0)
-        info_text(model, view, f"A: {_label(model.reader)} (the reference)\nits removed items in red")
+        info_text(model, view, "its removed items in red")
         return model.diff
-    _diff_layers(model, view)
-    info_text(model, view, _diff_text(model.diff, model))
+    _diff_layers(model, view)  # the diff summary heads the view's text whatever the coloring (rule R6)
     return model.diff  # a rerun finds B upstream of it
 
 
@@ -2947,10 +3253,12 @@ def _new_partner_view(left):
 
 
 def _close_view(view):
-    """Close ``view``: its layout cell goes back to its neighbour, its scene is forgotten."""
+    """Close ``view``: its layout cell goes back to its neighbour, its scene and its info text are
+    forgotten."""
     layout = pv.GetLayout(view)
     cell = layout.GetViewLocation(view) if layout is not None else -1
     _SCENES.pop(view.GetGlobalIDAsString(), None)
+    info = pv.FindSource(info_name(view))
     # ParaView 6: a view deleted while it shows anything, after a camera link, crashes the next render
     # once the scene time changes; one emptied (and rendered empty) first does not
     _hide(shown_sources(view), view)
@@ -2959,6 +3267,8 @@ def _close_view(view):
         layout.RemoveView(view)
         layout.Collapse(cell)
     pv.Delete(view)
+    if info is not None:  # the text of no other view
+        pv.Delete(info)
 
 
 def _array_range(srcs, assoc, array):
@@ -3032,10 +3342,11 @@ def _layers_wanted(scene, array=None):
     return coloring, overlays
 
 
-def _redraw(view, coloring, overlays, reader=None):
+def _redraw(view, coloring, overlays, reader=None, latest=None):
     """Draw ``view``'s layers again because its session changed (a comparison started or ended, a
     pair was made): the old layers are hidden, then ``coloring`` and each overlay ``(name, args)`` are
-    applied for the view's subject, reusing their ``NPV ...`` objects. Returns the last model drawn."""
+    applied for the view's subject, reusing their ``NPV ...`` objects. ``latest``: the layer the user
+    drew last, which stays the one the view's text gives in full. Returns the last model drawn."""
     from nastran_pv.scene import GHOST
 
     _hide(scene_of(view).clear(), view)
@@ -3044,9 +3355,14 @@ def _redraw(view, coloring, overlays, reader=None):
         model, _ = _apply_view(coloring[0], view, reader, kwargs=coloring[1], redraw=True)
     for name, args in overlays:
         model, _ = _apply_view(name, view, reader, model=model, kwargs=args, redraw=True)
+    scene_of(view).latest = latest
+    write_info(view, model)  # nothing drawn: the text says what the view is now (or goes)
+    if model is None:
+        _sync_steps()
     return model
 
 
+@_command
 def side_by_side(array=None, reference=None, view=None):
     """A (the reference) in a left view and B in a right one, cameras linked (rule R4). From a view of
     one model or of a comparison, a new view is split off on its right; from either view of a pair the
@@ -3076,6 +3392,7 @@ def side_by_side(array=None, reference=None, view=None):
         raise RuntimeError("Side by side needs two models: open the reference model (A) too, then select "
                            "the modified model (B) and run it again.")
     coloring, overlays = _layers_wanted(scene, array)
+    latest = coloring[0] if array else scene.latest  # the layer the user drew last in the view run from
     if coloring is None:
         coloring = ("diff", {}) if diff is not None else ("pid", {})
     if coloring[0] == "diff" and diff is None:
@@ -3088,14 +3405,10 @@ def side_by_side(array=None, reference=None, view=None):
     for v, other, role, side in ((left, right, "A", a), (right, left, "B", b)):
         s = scene_of(v)
         s.role, s.partner, s.diff, s.side = role, other.GetGlobalIDAsString(), diff, side
-    models = [_redraw(v, coloring, overlays) for v in (left, right)]
+    models = [_redraw(v, coloring, overlays, latest=latest) for v in (left, right)]
     _share_coloring((left, right), models)
-    for v, side, role in ((left, a, "A"), (right, b, "B")):  # which model each view is, when no layer says
-        if scene_of(v).info is None:
-            text = f"{role}: {_label(side)}"
-            if role == "B" and diff is not None and models[1] is not None:
-                text += "\n" + _diff_text(diff, models[1])
-            info_text(_ReaderOnly(side), v, text)
+    if coloring[0] == "results":
+        _share_scale((left, right), models)
     if created:
         left.ResetCamera(False)
         for prop in ("CameraPosition", "CameraFocalPoint", "CameraViewUp", "CameraParallelScale"):
@@ -3112,6 +3425,7 @@ def side_by_side(array=None, reference=None, view=None):
     return left, right
 
 
+@_command
 def single(view=None):
     """NPV Single: end the comparison in ``view`` (default: active), which shows B as one model again
     with the same overlays and coloring (DiffStatus becomes PID). In a side-by-side pair the right view
@@ -3127,8 +3441,10 @@ def single(view=None):
         return _finish(subject(view))
     b = sides[0]
     coloring, overlays = scene.layer_args()
+    latest = "pid" if scene.latest == "diff" else scene.latest
     if coloring is not None and coloring[0] in ("diff", GHOST):
         coloring = ("pid", {}) if coloring[0] == "diff" else None
+    a = sides[1]
     partner = _partner(view)
     if partner is not None:
         left, right = (view, partner) if scene.role == "A" else (partner, view)
@@ -3140,7 +3456,9 @@ def single(view=None):
         view = left
     scene_of(view).end_comparison()
     pv.SetActiveView(view)
-    _redraw(view, coloring, overlays, reader=b)
+    _redraw(view, coloring, overlays, reader=b, latest=latest)
+    if a is not None and a != b and partner is not None:  # A's view is gone: A starts undeformed again
+        set_deformation(_ReaderOnly(a), 0.0)
     pv.Render(view)
     return _finish(b)
 
@@ -3206,26 +3524,21 @@ def _apply_view(name, view, reader=None, model=None, reset_camera=None, remove=F
             layer = scene.overlays.get(name)
             if layer is None:
                 return model, reader
-            wrote = scene.info == name
             _hide(scene.remove_overlay(name), view)
-            info = pv.FindSource(_name(model, "info")) if wrote else None
-            if info is not None:  # only the text this overlay wrote: another one's summary stays
-                pv.Hide(info, view)
+            write_info(view, model)  # the other layers' summaries stay
             return model, layer.selected if layer.selected is not None else reader
         if scene.coloring is None:
             ghost = {"opacity": GHOST_OPACITY.get(name, 0.2)}
-            objects, _ = _recorded(lambda: _draw(GHOST, model, view, ghost))
+            objects, _, _ = _recorded(lambda: _draw(GHOST, model, view, ghost))
             _hide(scene.set_coloring(Layer(GHOST, objects, args=ghost)), view)
-    writes, writer = _INFO_WRITES, scene.info
-    objects, selected = _recorded(lambda: _draw(name, model, view, kwargs))
-    layer = Layer(name, objects, selected, kwargs)
+    objects, selected, said = _recorded(lambda: _draw(name, model, view, kwargs))
+    text, where = said if said is not None else (None, "Upper Left Corner")
+    layer = Layer(name, objects, selected, kwargs, summary=text, where=where)
     _hide(scene.add_overlay(layer) if kind(name) == "overlay" else scene.set_coloring(layer), view)
-    if _INFO_WRITES != writes:
-        scene.info = name
-    elif writer is not None and scene.info is None:  # the replaced coloring wrote it, this one writes none
-        info = pv.FindSource(_name(model, "info"))
-        if info is not None:
-            pv.Hide(info, view)
+    if not redraw:  # a redraw keeps the layer the user drew last (_redraw puts it back)
+        scene.latest = name
+    write_info(view, model)
+    _sync_steps()
     if reset_camera or (reset_camera is None and fresh and not redraw):
         view.ResetCamera(False)
     return model, selected
@@ -3262,6 +3575,7 @@ def _begin_comparison(view, reader=None, reference=None):
     return out
 
 
+@_command
 def apply(name, reader=None, view=None, model=None, reset_camera=None, toggle=False, **kwargs):
     """Add view ``name`` to the scene of ``view`` (default: active) for the view's model (:func:`subject`;
     ``reader`` for a view of no model yet). A coloring (PID, Thickness, Results, ...) replaces the
@@ -3287,6 +3601,8 @@ def apply(name, reader=None, view=None, model=None, reset_camera=None, toggle=Fa
             _apply_view(overlay, v, kwargs=args, redraw=True)
     if len(views) > 1 and kind(name) == "coloring":
         _share_coloring(views, [m for m, _ in results])
+    if len(views) > 1 and name == "results" and kwargs.get("scale") is None:
+        _share_scale(views, [m for m, _ in results])
     for v in views:
         pv.Render(v)
     pv.SetActiveView(view)
@@ -3318,6 +3634,14 @@ ANIMATE_FPS = 24  # frames per second when playing in a view (rendering slower t
 
 def _paraview_major():
     return servermanager.vtkSMProxyManager.GetVersionMajor()
+
+
+def matched_time(times, steps, t):
+    """:func:`nastran_pv.deform.matched_time`: this model's step of the index of the layout's step at
+    ``t`` (rule R5), None without one."""
+    from nastran_pv.deform import matched_time as match
+
+    return match(times, steps, t)
 
 
 def _set_time(view, t):
@@ -3369,11 +3693,68 @@ def current_step(reader, view=None):
     return int(np.argmin([abs(x - t) for x in times])) + 1
 
 
+def _deform_model(deform):
+    """The model a Nastran Deform moves: the model source upstream of it, through a Nastran Diff its B
+    (Swap Inputs aware)."""
+    for node in upstream(deform):
+        if _xml_name(node) == DIFF_XML:
+            return diff_sides(node)[0]
+        if _is_model_source(node):
+            return node
+    return None
+
+
 def model_deforms(reader):
-    """{deform filter: pipeline name} for every Nastran Deform downstream of ``reader`` (the NPV
-    ones and any the user added)."""
+    """{deform filter: pipeline name} for every Nastran Deform of ``reader``'s model (the NPV ones,
+    those on B's side of a comparison and any the user added)."""
     return {src: key[0] for key, src in pv.GetSources().items()
-            if _xml_name(src) == DEFORM_XML and any(node == reader for node in upstream(src))}
+            if _xml_name(src) == DEFORM_XML and _deform_model(src) == reader}
+
+
+def _followed(reader):
+    """B, when ``reader`` is A on the left of a side-by-side pair: A follows B's steps by index (rule
+    R5); else None."""
+    for scene in list(_SCENES.values()):
+        sides = _sides(scene) if scene.role == "A" else None
+        if sides and sides[1] == reader and sides[0] is not None and sides[0] != reader:
+            return sides[0]
+    return None
+
+
+def _sync_steps():
+    """A held time per model (rule R5): every Nastran Deform of A, on the left of a side-by-side pair,
+    gets B's time steps as its Match Steps, so at B's n-th step A is read at its own n-th step (and is
+    not moved without one), also when the time controls step; every other deform follows nothing."""
+    for src in pv.GetSources().values():
+        if _xml_name(src) != DEFORM_XML or "MatchSteps" not in src.ListProperties():
+            continue
+        model = _deform_model(src)
+        lead = _followed(model) if model is not None else None
+        want = " ".join(repr(t) for t in timesteps(lead)) if lead is not None else ""
+        if str(src.MatchSteps or "") != want:
+            src.MatchSteps = want
+
+
+def _layout_models(view, reader=None):
+    """``(leader, followers)``: the models a time command in ``view`` moves (rule R5). In a comparison
+    (after NPV Diff, or a side-by-side pair) B leads, whichever view: its steps are the layout's, and A
+    follows by index; else the view's model (``reader``) alone."""
+    sides = _sides(scene_of(view)) if view is not None else None
+    if sides and sides[0] is not None and (reader is None or reader in sides):
+        b, a = sides
+        return b, [a] if a is not None and a != b else []
+    return reader or subject(view), []
+
+
+def _set_layout_time(view, t):
+    """The time of ``view`` and of its partner in a pair (one time for the layout)."""
+    for v in _pair(view):
+        _set_time(v, t)
+
+
+def _render_layout(view):
+    for v in _pair(view):
+        pv.Render(v)
 
 
 def held_time(reader):
@@ -3404,10 +3785,39 @@ def _show_mode_label(model, view, text):
     return t
 
 
+def _step_names(reader):
+    """The deck reader's name of each time step (its *StepLabels*: ``Subcase 1 mode 3 (45.2 Hz)``),
+    [] for a converted file. Asking does not run the reader."""
+    if _xml_name(reader) != READER_XML or reader.GetProperty("StepLabels") is None:
+        return []
+    reader.UpdatePropertyInformation()
+    prop = reader.GetProperty("StepLabels")
+    text = prop.GetElement(0) if len(prop) else ""
+    return text.split("\n") if text else []
+
+
 def _hide_mode_label(reader, view):
     t = pv.FindSource(_name(_ReaderOnly(reader), "mode label"))
     if t is not None:
         pv.Hide(t, view)
+
+
+def _mode_labels(view, lead, others, times, mode, model=None):
+    """The mode in the upper right corner of each view of the layout: the leader's (B's) in its views;
+    in A's view of a pair, A's own step of that index (``A: ...``), or that it has none."""
+    for v in _pair(view):
+        own = _own_side(scene_of(v))
+        if own is not None and own in others:
+            t = matched_time(timesteps(own), times, times[mode - 1])
+            if t is None:
+                text = f"A: no step {mode} (it has {len(timesteps(own))}): not moved"
+            else:
+                names = _step_names(own)  # the reader names its steps: no need to read A at it
+                text = f"A: {names[mode - 1] if mode <= len(names) else mode_label(Model(own, t, own_time=True), mode)}"
+            _show_mode_label(_ReaderOnly(own), v, text)
+        else:
+            model = model or Model(lead, times[mode - 1])
+            _show_mode_label(model, v, mode_label(model, mode))
 
 
 def _suppress_time(reader, on):
@@ -3421,45 +3831,54 @@ def _suppress_time(reader, on):
 
 
 _LOOP_BEFORE = {}  # reader id -> the animation scene's Loop before play_mode turned it on
+_SUPPRESSED = set()  # ids of the readers play_mode took out of the time keeper (with or without deforms)
 
 
+@_command
 def play_mode(mode=None, frames=ANIMATE_FPS, reader=None, view=None):
     """Set the play button up to vibrate ``mode`` (1-based step; default the one the view is on)
     in the view as it is: every Nastran Deform of the model holds the mode's time step and turns
     the time steps into one looping cycle of ``frames`` phases, so whatever is shown (masses,
-    groups, a show-only subset, ...) moves. The mode and its frequency are shown in the view, and
-    the view is left at the peak of the cycle (a complex step: its largest displacement). Any
-    view, :func:`stop_mode_animation` or Animate All Modes gives the time controls back to the
-    modes. Returns the mode."""
-    reader = reader or subject(view)
+    groups, a show-only subset, ...) moves. In a comparison (rule R5) both models vibrate, B's mode
+    and A's step of the same index, at B's amplitude, and both readers' time steps leave the time
+    controls; in a pair each view shows its model's mode. The mode and its frequency are shown in
+    the view, and the view is left at the peak of the cycle (a complex step: its largest
+    displacement). Any view, :func:`stop_mode_animation` or Animate All Modes gives the time controls
+    back to the modes. Returns the mode."""
     view = view or pv.GetActiveViewOrCreate("RenderView")
-    mode = mode or current_step(reader, view)
-    stop_mode_animation(reader, view)
+    lead, others = _layout_models(view, reader)
+    mode = mode or current_step(lead, view)
+    stop_mode_animation(lead, view)
     if mode is None:
         raise RuntimeError(NO_STEPS)
-    times, _ = _prepare_modes(reader, view, [mode], None)
+    times, _ = _prepare_modes(lead, view, [mode], None)
     t = times[mode - 1]
-    _set_time(view, t)
-    model = Model(reader, t)
+    _set_layout_time(view, t)
+    model = Model(lead, t)
     amp = peak_deformation(model)
     if amp <= 0:
         raise RuntimeError(f"step {mode} ({mode_label(model, mode)}) has no displacement to vibrate.")
-    for f, name in model_deforms(reader).items():
-        f.Amplitude = 0.0 if name.startswith("NPV undeformed") else amp
-        f.ModeTime = t
-        f.FramesPerCycle = int(frames)
-        f.VibrateMode = 1
-        f.UpdatePipelineInformation()
-    _suppress_time(reader, True)
+    for r in [lead] + others:
+        own = t if r == lead else matched_time(timesteps(r), times, t)  # A: its step of B's index
+        for f, name in model_deforms(r).items():
+            f.Amplitude = 0.0 if name.startswith("NPV undeformed") or own is None else amp
+            # following Match Steps a deform finds A's step of the mode's index itself, and shows no
+            # results when A has none; another one is held at A's step (none: its first, not moved)
+            f.ModeTime = t if str(f.MatchSteps or "") else own if own is not None else (timesteps(r) or [0.0])[0]
+            f.FramesPerCycle = int(frames)
+            f.VibrateMode = 1
+            f.UpdatePipelineInformation()
+        _suppress_time(r, True)
+        _SUPPRESSED.add(r.GetGlobalIDAsString())
     scene = pv.GetAnimationScene()
-    _LOOP_BEFORE.setdefault(reader.GetGlobalIDAsString(), scene.Loop)
+    _LOOP_BEFORE.setdefault(lead.GetGlobalIDAsString(), scene.Loop)
     scene.UpdateAnimationUsingDataTimeSteps()
     scene.PlayMode = "Snap To TimeSteps"
     scene.Loop = 1
-    _set_time(view, _peak_time(model, frames))
-    _show_mode_label(model, view, mode_label(model, mode))
-    pv.Render(view)
-    _finish_deform(reader)
+    _set_layout_time(view, _peak_time(model, frames))
+    _mode_labels(view, lead, others, times, mode, model)
+    _render_layout(view)
+    _finish_deform(lead)
     return mode
 
 
@@ -3477,31 +3896,42 @@ def _peak_time(model, frames):
     return (round((((theta - start) / 360.0) % 0.5) * frames) % frames) / frames
 
 
+@_command
 def stop_mode_animation(reader=None, view=None):
     """Undo :func:`play_mode`: the time controls step through the modes again, on the mode that
-    vibrated. Returns True if a mode was vibrating."""
-    reader = reader or subject(view)
-    filters = [f for f in model_deforms(reader) if f.VibrateMode]
-    if not filters:
-        return False
+    vibrated (both models of a comparison). Returns True if a mode was vibrating."""
     view = view or pv.GetActiveViewOrCreate("RenderView")
-    held = float(filters[0].ModeTime)
+    lead, others = _layout_models(view, reader)
+    readers = [lead] + others + ([reader] if reader is not None and reader not in [lead] + others else [])
+    vibrating = [(r, [f for f in model_deforms(r) if f.VibrateMode]) for r in readers]
+    filters = [f for _, fs in vibrating for f in fs]
+    held_back = [r for r in readers if r.GetGlobalIDAsString() in _SUPPRESSED]
+    if not filters and not held_back:
+        return False
+    held = float(filters[0].ModeTime) if filters else view.ViewTime  # the leader's, when it vibrates
     for f in filters:
         f.VibrateMode = 0
         f.UpdatePipelineInformation()
-    _suppress_time(reader, False)
+    for r, fs in vibrating:  # A of a comparison may have no deform of its own: play_mode held it all the same
+        if fs or r in held_back:
+            _suppress_time(r, False)
+            _SUPPRESSED.discard(r.GetGlobalIDAsString())
     scene = pv.GetAnimationScene()
     scene.UpdateAnimationUsingDataTimeSteps()
-    scene.Loop = _LOOP_BEFORE.pop(reader.GetGlobalIDAsString(), scene.Loop)
-    _set_time(view, held)
-    _hide_mode_label(reader, view)
-    pv.Render(view)
-    _finish_deform(reader)
+    loops = [_LOOP_BEFORE.pop(r.GetGlobalIDAsString(), None) for r in readers]
+    scene.Loop = next((loop for loop in loops if loop is not None), scene.Loop)
+    _set_layout_time(view, held)
+    for v in _pair(view):
+        for r in readers:
+            _hide_mode_label(r, v)
+    _render_layout(view)
+    _finish_deform(lead)
     return True
 
 
 def _prepare_modes(reader, view, modes, camera):
-    """(times, 1-based modes) after checking them; a view with no NPV objects gets the results view."""
+    """(times, 1-based modes) of the layout's leading model after checking them. Nothing drawn is
+    replaced (rule R5): only a view (pair) with no layers at all gets NPV Results first."""
     stop_mode_animation(reader, view)
     times = mode_times(reader, view)
     if not times:
@@ -3510,7 +3940,7 @@ def _prepare_modes(reader, view, modes, camera):
     bad = [m for m in modes if not 1 <= m <= len(times)]
     if bad:
         raise ValueError(f"mode(s) {bad} not in 1..{len(times)}")
-    if not _shows_deform(reader, view):
+    if all(scene_of(v).empty for v in _pair(view)) and not _shows_deform(reader, view):
         apply("results", reader=reader, view=view)
     if camera:
         set_camera(view, camera)
@@ -3518,19 +3948,20 @@ def _prepare_modes(reader, view, modes, camera):
 
 
 @contextlib.contextmanager
-def _kept_view(reader, view):
-    """Put the view back as it was afterwards, even after an error: its time step and every NPV
-    deform filter's scale (0 in most views, Auto Scale in the results view). Auto Scale is off
-    meanwhile, so the sweeps' Scale Factors act."""
+def _kept_view(reader, view, others=()):
+    """Put the view (both views of a pair) back as it was afterwards, even after an error: its time
+    step and every NPV deform filter's scale of ``reader`` and ``others`` (0 in most views, Auto
+    Scale in the results view). Auto Scale is off meanwhile, so the sweeps' Scale Factors act."""
     start = view.ViewTime
-    saved = [(f, f.ScaleFactor, f.AutoScale, float(f.Phase)) for f in deform_filters(_ReaderOnly(reader))]
+    saved = [(f, f.ScaleFactor, f.AutoScale, float(f.Phase))
+             for r in [reader, *others] for f in deform_filters(_ReaderOnly(r))]
     for f, _, auto, _ in saved:
         if auto:
             f.AutoScale = 0
     try:
         yield
     finally:
-        _set_time(view, start)
+        _set_layout_time(view, start)
         for f, scale, auto, phase in saved:
             if f.ScaleFactor != scale:
                 f.ScaleFactor = scale
@@ -3538,7 +3969,7 @@ def _kept_view(reader, view):
                 f.AutoScale = auto
             if float(f.Phase) != phase:
                 f.Phase = phase
-        pv.Render(view)
+        _render_layout(view)
 
 
 def is_complex_step(model):
@@ -3575,25 +4006,28 @@ class _Deflect:
         return self.key(k, frames)
 
 
-def _mode_sweeps(reader, view, times, modes, skipped):
+def _mode_sweeps(reader, view, times, modes, skipped, others=()):
     """For each mode with a displacement: go to its time step and yield ``(mode, deflect)``, where
-    ``deflect(k, frames)`` (:class:`_Deflect`) moves every NPV deform filter to frame ``k`` of a
-    cycle at the mode's peak scale: by ``sin`` for a real mode, through its phase for a complex
-    step. Modes whose step has no displacement are appended to ``skipped``. The mode and its
-    frequency are shown in the view while it plays. Run it inside :func:`_kept_view`."""
+    ``deflect(k, frames)`` (:class:`_Deflect`) moves every NPV deform filter of ``reader`` and of
+    ``others`` (A of a comparison, which follows by index) to frame ``k`` of a cycle at the mode's
+    peak scale (one scale for the layout): by ``sin`` for a real mode, through its phase for a
+    complex step. Modes whose step has no displacement are appended to ``skipped``. The mode and its
+    frequency are shown in each view while it plays. Run it inside :func:`_kept_view`."""
     try:
         for mode in modes:
-            _set_time(view, times[mode - 1])
+            _set_layout_time(view, times[mode - 1])
             model = Model(reader, times[mode - 1])
-            filters = deform_filters(model)
+            filters = deform_filters(model) + [f for r in others for f in deform_filters(_ReaderOnly(r))]
             amp = peak_deformation(model)
             if not filters or amp <= 0:  # the step has no displacement (missing, all NaN or all 0)
                 skipped.append(mode)
                 continue
-            _show_mode_label(model, view, mode_label(model, mode))
+            _mode_labels(view, reader, others, times, mode, model)
             yield mode, _Deflect(filters, amp, is_complex_step(model))
     finally:
-        _hide_mode_label(reader, view)
+        for v in _pair(view):
+            for r in [reader, *others]:
+                _hide_mode_label(r, v)
 
 
 def _no_displacement(skipped, done, what):
@@ -3606,6 +4040,7 @@ def _phase(k, frames):
     return round(math.sin(2 * math.pi * k / frames), 9)
 
 
+@_command
 def animate_modes(modes=None, cycles=1, frames=24, out=None, reader=None, view=None, camera=None,
                   fps=ANIMATE_FPS):
     """Vibrate each mode in turn in the view as it is (masses, PID, loads, ... or results): every
@@ -3618,18 +4053,18 @@ def animate_modes(modes=None, cycles=1, frames=24, out=None, reader=None, view=N
     RuntimeError, after playing the others, for modes whose step has no displacement."""
     import time
 
-    reader = reader or subject(view)
     view = view or pv.GetActiveViewOrCreate("RenderView")
+    reader, others = _layout_models(view, reader)
     times, modes = _prepare_modes(reader, view, modes, camera)
     if out:
         os.makedirs(out, exist_ok=True)
     played, skipped = [], []
-    with _kept_view(reader, view):
-        for mode, deflect in _mode_sweeps(reader, view, times, modes, skipped):
+    with _kept_view(reader, view, others):
+        for mode, deflect in _mode_sweeps(reader, view, times, modes, skipped, others):
             for k in range(cycles * frames):
                 start = time.perf_counter()
                 deflect(k, frames)
-                pv.Render(view)
+                _render_layout(view)
                 if out:
                     pv.SaveScreenshot(os.path.join(out, f"mode{mode:02d}_{k:03d}.png"), view)
                 elif fps:
@@ -3664,12 +4099,13 @@ def _shows_deform(reader, view):
     return any(node == f for src in shown_sources(view) for node in upstream(src, 20) for f in filters)
 
 
+@_command
 def animate_mode(cycles=2, frames=ANIMATE_FPS):
     """Vibrate the mode the time controls are on (``cycles`` cycles), then leave the play button
     set up to loop it (:func:`play_mode`). Stop Mode Animation (or any view) gives the time controls
     back to the modes: step to another mode and click again."""
     view = pv.GetActiveViewOrCreate("RenderView")
-    reader = subject(view)
+    reader = _layout_models(view)[0]  # B in a comparison: A follows by index
     step = current_step(reader, view)
     if step is None:
         raise RuntimeError(NO_STEPS)
@@ -3697,6 +4133,7 @@ def _model_path(reader):
     return None
 
 
+@_command
 def save_mode_animations(modes=None, cycles=1, frames=24, folder=None, fps=ANIMATE_FPS, reader=None, view=None):
     """Save each mode's vibration, in the view as it is, as a looping GIF
     ``<model>_mode<NN>.gif`` in ``folder`` (default: next to the model file). ``modes`` are 1-based
@@ -3710,23 +4147,23 @@ def save_mode_animations(modes=None, cycles=1, frames=24, folder=None, fps=ANIMA
     """
     from PIL import Image
 
-    reader = reader or subject(view)
     view = view or pv.GetActiveViewOrCreate("RenderView")
-    model_file = _model_path(reader)
+    reader, others = _layout_models(view, reader)
+    model_file = _model_path(_own_side(scene_of(view)) or reader)  # what the GIF shows: the view's model
     folder = folder or (os.path.dirname(model_file) if model_file else os.getcwd())
     stem = os.path.splitext(os.path.basename(model_file))[0] if model_file else "model"
     os.makedirs(folder, exist_ok=True)
     times, modes = _prepare_modes(reader, view, modes, None)
     scratch = os.path.join(folder, f".npv_frame_{os.getpid()}.png")
     written, still, skipped = [], [], []
-    with _kept_view(reader, view):
-        for mode, deflect in _mode_sweeps(reader, view, times, modes, skipped):
+    with _kept_view(reader, view, others):
+        for mode, deflect in _mode_sweeps(reader, view, times, modes, skipped, others):
             shots = {}  # frame key -> image: equal shapes are rendered once
             keys = [deflect.key(k, frames) for k in range(cycles * frames)]
             for k, key in enumerate(keys):
                 if key not in shots:
                     deflect(k, frames)
-                    pv.Render(view)
+                    _render_layout(view)
                     shots[key] = capture_view(view, scratch)
             if deflect.spin:  # through its phase: still only when every frame is the first one
                 peak = shots[0]
@@ -3776,6 +4213,7 @@ ACTIONS["clear"] = clear
 ACTIONS["single"] = single
 
 
+@_command
 def run_macro(name):
     """Entry point for the toolbar macros: report problems in Output Messages instead of raising."""
     from vtkmodules.vtkCommonCore import vtkOutputWindow
