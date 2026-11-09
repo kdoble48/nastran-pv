@@ -6,12 +6,17 @@ environment variable), then File > Open a deck and choose
 
 The plugin finds its dependencies in this order:
 
-1. anything already importable (e.g. PYTHONPATH),
-2. ``../src`` relative to this file (the nastran_pv package),
-3. ``./_vendor`` next to this file (filled by ``install_deps.py``),
+1. nastran_pv: ``../src`` relative to this file in a checkout (put first on ``sys.path``), or, in
+   an installed wheel (``nastran_pv/paraview/``), the package this file ships in, imported on its
+   own so the rest of that site-packages stays off ParaView's path;
+2. anything else already importable (ParaView's own packages, ``PYTHONPATH``),
+3. the vendor folders filled by ``install_deps.py`` (``locate.vendor_dirs``: ``./_vendor`` then the
+   per-user folder in a checkout, the per-user folder for an installed package, or
+   ``NASTRAN_PV_VENDOR_DIR``),
 4. folders listed in the ``NASTRAN_PV_SITE_PACKAGES`` environment variable.
 """
 import importlib
+import importlib.machinery
 import itertools
 import os
 import sys
@@ -39,31 +44,78 @@ def _plugin_dir():
     return None
 
 
+_HELP = (
+    "nastran-pv could not import {missing}. Install pyNastran and its dependencies (cpylog,\n"
+    "docopt-ng, colorama, scipy) for ParaView's Python with\n"
+    "  nastran-pv setup --pvpython <path to pvpython>   (or python paraview/install_deps.py ...)\n"
+    "(it keeps a pyNastran that ParaView can already import and adds only what is missing),\n"
+    "or point NASTRAN_PV_SITE_PACKAGES at a site-packages folder of a CPython with the same\n"
+    "version as ParaView's Python that has pyNastran installed. Original error: {err}"
+)
+
+
+class _NoBytecodeLoader(importlib.machinery.SourceFileLoader):
+    """Reads an installed nastran_pv (and pip's .pyc where they fit) but writes no ``__pycache__``
+    into another Python's site-packages: pip did not record those files, so they would be left
+    behind on uninstall or upgrade."""
+
+    def set_data(self, path, data, *, _mode=0o666):
+        pass
+
+
+class _InstalledPackage:
+    """Meta path finder: nastran_pv and its submodules from ``root`` alone (the site-packages this
+    installed plugin ships in, often another Python's), so the rest of ``root`` stays off sys.path,
+    behind ParaView's numpy; first, because the plugin and its package must be the same version."""
+
+    def __init__(self, root):
+        self.npv_root = root
+
+    def find_spec(self, name, path=None, target=None):
+        if name != "nastran_pv" and not name.startswith("nastran_pv."):
+            return None
+        spec = importlib.machinery.PathFinder.find_spec(name, [self.npv_root] if name == "nastran_pv" else path)
+        if spec is not None and type(spec.loader) is importlib.machinery.SourceFileLoader:
+            spec.loader = _NoBytecodeLoader(spec.loader.name, spec.loader.path)
+        return spec
+
+
+def _vendor_paths(here):
+    """The vendor folders to append (``locate.vendor_dirs`` of this plugin folder). Without an
+    importable nastran_pv: ``NASTRAN_PV_VENDOR_DIR``, else ``./_vendor``."""
+    env = os.environ.get("NASTRAN_PV_VENDOR_DIR")
+    try:  # nastran_pv imports without pyNastran, which may be in the vendor folders
+        from nastran_pv.locate import vendor_dirs
+    except ImportError:  # the reader reports what is missing on first use
+        return [env] if env else [os.path.join(here, "_vendor")] if here else []
+    return [str(p) for p in vendor_dirs(here)] if here or env else []
+
+
 def _bootstrap():
     here = _plugin_dir()
-    front, back = [], []
     if here:
-        front.append(os.path.join(os.path.dirname(here), "src"))
-        back.append(os.path.join(here, "_vendor"))
+        parent = os.path.dirname(here)
+        src = os.path.join(parent, "src")
+        if os.path.isdir(src):  # a checkout: <repo>/paraview next to <repo>/src
+            if src not in sys.path:
+                sys.path.insert(0, src)
+        elif os.path.basename(parent) == "nastran_pv" and os.path.isfile(os.path.join(parent, "__init__.py")):
+            root = os.path.dirname(parent)  # an installed wheel: <site-packages>/nastran_pv/paraview
+            if not any(getattr(f, "npv_root", None) == root for f in sys.meta_path):
+                sys.meta_path.insert(0, _InstalledPackage(root))
+    try:
+        back = _vendor_paths(here)
+    except Exception as exc:  # a nastran_pv that fails to import for another reason
+        vtkOutputWindow.GetInstance().DisplayErrorText(
+            _HELP.format(missing="nastran_pv", err=f"{type(exc).__name__}: {exc}") + "\n")
+        back = []
     back += [p for p in os.environ.get("NASTRAN_PV_SITE_PACKAGES", "").split(os.pathsep) if p]
-    for p in reversed(front):
-        if os.path.isdir(p) and p not in sys.path:
-            sys.path.insert(0, p)
     for p in back:  # after ParaView's own site-packages so its numpy wins
         if os.path.isdir(p) and p not in sys.path:
             sys.path.append(p)
 
 
 _bootstrap()
-
-_HELP = (
-    "nastran-pv could not import {missing}. Install pyNastran and its dependencies (cpylog,\n"
-    "docopt-ng, colorama, scipy) for ParaView's Python with\n"
-    "  python paraview/install_deps.py --pvpython <path to pvpython>\n"
-    "(it keeps a pyNastran that ParaView can already import and adds only what is missing),\n"
-    "or point NASTRAN_PV_SITE_PACKAGES at a site-packages folder of a CPython with the same\n"
-    "version as ParaView's Python that has pyNastran installed. Original error: {err}"
-)
 
 _FLAGS = ("shells", "lines", "solids", "masses", "rigid", "connectors", "plotels", "bushes", "constraints", "loads")
 # model tree checklists (reader property -> nastran_pv.tree category)
@@ -910,19 +962,25 @@ class _GlyphFilter(_Settable, VTKPythonAlgorithmBase):
         data = as_multiblock(vtkDataObject.GetData(inInfo[0], 0))
         if data.IsA("vtkMultiBlockDataSet"):
             self._list(data)
-        block = _find_block(data, self.BLOCK, self.REQUIRED)
+        block = self._block(data)
         out = vtkPolyData.GetData(outInfo, 0)
         if block is None or block.GetNumberOfPoints() == 0:
             return 1
         out.ShallowCopy(self._glyphs(block, glyph_diagonal(data), data))
         return 1
 
+    def _block(self, data):
+        """What ``_glyphs`` draws from: the filter's block of the input (None: nothing to draw)."""
+        return _find_block(data, self.BLOCK, self.REQUIRED)
 
-# copies of nastran_pv.glyphs.MASS_COLOR_ARRAYS / BUSH_SHOW / LOAD_SHOW / LOAD_SCALES (test_plugin_constants)
+
+# copies of nastran_pv.glyphs.MASS_COLOR_ARRAYS / BUSH_SHOW / LOAD_SHOW / LOAD_SCALES / LOAD_SOURCES
+# (test_plugin_constants)
 _MASS_COLORS = ("Mass", "EID", "NID")
 _BUSH_SHOW = ("all", "grounded", "coincident")
 _LOAD_SHOW = ("force", "moment", "both")
 _LOAD_SCALES = ("magnitude", "fixed")
+_LOAD_SOURCES = ("deck", "SPCForce", "MPCForce", "AppliedLoad")
 
 
 @smproxy.filter(name="NastranPVMassGlyphs", label="Nastran Mass Glyphs")
@@ -1043,15 +1101,17 @@ class NastranPVBushGlyphs(_GlyphFilter):
 @smdomain.datatype(dataTypes=["vtkDataObject"], composite_data_supported=True)
 @_with_glyph_size(0.08, 0.001, 0.5, 6, 3, 32)
 class NastranPVLoadGlyphs(_GlyphFilter):
-    """FORCE/MOMENT arrows of the checked load sets (Loads/* blocks): forces single-headed, moments
-    double-headed, tail on the grid. Size: length of the largest arrow as a fraction of the model
-    diagonal. Every Nth Point 0 keeps at most 1500 arrows per set."""
+    """FORCE/MOMENT arrows of the checked load sets (Loads/* blocks), or with Source a result's
+    SPC forces, MPC forces or applied loads (OLOAD) at each grid with output: forces single-headed,
+    moments double-headed, tail on the grid. Size: length of the largest arrow as a fraction of the
+    model diagonal. Every Nth Point 0 keeps at most 1500 arrows per set."""
 
     BLOCK, REQUIRED = "Loads", "Force"
     LISTS = True
 
     def __init__(self):
         _GlyphFilter.__init__(self)
+        self._source = 0
         self._sets = _checklist(self)
         self._show = 0
         self._scale = 0
@@ -1059,7 +1119,15 @@ class NastranPVLoadGlyphs(_GlyphFilter):
         self._size = 0.08
         self._resolution = 6
 
+    @smproperty.intvector(name="Source", default_values=0)
+    @smdomain.xml(_enum_xml(("Deck load sets", "SPC forces", "MPC forces", "Applied loads (OLOAD)")))
+    def SetSource(self, v):
+        """What to draw: the deck's load sets, or the current step's SPC forces, MPC forces or applied
+        loads (OLOAD) from the results (one arrow per grid with output; Load Sets does not apply)."""
+        self._set("_source", int(v))
+
     @smproperty.dataarrayselection(name="LoadSets")
+    @smhint.xml('<PropertyWidgetDecorator type="GenericDecorator" mode="visibility" property="Source" value="0"/>')
     def GetLoadSets(self):
         """Load sets to draw (first shown: the Case Control LOAD, else the first set with loads)."""
         return self._sets
@@ -1089,16 +1157,32 @@ class NastranPVLoadGlyphs(_GlyphFilter):
         default = default_load_set(data)
         _fill_checklist(self, self._sets, [n for n, _ in load_sets_of(data)], {default} if default else set())
 
+    def _result_source(self):
+        """The result type drawn (SPCForce, MPCForce, AppliedLoad), or None for the deck's sets."""
+        source = _LOAD_SOURCES[self._source % len(_LOAD_SOURCES)]
+        return None if source == "deck" else source
+
+    def _block(self, data):
+        return data if self._result_source() else _GlyphFilter._block(self, data)
+
     def _glyphs(self, block, diag, model):
-        from nastran_pv.glyphs import load_glyphs, load_sets_of
+        from nastran_pv.glyphs import load_glyphs, load_sets_of, result_load_points
         from nastran_pv.vtkutil import add_string_array
 
-        on = set(_checked(self._sets))
-        sets = [(n, ds) for n, ds in load_sets_of(model) if n in on] if block.IsA("vtkMultiBlockDataSet") \
-            else [("Loads", block)]
+        rtype = self._result_source()
+        if rtype:  # the result's arrays on the model's blocks, one arrow per grid
+            points = result_load_points(model, rtype)
+            sets = [(rtype, points)] if points.GetNumberOfPoints() else []
+        elif block.IsA("vtkMultiBlockDataSet"):
+            on = set(_checked(self._sets))
+            sets = [(n, ds) for n, ds in load_sets_of(model) if n in on]
+        else:
+            sets = [("Loads", block)]
         out = load_glyphs(sets, diag, _LOAD_SHOW[self._show % 3], self._size, _LOAD_SCALES[self._scale % 2],
                           self._stride, self._resolution)
         add_string_array(out.GetFieldData(), "LoadSetNames", [n for n, _ in sets])
+        if rtype and points.GetFieldData().GetArray("ForceSum") is not None:
+            out.GetFieldData().AddArray(points.GetFieldData().GetArray("ForceSum"))  # of the grids drawn
         return out
 
 
