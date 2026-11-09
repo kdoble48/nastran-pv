@@ -369,7 +369,9 @@ class Op2Results(_Results):
             modes = getattr(res, "modes", [])
             for it in range(ntimes):
                 t = float(times[it]) if len(times) > it else float("nan")
-                mode = int(modes[it]) if len(modes) > it else it + 1
+                mode = None
+                if kind in ("eigenvector", "complex_eigenvector"):
+                    mode = int(modes[it]) if len(modes) > it else it + 1
                 if kind == "eigenvector":
                     freq = _mode_frequency(eigns, cycles, it)
                 elif kind == "complex_eigenvector":  # the damped frequency, |Im(lambda)| / 2 pi
