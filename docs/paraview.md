@@ -85,12 +85,23 @@ of that group. The rules, in Nastran terms:
 * An RBE2, RBE3, RBAR or CBUSH is kept when **any** of its grids is on a kept element. Its other
   grids then count as kept too. So the CONM2 on the independent grid of an RBE3 spider, such as an
   engine mass, stays with the wing elements it hangs from. The chain continues only through grids
-  that no shell, solid or line element uses.
+  that no shell, solid or line element uses, and only through kept rigid elements and bushes.
 * A CONM2/CONM1/CMASS, an SPC grid or a FORCE/MOMENT grid is kept when its grid is kept.
-* CBAR/CBEAM sections are elements: their own EID, PID and group decide.
-* **An item's own EID wins** when the lists name it. Show Only `1 201` keeps shell 1 and only
-  CONM2 201 of the masses on it. Hidden Elements `201` hides CONM2 201 wherever its grid is.
-* With nothing hidden, every overlay shows everything.
+* CBAR/CBEAM sections are elements: their own EID, PID and group decide, and a swept section
+  follows its beam.
+* **An item's own EID wins** when Show Only (or a Show only Selection File of EIDs) names it.
+  Show Only `1 201` keeps shell 1 and only CONM2 201 of the masses on it. A named RBE2 or CBUSH
+  keeps what hangs on its grids too: Show Only of an engine's RBE2 shows its CONM2. An MPC's legs
+  carry its set id as their EID, as in the reader's lists.
+* A Show only Selection File of grids, properties, materials, families or groups **adds** what it
+  lists to the rules above: a GRID file keeps the masses and SPCs on its grids, a PID file of PBUSH
+  ids keeps those bushes and what hangs on them, and the RBE3 spider off the listed wing still
+  keeps the engine mass on its unlisted centre grid.
+* **What is hidden always goes**: an unticked checklist entry, Hidden Elements `201` (CONM2 201
+  wherever its grid is) or a Hide Selection File (PBUSH 51's bushes). A hidden RBE2 or CBUSH carries
+  no chain either, so the masses beyond it go too.
+* With nothing hidden, every overlay shows everything. An ID list the reader cannot parse, or a
+  Selection File it cannot read, is ignored (with an error in Output Messages): no scope.
 
 The overlays draw through the *Nastran Scope* filter (`NPV scope`, after `NPV deform`). It reads
 the reader's whole model and its visibility settings, so it updates when you change a checklist
@@ -279,7 +290,8 @@ the selection commands make no filter of their own.
 [Nastran Files](#include-files)):
 
 * **Nastran Deform** moves the whole model by *Scale Factor* × `Displacement`. Blocks without
-  one (load sets, ...) follow their grids by NID. The NPV views draw through it (*NPV deform*),
+  one (load sets, connectors, bush lines, ...) follow their grids by NID, on the reader also grids
+  that only hidden elements use. The NPV views draw through it (*NPV deform*),
   which is how NPV Results and the animation macros deform every view; at 0 it passes the
   model through. *Auto Scale* (NPV Results turns it on) ignores *Scale Factor* and scales each
   time step so its largest displacement is *Auto Scale Peak* (0.08) × the model diagonal; the
@@ -291,9 +303,11 @@ the selection commands make no filter of their own.
 * **Nastran Scope** is the overlays' copy of the model. Its mesh blocks keep what the reader
   keeps (checklists, Show Only/Hide, the selection file). Masses, rigid elements, bushes, SPCs
   and loads stay when they hang off a kept element, also when the reader's own output drops them;
-  EIDs named in Show Only win, and hidden EIDs always go. With nothing hidden, or on a converted
+  EIDs named in Show Only win, a Show only file adds what it lists, and what is hidden always goes
+  ([the rules](#overlays-follow-the-scope)). With nothing hidden, or on a converted
   file, it passes its input through. It goes after *Nastran Deform* on the reader and moves by the
-  scale that filter applied, so the NPV overlays draw through it (*NPV scope*) and follow the mode.
+  scale that filter applied, so the NPV overlays draw through it (*NPV scope*) and follow the mode;
+  a rigid, connector or bush line to a grid of a hidden element moves with that grid too.
 
 * **Nastran Mass Glyphs** builds one ellipsoid per concentrated mass. Its sizing controls:
   - *SizeMode*:
