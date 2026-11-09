@@ -436,11 +436,14 @@ def _labels():
     from nastran_pv.labels import unique_labels
 
     sources = pv.GetSources()
-    groups = {}
+    groups, seen = {}, set()
     for key, proxy in sources.items():
         gid = proxy.GetGlobalIDAsString()
+        seen.add(gid)
         if _model_source(proxy, gid):
             groups.setdefault(key[0], []).append((int(gid), proxy))
+    for gid in [g for g in _MODEL_SOURCES if g not in seen]:
+        del _MODEL_SOURCES[gid]  # deleted
     out = {}
     for name, members in groups.items():
         members.sort(key=lambda m: m[0])
@@ -2953,10 +2956,12 @@ def _new_partner_view(left):
 
 
 def _close_view(view):
-    """Close ``view``: its layout cell goes back to its neighbour, its scene is forgotten."""
+    """Close ``view``: its layout cell goes back to its neighbour, its scene and its info text are
+    forgotten."""
     layout = pv.GetLayout(view)
     cell = layout.GetViewLocation(view) if layout is not None else -1
     _SCENES.pop(view.GetGlobalIDAsString(), None)
+    info = pv.FindSource(info_name(view))
     # ParaView 6: a view deleted while it shows anything, after a camera link, crashes the next render
     # once the scene time changes; one emptied (and rendered empty) first does not
     _hide(shown_sources(view), view)
@@ -2965,6 +2970,8 @@ def _close_view(view):
         layout.RemoveView(view)
         layout.Collapse(cell)
     pv.Delete(view)
+    if info is not None:  # the text of no other view
+        pv.Delete(info)
 
 
 def _array_range(srcs, assoc, array):
