@@ -12,7 +12,7 @@ All notable changes to nastran-pv are listed here. The format follows
   `pvpython` it finds and the OS, a dependency that does not import named as such. A bug-report
   issue form (`.github/ISSUE_TEMPLATE/bug_report.yml`) asks for them, for a deck that shows the
   problem (a cut-down one for a confidential model), the results file when results are involved,
-  what was expected and seen, and the card report and warnings; the README links it (#TBD).
+  what was expected and seen, and the card report and warnings; the README links it (#78).
 
 - Composite plies in ParaView: the reader's *Ply* (`convert --ply`: a ply id, or 0 for each
   element's critical ply), the *Nastran Ply Axes* filter (a ply's fibre and 2-directions as lines

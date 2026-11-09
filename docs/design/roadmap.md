@@ -45,7 +45,7 @@ and CI proves all of this on every push.
 | 12. Results helpers as filters | Done | #73 |
 | 13. Composites | Done | #71, #74 |
 | 14. Performance budget | Done | #68 |
-| 15. 1.0 release | In progress: the Python API page and the deprecation policy (#76), the bug-report form, `--version` and this status (#GALLERY_NEXT), the gallery's result scenes (#77) | |
+| 15. 1.0 release | In progress: the Python API page and the deprecation policy (#76), the bug-report form, `--version` and this status (#78), the gallery's result scenes (#77) | |
 
 ### Left for the 1.0.0 tag
 
