@@ -117,17 +117,30 @@ def load_sets(blocks):
     return out
 
 
+def _set_entry(sets, name, sid):
+    """The set ``name`` of ``sets``, an empty one (no load points, no gravity) when it has none yet."""
+    return sets.setdefault(name, {"sid": int(sid), "nid": np.zeros(0, dtype=np.int64), "xyz": np.zeros((0, 3)),
+                                  "F": np.zeros((0, 3)), "M": np.zeros((0, 3)), "G": np.zeros(3)})
+
+
 def add_gravity(sets, mb) -> None:
     """Gravity from the ``GRAV_*`` root table (a .vtm drops a GRAV-only set's empty block)."""
-    from .diff import root_array, root_strings
+    from .glyphs import gravity_sets_of
 
-    sids, acc = root_array(mb, "GRAV_Set"), root_array(mb, "GRAV_Acceleration")
-    if sids is None or acc is None:
-        return
-    for sid, name, g in zip(sids.tolist(), root_strings(mb, "GRAV_Name"), acc.reshape(-1, 3)):
-        s = sets.setdefault(name, {"sid": int(sid), "nid": np.zeros(0, dtype=np.int64), "xyz": np.zeros((0, 3)),
-                                   "F": np.zeros((0, 3)), "M": np.zeros((0, 3))})
-        s["G"] = g.astype(float)
+    for name, sid, g in gravity_sets_of(mb):
+        _set_entry(sets, name, sid)["G"] = g
+
+
+def add_pressures(sets, blocks) -> None:
+    """The pressure resultant (``ResultantForce`` of the ``Pressures/*`` blocks) of each set, as
+    ``P``; a pressure-only set gets an entry. The faces themselves are not matched one by one."""
+    for path, ds in blocks.items():
+        if path.startswith("Pressures/"):
+            name = path.split("/", 1)[1]
+            sid = get_array(ds.GetFieldData(), "LoadSet")
+            res = get_array(ds.GetFieldData(), "ResultantForce")
+            entry = _set_entry(sets, name, int(sid[0]) if sid is not None and len(sid) else -1)
+            entry["P"] = res.reshape(-1)[:3].astype(float) if res is not None and res.size >= 3 else np.zeros(3)
 
 
 def spc_points(ds):
@@ -363,9 +376,10 @@ def compare_bushes(A, B, moved, row, tol, res: Result) -> None:
 
 
 def _resultant(s):
+    """(nodal force, nodal moment about the origin, gravity, pressure force) of a set entry."""
     if s is None:
-        return np.zeros(3), np.zeros(3), np.zeros(3)
-    return (*vtkutil.resultant(s["xyz"], s["F"], s["M"]), s["G"])
+        return np.zeros(3), np.zeros(3), np.zeros(3), np.zeros(3)
+    return (*vtkutil.resultant(s["xyz"], s["F"], s["M"]), s["G"], s.get("P", np.zeros(3)))
 
 
 def compare_loads(A, B, moved, row, tol, res: Result, gravity: bool = True) -> None:
@@ -378,12 +392,15 @@ def compare_loads(A, B, moved, row, tol, res: Result, gravity: bool = True) -> N
     if sa is None or sb is None:
         res.notes.append(f"loads not compared: a Loads block of {'A' if sa is None else 'B'} lacks NID/Force")
         return
+    add_pressures(sa, A.blocks)
+    add_pressures(sb, B.blocks)
+    pressures = any("P" in s for s in (*sa.values(), *sb.values()))
     if gravity:
         add_gravity(sa, A.mb)
         add_gravity(sb, B.mb)
     else:
         for sets in (sa, sb):
-            for name in [k for k, s in sets.items() if not len(s["nid"])]:
+            for name in [k for k, s in sets.items() if not len(s["nid"]) and "P" not in s]:
                 del sets[name]
             for s in sets.values():
                 s["G"] = np.zeros(3)
@@ -449,7 +466,7 @@ def compare_loads(A, B, moved, row, tol, res: Result, gravity: bool = True) -> N
         if a is None or b is None:
             row("load_set", sid, "added" if a is None else "removed", name=name)
         ra, rb = _resultant(a), _resultant(b)
-        for w, prefix in enumerate("FMG"):
+        for w, prefix in enumerate("FMGP"):
             scale = max(np.linalg.norm(ra[w]), np.linalg.norm(rb[w]))
             for c, x in enumerate("XYZ"):
                 if beyond(rb[w][c] - ra[w][c], scale):
@@ -457,7 +474,7 @@ def compare_loads(A, B, moved, row, tol, res: Result, gravity: bool = True) -> N
                                                                                             else "removed"),
                         f"{prefix}{x}", float(ra[w][c]), float(rb[w][c]), name=name)
         res.load_sets.append({"Set": sid, "Name": name, **counts, "DeltaF": rb[0] - ra[0], "DeltaM": rb[1] - ra[1],
-                              "DeltaG": rb[2] - ra[2]})
+                              "DeltaG": rb[2] - ra[2], **({"DeltaP": rb[3] - ra[3]} if pressures else {})})
     status = np.concatenate(all_status) if all_status else np.zeros(0, dtype=np.int64)
     res.summary.append(_summary("loads", n_a, n_b, status, n_removed))
 

@@ -20,7 +20,7 @@ nastran-pv diff out/baseline.vtm modified.bdf --csv out/diff.csv
 ```text
 elements in B: 1 same, 2 added, 1 changed (type/PID/grids), 2 via property/material; 2 removed
 model mass 10.9 -> 14.4: +3.5 (+32.110%); CG moved 0.963391
-not compared: pressure and thermal loads (PLOAD*, TEMP), spring/damper values, MPC coefficients
+not compared: pressure faces one by one (PLOAD*: only their per-set resultant), thermal loads (TEMP), spring/damper values, MPC coefficients
 
 Item        A   B   Same  Added  Removed  Changed
 grids       11  11  9     1      1        1
@@ -72,7 +72,7 @@ These change what is compared, in `diff`, `convert --diff-against` and on the Na
 | Connector | EID in `Connectors`; an MPC set by its set id (all its equations together) | its type, legs, DOF or PID, or one of its grids moved |
 | Bush | EID in `Bushes` | GA/GB, PID, the element axes `Axis1-3` or the spring location, or `K` (the PBUSH stiffness); a `K` change alone is *property*, like an element |
 | Load | (load set, grid) in `Loads/SID_n` and `Loads/LOAD_n` | the `Force` or `Moment` at the grid (FORCE/MOMENT summed per grid, LOAD combinations resolved), or the grid moved |
-| Load set | `SID_n`, `LOAD_n` | rows only: the resultant force, the resultant moment about the basic origin (sum of r × F + M) and the GRAV acceleration |
+| Load set | `SID_n`, `LOAD_n` | rows only: the resultant force, the resultant moment about the basic origin (sum of r × F + M), the GRAV acceleration and the pressure resultant (`PX PY PZ`: the `ResultantForce` of the set's `Pressures` block, so a pressure-only set has a row too) |
 | SPC | (SPC set, grid) in `Constraints` | the constrained DOFs, the enforced values (`SPCEnforced`), the grid's CD or its CD system, or the grid moved |
 | Coordinate system | CID in the `CORD_*` table | its type, origin (moved more than `--grid-tol`) or axes (a component differs by more than `--rel-tol`) |
 
@@ -89,8 +89,10 @@ another (a CQUAD4 that became a CBAR, or a shell id reused by a solid: Shells to
 removed from the one block and added to the other. Force and moment vectors differ when
 `|b - a| > --load-tol × max(|a|, |b|)` (`--load-tol` defaults to `--rel-tol`).
 
-Not compared, because the model does not hold them: pressure, distributed and thermal loads
-(PLOAD*, PLOAD4, TEMP), spring and damper values (CELAS/PELAS K, CDAMP B) and MPC coefficients.
+Not compared, because the model does not hold them: distributed and thermal loads (PLOAD1, TEMP),
+spring and damper values (CELAS/PELAS K, CDAMP B) and MPC coefficients. Pressure loads (PLOAD,
+PLOAD2, PLOAD4) are compared per load set by their resultant, not face by face: a pressure moved
+between two faces with the same total is not reported, and the faces get no `DiffStatus`.
 A model written before these comparisons existed (a `.vtm` or VTKHDF without the `CORD_` table)
 has its coordinate systems, grid CP/CD, SPC enforced values and GRAV skipped (load sets with no
 load points are then left out on both sides, since an older `.vtm` drops a GRAV-only set), and a
@@ -168,7 +170,8 @@ DIFF_Added DIFF_Removed DIFF_Changed`, the mass table `DIFFMASS_Kind DIFFMASS_Ke
 DIFFMASS_B DIFFMASS_Delta DIFFMASS_Rel` (model totals and CG, then per PID, then per family),
 `DiffCG` (B − A) and the load set table `DIFFLOAD_Set DIFFLOAD_Name DIFFLOAD_Same DIFFLOAD_Added
 DIFFLOAD_Removed DIFFLOAD_Changed DIFFLOAD_DeltaF DIFFLOAD_DeltaM DIFFLOAD_DeltaG` (per load set:
-the point counts and the change of the resultant force, moment about the origin, and gravity).
+the point counts and the change of the resultant force, moment about the origin, and gravity), plus
+`DIFFLOAD_DeltaP` (the change of the pressure resultant) when either model has pressure loads.
 
 ## ParaView
 

@@ -1259,18 +1259,22 @@ def _glyph_vector(src, name):
 
 
 def view_loads(model, view, sets=None, show=None, size=None, stride=None, source=None):
-    """FORCE/MOMENT arrows (Nastran Load Glyphs) of the load sets checked on 'NPV load glyphs'
-    (first: the Case Control LOAD, else the first set with loads). ``sets`` (block names such as
-    LOAD_1001), ``show`` (Forces, Moments, Forces and moments), ``size`` and ``stride`` (Every Nth
-    Point) set the filter; left None they keep its settings. ``source`` (Deck load sets, SPC
+    """Arrows (Nastran Load Glyphs) of the load sets checked on 'NPV load glyphs' (first: the
+    Case Control LOAD, else the first set with loads): FORCE/MOMENT at their grids, PLOAD* pressures
+    on their faces and GRAV at the model CG. ``sets`` (block names such as LOAD_1001), ``show``
+    (Forces, Moments, Forces and moments), ``size`` and ``stride`` (Every Nth Point) set the filter;
+    left None they keep its settings (Show Pressures and Show Gravity are the filter's). ``source`` (Deck load sets, SPC
     forces, MPC forces, Applied loads (OLOAD)) picks the filter's Source: a result draws the
     current step's vectors at each grid with output and gives their resultant."""
     kind = _load_source(model, source)
     if kind in _RESULT_LOADS:
         return _result_loads(model, view, kind, show, size, stride)
-    loads = model.scoped("Loads")
-    if loads is None:
-        info_text(model, view, _missing_text(model, "nodal loads (FORCE/MOMENT)"))
+    from nastran_pv.glyphs import gravity_anchor, gravity_sets_of
+
+    loads, pressures = model.scoped("Loads"), model.scoped("Pressures")
+    gravity = {name: a for name, _, a in gravity_sets_of(model.data)}
+    if loads is None and pressures is None and not gravity:
+        info_text(model, view, _missing_text(model, "loads (FORCE/MOMENT, PLOAD*, GRAV)"))
         return
     g = _overlay(model, "load glyphs", lambda src: pv.NastranLoadGlyphs(Input=src), "NastranPVLoadGlyphs")
     g.UpdatePipelineInformation()
@@ -1279,21 +1283,22 @@ def view_loads(model, view, sets=None, show=None, size=None, stride=None, source
     _set_given(g, Source=source, Show=show, Size=size, EveryNthPoint=stride)
     g.UpdatePipeline()
     g.UpdatePipelineInformation()
-    names = block_names(loads)
+    names = block_names(loads) if loads is not None else []
+    faces = block_names(pressures) if pressures is not None else []
     listed = fetch(g).GetFieldData().GetAbstractArray("LoadSetNames")
     drawn = [listed.GetValue(i) for i in range(listed.GetNumberOfValues())] if listed is not None else []
-    drawn = [n for n in drawn if n in names]
+    drawn = [n for n in drawn if n in names or n in faces or n in gravity]
     count = int(_glyph_field(g, "ArrowCount"))
     if not count:
         available = list(g.GetProperty("LoadSetsInfo"))[0::2]
         what = {"Forces": "forces", "Moments": "moments"}.get(enum_text(g, "Show"), "forces or moments")
         if not available:
-            text = "Only GRAV load sets in this deck (GRAV is not drawn as arrows)."
+            text = "No load set with loads to draw in this deck."
         elif not list(g.LoadSets):
             text = "No load set checked: check one on 'NPV load glyphs' (Load Sets)."
         else:
             text = (f"{', '.join(drawn) or 'The checked sets'}: no {what} to draw. Show on 'NPV load glyphs' "
-                    "picks forces, moments or both; GRAV is not drawn.")
+                    "picks forces, moments or both; Show Pressures and Show Gravity draw PLOAD* and GRAV.")
         info_text(model, view, text)
         return g
     d = _show(g, view)
@@ -1304,12 +1309,26 @@ def view_loads(model, view, sets=None, show=None, size=None, stride=None, source
     lines = [_changes(model, loads, "POINTS", "load")] if model.from_diff else []
     from nastran_pv.vtkutil import vector_text
 
+    mass, wtmass = model.field("ModelMass"), model.field("WTMASS")
+    where = gravity_anchor(model.data)[1]  # the CG, or the model centre when it has no mass
     for name in drawn[:6]:
-        blk = loads.GetBlock(names.index(name))
-        res = _block_field(blk, "ResultantForce")
-        lines.append(f"{name}: {blk.GetNumberOfPoints()} loaded grids")
-        if res is not None:
-            lines.append(f"Resultant force {vector_text(res)}")
+        blk = loads.GetBlock(names.index(name)) if name in names else None
+        if blk is not None and blk.GetNumberOfPoints():
+            res = _block_field(blk, "ResultantForce")
+            lines.append(f"{name}: {blk.GetNumberOfPoints()} loaded grids")
+            if res is not None:
+                lines.append(f"Resultant force {vector_text(res)}")
+        if name in faces and g.ShowPressures:
+            blk = pressures.GetBlock(faces.index(name))
+            res = _block_field(blk, "ResultantForce")
+            lines.append(f"{name}: {blk.GetNumberOfCells()} pressure faces"
+                         + (f", resultant force {vector_text(res)}" if res is not None else ""))
+        if name in gravity and g.ShowGravity:
+            a = gravity[name]
+            text = f"{name}: GRAV {vector_text(a)} at {where}"
+            if mass is not None and wtmass is not None and float(mass[0]):
+                text += f", WTMASS x mass x a = {vector_text(float(wtmass[0]) * float(mass[0]) * a)}"
+            lines.append(text)
     if len(drawn) > 6:
         lines.append(f"... {len(drawn) - 6} more set(s)")
     step = int(_glyph_field(g, "Stride", 1))

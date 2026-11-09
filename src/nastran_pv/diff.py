@@ -862,5 +862,6 @@ def report_lines(d: ModelDiff, name_a="A", name_b="B") -> list[str]:
         f"model mass {total['A']:.6g} -> {total['B']:.6g}: {total['Delta']:+.6g}{rel}; "
         f"CG moved {cg_shift:.6g}",
         *d.notes,
-        "not compared: pressure and thermal loads (PLOAD*, TEMP), spring/damper values, MPC coefficients",
+        "not compared: pressure faces one by one (PLOAD*: only their per-set resultant), thermal loads (TEMP), "
+        "spring/damper values, MPC coefficients",
     ]
