@@ -1343,7 +1343,7 @@ class NastranPVScope(_Settable, VTKPythonAlgorithmBase):
         self._tree = None  # (whole multiblock, Visibility key, Tree)
         self._deformer = None  # (whole multiblock, Visibility key, generation, Deformer)
         self._diagonal = None  # (whole multiblock, its diagonal)
-        self._comparison = None  # (whole diff output, A's model, both Visibility keys, ScopedCopy or None)
+        self._comparison = None  # (kept diff output, A's model, both Visibility keys, ScopedCopy or None)
 
     def FillInputPortInformation(self, port, info):
         info.Set(self.INPUT_REQUIRED_DATA_TYPE(), "vtkDataObject")
@@ -1403,14 +1403,14 @@ class NastranPVScope(_Settable, VTKPythonAlgorithmBase):
         from nastran_pv.diff import show_only
         from nastran_pv.selection import ScopedCopy, comparison_masks
 
-        whole, b_tag, a_tag, a_mb, show = entry
+        kept, whole, b_tag, a_tag, a_mb, show = entry  # whole: kept, with this step's arrays
         b_reg, a_reg = _WHOLE_MODEL.get(b_tag), _WHOLE_MODEL.get(a_tag)
         vis_b, names_b = (b_reg[2], b_reg[3]) if b_reg is not None else (None, None)
         vis_a, names_a = (a_reg[2], a_reg[3]) if a_reg is not None else (vis_b, names_b)
         keys = tuple(v.key() if v is not None else None for v in (vis_b, vis_a))
-        if self._comparison is None or self._comparison[:3] != (whole, a_mb, keys):
+        if self._comparison is None or self._comparison[:3] != (kept, a_mb, keys):
             masks = comparison_masks(whole, vis_b, names_b, a_mb, vis_a, names_a)
-            self._comparison = (whole, a_mb, keys, None if masks is None else ScopedCopy(whole, masks))
+            self._comparison = (kept, a_mb, keys, None if masks is None else ScopedCopy(whole, masks))
         cut = self._comparison[3]
         out.ShallowCopy(inp if cut is None else show_only(cut.output(whole), *show))  # nothing hidden: as is
         self._mark_diagonal(out, b_reg[0] if b_reg is not None else whole)
@@ -2234,16 +2234,19 @@ class NastranPVDiff(_Settable, VTKPythonAlgorithmBase):
         return ("model", found[0]) if found is not None else (data, data.GetMTime())
 
     def _compare(self, b_in, a_in, tol):
-        """``(annotated B, table rows, A's whole model)``, computed again only when a model's content or
-        ``tol`` changed. Per-step arrays (results, random response) are put back on the kept output."""
+        """``(kept annotated B, annotated B now, table rows, A's whole model)``, computed again only when
+        a model's content or ``tol`` changed. B now is the kept one with this time step's arrays (results,
+        random response) put back, on new attribute containers: the kept one is never changed, since the
+        outputs made from it before (and the views drawing them) share its datasets."""
         from nastran_pv.diff import annotate, own_arrays, reattach, table_rows
         from nastran_pv.fields import shallow_clone
 
         key = (self._content(b_in), self._content(a_in), tol)
         if self._cache is not None and self._cache[0] == key:
             _, b, rows, a, source, own = self._cache
-            reattach(b, source, own)  # the reader may have moved to another time step
-            return b, rows, a
+            now = shallow_clone(b)
+            reattach(now, source, own)  # the reader may have moved to another time step
+            return b, now, rows, a
         (source, b_cut), (a, a_cut) = _whole_model(b_in), _whole_model(a_in)
         b = shallow_clone(source)  # never add arrays to the reader's cached model
         if b_cut or a_cut:
@@ -2259,7 +2262,7 @@ class NastranPVDiff(_Settable, VTKPythonAlgorithmBase):
         except Exception as exc:  # report, pass B through unchanged
             _message(f"nastran-pv Diff: {exc}", error=True)
         self._cache = (key, b, rows, a, source, own_arrays(b, source))
-        return b, rows, a
+        return b, b, rows, a
 
     def RequestData(self, request, inInfo, outInfo):
         from vtkmodules.vtkCommonDataModel import vtkTable
@@ -2273,15 +2276,15 @@ class NastranPVDiff(_Settable, VTKPythonAlgorithmBase):
             return 1
         if self._swap:
             b_in, a_in = a_in, b_in
-        b, rows, a = self._compare(b_in, a_in, self._tolerances())
+        kept, b, rows, a = self._compare(b_in, a_in, self._tolerances())
         _fill_table(vtkTable.GetData(outInfo, 1), rows)
         reasons = sum(1 << i for i, r in enumerate(_DIFF_REASONS) if r in set(_checked(self._reasons)))
         statuses = tuple(i for i, s in enumerate(_DIFF_STATUSES[:4]) if self._show[s])
         removed = bool(self._show["removed"])
         out = vtkMultiBlockDataSet.GetData(outInfo, 0)
         out.ShallowCopy(show_only(b, statuses, reasons, removed=removed))
-        tag = f"{id(self)}"  # for Nastran Scope after it: the whole output, both readers, A's model
-        _DIFF_OUTPUTS[tag] = (b, _reader_tag(b_in), _reader_tag(a_in), a, (statuses, reasons, removed))
+        tag = f"{id(self)}"  # for Nastran Scope after it: the whole output (kept, now), both readers, A's model
+        _DIFF_OUTPUTS[tag] = (kept, b, _reader_tag(b_in), _reader_tag(a_in), a, (statuses, reasons, removed))
         from vtkmodules.vtkCommonDataModel import vtkFieldData
 
         from nastran_pv import vtkutil

@@ -246,9 +246,10 @@ What a render view shows is a *scene* made of layers, and each macro edits one l
   until a coloring replaces it.
 - A **new view starts undeformed**. After that only NPV Results changes the deformation: an overlay
   or a coloring clicked on a deformed view keeps it.
-- **The model follows the view.** A view keeps the model it shows, whichever object is selected; a
-  macro for **another model** (a second reader selected in the Pipeline Browser since the last macro)
-  starts a new scene in that view: the first model's layers are hidden.
+- **The model follows the view.** A view keeps the model it shows: clicking into another view, or
+  picking cells there, does not move a macro to another model. A macro for **another model** (a
+  second reader selected in the Pipeline Browser since the last macro) starts a new scene in that
+  view: the first model's layers are hidden.
 - **NPV Clear** is the reset: it hides every layer and puts the deformation back to 0, and
   deletes nothing. A comparison stays one (NPV Single ends it); in a side-by-side pair it clears
   both views.

@@ -1898,13 +1898,13 @@ class _Cmp:
         """``view`` (and a partner for the pair states) in ``state``; returns the view a command runs in.
         The NPV objects stay (they are reused, as in a session), but the one-model state has no diff."""
         pv, nv = self.pv, self.nv
-        for v in list(pv.GetViews()):
-            if v != view:
-                pv.Delete(v)
-        try:
+        try:  # before the views go: a link to a deleted view crashes the next render (ParaView 6)
             pv.RemoveCameraLink(nv.SIDE_LINK)
         except Exception:
             pass
+        for v in list(pv.GetViews()):
+            if v != view:
+                nv._close_view(v)  # out of its layout cell first, as NPV Single does
         for src in nv._sources_with_selection().values():
             pv.ClearSelection(src)
         nv._SCENES.clear()
@@ -1998,7 +1998,9 @@ class _Cmp:
             return nv.stop_mode_animation()
 
         def index_colors():
-            self.pv.SetActiveSource(self.selectable(self.pv.GetActiveView()))  # the colored mesh, picked
+            view = self.pv.GetActiveView()
+            colored = nv._coloring_reps(view)[1]  # the coloring layer's object, picked in the Pipeline Browser
+            self.pv.SetActiveSource(colored[0][1] if colored else self.selectable(view))
             return nv.index_colors()
 
         out = {name: (lambda name=name: nv.apply(name, toggle=True)) for name in nv.VIEWS}
@@ -2179,6 +2181,8 @@ def comparison_checks(pv, nv):
         for state in CMP_STATES:
             run_view = cmp.build(state, view)
             for name, fn in commands.items():  # the view commands in turn, a fresh state after a session change
+                if os.environ.get("NPV_CMP_VERBOSE"):
+                    print(f"   . {pair}/{state}/{name}", flush=True)
                 pv.SetActiveView(run_view)
                 runs += 1
                 t0 = time.time()

@@ -2396,6 +2396,10 @@ def _close_view(view):
     layout = pv.GetLayout(view)
     cell = layout.GetViewLocation(view) if layout is not None else -1
     _SCENES.pop(view.GetGlobalIDAsString(), None)
+    # ParaView 6: a view deleted while it shows anything, after a camera link, crashes the next render
+    # once the scene time changes; one emptied (and rendered empty) first does not
+    _hide(shown_sources(view), view)
+    pv.Render(view)
     if cell >= 0:  # empty the cell, then fold it into its neighbour (deleting the view first leaves it)
         layout.RemoveView(view)
         layout.Collapse(cell)
