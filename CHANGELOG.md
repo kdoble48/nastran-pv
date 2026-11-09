@@ -69,14 +69,19 @@ All notable changes to nastran-pv are listed here. The format follows
 - Result types: what results attach is declared per type in `result_types.py` (`Displacement`,
   `VonMisesMax`, outputs unchanged), so new results are added by declaration. Choose them with
   `--result-types` (`convert`, `stats`, `store add`) or the reader's *Result Types* checklist (#60).
-- Scene layers (#54): the *NPV Clear* macro, the one full reset of a view (it hides every layer and
+- A roadmap to 1.0 (`docs/design/roadmap.md`): what shipped since October, the decisions, and 15
+  tasks from the 0.2 release to 1.0 (#55).
+- Scene layers: the *NPV Clear* macro, the one full reset of a view (it hides every layer and
   sets the deformation back to 0, deleting nothing), and the *Nastran Scope* filter, the overlays'
-  copy of the model cut by the reader's scope (`selection.scope_masks`).
+  copy of the model cut by the reader's scope (`selection.scope_masks`) (#54).
 - Include-file groups: a deck read from two or more files gets `FileId` (and `FileNames`,
   `FileParents`, root `FILE_Name FILE_Path FILE_Parent`), so each element, mass, rigid element and
   connector belongs to the INCLUDE file that holds its card. The reader gains a *Visible Files*
   checklist and the model tree a nested `Files/` branch; the new *Nastran Files* filter gives a
-  converted `.vtm`/VTKHDF the same checklist.
+  converted `.vtm`/VTKHDF the same checklist (#52).
+- A worked model diff example on the uCRM-9 wingbox in [Model diff](docs/diff.md), with
+  `docs/build_diff_example.py`, which writes the pair (a thicker skin, a remeshed panel, heavier
+  engine masses, an RBE3 made an RBE2, a new stringer in its own INCLUDE file) (#51).
 - Filter properties: every NPV macro's filter holds the settings of its view, in shared *Glyph
   Size*, *Show Only* and *Traversal* groups, and a rerun keeps them. New *Nastran Load Glyphs*
   (load sets, forces/moments, arrow length, every Nth point) and *Nastran SPC Glyphs* (SPC sets,
@@ -86,13 +91,13 @@ All notable changes to nastran-pv are listed here. The format follows
   *Ignore Grid Moves*, *Swap Inputs*, the *Show* filters (statuses, reasons, Removed block) and
   per-kind tolerances, with the matching `diff`/`convert --diff-against` flags `--skip`,
   `--ignore-grid-moves`, `--grid-tol-absolute`, `--load-tol`, `--stiffness-tol`, `--mass-tol` and
-  `--abs-floor` (#49).
+  `--abs-floor` (#50).
 - Test CI: pytest and pyflakes on Linux, Windows and macOS with Python 3.10 to 3.12 (#42).
 - This changelog and a written [version policy](docs/versioning.md) (#42).
 - Selection from a CSV/ID file: `convert --select`, the reader's Selection File, and NPV Show Only/Hide/Highlight File (#43).
 - Model diff v2: rigid elements, connectors, bushes, loads (with per-set resultants), SPCs and
   coordinate systems are compared too, on the mesh and in the report; models gain the `CORD_*`,
-  `GRIDCS_*` and `GRAV_*` root tables and the `SPCEnforced` array.
+  `GRIDCS_*` and `GRAV_*` root tables and the `SPCEnforced` array (#48).
 - Model diff: a report, the differences on the mesh, and the two models side by side (#44).
 - Random vibration from normal modes, with RMS response shown on the mesh (#41).
 - Play button vibrates the current mode; mode animations show the mode's frequency (#40).
@@ -123,6 +128,11 @@ All notable changes to nastran-pv are listed here. The format follows
   installing the wheel and `nastran-pv setup`, on pull requests that touch `paraview/`, `src/` or
   `tests/`. `setup`, `view` and `render` also find a ParaView unpacked in the home folder
   (`~/ParaView-*`), and pick the newest ParaView by version rather than by name (#59).
+- Releases on PyPI: `pip install nastran-pv`. The *publish* workflow builds and checks the sdist
+  and the wheel once and publishes them with trusted publishing, a `vX.Y.ZrcN` tag to TestPyPI and
+  a `vX.Y.Z` tag to PyPI ([Releasing](docs/versioning.md#releasing)). The package metadata gains
+  classifiers, project URLs and keywords, and test CI also runs Python 3.13 and 3.14, with
+  pyNastran `main` at a pinned commit and pyNastran's own self-checks on (#69).
 
 ### Changed
 
@@ -145,8 +155,8 @@ All notable changes to nastran-pv are listed here. The format follows
 - NPV Loads and NPV SPC draw through *NPV load glyphs* and *NPV spc glyphs* (Nastran filters)
   instead of ParaView Glyph objects; NPV Results scales each time step to 8 % of the model (Nastran
   Deform *Auto Scale*); Mass Glyphs' *RelativeSize* is now *Size* (saved states and scripts that set *RelativeSize* need *Size*);
-  rerunning a macro keeps the settings changed on its filter (#49).
-- NPV macros and `nastran_views.apply` end with the filter they are about selected (mass glyphs, NPV grow, the Nastran Diff, NPV deform, ...), or the reader for coloring and visibility macros.
+  rerunning a macro keeps the settings changed on its filter (#50).
+- NPV macros and `nastran_views.apply` end with the filter they are about selected (mass glyphs, NPV grow, the Nastran Diff, NPV deform, ...), or the reader for coloring and visibility macros (#46).
 - Simplified the plugin: shared setters and `RequestData`, one upstream walk, one screenshot view (#38).
 - Simplified the core: a shared results base, builder helpers and field tables in `vtkutil` (#37).
 - One id lookup, shared VTK helpers, plugin constants taken from `src`, and dead code removed (#36).
@@ -164,6 +174,12 @@ All notable changes to nastran-pv are listed here. The format follows
 - `vtk` is a dependency (the `vtk` extra still works), since every `nastran-pv` command imports it;
   `import nastran_pv` no longer imports pyNastran (`Deck` and `load_deck` load on first use); a
   `NASTRAN_PV_PARAVIEW_DIR` without the plugin is an error (#58).
+- CLAUDE.md keeps only what every change needs; the module notes and the full gotchas list moved
+  to the new [Architecture](docs/architecture.md) page (#53).
+- The sdist carries `CHANGELOG.md`, and no longer the `tests/test*.py` files, which could not run
+  without `tests/data`; `license` is an SPDX expression (built by setuptools 77 or newer); the
+  version is written once, as `nastran_pv.__version__`, which `pyproject.toml` reads; the
+  README's links are absolute, so they work on PyPI (#69).
 
 ### Fixed
 
@@ -192,8 +208,10 @@ All notable changes to nastran-pv are listed here. The format follows
   topology filters; Exclude PIDs names a bad entry and, like `exclude_pids=`, takes ranges; `check`
   and `--only` take comma lists, `check` warns that `within=` needs seeds and gives zero counts on a
   model without elements; graph blocks without a type array, EID or DOF warn, once (#57).
-- Deck vs converted file parity: a `.vtkhdf` gives the same model, tables, CLI output, filters and views as its deck. Root and block field data no longer mix on read, options that need the deck are refused instead of ignored, `--step` picks the step of a converted series, and the warnings and `store add` deck carry over.
-- Model Check on the deck reader reported every model-tree piece seam as a free edge or face; Parts numbering and Path no longer depend on cell order.
+- Deck vs converted file parity: a `.vtkhdf` gives the same model, tables, CLI output, filters and views as its deck. Root and block field data no longer mix on read, options that need the deck are refused instead of ignored, `--step` picks the step of a converted series, and the warnings and `store add` deck carry over (#47).
+- Model Check on the deck reader reported every model-tree piece seam as a free edge or face; Parts numbering and Path no longer depend on cell order (#47).
+- The docs, README, CLAUDE.md and project skills were checked against the code: the missing CLI
+  commands, flags, defaults and extras are documented, and stale entries corrected (#45).
 - Decks with latin-1 characters (`$ Kräfte`) failed to load on Linux and macOS, because pyNastran reads the file header with the locale's encoding (#42).
 - Decks that fail to load raise an error instead of rendering as an empty model (#35).
 - `install_deps.py` keeps the working pyNastran on a failed install and reinstalls wheels for another Python (#32).
