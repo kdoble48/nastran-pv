@@ -21,6 +21,7 @@ out when the deck has nothing for it.
 | `BushLines` | CBUSH GA–GB lines | cell: `EID PID`; point: `NID` |
 | `Constraints` | SPC/SPC1/SPCADD/GRID PS points per set | point: `NID SPCSet SPC_DOF DOFCode CD`, plus `SPCEnforced` (6: the SPC enforced value per DOF) when a value is not 0 |
 | `Loads/SID_n`, `Loads/LOAD_n` | FORCE/MOMENT(1,2) per set, LOAD combinations resolved | point: `NID Force Moment ForceMagnitude MomentMagnitude`; field: `LoadSet ResultantForce GravityAcceleration` (GRAV only) |
+| `Pressures/SID_n`, `Pressures/LOAD_n` | the faces PLOAD, PLOAD2 and PLOAD4 load, per set as for `Loads` (LOAD combinations scale and sum them); see [Pressure loads](#pressure-loads) | cell: `EID LoadCard Pressure PressureDirection PressureForce`; point: `NID CornerPressure`; field: `LoadSet ResultantForce LoadCardNames` |
 | `Removed` | the reference model's removed items (only with `convert --diff-against` or the Nastran Diff filter) | cell: `EID PID ElementType ElementMass DiffStatus DiffReason DeltaElementMass ItemType SID`; point: `NID`; see [Model diff](diff.md#diff-on-the-mesh) |
 | `BeamSections` | CBAR/CBEAM cross sections swept in 3D (only with `--beam-sections`) | cell: `EID PID MID ElementType BeamPart Face`; point: `GA GB StationT`, with results `Displacement DisplacementMagnitude` |
 
@@ -182,6 +183,42 @@ the MPC forces, else the applied loads (static steps, one per subcase). [Nastran
   from their first slot and a beam's end B from its last slot with a `GRID`. It is tested against
   files written in that layout; please report any real files it misreads.
 
+## Pressure loads
+
+PLOAD (three or four grids), PLOAD2 (shell elements) and PLOAD4 (shell elements, THRU ranges, and
+solid faces named by G1 and G3/G4) become the `Pressures/*` blocks: one polygon per loaded face on
+its corner grids (a quadratic face uses its corners), each face once per set (the same face loaded
+twice, directly or through a LOAD combination, sums its pressures; `LoadCard` 3, `several`, marks a
+face loaded by two kinds of card). `--no-loads` and the reader's *Loads* toggle drop them with the
+`Loads` block.
+
+* **Direction** (`PressureDirection`, the unit direction of positive pressure, basic): a shell's
+  normal (the right-hand rule on its grids), PLOAD's G1-G2-G3(-G4) normal, inward on a solid face,
+  or PLOAD4's N1-N3 (in its CID). Each face's points run in the order whose right-hand normal is
+  that direction (N1-N3 aside), starting at G1.
+* **Pressures**: `CornerPressure` at each corner (PLOAD4 P1-P4, P2-P4 defaulting to P1; for a solid
+  face P1 sits on G1 and P2-P4 follow the right-hand rule on the outward normal), `Pressure` their
+  mean, as signed on the card.
+* **Force** (`PressureForce`): the pressure integrated over the face with the corner values
+  interpolated (linear on a triangle, bilinear on a quad: 2 × 2 Gauss points, exact for a bilinear
+  face), along the direction; with N1-N3, the integral of the pressure over the actual area along
+  N. `ResultantForce` on the block is the sum over the set, which is what the faces contribute to
+  the OLOAD resultant.
+* The faces follow their elements in the reader's scope (a PLOAD face follows its grids) and their
+  grids when the model deforms. They are not equivalent nodal forces: `F_<sid>` holds FORCE/MOMENT
+  only.
+
+Solid faces follow the QRG's PLOAD4 rules: G3 diagonally opposite G1 names a quadrilateral face
+(CHEXA, CPENTA, the CPYRAM base); a blank G3 a CPENTA triangle holding G1; G4 the CTETRA corner off
+the face; and G1 and G3 adjacent base corners of a CPYRAM the triangle they make with the apex.
+
+A card that references an element or grid the deck lacks is a broken deck: a warning, and the card
+is skipped. In a list or THRU range of elements (PLOAD2, PLOAD4) the ids the deck lacks, or whose
+type the card cannot load, are skipped with one warning per card and the rest are drawn. A form
+nothing draws is a [card report](#cards-not-drawn) row: a PLOAD4 edge load (SORL=LINE or an LDIR
+other than NORM), G1 and G3/G4 that name no face, a PLOAD2 on an element that is not a shell. PLOAD1
+(beam loads) and the axisymmetric PLOADX1 stay in the card report too.
+
 ## Coordinate systems
 
 The root table `CORD_*` has one row per coordinate system other than 0: `CORD_ID`, `CORD_Type`
@@ -235,10 +272,9 @@ card report: `convert` prints it after the block list, `stats` on stderr, the re
 Output Messages, and the root table keeps it, so a converted file reports what its deck did.
 
 ```text
-24 card(s) of 20 type(s) not drawn:
+22 card(s) of 19 type(s) not drawn:
   Card     Count  Reason                      IDs
   CTRIAX6  2      not drawn                   EID 40 41
-  PLOAD4   2      not drawn                   SID 9
   SPOINT   2      scalar points, no location  ID 101 102
   CDAMP5   1      heat transfer               EID 30
   CELAS2   1      grounded, one grid          EID 31
@@ -255,11 +291,14 @@ more. The reasons:
 
 | Reason | Cards |
 |---|---|
-| `not drawn` | card types no block shows: axisymmetric and plane elements (CTRIAX/CTRIAX6/CQUADX, CPLSTN/CPLSTS), CBUSH1D/2D, GENEL, CBEAM3, PLOAD*, TEMP, SPCD, LSEQ, SPCAX, SUPORT, dynamic loads (DAREA, TLOAD*, RLOAD*), CAERO panels and splines, contact bodies, bolts, any card type nastran-pv does not know |
+| `not drawn` | card types no block shows: axisymmetric and plane elements (CTRIAX/CTRIAX6/CQUADX, CPLSTN/CPLSTS), CBUSH1D/2D, GENEL, CBEAM3, PLOAD1, PLOADX1, TEMP, SPCD, LSEQ, SPCAX, SUPORT, dynamic loads (DAREA, TLOAD*, RLOAD*), CAERO panels and splines, contact bodies, bolts, any card type nastran-pv does not know |
 | `scalar points, no location` | SPOINT/EPOINT and what connects only them (CELAS3/4, CDAMP3/4, CMASS3/4), and CELAS1/2, CDAMP1/2, CMASS1/2, PLOTELs and MPC equations with a grid that is a scalar point (an MPC's other terms are still drawn; its row has the set id). Scalar points have no coordinates, so these are counted, not drawn; their mass is not in `ModelMass` |
 | `grounded, one grid` | CELAS1/2, CDAMP1/2, CGAP with one grid (or two DOFs of one grid): no line to draw |
 | `heat transfer` | CDAMP5 (a thermal capacitance), CHBDYE/G/P, QBDY1/2/3, QHBDY, QVOL, QVECT, and the thermal boundary conditions (CONV, CONVM, RADBC, RADM, TEMPBC). None is a structural link, so none joins the [model tools](tools.md)' graph |
 | `patch form, no GA/GB` | CFAST given by patches only |
+| `edge load (SORL=LINE or LDIR)` | PLOAD4 that loads an element's edge, not its face (IDs: the load set) |
+| `G1 and G3/G4 name no face` | PLOAD4 on a solid whose G1 and G3/G4 name none of its faces, such as a CPYRAM's apex (IDs: the load set) |
+| `element type it cannot load` | PLOAD2 on an element that is not a shell, PLOAD4 on one that is neither a shell nor a solid (IDs: the load set) |
 | `matrix input` | DMIG, DMI, DMIJ, DMIJI, DMIK, DMIAX |
 | `superelement` | the cards of a `BEGIN SUPER` section (data and control cards left out) and the superelement cards (SEBULK, SECONCT, SELOC, ...) |
 | `not read` | cards pyNastran rejected (unknown to it), and CWELD, which nastran-pv turns off because pyNastran 1.5 aborts the read on some of its forms |
@@ -273,7 +312,10 @@ every card is drawn or used); a file without it predates the report. The design 
 
 ## Not visualized yet
 
-Everything in the [card report](#cards-not-drawn) (pressure loads, axisymmetric and heat-transfer
-elements, CBUSH1D/2D, GENEL, DMIG, superelements, grounded springs, CFAST patch forms, CWELD,
-PLOTEL3/4/6/8 and the 3D plot elements), and GRAV as nodal forces (GRAV is reported as field data
-only). Scalar-point cards stay in the report: they have no location to draw at.
+Everything in the [card report](#cards-not-drawn) (beam and axisymmetric loads PLOAD1/PLOADX1,
+axisymmetric and heat-transfer elements, CBUSH1D/2D, GENEL, DMIG, superelements, grounded springs,
+CFAST patch forms, CWELD, PLOTEL3/4/6/8 and the 3D plot elements). Scalar-point cards stay in the
+report: they have no location to draw at. GRAV is drawn as one arrow at the model CG (at the
+centre of the model's bounds when it has no mass) ([Nastran Load Glyphs](paraview.md#filter-properties)),
+not as nodal forces; the results' applied
+loads (OLOAD, [result types](#result-types)) give the nodal forces Nastran made of it.

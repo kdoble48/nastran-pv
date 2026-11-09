@@ -332,7 +332,7 @@ def test_cli_prints_the_new_lists(tmp_path, capsys):
     for title in ("rigid elements:", "connectors:", "bushes:", "load sets:", "loads:", "SPCs:",
                   "coordinate systems:"):
         assert title in out
-    assert "not compared: pressure and thermal loads" in out
+    assert "not compared: pressure faces one by one" in out
     with open(csv_path) as f:
         items = {r["Item"] for r in csv.DictReader(f)}
     assert items >= {"rigid", "connector", "bush", "load", "load_set", "spc", "coord", "grid"}

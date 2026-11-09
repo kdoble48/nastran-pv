@@ -66,8 +66,10 @@ the file skips deck parsing, which is much faster on large models. `summary.py` 
   defined (open the run deck?)" and "model mass excludes the structural mass of N element(s)" mean the numbers are
   incomplete (`troubleshooting-nastran-models`). "reordered N solid element(s)" is info only.
 - **Half models:** uCRM-9 is semi-span (Y ≥ 0). Say that the mass and CG are for one side.
-- **Loads:** `ActiveLoadSets` comes from case control. GRAV is reported as field data and is not
-  turned into nodal forces, so `ResultantForce` is the nodal FORCE cards only.
+- **Loads:** `ActiveLoadSets` comes from case control. GRAV is field data (drawn as one arrow at
+  the CG), not nodal forces, and pressures are the `Pressures/*` faces, so `ResultantForce` on
+  `Loads/*` is the nodal FORCE cards only; `Pressures/*` carry their own `ResultantForce`. The
+  results' `ResultantAppliedForce` (OLOAD) is the total Nastran applied.
 - Complex results (SOL 107/108/110/111) are skipped with a message. They are not an error.
 
 ## Common mistakes

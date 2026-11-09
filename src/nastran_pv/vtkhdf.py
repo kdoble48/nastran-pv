@@ -286,8 +286,11 @@ class _StepSource(VTKPythonAlgorithmBase):
     """Pipeline source that re-attaches the requested result step to the model."""
 
     def __init__(self, mb, results, deck, steps):
+        from . import vtkutil
+
         VTKPythonAlgorithmBase.__init__(self, nInputPorts=0, nOutputPorts=1,
                                         outputType="vtkPartitionedDataSetCollection")
+        vtkutil.drop_state_on_delete(self)  # the writer outlives `source` (ParaView 6.0 ghost crash)
         self.mb, self.results, self.deck = mb, results, deck
         self.steps = list(steps)
         self._filled, self._padded = [], []  # the arrays added (and padded) for the last step written

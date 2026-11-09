@@ -15,6 +15,7 @@ The plugin finds its dependencies in this order:
    ``NASTRAN_PV_VENDOR_DIR``),
 4. folders listed in the ``NASTRAN_PV_SITE_PACKAGES`` environment variable.
 """
+import functools
 import importlib
 import importlib.machinery
 import itertools
@@ -214,9 +215,42 @@ def _whole_model(data):
     return as_multiblock(data), first is not None and first.GetFieldData().GetAbstractArray(BLOCK_PATH) is not None
 
 
+def _drop_state_on_delete(algorithm):
+    """``vtkutil.drop_state_on_delete``: empty the algorithm's ``__dict__`` when ParaView deletes it
+    (a stale dict released later crashes ParaView 6.0 on Linux)."""
+    try:
+        from nastran_pv.vtkutil import drop_state_on_delete
+    except ImportError:  # the reader reports a missing nastran_pv on first use
+        return
+    drop_state_on_delete(algorithm)
+
+
+def _reexecutes(owner):
+    """A ``ModifiedEvent`` observer for a checklist ``owner`` keeps: re-executes ``owner`` unless it is
+    filling its lists (``vtkutil.modified_callback``, which holds it weakly: a lambda capturing
+    ``owner`` kept every deleted reader and checklist filter alive, caches and all)."""
+    try:
+        from nastran_pv.vtkutil import modified_callback
+    except ImportError:  # the reader reports a missing nastran_pv on first use
+        return lambda *args: None if owner._listing else owner.Modified()
+    return modified_callback(owner)
+
+
 class _Settable:
     """Property setters that re-execute only on a change. Plain methods (no ``_pvsm`` tags), so
-    the proxies' XML is unchanged."""
+    the proxies' XML is unchanged. Every algorithm here derives from it, and each ``__init__``
+    ends with :func:`_drop_state_on_delete`."""
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        init = cls.__dict__.get("__init__")
+        if init is not None:
+            @functools.wraps(init)
+            def __init__(self, *args, **kw):
+                init(self, *args, **kw)
+                _drop_state_on_delete(self)
+
+            cls.__init__ = __init__
 
     def _set(self, attr, value):
         if getattr(self, attr) != value:
@@ -349,7 +383,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         self._results = None
         self._results_key = None
         self._result_types = vtkDataArraySelection()  # ResultTypes: what the results file has
-        self._result_types.AddObserver("ModifiedEvent", lambda *args: None if self._listing else self.Modified())
+        self._result_types.AddObserver("ModifiedEvent", _reexecutes(self))
         self._random_asd = ""
         self._random_drive = 2
         self._random_damping = 0.05
@@ -363,7 +397,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         self._lists = {}
         for cat in _VISIBILITY.values():
             sel = vtkDataArraySelection()
-            sel.AddObserver("ModifiedEvent", lambda *args: None if self._listing else self.Modified())
+            sel.AddObserver("ModifiedEvent", _reexecutes(self))
             self._lists[cat] = sel
         self._listed_key = None
         self._reported_key = None
@@ -922,7 +956,7 @@ def _named_block(mb, name):
 def _checklist(owner):
     """A checklist property's selection: a change re-executes ``owner``, except while it is filled."""
     sel = vtkDataArraySelection()
-    sel.AddObserver("ModifiedEvent", lambda *args: None if owner._listing else owner.Modified())
+    sel.AddObserver("ModifiedEvent", _reexecutes(owner))
     return sel
 
 
@@ -1126,9 +1160,10 @@ class NastranPVBushGlyphs(_GlyphFilter):
 @smdomain.datatype(dataTypes=["vtkDataObject"], composite_data_supported=True)
 @_with_glyph_size(0.08, 0.001, 0.5, 6, 3, 32)
 class NastranPVLoadGlyphs(_GlyphFilter):
-    """FORCE/MOMENT arrows of the checked load sets (Loads/* blocks), or with Source a result's
-    SPC forces, MPC forces or applied loads (OLOAD) at each grid with output: forces single-headed,
-    moments double-headed, tail on the grid. Size: length of the largest arrow as a fraction of the
+    """Arrows of the checked load sets: FORCE/MOMENT (Loads/* blocks; forces single-headed, moments
+    double-headed, tail on the grid), pressures (Pressures/* faces, head on the face) and GRAV (at
+    the model CG). With Source, a result's SPC forces, MPC forces or applied loads (OLOAD) at each
+    grid with output instead. Size: length of the largest arrow of each kind as a fraction of the
     model diagonal. Every Nth Point 0 keeps at most 1500 arrows per set."""
 
     BLOCK, REQUIRED = "Loads", "Force"
@@ -1139,6 +1174,8 @@ class NastranPVLoadGlyphs(_GlyphFilter):
         self._source = 0
         self._sets = _checklist(self)
         self._show = 0
+        self._pressures = 1
+        self._gravity = 1
         self._scale = 0
         self._stride = 0
         self._size = 0.08
@@ -1160,27 +1197,44 @@ class NastranPVLoadGlyphs(_GlyphFilter):
     @smproperty.intvector(name="Show", default_values=0)
     @smdomain.xml(_enum_xml(("Forces", "Moments", "Forces and moments")))
     def SetShow(self, v):
+        """The nodal loads to draw (FORCE*, MOMENT*); pressures and gravity have their own switches."""
         self._set("_show", int(v))
+
+    @smproperty.intvector(name="ShowPressures", default_values=1)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    @smhint.xml('<PropertyWidgetDecorator type="GenericDecorator" mode="visibility" property="Source" value="0"/>')
+    def SetShowPressures(self, v):
+        """An arrow per face PLOAD/PLOAD2/PLOAD4 loads (Pressures/* blocks), pushing on the face."""
+        self._set("_pressures", int(v))
+
+    @smproperty.intvector(name="ShowGravity", default_values=1)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    @smhint.xml('<PropertyWidgetDecorator type="GenericDecorator" mode="visibility" property="Source" value="0"/>')
+    def SetShowGravity(self, v):
+        """An arrow at the model CG along the GRAV acceleration of each checked set."""
+        self._set("_gravity", int(v))
 
     @smproperty.intvector(name="ArrowLength", default_values=0)
     @smdomain.xml(_enum_xml(("By magnitude", "Fixed")))
     def SetArrowLength(self, v):
-        """By magnitude: the largest force (and moment) gets Size; Fixed: every arrow gets Size."""
+        """By magnitude: the largest force (and moment, pressure, acceleration) gets Size; Fixed:
+        every arrow gets Size."""
         self._set("_scale", int(v))
 
     @smproperty.intvector(name="EveryNthPoint", default_values=0)
     @smdomain.intrange(min=0, max=1000)
     def SetEveryNthPoint(self, v):
-        """Draw every Nth loaded grid of each set; 0 = automatic (at most 1500 arrows a set)."""
+        """Draw every Nth loaded grid (and pressure face) of each set; 0 = automatic (at most 1500
+        arrows a set)."""
         self._set("_stride", max(int(v), 0))
 
     def _list(self, data):
         try:
-            from nastran_pv.glyphs import default_load_set, load_sets_of
+            from nastran_pv.glyphs import default_load_set, load_set_names
         except ImportError:
             return
         default = default_load_set(data)
-        _fill_checklist(self, self._sets, [n for n, _ in load_sets_of(data)], {default} if default else set())
+        _fill_checklist(self, self._sets, load_set_names(data), {default} if default else set())
 
     def _result_source(self):
         """The result type drawn (SPCForce, MPCForce, AppliedLoad), or None for the deck's sets."""
@@ -1188,24 +1242,39 @@ class NastranPVLoadGlyphs(_GlyphFilter):
         return None if source == "deck" else source
 
     def _block(self, data):
-        return data if self._result_source() else _GlyphFilter._block(self, data)
+        if self._result_source():
+            return data
+        if data.IsA("vtkMultiBlockDataSet"):  # nodal loads, pressure faces or GRAV: the whole model
+            from nastran_pv.glyphs import load_set_names
+
+            return data if load_set_names(data) else None
+        return _GlyphFilter._block(self, data)
 
     def _glyphs(self, block, diag, model):
-        from nastran_pv.glyphs import load_glyphs, load_sets_of, result_load_points
+        from nastran_pv.glyphs import (gravity_anchor, gravity_sets_of, load_glyphs, load_set_names, load_sets_of,
+                                       pressure_sets_of, result_load_points)
         from nastran_pv.vtkutil import add_string_array
 
         rtype = self._result_source()
+        pressures, gravity, cg = [], [], None
         if rtype:  # the result's arrays on the model's blocks, one arrow per grid
             points = result_load_points(model, rtype)
             sets = [(rtype, points)] if points.GetNumberOfPoints() else []
+            names = [n for n, _ in sets]
         elif block.IsA("vtkMultiBlockDataSet"):
             on = set(_checked(self._sets))
             sets = [(n, ds) for n, ds in load_sets_of(model) if n in on]
+            if self._pressures:
+                pressures = [(n, ds) for n, ds in pressure_sets_of(model) if n in on]
+            if self._gravity:
+                gravity, cg = [g for g in gravity_sets_of(model) if g[0] in on], gravity_anchor(model)[0]
+            names = [n for n in load_set_names(model) if n in on]
         else:
             sets = [("Loads", block)]
+            names = ["Loads"]
         out = load_glyphs(sets, diag, _LOAD_SHOW[self._show % 3], self._size, _LOAD_SCALES[self._scale % 2],
-                          self._stride, self._resolution)
-        add_string_array(out.GetFieldData(), "LoadSetNames", [n for n, _ in sets])
+                          self._stride, self._resolution, pressures=pressures, gravity=gravity, cg=cg)
+        add_string_array(out.GetFieldData(), "LoadSetNames", names)
         if rtype and points.GetFieldData().GetArray("ForceSum") is not None:
             out.GetFieldData().AddArray(points.GetFieldData().GetArray("ForceSum"))  # of the grids drawn
         return out
@@ -1938,7 +2007,7 @@ class _TopologyFilter(_FieldFilter):
         _FieldFilter.__init__(self, n_out)
         self._listing = False
         self._cards = vtkDataArraySelection()
-        self._cards.AddObserver("ModifiedEvent", lambda *args: None if self._listing else self.Modified())
+        self._cards.AddObserver("ModifiedEvent", _reexecutes(self))
         self._groups = {g: 1 for g in _GROUPS}
         self._exclude_pids = ""
         self._within = 0

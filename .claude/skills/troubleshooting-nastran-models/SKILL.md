@@ -26,15 +26,15 @@ grep -n "INCLUDE\|^SOL\|LOAD\s*=\|SPC\s*=" DECK         # is this the run deck, 
 | `PID`, `ElementMass`, … shown as "(partial)" in ParaView | The array exists on some blocks only (not on Rigid/Masses). Root field data is always partial | Expected. Use the NPV views or Extract Block |
 | `render` exits 1 / a macro says "cannot read DECK: <error>" | pyNastran rejected a card (e.g. integer fields where it wants reals), or an INCLUDE is missing. The reader produced no model | Fix the card it names; the full traceback is in ParaView's Output Messages (or stderr) |
 | Masses view empty / no `Masses` block | No CONM1/CONM2/CMASS1/2 in the deck (e.g. all Linderholt models). CMASS3/4 sit on scalar points (no location; in the card report) | Expected. The mass is in `ElementMass`. Use `stats --by PID --field ElementMass` |
-| An element type, spring or load missing from every view; "N card(s) of M type(s) not drawn: ..." | The card report: no block draws that card type or form (axisymmetric/heat-transfer elements, PLOAD*, DMIG, superelements, scalar-point or grounded springs, CFAST patches, CWELD) | Expected. `convert` prints the table with the reason and the first ids; a missing *grid* is a separate warning (a broken deck) |
-| Loads view empty or smaller than expected | Modal deck (no `LOAD`). GRAV and PLOAD* are not drawn. Big models draw at most 1,500 arrows | Use the static run deck. State the GRAV caveat. Check `ActiveLoadSets` |
+| An element type, spring or load missing from every view; "N card(s) of M type(s) not drawn: ..." | The card report: no block draws that card type or form (axisymmetric/heat-transfer elements, PLOAD1, DMIG, superelements, scalar-point or grounded springs, CFAST patches, CWELD) | Expected. `convert` prints the table with the reason and the first ids; a missing *grid* is a separate warning (a broken deck) |
+| Loads view empty or smaller than expected | Modal deck (no `LOAD`). *Show Pressures* / *Show Gravity* off on 'NPV load glyphs'. Big models draw at most 1,500 arrows | Use the static run deck. Check `ActiveLoadSets` |
 | `family`/`group` views blank; FAMILY stats all `-1` | No `$ ... family` comments (only ICEM/TACS decks such as uCRM-9 have them) | Use the `pid`/`mid` views |
 | Model "falls apart", unexpected free-free modes, meshes that look joined but aren't | Floating parts, coincident unmerged grids, RBE/spring legs to nowhere | `nastran-pv check DECK`; `convert --parts --rules "exclude=rigid"` shows what the RBEs join (docs/tools.md) |
 | Results view: no time steps; "no displacement/eigenvector output found" | OP2 without DISP/eigenvector output, or complex SOL 107–111 (skipped) | Ask for a real-valued run with `DISP=ALL` |
 | `.h5`: "not an MSC/NX Nastran HDF5 result file" | Not an MSC/NX result HDF5 | Use the `.op2` |
 | "nastran-pv could not import pyNastran" (or `cpylog`, `scipy`, ...) in ParaView | The vendor folder (`paraview/_vendor` in a clone; for an installed package a per-user folder per ParaView Python, which `install_deps.py` prints) is missing or broken, or a pyNastran on ParaView's path lacks its dependencies | Close ParaView, `nastran-pv setup --pvpython "<pvpython>"` (or `python paraview/install_deps.py --pvpython ...`). It keeps a pyNastran ParaView already imports, vendors only what is missing, reinstalls wheels built for another Python, and ends by importing them in pvpython. If it says "pvpython still cannot import", a broken copy in ParaView's own site-packages or `PYTHONPATH` comes first: repair or remove that copy. In a git worktree (no `paraview/_vendor`, it is gitignored), set `NASTRAN_PV_SITE_PACKAGES` to the main checkout's `paraview/_vendor` instead |
 | `IndexError` in pyNastran `pybdf.py` (`loaded_filenames[jfile]`) | pyNastran 1.5/main reading a StringIO deck that has an INCLUDE | Fixed in nastran-pv: bulk-only decks are read with `punch=None`, never a StringIO |
-| "pvpython not found; put ParaView's bin folder on PATH or set NASTRAN_PV_PARAVIEW_BIN" | ParaView is not on PATH or in a standard folder | Set `NASTRAN_PV_PARAVIEW_BIN` to its `bin`, or pass `--pvpython` |
+| "pvpython not found; put ParaView's bin folder on PATH or set NASTRAN_PV_PARAVIEW_BIN" | ParaView is not on PATH, in a standard install folder or unpacked in the home folder (`~/ParaView*`) | Set `NASTRAN_PV_PARAVIEW_BIN` to its `bin`, or pass `--pvpython` |
 | Opened with VisIt's NASTRAN or the built-in "BDF Reader": geometry only | Wrong reader picked | Choose *Nastran Bulk Data (nastran-pv)* → *Set reader as default* |
 | `ExtractBlock` selector matches nothing | VTKHDF root is `assembly`, and pvpython `Fetch` prefixes `Block <n>_` | Selectors `//Shells`; `nastran_views.block_names` |
 | Reader block missing in a script, `GetNumberOfBlocks` AttributeError | The reader outputs the model tree (a `vtkPartitionedDataSetCollection`), and `Fetch` drops its assembly | `nv.Model(reader)`, or `as_multiblock(nv.fetch(src))`; reader selectors are `/Root/Model/<block>` (`nv.selectors`) |
@@ -47,9 +47,9 @@ grep -n "INCLUDE\|^SOL\|LOAD\s*=\|SPC\s*=" DECK         # is this the run deck, 
 
 ## Not bugs (known gaps)
 
-The card report's cards (PLOAD* pressures, scalar-point springs and masses such as CELAS3/4 and
-CMASS3/4, grounded springs, axisymmetric and heat-transfer elements, DMIG, superelements) and GRAV
-as arrows are not visualized (`docs/model.md#cards-not-drawn`, `#not-visualized-yet`). Say so. Adding support is a code change: use `extending-nastran-pv`.
+The card report's cards (PLOAD1 beam loads, scalar-point springs and masses such as CELAS3/4 and
+CMASS3/4, grounded springs, axisymmetric and heat-transfer elements, DMIG, superelements) are not
+visualized (`docs/model.md#cards-not-drawn`, `#not-visualized-yet`). Say so. Adding support is a code change: use `extending-nastran-pv`.
 
 ## Reporting back
 
