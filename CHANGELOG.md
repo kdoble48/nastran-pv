@@ -194,7 +194,7 @@ All notable changes to nastran-pv are listed here. The format follows
   arguments or a filter scene (`export_site.py`), a single static step is one scene (not a
   one-mode tab), and `--out` builds elsewhere. Frequency response, transient and complex results
   have no scene (MYSTRAN solves none); the gallery index says so. The export takes each display's
-  own color map for its legend, so the plies scene no longer shows a stray 0 to 1 scale bar (#TBD).
+  own color map for its legend, so the plies scene no longer shows a stray 0 to 1 scale bar (#77).
 
 ### Changed
 
