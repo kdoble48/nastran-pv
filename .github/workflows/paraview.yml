@@ -84,6 +84,6 @@ jobs:
           export LD_LIBRARY_PATH="${pv}lib/mesa${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           # the checkout's plugin (../src), with the packages setup vendored for this ParaView
           export NASTRAN_PV_SITE_PACKAGES="$vendor" NASTRAN_PV_PYTHON=~/venv/bin/python
-          # pyNastran main runs its developer self-checks when GITHUB_ACTOR is set (pyNastran.IS_CI), and
-          # one of them (_check_result_slice) fails on the synthetic OP2; a user's ParaView never sees it
-          env -u GITHUB_ACTOR "${pv}bin/pvpython" tests/pv_smoke.py
+          # GITHUB_ACTOR is set, so the vendored pyNastran main also runs its self-checks (pyNastran.IS_CI)
+          # on the synthetic OP2s, as it would in a user's GitHub Actions
+          "${pv}bin/pvpython" tests/pv_smoke.py
