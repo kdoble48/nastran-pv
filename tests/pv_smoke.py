@@ -114,6 +114,18 @@ def stale_card_check(pv, topo):
     pv.Delete(g)
     pv.Delete(other)
 
+    # a graph's warnings come once, when it is built, not on every slider step
+    shells.GetCellData().RemoveArray("ElementType")
+    untyped = rm.load_reader(str(write_vtm(mb, os.path.join(tempfile.mkdtemp(), "untyped.vtm"))))
+    g = pv.NastranGrow(Input=untyped, SeedIDs="EID 1", LimitHops=1, MaxHops=5)
+    first = _messages(g.UpdatePipeline)
+    g.MaxHops = 6
+    second = _messages(g.UpdatePipeline)
+    check(first.count("Shells: no ElementType") == 1 and "Shells: no ElementType" not in second,
+          f"graph warnings once per graph: {first!r} then {second!r}")
+    pv.Delete(g)
+    pv.Delete(untyped)
+
 
 def topology_checks(pv, nv):
     import time

@@ -145,13 +145,13 @@ def apply_field_options(mb, args) -> list[str]:
         try:
             rules = Rules.parse(args.rules)
             graph = Graph.from_multiblock(mb)
+            notes += graph.warnings
             if args.parts:
                 res = parts(mb, rules, graph=graph)
                 notes += [f"parts: {res.count} part(s), {len(res.links)} link(s)"] + res.warnings
             if args.grow:
                 res = grow(mb, args.grow, rules, graph=graph)
-                notes += [f"grow: {res.cells} cell(s) reached, max {res.max_hop} hop(s)"]
-                notes += [w for w in res.warnings if w not in notes]  # the graph's warnings come once
+                notes += [f"grow: {res.cells} cell(s) reached, max {res.max_hop} hop(s)"] + res.warnings
         except ValueError as exc:
             raise SystemExit(f"nastran-pv: {exc}") from None
     elif getattr(args, "rules", None):

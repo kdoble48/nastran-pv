@@ -686,14 +686,47 @@ def test_graph_blocks_without_type_array_or_eid_warn(topo_mb):
     assert "SHELLS" in card_types(topo_mb)
     assert Rules(exclude=frozenset({"SHELLS"})).allowed(g).sum() == 8
     assert len(set(g.element[slice(*g.spans["Rigid"])].tolist())) == 2
-    assert set(g.warnings) <= set(grow(topo_mb, "EID 1", graph=g).warnings)
-    assert set(g.warnings) <= set(check(topo_mb, graph=g).warnings)
+    # reported once, where the graph is built: by the caller that passes it in, by the tool otherwise
+    assert not set(g.warnings) & set(grow(topo_mb, "EID 1", graph=g).warnings)
+    assert not set(g.warnings) & set(check(topo_mb, graph=g).warnings)
+    assert set(g.warnings) <= set(grow(topo_mb, "EID 1").warnings)
+    assert set(g.warnings) <= set(check(topo_mb).warnings)
+
+
+def test_mpc_legs_without_dof_are_elements_of_their_own(conn_mb):
+    """Without DOF two equations of one set on one dependent grid would merge: each MPC leg is then an
+    element of its own (legs 9-1 and 9-2 no longer share one), with a warning."""
+    get_block(conn_mb, "Connectors").GetCellData().RemoveArray("DOF")
+    g = Graph.from_multiblock(conn_mb)
+    assert any("Connectors" in w and "DOF" in w for w in g.warnings), g.warnings
+    span = slice(*g.spans["Connectors"])
+    mpc = g.card[span] == g.card_index("MPC")
+    assert len(set(g.element[span][mpc].tolist())) == int(mpc.sum()) == 7
+
+
+def test_element_ids_are_computed_on_first_use(topo_mb):
+    g = Graph.from_multiblock(topo_mb)
+    assert "element" not in vars(g)
+    assert len(g.element) == g.n_cells and "element" in vars(g)
+
+
+def test_mpc_leg_mask_falls_back_to_the_global_table(topo_mb):
+    from nastran_pv.fields.common import mpc_legs
+
+    con = get_block(topo_mb, "Connectors")
+    mask = mpc_legs(con)
+    assert arr(con, "EID", "cell")[mask].tolist() == [1]
+    con.GetFieldData().RemoveArray("ConnectorTypeNames")
+    assert mpc_legs(con).tolist() == mask.tolist()
+    assert mpc_legs(get_block(topo_mb, "Shells")) is None
 
 
 def test_check_takes_check_names_as_text(topo_mb):
     assert [r["Name"] for r in check(topo_mb, checks="FreeEdges").summary] == ["FreeEdges"]
     assert [r["Name"] for r in check(topo_mb, checks="FreeEdges, CoincidentGrids").summary] == [
         "FreeEdges", "CoincidentGrids"]
+    assert [r["Name"] for r in check(topo_mb, checks=["FreeEdges,CoincidentGrids", "FreeFaces"]).summary] == [
+        "FreeEdges", "FreeFaces", "CoincidentGrids"]  # argparse gives --only A,B C as two items
 
 
 def test_check_module_is_not_hidden_by_the_function():
@@ -724,5 +757,10 @@ def test_parse_pids():
 
     assert parse_pids("7 8, 10-12;20") == frozenset({7, 8, 10, 11, 12, 20})
     assert parse_pids("") == frozenset()
-    with pytest.raises(ValueError, match=r"Exclude PIDs '7;x': not an ID or a range: 'x'"):
+    with pytest.raises(ValueError, match=r"^not an ID or a range: 'x'; give PIDs such as") as err:
         parse_pids("7;x")
+    assert "Exclude" not in str(err.value)  # the plugin adds its label
+    # the rules take the same PID lists
+    assert Rules.parse("exclude_pids=10-12,20").exclude_pids == frozenset({10, 11, 12, 20})
+    with pytest.raises(ValueError, match="bad rule 'exclude_pids=7,x'"):
+        Rules.parse("exclude_pids=7,x")

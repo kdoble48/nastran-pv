@@ -18,7 +18,7 @@ Every tool takes the same rules. On the CLI they are one `--rules` string:
 |---|---|
 | `exclude=NAME,...` | Card types or groups to leave out. An excluded element is never reached and never joins two grids. |
 | `include=NAME,...` | Only these card types or groups. Give `include` or `exclude`, not both. |
-| `exclude_pids=ID,...` | Leave out the elements with these PIDs. |
+| `exclude_pids=ID,...` | Leave out the elements with these PIDs; ranges such as `10-20` too. |
 | `within=pid\|mid\|family\|group` | Grow and path never leave the seeds' property, material, family or group. A seed grid on a boundary seeds every one it touches. Elements without that key are not entered: only shells carry family and group; rigid elements, connectors and bushes have no material; and rigid elements (RBE2, RBE3, ...), MPCs and CELAS2/CDAMP2 have no PID, so `within=pid` never enters them and seeding an RBE2 reaches nothing. Seeds without the key warn that nothing can be reached. `within_pids` is the old spelling of `within=pid`. Parts and the checks have no seeds, so they ignore it with a warning. |
 | `max_hops=N` | Stop N elements away from the seeds. |
 

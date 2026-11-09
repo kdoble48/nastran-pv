@@ -14,7 +14,7 @@ from vtkmodules.vtkFiltersGeometry import vtkDataSetSurfaceFilter, vtkGeometryFi
 from .. import vtkutil
 from ..fields.common import get_array, iter_blocks, replace_array
 from .common import gather_cells
-from .graph import LINK_GROUPS, MESH_GROUPS, Graph, NoElementsError, Rules
+from .graph import LINK_GROUPS, MESH_GROUPS, Graph, NoElementsError, Rules, graph_for
 from .parts import label_parts
 
 CHECKS = ("FreeEdges", "FreeFaces", "CoincidentGrids", "DuplicateElements", "DanglingConnectors", "FloatingParts")
@@ -191,23 +191,22 @@ FUNCS = {"FreeEdges": _free_edges, "FreeFaces": _free_faces, "CoincidentGrids": 
 
 
 def check(mb, rules: Rules | None = None, tol: float = 1e-6, checks=CHECKS, graph: Graph | None = None) -> CheckResult:
-    """Run ``checks`` (default all; names, or one text such as ``"FreeEdges, CoincidentGrids"``).
-    ``tol`` is the coincident-grid distance as a fraction of the model diagonal; ``rules`` decide
-    what a part is for ``FloatingParts``. A model without elements gets zero counts."""
-    if isinstance(checks, str):
-        checks = checks.replace(",", " ").split()
+    """Run ``checks`` (default all): names, each of which may be a comma list such as
+    ``"FreeEdges, CoincidentGrids"``. ``tol`` is the coincident-grid distance as a fraction of the
+    model diagonal; ``rules`` decide what a part is for ``FloatingParts``. A model without elements
+    gets zero counts. A given ``graph``'s warnings are its builder's to report."""
+    checks = [c for item in ([checks] if isinstance(checks, str) else checks) for c in item.replace(",", " ").split()]
     unknown = sorted(set(checks) - set(CHECKS))
     if unknown:
         raise ValueError(f"unknown check(s) {unknown}; choose from {', '.join(CHECKS)}")
     rules = rules or Rules()
-    warnings = [f"within={rules.within} needs seeds; ignored for check"] if rules.within else []
-    if graph is None:
-        try:
-            graph = Graph.from_multiblock(mb)
-        except NoElementsError:
-            warnings.append("no element blocks with a NID array: every count is 0")
-    if graph is not None:
-        warnings = graph.warnings + warnings
+    warnings = []
+    try:
+        graph, warnings = graph_for(mb, graph)
+    except NoElementsError:
+        warnings.append("no element blocks with a NID array: every count is 0")
+    if rules.within:
+        warnings.append(f"within={rules.within} needs seeds; ignored for check")
     blocks = dict(iter_blocks(mb))
     out = vtkMultiBlockDataSet()
     rows = []

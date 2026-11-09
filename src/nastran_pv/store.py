@@ -26,7 +26,7 @@ import numpy as np
 
 from . import vtkutil
 from .vtkio import read_model, write_vtm
-from .fields.common import MESH, field_strings, field_value, get_array, iter_blocks
+from .fields.common import MESH, field_strings, field_value, get_array, iter_blocks, mpc_legs
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -128,11 +128,15 @@ class Store:
 
     def _add_elements(self, run_id, block, ds, eid) -> None:
         """One row per element (the legs of an RBE3 share their EID: INSERT OR IGNORE keeps one).
-        MPC legs are left out: an MPC has no element id, their EID is the MPC set id."""
+        MPC legs are left out: an MPC has no element id, their EID is the MPC set id. A connector
+        without a property (CELAS2, CDAMP2: PID 0) gets NULL, like a rigid element."""
         if eid is None:
             return
         cd = ds.GetCellData()
         pid, mid = get_array(cd, "PID"), get_array(cd, "MID")
+        if pid is not None and block in ELEMENT_LINKS:
+            pid = np.where(pid > 0, pid, -1)
+        mpc = mpc_legs(ds)
         et, fam = get_array(cd, "ElementType"), get_array(cd, "FamilyId")
         et_names = (field_strings(ds, "ElementTypeNames") or field_strings(ds, "RigidTypeNames")
                     or field_strings(ds, "ConnectorTypeNames"))
@@ -143,10 +147,11 @@ class Store:
         fam_names = field_strings(ds, "FamilyNames")
         rows = []
         for i, e in enumerate(eid):
-            if block == "Connectors" and et is not None and 0 <= et[i] < len(et_names) and et_names[et[i]] == "MPC":
+            if mpc is not None and mpc[i]:
                 continue
             rows.append((run_id, block, int(e),
-                         int(pid[i]) if pid is not None else None, int(mid[i]) if mid is not None else None,
+                         int(pid[i]) if pid is not None and pid[i] >= 0 else None,
+                         int(mid[i]) if mid is not None else None,
                          et_names[et[i]] if et is not None and 0 <= et[i] < len(et_names) else None,
                          fam_names[fam[i]] if fam is not None and 0 <= fam[i] < len(fam_names) else None))
         self.con.executemany("INSERT OR IGNORE INTO elements VALUES (?,?,?,?,?,?,?)", rows)

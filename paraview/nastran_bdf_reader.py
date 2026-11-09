@@ -1797,7 +1797,11 @@ class _TopologyFilter(_FieldFilter):
         if self._graph is not None:  # the checklist keeps the cards of an earlier input: not an error
             off &= set(self._graph.card_names)
         off |= {g for g, on in self._groups.items() if not on}
-        return Rules(exclude=frozenset(off), exclude_pids=parse_pids(self._exclude_pids), within=_WITHIN[self._within],
+        try:
+            pids = parse_pids(self._exclude_pids)
+        except ValueError as exc:
+            raise ValueError(f"Exclude PIDs {self._exclude_pids!r}: {exc}") from None
+        return Rules(exclude=frozenset(off), exclude_pids=pids, within=_WITHIN[self._within],
                      max_hops=self._max_hops if self._limit else None)
 
     def _report(self, warnings):
@@ -1815,6 +1819,7 @@ class _TopologyFilter(_FieldFilter):
             except NoElementsError:  # Model Check counts zeros; the others report it
                 self._graph = None
             self._graph_key = mtime
+            self._report(self._graph.warnings if self._graph is not None else [])  # once per graph
         return self._run(mb, self._graph, outInfo)
 
 

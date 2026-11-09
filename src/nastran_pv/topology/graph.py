@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from functools import cached_property
 
 import numpy as np
 from scipy import sparse
@@ -29,7 +30,7 @@ GROUPS = ("shells", "solids", "lines", "rigid", "bushes", "connectors")
 MESH_GROUPS = ("shells", "solids", "lines")
 LINK_GROUPS = ("rigid", "bushes", "connectors")
 KNOWN_CARDS = set(ELEMENT_TYPES) | set(RIGID_TYPES) | set(CONNECTOR_TYPES) | {"CBUSH"}
-RULES_SYNTAX = ("exclude=NAME,... (or include=NAME,...) exclude_pids=ID,... within=pid|mid|family|group "
+RULES_SYNTAX = ("exclude=NAME,... (or include=NAME,...) exclude_pids=ID,A-B,... within=pid|mid|family|group "
                 "max_hops=N")
 WITHIN = ("pid", "mid", "family", "group")
 WITHIN_ALIASES = {"property": "pid", "material": "mid", "pids": "pid"}
@@ -59,22 +60,17 @@ class NoElementsError(ValueError):
     """The multiblock has no element block with a ``NID`` array, so there is nothing to traverse."""
 
 
-def _elements(card, eid, lead, dof, has_eid, mpc_card) -> np.ndarray:
-    """One id per element: the cells of one card and EID (an RBE3's legs) share it. An MPC has no
-    EID (its legs carry the set id), so one equation is one element: its set id, dependent grid and
-    component. A cell of a block without EID is an element of its own."""
+def _element_keys(card, eid, lead, dof, alone, mpc_card) -> np.ndarray:
+    """(C, 4) rows equal on the cells of one element: the cells of one card and EID (an RBE3's legs)
+    share theirs. An MPC has no EID (its legs carry the set id), so one equation is one element: its
+    set id, dependent grid and component. ``alone`` cells (a block without EID, MPC legs without
+    DOF) are elements of their own."""
     sub = np.full((len(card), 2), -1, np.int64)
     mpc = card == mpc_card
     sub[mpc] = np.column_stack([lead[mpc], dof[mpc]])
-    sub[~has_eid, 0] = np.flatnonzero(~has_eid)
-    keys = np.column_stack([card, eid, sub])
-    order = np.lexsort(keys.T[::-1])  # np.unique(axis=0) does the same, several times slower
-    ordered = keys[order]
-    new = np.ones(len(keys), bool)
-    new[1:] = np.any(ordered[1:] != ordered[:-1], axis=1)
-    element = np.empty(len(keys), np.int64)
-    element[order] = np.cumsum(new) - 1
-    return element
+    sub[alone, 0] = np.flatnonzero(alone)
+    sub[alone, 1] = -2  # apart from any MPC equation's (grid, component)
+    return np.column_stack([card, eid, sub])
 
 
 @dataclass
@@ -91,8 +87,20 @@ class Graph:
     mid: np.ndarray = None           # (C,) MID, -1 where the block has none
     family: np.ndarray = None        # (C,) FamilyId, -1 where none
     group_id: np.ndarray = None      # (C,) GroupId (pre-processor group), -1 where none
-    element: np.ndarray = None       # (C,) element id: equal on the cells of one element (see _elements)
-    warnings: list = field(default_factory=list)  # blocks that lack a type array or EID
+    element_keys: np.ndarray = field(default=None, repr=False)  # (C, 4), see _element_keys
+    warnings: list = field(default_factory=list)  # blocks that lack a type array, EID or DOF
+
+    @cached_property
+    def element(self) -> np.ndarray:
+        """(C,) element id, equal on the cells of one element; computed on first use (the checks)."""
+        keys = self.element_keys
+        order = np.lexsort(keys.T[::-1])  # np.unique(axis=0) does the same, several times slower
+        ordered = keys[order]
+        new = np.ones(len(keys), bool)
+        new[1:] = np.any(ordered[1:] != ordered[:-1], axis=1)
+        element = np.empty(len(keys), np.int64)
+        element[order] = np.cumsum(new) - 1
+        return element
 
     def within_values(self, key: str) -> np.ndarray:
         """The per-cell array a ``within=<key>`` rule compares (-1 = none; for pid and mid 0 too)."""
@@ -110,7 +118,7 @@ class Graph:
     def from_multiblock(cls, mb) -> "Graph":
         rows, cols, nid_parts, xyz_parts = [], [], [], []
         eid, pid, card, group = [], [], [], []
-        lead, dof, has_eid, warnings = [], [], [], []  # for the element ids
+        lead, dof, alone, warnings = [], [], [], []  # for the element keys
         extra = {"MID": [], "FamilyId": [], "GroupId": []}
         card_names: list[str] = []
         spans = {}
@@ -132,7 +140,6 @@ class Graph:
             xyz_parts.append(vtkutil.to_numpy(ds.GetPoints().GetData()).astype(float))
             e = get_array(cd, "EID")
             eid.append(np.full(n, -1, np.int64) if e is None else np.asarray(e, dtype=np.int64))
-            has_eid.append(np.full(n, e is not None))
             if e is None:
                 warnings.append(f"{path}: no EID cell array; each of its cells is an element of its own in the checks")
             lead.append(nid[conn[np.minimum(offsets[:-1], len(conn) - 1)]] if len(conn) else np.full(n, -1, np.int64))
@@ -154,6 +161,10 @@ class Graph:
             else:
                 lut = np.array([_index(card_names, s) for s in names], dtype=np.int64)
                 card.append(lut[np.asarray(codes, dtype=np.int64)])
+            mpc = card[-1] == card_names.index("MPC") if "MPC" in card_names else np.zeros(n, bool)
+            alone.append(np.full(n, e is None) | (mpc & (d is None)))
+            if d is None and mpc.any():  # the equations of one set on one grid would merge
+                warnings.append(f"{path}: no DOF cell array; each MPC leg is an element of its own in the checks")
             group.append(np.full(n, GROUPS.index(alias)))
             spans[path] = (start, start + n)
             start += n
@@ -167,10 +178,10 @@ class Graph:
         inc.sum_duplicates()
         inc.data[:] = 1
         eid, card = np.concatenate(eid), np.concatenate(card).astype(np.int64)
-        element = _elements(card, eid, np.concatenate(lead), np.concatenate(dof), np.concatenate(has_eid),
-                            card_names.index("MPC") if "MPC" in card_names else -1)
+        keys = _element_keys(card, eid, np.concatenate(lead), np.concatenate(dof), np.concatenate(alone),
+                             card_names.index("MPC") if "MPC" in card_names else -1)
         return cls(nids, xyz, inc, eid, np.concatenate(pid), card, np.concatenate(group).astype(np.int64),
-                   card_names, spans, *(np.concatenate(v) for v in extra.values()), element=element,
+                   card_names, spans, *(np.concatenate(v) for v in extra.values()), element_keys=keys,
                    warnings=warnings)
 
     def grid_index(self, ids) -> np.ndarray:
@@ -192,6 +203,15 @@ class Graph:
         a = sparse.diags(allowed.astype(np.int8), dtype=np.int8) @ self.incidence
         a.eliminate_zeros()
         return sparse.bmat([[None, a], [a.T, None]], format="csr")
+
+
+def graph_for(mb, graph: Graph | None):
+    """(graph, warnings): a given graph and no warnings (whoever built it reported them once), or a
+    graph built from ``mb`` and its warnings."""
+    if graph is not None:
+        return graph, []
+    graph = Graph.from_multiblock(mb)
+    return graph, list(graph.warnings)
 
 
 def _name(text: str) -> str:
@@ -231,7 +251,7 @@ class Rules:
                 if key in ("include", "exclude") and items:
                     kw[key] = frozenset(_name(v) for v in items)
                 elif key == "exclude_pids" and items:
-                    kw[key] = frozenset(int(v) for v in items)
+                    kw[key] = parse_pids(value)
                 elif key == "within_pids" and not eq:
                     kw["within"] = "pid"
                 elif key == "within" and value:
@@ -324,10 +344,10 @@ def card_types(mb) -> list[str]:
 
 def parse_pids(text) -> frozenset:
     """PIDs from free text, as the reader's element lists take them: ``7 8``, ``7,8;9``, ``10-20``
-    or ``10 THRU 20`` (the plugin's Exclude PIDs)."""
+    or ``10 THRU 20`` (``exclude_pids=`` and the plugin's Exclude PIDs)."""
     from ..tree import parse_ids
 
     try:
         return frozenset(parse_ids(text))
     except ValueError as exc:
-        raise ValueError(f"Exclude PIDs {text!r}: {exc}; give PIDs such as 7 8 or 10-20") from None
+        raise ValueError(f"{exc}; give PIDs such as 7 8 or 10-20") from None

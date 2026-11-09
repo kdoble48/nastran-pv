@@ -5,6 +5,7 @@ import numpy as np
 from vtkmodules.vtkCommonDataModel import vtkMultiBlockDataSet
 
 from .. import vtkutil
+from ..categories import CONNECTOR_TYPES
 
 MESH = ("Shells", "Solids", "Lines")
 
@@ -56,3 +57,14 @@ def field_strings(ds, name):
 def replace_array(attr, name, values, skip_all_nan=True):
     attr.RemoveArray(name)
     vtkutil.add_array(attr, name, np.asarray(values), skip_all_nan=skip_all_nan)
+
+
+def mpc_legs(ds):
+    """Mask of the MPC legs among ``ds``'s cells, whose ``EID`` is the MPC set id, not an element id;
+    None without a ``ConnectorType`` array. The codes resolve through the block's
+    ``ConnectorTypeNames``, else the global table (MPC is one of its fixed codes)."""
+    codes = get_array(ds.GetCellData(), "ConnectorType")
+    if codes is None:
+        return None
+    names = field_strings(ds, "ConnectorTypeNames") or CONNECTOR_TYPES
+    return np.isin(np.asarray(codes), [i for i, n in enumerate(names) if n == "MPC"])

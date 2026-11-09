@@ -7,7 +7,7 @@ import numpy as np
 from scipy.sparse import csgraph
 
 from .common import extract_reached, write_cells, write_points
-from .graph import MESH_GROUPS, Graph, Rules, Seeds
+from .graph import MESH_GROUPS, Graph, Rules, Seeds, graph_for
 
 
 @dataclass
@@ -77,8 +77,7 @@ def grow(mb, seeds, rules: Rules | None = None, extract: bool = False, graph: Gr
     """
     rules = rules or Rules()
     seeds = Seeds.parse(seeds) if isinstance(seeds, str) else seeds
-    graph = graph or Graph.from_multiblock(mb)
-    warnings = list(graph.warnings)
+    graph, warnings = graph_for(mb, graph)
     seed, grid_rows, allowed = seed_cells(graph, seeds, rules, warnings)
     if not seed.any() and not len(grid_rows):
         warnings.append("no seeds left: nothing reached")

@@ -9,7 +9,7 @@ from scipy.sparse import csgraph
 from ..fields.common import get_array, iter_blocks
 from ..vtkutil import write_field_table
 from .common import cell_values, write_cells, write_points
-from .graph import Graph, Rules
+from .graph import Graph, Rules, graph_for
 
 
 @dataclass
@@ -84,8 +84,8 @@ def _links(graph, allowed, part_grid):
 def parts(mb, rules: Rules | None = None, graph: Graph | None = None) -> PartsResult:
     """Write ``PartId`` cell/point arrays and the ``PART_*``/``LINK_*`` root tables onto ``mb``."""
     rules = rules or Rules()
-    graph = graph or Graph.from_multiblock(mb)
-    warnings = graph.warnings + ([f"within={rules.within} needs seeds; ignored for parts"] if rules.within else [])
+    graph, warnings = graph_for(mb, graph)
+    warnings += [f"within={rules.within} needs seeds; ignored for parts"] if rules.within else []
     allowed = rules.allowed(graph)
     part_cell, part_grid, n = label_parts(graph, allowed)
     write_cells(mb, graph, "PartId", part_cell)
