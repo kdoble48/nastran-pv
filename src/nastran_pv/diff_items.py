@@ -349,7 +349,7 @@ def compare_bushes(A, B, moved, row, tol, res: Result) -> None:
     gone = [e for e in ia if e not in ib]
     for e in gone:
         row("bush", e, "removed", "PID", ia[e]["pid"], None, name="CBUSH")
-        res.removed_points.append((BUSH_ITEM, e, -1, -1, ia[e]["xyz"], np.nan))
+        res.removed_points.append((BUSH_ITEM, e, -1, ia[e]["ga"], ia[e]["xyz"], np.nan))  # NID: its GA
     res.summary.append(_summary("bushes", len(ia), len(ib), status, len(gone)))
     if db is not None:
         res.items["Bushes"] = {"assoc": "point", "status": status, "reason": reason, "extra": {"DeltaK": delta_k}}

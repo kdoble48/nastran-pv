@@ -155,6 +155,7 @@ def mass_glyph_matrices(tensors, eq_radius, mass, has_inertia, diag, mode="auto"
 
 
 MASS_COLOR_ARRAYS = ("Mass", "EID", "NID")  # Nastran Mass Glyphs' Color By: the output's active scalars
+STATUS_ARRAYS = ("DiffStatus", "DiffReason")  # a Nastran Diff output's per-item change: every glyph carries them
 
 
 def mass_glyphs(masses: vtkPolyData, diag: float, mode: str = "auto", relative: float = 0.025,
@@ -185,8 +186,8 @@ def mass_glyphs(masses: vtkPolyData, diag: float, mode: str = "auto", relative: 
         xyz, conn, ntri, normals = instance(tmpl, mats[rows], centres[rows])
         out = _polydata(xyz, conn, ntri, len(rows), normals)
         per = len(tmpl[0])
-        _repeat_point_arrays(masses, out, per, ("Mass", "EID", "NID", "MassScale", "EquivalentRadius", "HasInertia"),
-                             rows)
+        _repeat_point_arrays(masses, out, per, ("Mass", "EID", "NID", "MassScale", "EquivalentRadius", "HasInertia")
+                             + STATUS_ARRAYS, rows)
         vtkutil.add_array(out.GetPointData(), "GlyphRadius", np.repeat(glyph_r[rows], per))
         if out.GetPointData().GetArray(scalars) is not None:
             out.GetPointData().SetActiveScalars(scalars)
@@ -417,10 +418,12 @@ def bush_glyphs(bushes: vtkPolyData, diag: float, size: float = 0.04, triad: boo
         return out
 
     pieces = []  # (xyz, conn, triangles per glyph, per-glyph columns dict)
+    status = {s: vtkutil.to_numpy(pd.GetArray(s)).astype(np.int64) for s in STATUS_ARRAYS if pd.GetArray(s) is not None}
 
     def add(xyz, conn, ntri, normals, rows, axis_code, stiff, rel, dom):
         pieces.append((xyz, conn, ntri, normals, {"Axis": axis_code, "Stiffness": stiff, "EID": eid[rows],
-                                         "Released": rel, "Dominant": dom}))
+                                                  "Released": rel, "Dominant": dom,
+                                                  **{s: v[rows] for s, v in status.items()}}))
 
     if triad:
         bar = unit_bar(resolution) if kind == "translation" else None
@@ -475,6 +478,8 @@ def bush_glyphs(bushes: vtkPolyData, diag: float, size: float = 0.04, triad: boo
     vtkutil.add_array(cd, "EID", np.concatenate(cols["EID"]).astype(np.int64))
     vtkutil.add_array(cd, "Released", np.concatenate(cols["Released"]).astype(np.uint8))
     vtkutil.add_array(cd, "Dominant", np.concatenate(cols["Dominant"]).astype(np.uint8))
+    for s in status:
+        vtkutil.add_array(cd, s, np.concatenate(cols[s]).astype(np.int64))
     return out
 
 
@@ -564,7 +569,8 @@ def load_glyphs(sets, diag: float, show: str = "force", size: float = 0.08, scal
     if scale not in LOAD_SCALES:
         raise ValueError(f"scale must be one of {LOAD_SCALES}")
     kinds = [(k, name) for k, name in enumerate(("Force", "Moment")) if show in ("both", name.lower())]
-    rows, n_points, used_stride, peak = [], 0, 1, {}  # rows: (kind, xyz, vectors, nid, sid)
+    rows, n_points, used_stride, peak = [], 0, 1, {}  # rows: (kind, xyz, vectors, nid, sid, status columns)
+    carried = [s for s in STATUS_ARRAYS if any(ds.GetPointData().GetArray(s) is not None for _, ds in sets)]
     for name, ds in sets:
         n = ds.GetNumberOfPoints()
         if not n:
@@ -576,15 +582,16 @@ def load_glyphs(sets, diag: float, show: str = "force", size: float = 0.08, scal
         pd = ds.GetPointData()
         xyz = vtkutil.to_numpy(ds.GetPoints().GetData()).reshape(-1, 3).astype(float)[idx]
         nid = get_array(pd, "NID", np.full(n, -1)).astype(np.int64)[idx]
+        status = {s: get_array(pd, s, np.full(n, -1)).astype(np.int64)[idx] for s in carried}
         for k, array in kinds:
             vec = get_array(pd, array)
             if vec is not None:
                 vec = np.nan_to_num(vec.reshape(-1, 3).astype(float))
                 peak[k] = max(peak.get(k, 0.0), float(np.linalg.norm(vec, axis=1).max()))  # over every point
-                rows.append((k, xyz, vec[idx], nid, _set_id(ds, name)))
+                rows.append((k, xyz, vec[idx], nid, _set_id(ds, name), status))
     peak = {k: peak.get(k, 0.0) for k, _ in kinds}
     pieces = []
-    for k, xyz, vec, nid, sid in rows:
+    for k, xyz, vec, nid, sid, status in rows:
         mag = np.linalg.norm(vec, axis=1)
         on = mag > 0
         if not on.any() or peak[k] <= 0:
@@ -592,12 +599,13 @@ def load_glyphs(sets, diag: float, show: str = "force", size: float = 0.08, scal
         length = size * diag * (mag[on] / peak[k] if scale == "magnitude" else np.ones(int(on.sum())))
         frames = _frames(vec[on] / mag[on, None])
         mats = frames * length[:, None, None]
-        pieces.append((k, mats, frames, xyz[on], mag[on], nid[on], np.full(int(on.sum()), sid)))
+        pieces.append((k, mats, frames, xyz[on], mag[on], nid[on], np.full(int(on.sum()), sid),
+                       {s: v[on] for s, v in status.items()}))
     out = vtkPolyData()
     if pieces:
         templates = {k: load_arrow(resolution, heads=k + 1) for k in {p[0] for p in pieces}}
         xyz_all, conn_all, nrm_all, cols, offset, count = [], [], [], {}, 0, 0
-        for k, mats, frames, origin, mag, nid, sid in pieces:
+        for k, mats, frames, origin, mag, nid, sid, status in pieces:
             xyz, conn, ntri, normals = instance(templates[k], mats, origin, rotations=frames)
             per = len(templates[k][0])
             xyz_all.append(xyz)
@@ -605,7 +613,8 @@ def load_glyphs(sets, diag: float, show: str = "force", size: float = 0.08, scal
             conn_all.append(conn + offset)
             offset += len(xyz)
             count += len(mats)
-            for col, v in (("Magnitude", mag), ("LoadKind", np.full(len(mag), k)), ("LoadSet", sid), ("NID", nid)):
+            for col, v in (("Magnitude", mag), ("LoadKind", np.full(len(mag), k)), ("LoadSet", sid), ("NID", nid),
+                           *status.items()):
                 cols.setdefault(col, []).append(np.repeat(v, per))
         conn = np.concatenate(conn_all)
         out.SetPoints(vtkutil.make_points(np.vstack(xyz_all)))
@@ -663,7 +672,7 @@ def spc_glyphs(constraints: vtkPolyData, diag: float, size: float = 0.006, sets=
         mats = np.tile(np.eye(3) * (0.5 * size * diag), (len(rows), 1, 1))
         xyz, conn, ntri, normals = instance(tmpl, mats, centres, rotations=np.tile(np.eye(3), (len(rows), 1, 1)))
         out = _polydata(xyz, conn, ntri, len(rows), normals)
-        _repeat_point_arrays(constraints, out, len(tmpl[0]), ("NID", "SPCSet", "DOFCode", "CD"), rows)
+        _repeat_point_arrays(constraints, out, len(tmpl[0]), ("NID", "SPCSet", "DOFCode", "CD") + STATUS_ARRAYS, rows)
         if out.GetPointData().GetArray("DOFCode") is not None:
             out.GetPointData().SetActiveScalars("DOFCode")
     vtkutil.add_array(out.GetFieldData(), "SPCPoints", np.array([len(rows)]))
