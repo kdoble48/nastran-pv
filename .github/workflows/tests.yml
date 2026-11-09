@@ -21,21 +21,37 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python: ["3.10", "3.11", "3.12"]
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        include:
+          # pyNastran 1.4.1 needs numpy < 2, which has no wheels past Python 3.12: these use main, at
+          # the commit pinned in .github/pynastran-main.txt, installed first so `pip install -e .` keeps it
+          - python: "3.13"
+            pynastran: main
+          - python: "3.14"
+            pynastran: main
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
           cache: pip
-          cache-dependency-path: pyproject.toml
+          cache-dependency-path: |
+            pyproject.toml
+            .github/pynastran-main.txt
+      - name: pyNastran main (pinned)
+        if: matrix.pynastran == 'main'
+        run: python -m pip install -r .github/pynastran-main.txt
       - name: Install
         run: python -m pip install -e ".[test]"
       - name: Lint
         shell: bash
         run: python -m pyflakes src paraview/*.py tests
       - name: Test
-        run: python -m pytest -q -ra
+        # GITHUB_ACTOR is set, so pyNastran main runs its own self-checks (pyNastran.IS_CI) on every
+        # OP2 the tests read, as it does in a user's GitHub Actions
+        run: |
+          python -c "import pyNastran, numpy, vtk; print('pyNastran', pyNastran.__version__, 'numpy', numpy.__version__, 'vtk', vtk.vtkVersion.GetVTKVersion())"
+          python -m pytest -q -ra
 
   wheel:
     # the wheel alone (no clone, no NASTRAN_PV_PARAVIEW_DIR) must carry and find the ParaView plugin
@@ -57,23 +73,17 @@ jobs:
         run: |
           # stand-ins for a developer's vendored packages and caches: they must stay out of the wheel.
           # The sdist's wheel tests MANIFEST.in; the tree's wheel (as pip builds a clone) tests setup.py
-          mkdir -p paraview/_vendor/scipy paraview/__pycache__
-          touch paraview/_vendor/scipy/__init__.py paraview/__pycache__/nastran_views.cpython-312.pyc
-          python -m pip install build
+          mkdir -p paraview/_vendor/scipy paraview/__pycache__ src/nastran_pv/__pycache__
+          touch paraview/_vendor/scipy/__init__.py paraview/__pycache__/nastran_views.cpython-312.pyc \
+                src/nastran_pv/__pycache__/cli.cpython-312.pyc
+          # readme-renderer[md] renders the Markdown README as PyPI does (plain twine skips it)
+          python -m pip install build twine "readme-renderer[md]"
           python -m build --outdir dist
           python -m build --wheel --outdir dist-tree
-      - name: Both wheels carry the plugin, and nothing else from paraview/
-        run: |
-          for whl in dist/*.whl dist-tree/*.whl; do
-            echo "== $whl"
-            python -m zipfile -l "$whl" | grep nastran_pv/paraview/
-            python -m zipfile -l "$whl" > files.txt
-            for f in nastran_bdf_reader.py nastran_views.py install_deps.py install_macros.py \
-                     render_model.py nastran_pv_colors.json; do
-              grep -q "nastran_pv/paraview/$f" files.txt || { echo "::error::$whl lacks $f"; exit 1; }
-            done
-            if grep -E "_vendor|__pycache__|\.pyc" files.txt; then echo "::error::$whl has vendored files"; exit 1; fi
-          done
+      - name: twine check --strict
+        run: python -m twine check --strict dist/* dist-tree/*
+      - name: The wheels carry the plugin, the sdist what MANIFEST.in promises, and nothing generated
+        run: python tests/check_dists.py dist/* dist-tree/*.whl
       - name: Install it into a fresh venv and find the plugin there
         run: |
           python -m venv "$RUNNER_TEMP/venv"

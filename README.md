@@ -30,7 +30,8 @@ nastran-pv setup                 # ParaView-side dependencies + toolbar macros (
 ```
 
 A wheel built from the clone carries the plugin too, so it needs no clone. See
-[Install](docs/install.md) for the wheel, extras, environment variables and the example datasets.
+[Install](https://kdoble48.github.io/nastran-pv/install.html) for the wheel, extras, environment
+variables and the example datasets.
 
 ## Quickstart
 
@@ -43,17 +44,27 @@ nastran-pv stats out/model.vtm --by PID --field ElementMass
 
 ## Documentation
 
-The full documentation, including an interactive 3D view gallery, is at <https://kdoble48.github.io/nastran-pv/> (sources indexed in [docs/index.md](docs/index.md)):
+The full documentation, including an interactive 3D view gallery, is at
+<https://kdoble48.github.io/nastran-pv/> (sources in
+[docs/](https://github.com/kdoble48/nastran-pv/tree/main/docs)):
 
-- [ParaView](docs/paraview.md) and [ParaView tutorials](docs/paraview-tutorials.md): the reader,
+- [ParaView](https://kdoble48.github.io/nastran-pv/paraview.html) and
+  [ParaView tutorials](https://kdoble48.github.io/nastran-pv/paraview-tutorials.html): the reader,
   one-click views, glyph filters, indexed colors
-- [CLI](docs/cli.md), [Fields](docs/fields.md), [Model tools](docs/tools.md),
-  [Model diff](docs/diff.md), [Run store](docs/store.md), [Random vibration](docs/random-vibration.md)
-- [Model blocks and arrays](docs/model.md), [Output formats](docs/output-formats.md),
-  [Beam sections](docs/beam-sections.md)
-- [Development](docs/development.md) and [Versioning](docs/versioning.md): tests, lint, how to
-  write these docs, and the version policy
+- [CLI](https://kdoble48.github.io/nastran-pv/cli.html),
+  [Fields](https://kdoble48.github.io/nastran-pv/fields.html),
+  [Model tools](https://kdoble48.github.io/nastran-pv/tools.html),
+  [Model diff](https://kdoble48.github.io/nastran-pv/diff.html),
+  [Run store](https://kdoble48.github.io/nastran-pv/store.html),
+  [Random vibration](https://kdoble48.github.io/nastran-pv/random-vibration.html)
+- [Model blocks and arrays](https://kdoble48.github.io/nastran-pv/model.html),
+  [Output formats](https://kdoble48.github.io/nastran-pv/output-formats.html),
+  [Beam sections](https://kdoble48.github.io/nastran-pv/beam-sections.html)
+- [Development](https://kdoble48.github.io/nastran-pv/development.html) and
+  [Versioning](https://kdoble48.github.io/nastran-pv/versioning.html): tests, lint, how to write
+  these docs, and the version policy
+- [Changelog](https://github.com/kdoble48/nastran-pv/blob/main/CHANGELOG.md)
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](https://github.com/kdoble48/nastran-pv/blob/main/LICENSE).

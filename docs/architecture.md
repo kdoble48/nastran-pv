@@ -306,8 +306,9 @@ Every gotcha found so far, by area. The few that bite on any change are also in 
   closures (`tests/test_vtk_lifetime.py` reproduces the crash in plain Python).
 - pyNastran quirks:
   - pyNastran main turns on its developer self-checks when `GITHUB_ACTOR` (or `TRAVIS`, `APPVEYOR`)
-    is set (`pyNastran.IS_CI`). One of them, `_check_result_slice`, fails on the synthetic OP2
-    from `op2_fixture`, so the ParaView CI job runs pvpython with `GITHUB_ACTOR` unset.
+    is set (`pyNastran.IS_CI`), so they run on every OP2 that CI reads. One of them,
+    `_check_result_slice`, slices a table by `searchsorted` on its element ids, so a synthesized
+    table in `op2_fixture` lists its elements in ascending id order, as Nastran writes SORT1 tables.
   - `Subcase.has_parameter` returns a list.
   - Stress tables expose `get_headers()`; von Mises exists only when `stress_bits[4]` is set.
     A plate strain table's first header is `fiber_curvature` when its rows are mid-plane strain
