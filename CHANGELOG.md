@@ -8,8 +8,11 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Added
 
-- `nastran-pv --version`: the versions of nastran-pv, Python, pyNastran, numpy, VTK and h5py, the
-  `pvpython` it finds and the OS, a dependency that does not import named as such. A bug-report
+- `nastran-pv --version`: the version of nastran-pv, the folder it runs from (and the commit of a
+  source checkout), the versions of Python, pyNastran, numpy, VTK and h5py, the `pvpython` it finds
+  and the OS. It answers before the CLI imports its dependencies, so a missing or broken VTK or
+  pyNastran is named, not a traceback; the `nastran-pv` command now starts in
+  `nastran_pv.__main__:main`. A bug-report
   issue form (`.github/ISSUE_TEMPLATE/bug_report.yml`) asks for them, for a deck that shows the
   problem (a cut-down one for a confidential model), the results file when results are involved,
   what was expected and seen, and the card report and warnings; the README links it (#78).

@@ -51,7 +51,7 @@ and CI proves all of this on every push.
 
 1. Task 3: register the publishers and environments, publish `0.2.0rc1` to TestPyPI, check it on
    a clean Windows and Linux machine, publish `0.2.0` (#70).
-2. Task 5 merged (#75).
+2. Merge task 5 (#75).
 3. Task 15's pull requests merged, then the gallery assets uploaded with the user's go-ahead
    (`python docs/build_gallery.py --ucrm9 ... --mystran ... --upload`, the exact command is in
    #77), so the site shows the result scenes. Frequency response, transient and complex

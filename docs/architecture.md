@@ -187,6 +187,8 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
 - `store.py`: SQLite in long format (`runs`, `elements`, `nodes`, `element_values`,
   `node_values`), plus `<db>_vtm/run_<id>.vtm`.
 - `cli.py`: the `convert`, `stats`, `check`, `sections`, `diff` and `store` commands, with shared field options.
+  The `nastran-pv` command enters at `__main__.main`, which answers `--version` from `versions.py`
+  (standard library only) before importing `cli.py` and its dependencies.
   `launch.py` provides `view`, `render` and `setup`, and `locate.py` (standard library only) finds
   the ParaView executables (one search for the CLI and `install_deps.py`: env, `PATH`, then the newest
   `ParaView*` by folder version in the install folders and the home folder), the plugin folder (`NASTRAN_PV_PARAVIEW_DIR`, then the wheel's

@@ -27,10 +27,12 @@ body:
     id: steps
     attributes:
       label: How to reproduce
-      description: The exact command, or the ParaView steps (reader properties you changed, the view or filter you used).
+      description: >
+        The exact command, or the ParaView steps (reader properties you changed, the view or filter you
+        used).
       placeholder: |
         nastran-pv convert model.bdf --results model.op2 -o out/model.vtm
-      render: shell
+        or: open model.bdf, set OP2 File Name to model.op2, Apply, click NPV Stress
     validations:
       required: true
   - type: textarea
