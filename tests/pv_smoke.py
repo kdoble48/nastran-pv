@@ -1164,7 +1164,8 @@ def _output_differences(nv, a, b, port=0):
     if da.IsA("vtkMultiBlockDataSet") or da.IsA("vtkPartitionedDataSetCollection"):
         diffs = model_digest_differences(model_digest(as_multiblock(da)), model_digest(as_multiblock(db)))
         # ParaView 5.x: convert ran in the system Python, whose pyNastran words its warnings differently
-        return [d for d in diffs if rm.nv._paraview_major() >= 6 or not d.endswith("field Warnings: differs")]
+        # (or has some the reader's has not: differs, or only in one)
+        return [d for d in diffs if rm.nv._paraview_major() >= 6 or "field Warnings: " not in d]
     return digest_differences(digest(da), digest(db))
 
 
@@ -1285,7 +1286,8 @@ def parity_checks(pv, nv):
             check(times == nv.timesteps(f), f"{tag}: time steps {times} == {nv.timesteps(f)}")
             vtm = suffix == ".vtm"
             # ParaView 5.x: convert ran in the system Python, whose pyNastran words its warnings differently
-            # and ParaView's VTKHDF reader tags a series with a Time field
+            # (or has some the reader's has not: 1.4 warns about CMASS3 on cards.bdf) and ParaView's VTKHDF
+            # reader tags a series with a Time field
             ignore = ("Time",) if rm.nv._paraview_major() >= 6 else ("Time", "Warnings")
             loaded = load_deck(deck, echo=False)
             truth = build_multiblock(loaded)  # the model convert wrote
@@ -1297,7 +1299,7 @@ def parity_checks(pv, nv):
                 diffs = differences(snapshot(truth, drop_empty=vtm), snapshot(got, drop_empty=vtm), ignore)
                 check(not diffs, f"{tag} t={t}: ParaView reads the model convert wrote" + _listed(diffs))
                 diffs = [d for d in model_digest_differences(model_digest(nv.Model(r, t).data), model_digest(got))
-                         if not any(d.endswith(f"field {i}: differs") for i in ignore)]
+                         if not any(f"field {i}: " in d for i in ignore)]  # differs, or only in one
                 check(not diffs, f"{tag} t={t}: the same model as the deck reader" + _listed(diffs))
             model = nv.Model(r, times[-1] if times else None)
             mesh = next(b for b in ("Shells", "Solids", "Lines") if model.has(b))

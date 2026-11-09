@@ -89,5 +89,9 @@ was missing from it.
 
 ## Real decks
 
-The uCRM-9 coarse, medium and fine run decks and the twelve Linderholt files convert with their
-skipped cards reported; the output is in the PR.
+The six uCRM-9 run decks (coarse, medium and fine; modal and static cruise) and the sixteen
+Linderholt files (eight `.dat` run decks, eight `.bdf` meshes) all print `card report: every card is
+drawn or used`. Their card types are CQUADR, CONM2, RBE2, RBE3, SPC, FORCE, GRAV and LOAD (uCRM-9)
+and CHEXA, CPENTA and RBE2 (Linderholt), all drawn, plus data and control cards (CORD2R, MAT1,
+MAT2, PSHELL, PSOLID, PARAM, EIGRL). So the report's rows are exercised by `tests/data/cards.bdf`,
+which holds one card of each kind.
