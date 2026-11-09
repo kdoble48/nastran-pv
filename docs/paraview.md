@@ -15,7 +15,10 @@ one-click views on the Macros toolbar. For step-by-step walkthroughs, see
    takes an `.op2` or MSC/NX `.h5` file. Each result step (subcase, load step or mode) becomes a
    time step, and *Result Types* lists the [result types](model.md#result-types) the file has
    (each at its default: displacements, `VonMisesMax` and forces checked, the stress and strain
-   components not; check or uncheck one to add or leave off its arrays). *NSMSet* picks the bulk nonstructural mass set
+   components not; check or uncheck one to add or leave off its arrays). *Ply* is `convert --ply`
+   for a composite deck: a ply id (the PCOMP ply number or a PCOMPG global ply id) lays that ply's
+   layup on the shells (`PlyAngle`, `PlyAxis`, ...) and gives the ply result types at that ply; 0
+   gives each element's critical ply ([Composites](model.md#composites)). *NSMSet* picks the bulk nonstructural mass set
    ([Nonstructural mass](model.md#nonstructural-mass)), *BushStiffnessReference* is `convert --k-ref`
    (0 = the softest stiffness), and *Random ASD* turns the modes into a random response
    ([Random vibration](random-vibration.md)).
@@ -204,6 +207,7 @@ an `NPV ...` filter selected finds the model upstream of it.
 | NPV Results | Deformed shape colored by displacement over the undeformed outline, for the current time step; each step's largest displacement is drawn at 8 % of the model size (*NPV deform* > *Auto Scale*; uncheck it to type a *Scale Factor*, which rerunning NPV Results keeps; the overlays and colorings clicked afterwards keep the deformation, NPV Clear sets it back to 0, and NPV Results then turns Auto Scale back on) |
 | NPV Forces | Element forces of the current step ([result types](model.md#result-types)), each block by its own array over a ghost of the model: shells by `MembraneForce` (magnitude), lines by `AxialForce`, bushes by `BushForce` and springs by `SpringForce`, in the element frame; the lines and springs draw only their elements with a force (an MPC leg stays the thin ghost). Another array or component: the *Color By* menu, or `nv.apply("forces", shell="bending", line="BendingMomentA", component=0)` (`shell`: membrane, bending, shear; `component` is checked against each array's size). It turns on the force types in the reader's *Result Types* when they are unchecked |
 | NPV Stress | Von Mises stress of the current step: shells at the top fibre (`VonMisesTop`), solids at the centre (`VonMises`), bars, beams and rods by `MaxStress`. It turns on the stress types in the reader's *Result Types* (off by default), and the strain types instead with `strain=True`: the info text names the types it turned on. A type the view turned on stays on (uncheck it in *Result Types* to drop its arrays) until the other stress-or-strain choice of the view turns it off again; a type you checked yourself stays, and other views leave them alone. A file without stress components shows `VonMisesMax`, the envelope. From Python: `nv.apply("stress", quantity="principal", fibre="bottom")` (`quantity`: vonmises, principal (the major one, or `component=1`), maxshear, components), `strain=True` for the strains (principal by default) |
+| NPV Plies | Composite plies ([Composites](model.md#composites)) over a ghost of the model: the shells colored by `PlyFailureIndexMax`, else `PlyVonMises` (it turns `PlyStress` and `PlyFailureIndex` on in the reader's *Result Types*), else the ply's layup, and the ply's material axes on top (*NPV ply axes*: the fibre direction black, the 2-direction red with *Both Axes*). The ply is the reader's *Ply*: 0, each element's critical ply (its id in `PlyStressPly`; the axes are then the element material axes), or a ply id. From Python: `nv.apply("plies", ply=3, quantity="stress", component=0)` (`ply` sets the reader's *Ply*; on a converted file it picks the axes' ply, the results staying as converted; `quantity`: failure, vonmises, stress, strain, angle, thickness, count) |
 | NPV Random RMS | Random response (reader *Random ASD* set, see [Random vibration](random-vibration.md)): the mesh colored by acceleration RMS on a log scale, with the drive, input RMS and captured mass. Drive, damping and g are the reader's *Random* properties, since the reader computes the response |
 | NPV Random Sweep | The response ASD at the current frequency frame on one fixed log range, with the frame's frequency: press play to sweep |
 | NPV Animate Mode | Vibrates the mode the time controls are on, in the view as it is (masses, PID, loads, results, a show-only subset, anything you switched on): two cycles at 24 frames/s. It then leaves the **play button** looping that mode: the time steps become the 24 phases of one cycle (the time widget reads *Phase*), and the mode and its frequency stay in the upper right corner. A converted single-step file (`convert --results` without `--all-steps`) has one mode. From Python: `nv.play_mode(3, frames=36)` |
@@ -278,6 +282,7 @@ again keeps what you changed; from Python an argument you pass explicitly wins
 | Loads | *NPV load glyphs* | *Source*, *Load Sets*, *Show*, *Show Pressures*, *Show Gravity*, *Arrow Length*, *Every Nth Point*; *Glyph Size* group |
 | SPC | *NPV spc glyphs* | *SPC Sets*, *DOFs*; *Glyph Size* group |
 | Results, Animate Mode | *NPV deform* | *Auto Scale*, *Scale Factor*, *Auto Scale Peak* (advanced); the undeformed outline's opacity is the Display opacity of *NPV undeformed mesh* |
+| Plies | *NPV ply axes* (the ply itself is the reader's *Ply*) | *Ply* (0: the model's, as the reader laid it), *Size*, *Both Axes* |
 | Random RMS, Random Sweep | the reader | *Random ASD*, *Random Drive*, *Random Damping*, *Random G*, *Random Frames* (the reader computes the response) |
 | Grow, Path, Model Check, Parts | *NPV grow*, *NPV path*, *NPV check*, *NPV parts* | the *Traversal* group; Path and Model Check also *Show Only* ([Model tools](tools.md#paraview)) |
 | Diff | the Nastran Diff | *Compare*, *Show* and *Tolerances* groups ([Model diff](diff.md#paraview)) |
@@ -381,6 +386,13 @@ the selection commands make no filter of their own.
 * **Nastran SPC Glyphs** puts a sphere of diameter *Size* × the model diagonal (0.006) on every
   constrained grid of the checked *SPC Sets* that constrains any of the *DOFs* (default `123456`;
   `123` keeps the grids that fix a translation). Point arrays `DOFCode`, `SPCSet`, `NID` and `CD`.
+* **Nastran Ply Axes** draws a composite ply's material axes as a line through each shell's centre,
+  *Size* (0.5) × the element's size (twice its mean centre-to-grid distance) long: the 1-direction
+  (the fibre) and, with *Both Axes*, the 2-direction. *Ply* is a ply id (from the Shells layup, so it
+  works on a converted file too); 0 draws the model's `PlyAxis` (the reader's *Ply*, or
+  `convert --ply`) or, without one, the element material axes (THETA/MCID). An element without the
+  ply gets no line. Cell arrays `EID`, `Direction` (1, 2) and `PlyAngle`; field `AxesPly`,
+  `AxisCount`.
 * **Nastran Beam Sections** sweeps each CBAR/CBEAM's cross section along it (see
   [Beam sections](beam-sections.md)). *ShowSections*, *ShowAxes* (shear-center and neutral axes) and
   *ShowTriads* (x/y/z arrows, *TriadSize* × model diagonal) pick the parts; the `BeamPart` cell array

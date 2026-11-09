@@ -57,6 +57,8 @@ VIEW_INFO = {
                          "springs by their force, in the element frame."),
     "stress": ("Stress", "Von Mises stress of the step: shells at the top fibre, solids at the centre, lines by their "
                          "largest longitudinal stress."),
+    "plies": ("Plies", "Composite plies: shells colored by a ply's failure index or stress (each element's critical "
+                       "ply by default), with the ply's fibre directions."),
     "diff": ("Diff", "What changed from a reference model: elements added, changed or changed through their "
                      "property, removed elements in red, with the mass change."),
 }

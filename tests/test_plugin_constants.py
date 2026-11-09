@@ -42,6 +42,7 @@ def test_reader_glyph_and_diff_choices_match_nastran_pv():
     assert ast.literal_eval(found["_LOAD_SHOW"]) == glyphs.LOAD_SHOW
     assert ast.literal_eval(found["_LOAD_SCALES"]) == glyphs.LOAD_SCALES
     assert ast.literal_eval(found["_LOAD_SOURCES"]) == glyphs.LOAD_SOURCES
+    assert ast.literal_eval(found["_PLY_AXIS_SIZE"]) == glyphs.PLY_AXIS_SIZE
     views = _assignments("nastran_views.py")
     assert [t for t, _ in ast.literal_eval(views["_RESULT_LOADS"]).values()] == list(glyphs.LOAD_SOURCES[1:])
     assert ast.literal_eval(found["_DIFF_KINDS"]) == diff.KINDS

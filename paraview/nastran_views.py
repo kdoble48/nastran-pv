@@ -15,10 +15,13 @@ again. Available views::
 
     masses  bushes  bushrotations  beams  loads  spc  rigid  family  group  pid  mid  thickness
     nsm  elementtype  results  random  randomsweep  parts  grow  path  check  diff  forces  stress
+    plies
 
 ``forces`` and ``stress`` color each block by its element forces or stresses (``stress`` takes
 ``quantity``, ``fibre``, ``strain`` and ``component``); ``apply`` first turns on the result
-types they need in the deck reader's *Result Types* (``turn_on_result_types``).
+types they need in the deck reader's *Result Types* (``turn_on_result_types``). ``plies`` colors
+the composite shells by a ply result or layup quantity and draws the ply's axes (Nastran Ply
+Axes); its ``ply`` sets the deck reader's *Ply* first (``set_reader_ply``).
 
 ``grow_from_selection`` and ``path_from_selection`` seed the grow and path
 views from the current selection. ``animate_mode`` vibrates the current mode and leaves the play
@@ -1487,6 +1490,8 @@ def view_result_types(name, kwargs) -> tuple[str, ...]:
         return tuple(t.name for t in _force_types())
     if name == "stress":
         return tuple(t.name for t in _stress_types(bool(kwargs.get("strain"))))
+    if name == "plies":
+        return tuple(t.name for t in _ply_types(kwargs))
     return ()
 
 
@@ -1572,8 +1577,11 @@ def _color_blocks(model, view, view_name, picks, component=None):
             src.LowerThreshold, src.UpperThreshold = -1e300, 1e300
         d = _show(src, view)
         d.Opacity = 1.0
+        old = d.LookupTable  # a reused extract's previous coloring: its legend goes when nothing else uses it
         pv.ColorBy(d, (assoc, array))
         lut = pv.GetColorTransferFunction(array)
+        if old is not None and old != lut:
+            pv.HideScalarBarIfNotNeeded(old, view)
         lut.InterpretValuesAsCategories = 0
         comp = None
         if values.ndim == 2:  # the mode first, then the range: no magnitude range left in it
@@ -1690,6 +1698,126 @@ def view_stress(model, view, quantity=None, fibre=None, strain=False, component=
         return
     _info_lines(model, view, what, shown, _TURNED_ON.get("stress"),
                 "Other arrays, fibres and components" if fibres else "Other arrays and components")
+
+
+# ----------------------------------------------------------------- composite plies
+PLY_QUANTITIES = {  # quantity: (Shells array, default component of a vector array)
+    "failure": ("PlyFailureIndexMax", None), "vonmises": ("PlyVonMises", None), "stress": ("PlyStress", 0),
+    "strain": ("PlyPrincipalStrain", 0), "angle": ("PlyAngle", None), "thickness": ("PlyThickness", None),
+    "count": ("PlyCount", None),
+}
+PLY_DEFAULT_ORDER = ("failure", "vonmises", "strain", "angle", "count")  # the first the model has
+PLY_LAYUP = ("angle", "thickness", "count")  # quantities of the layup, not of the results
+PLY_AXES_RGB = ((0.05, 0.05, 0.05), (0.85, 0.15, 0.1))  # the 1-direction (fibre), the 2-direction
+PLY_NAN_RGB = (0.78, 0.78, 0.78)  # shells without the ply (a PSHELL, a PCOMPG without that global ply)
+
+
+def _ply_types(kwargs) -> tuple:
+    rt = _rt()
+    strain = str(kwargs.get("quantity") or "").lower() == "strain"
+    return (rt.PLY_STRAIN if strain else rt.PLY_STRESS), rt.PLY_FAILURE_INDEX
+
+
+def set_reader_ply(reader, ply) -> bool:
+    """Set the deck reader's *Ply* to ``ply`` (a ply id, or 0 / ``max`` for each element's critical
+    ply) when it is given and differs; True when it changed. A converted file carries the ply it
+    was written with (``convert --ply``)."""
+    if ply is None or _xml_name(reader) != READER_XML or reader.GetProperty("Ply") is None:
+        return False
+    from nastran_pv.result_types import parse_ply
+
+    value = parse_ply(ply)
+    if int(reader.Ply) == value:
+        return False
+    reader.Ply = value
+    return True
+
+
+def _ply_axes(model, view, ply, size, both):
+    """The ply axes overlay (Nastran Ply Axes on NPV scope), black fibres and red 2-directions; on
+    the deck reader its Ply follows the reader's (0), on a converted file it is ``ply`` when given."""
+    axes = _overlay(model, "ply axes", lambda src: pv.NastranPlyAxes(Input=src), "NastranPVPlyAxes")
+    own = None if ply is None or _xml_name(model.reader) == READER_XML else _ply_value(ply)
+    _set_given(axes, Ply=own, Size=size, BothAxes=None if both is None else int(bool(both)))
+    axes.UpdatePipeline(model.time)
+    count = int(_glyph_field(axes, "AxisCount"))
+    if not count:
+        return 0, int(_glyph_field(axes, "AxesPly"))
+    d = _show(axes, view)
+    d.LineWidth = 3.0
+    d.Representation = "Surface"
+    categorical(d, "Direction", [1, 2], ["1 (fibre)", "2"], list(PLY_AXES_RGB), view=view, separate=True)
+    d.SetScalarBarVisibility(view, False)
+    return count, int(_glyph_field(axes, "AxesPly"))
+
+
+def _ply_value(ply) -> int:
+    from nastran_pv.result_types import parse_ply
+
+    return parse_ply(ply)
+
+
+def view_plies(model, view, ply=None, quantity=None, component=None, axes=True, size=None, both=None):
+    """Composite plies over a ghost of the rest: the shells coloured by a ply result or the ply's
+    layup, and the ply's material axes on top (Nastran Ply Axes: black fibre direction, red
+    2-direction with ``both``; ``size`` its length over the element's). ``ply``: a ply id (the PCOMP
+    ply number or a PCOMPG global ply id), or 0 / ``max`` for each element's critical ply; ``apply``
+    sets the deck reader's *Ply* to it first. ``quantity``: failure (``PlyFailureIndexMax``),
+    vonmises, stress (``PlyStress``, S11 unless ``component`` says), strain
+    (``PlyPrincipalStrain``), angle, thickness or count (``PlyCount``); by default the first of
+    failure, vonmises, strain, angle and count the model has. ``apply`` turns on ``PlyStress`` (or
+    ``PlyStrain``) and ``PlyFailureIndex`` in the reader's Result Types."""
+    if quantity is not None:
+        q = str(quantity).lower().replace(" ", "").replace("_", "")
+        if q not in PLY_QUANTITIES:
+            raise ValueError(f"plies view: quantity={quantity!r} is not one of {tuple(PLY_QUANTITIES)}")
+        order = (q,)
+    else:
+        order = PLY_DEFAULT_ORDER
+    if not model.has("Shells") or model.array("Shells", "PlyCount", "cell") is None:
+        info_text(model, view, "No composite shells: no shell property is a PCOMP or PCOMPG.")
+        return None
+    ghost_mesh(model, view)
+
+    def has(q):
+        values = model.array("Shells", PLY_QUANTITIES[q][0], "cell")
+        return values is not None and np.isfinite(values).any()
+
+    q = next((q for q in order if has(q)), None)
+    shown = []
+    if q is not None:
+        array, default = PLY_QUANTITIES[q]
+        shown = _color_blocks(model, view, "plies", (("Shells", array, default),), component)
+        pv.GetColorTransferFunction(array).NanColor = list(PLY_NAN_RGB)  # elements without the ply
+    reader_ply = int(model.reader.Ply) if _xml_name(model.reader) == READER_XML else None
+    lines = []
+    if q is None:
+        lines.append(f"No {quantity} to show: a ply id (the reader's Ply) lays the layup" if quantity in PLY_LAYUP
+                     else f"No {quantity or 'ply results'} at this step: STRESS = ALL writes them (FT and SB on "
+                          "the PCOMP for failure indices)")
+    elif q not in PLY_LAYUP:
+        if reader_ply is None:
+            lines.append("ply: as the file was converted (convert --ply)")
+        elif reader_ply:
+            lines.append(f"ply {reader_ply}")
+        else:
+            rtype = _rt().PLY_FAILURE_INDEX if q == "failure" else _ply_types({"quantity": q})[0]
+            lines.append(f"ply: the critical one of each element, its id in {rtype.name}Ply")
+    lines += shown
+    obj, drawn, count = None, 0, 0
+    if axes:
+        count, drawn = _ply_axes(model, view, ply, size, both)
+        obj = pv.FindSource(_name(model, "ply axes"))
+        lines.append(f"axes: ply {drawn} material axes ({count} lines; Nastran Ply Axes)" if drawn and count else
+                     f"axes: the element material axes, THETA/MCID ({count} lines; a ply id draws a ply's)"
+                     if count else "axes: none (no element has the ply)")
+    header = "Composite plies" + (f", {_step_label(model, view)}" if q is not None and q not in PLY_LAYUP else "")
+    text = header + "\n" + "\n".join(lines)
+    if _TURNED_ON.get("plies"):
+        text += f"\nTurned on in the reader's Result Types: {', '.join(_TURNED_ON['plies'])}"
+    t = info_text(model, view, text + "\nThe ply: the reader's Ply (0: each element's critical ply)")
+    pv.GetDisplayProperties(t, view).Justification = "Left"
+    return obj
 
 
 # ----------------------------------------------------------------- topology
@@ -2470,7 +2598,7 @@ VIEWS = {
     "rigid": view_rigid, "family": view_family, "group": view_group, "pid": view_pid,
     "mid": view_mid, "elementtype": view_elementtype, "thickness": view_thickness, "nsm": view_nsm,
     "results": view_results, "random": view_random, "randomsweep": view_randomsweep, "parts": view_parts, "grow": view_grow, "path": view_path, "check": view_check,
-    "diff": view_diff, "forces": view_forces, "stress": view_stress,
+    "diff": view_diff, "forces": view_forces, "stress": view_stress, "plies": view_plies,
 }
 
 
@@ -2490,7 +2618,8 @@ def apply(name, reader=None, view=None, model=None, reset_camera=None, toggle=Fa
     stop_mode_animation(reader, view)  # back on the mode's time step, time controls step modes again
     turned_on = turn_on_result_types(reader, view_result_types(name, kwargs))  # before the model is read
     _TURNED_ON[name] = turned_on
-    if model is None or turned_on:
+    ply_changed = name == "plies" and set_reader_ply(reader, kwargs.get("ply"))
+    if model is None or turned_on or ply_changed:
         model = Model(reader, getattr(view, "ViewTime", 0.0) if model is None else model.time)
     scene = scene_of(view)
     if scene.model is not None and scene.model != reader:  # one subject per single-model scene
