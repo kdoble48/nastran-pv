@@ -463,16 +463,15 @@ def _feed(proxy, src):
 
 
 def scope_active(reader):
-    """True when the deck reader hides anything: an EID list, an unchecked checklist entry, or a
-    Selection File in use. A converted file has no scope."""
+    """True when the deck reader's visibility hides anything: an EID list, an unchecked checklist
+    entry or a Selection File, as the reader applies them (its *ScopeActive*), so an EID list it
+    cannot parse, a file it cannot read or a read that failed is no scope. It does not run the
+    reader. A converted file has no scope."""
     if _xml_name(reader) != READER_XML:
         return False
-    if (reader.ShowOnlyElements or "").strip() or (reader.HiddenElements or "").strip():
-        return True
-    if reader.SelectionFile and enum_text(reader, "SelectionMode") != "Off":
-        return True
-    reader.UpdatePipelineInformation()
-    return any(set(_listed(reader, prop)) - set(getattr(reader, prop)) for prop in VISIBILITY_PROPS)
+    reader.UpdatePropertyInformation()
+    prop = reader.GetProperty("ScopeActive")
+    return bool(prop.GetElement(0)) if prop is not None and len(prop) else False
 
 
 def _missing_text(model, what, note=""):
@@ -530,13 +529,21 @@ _INFO_WRITES = 0  # info_text calls so far: apply tells from it which layer wrot
 
 def scene_of(view):
     """The layers shown in ``view`` (a :class:`nastran_pv.scene.Scene`, made on first use). Scenes of
-    views that were closed are dropped."""
+    views that were closed are dropped, and a scene whose reader was deleted is emptied, hiding what
+    is left of it in ``view``: its objects still open and every ``NPV ...`` object (its info text)."""
     from nastran_pv.scene import Scene
 
     alive = {v.GetGlobalIDAsString() for v in pv.GetViews()}
     for key in [k for k in _SCENES if k not in alive]:
         del _SCENES[key]
-    return _SCENES.setdefault(view.GetGlobalIDAsString(), Scene())
+    scene = _SCENES.setdefault(view.GetGlobalIDAsString(), Scene())
+    sources = pv.GetSources()
+    if scene.model is not None and scene.model not in list(sources.values()):
+        cleared = scene.clear()
+        names = {v.GetGlobalIDAsString(): k[0] for k, v in sources.items()}
+        _hide([s for s in shown_sources(view)
+               if s in cleared or names.get(s.GetGlobalIDAsString(), "").startswith("NPV ")], view)
+    return scene
 
 
 def _show(src, view):
@@ -2154,7 +2161,7 @@ def apply(name, reader=None, view=None, model=None, reset_camera=None, toggle=Fa
         if scene.coloring is None:
             objects, _ = _recorded(lambda: ghost_mesh(model, view, GHOST_OPACITY.get(name, 0.2)))
             _hide(scene.set_coloring(Layer(GHOST, objects)), view)
-    writes = _INFO_WRITES
+    writes, writer = _INFO_WRITES, scene.info
     objects, selected = _recorded(lambda: VIEWS[name](model, view, **kwargs))
     if kind(name) == "overlay":
         _hide(scene.add_overlay(Layer(name, objects, selected)), view)
@@ -2162,6 +2169,10 @@ def apply(name, reader=None, view=None, model=None, reset_camera=None, toggle=Fa
         _hide(scene.set_coloring(Layer(name, objects, selected)), view)
     if _INFO_WRITES != writes:
         scene.info = name
+    elif writer is not None and scene.info is None:  # the replaced coloring wrote it, this one writes none
+        info = pv.FindSource(_name(model, "info"))
+        if info is not None:
+            pv.Hide(info, view)
     if reset_camera or (reset_camera is None and fresh):
         view.ResetCamera(False)
     pv.Render(view)

@@ -31,7 +31,7 @@ import numpy as np
 from vtkmodules.vtkCommonDataModel import vtkMultiBlockDataSet
 
 from . import vtkutil
-from .fields.common import MESH, field_strings, get_array, iter_blocks
+from .fields.common import MESH, field_strings, get_array, iter_blocks, mpc_legs
 from .tree import _cut, _item_kind, format_ids, item_labels, parse_ids
 
 KEYS = ("EID", "NID", "PID", "MID", "FAMILY", "GROUP")
@@ -242,10 +242,8 @@ def _element_eids(ds, kind):
     if eid is None:
         return None
     eid = np.asarray(eid).astype(np.int64)
-    codes = get_array(ds.GetCellData(), "ConnectorType") if kind == "cell" else None
-    if codes is not None:
-        names = field_strings(ds, "ConnectorTypeNames")
-        mpc = np.array([0 <= c < len(names) and names[c] == "MPC" for c in codes], dtype=bool)
+    mpc = mpc_legs(ds) if kind == "cell" else None
+    if mpc is not None:
         eid = np.where(mpc, -1, eid)
     return eid
 
@@ -370,21 +368,34 @@ def item_masks(mb, ids: IdList, grids: str = "all", attach: bool = True):
 
 
 def _connector_elements(blocks):
-    """Group the connector items into elements: ``(count, item -> element per block, entry element, entry grid)``.
+    """Group the connector items into elements: ``(count, item -> element per block, element -> group,
+    entry element, entry grid)``.
 
     Rigid legs and connector cells share an element by EID (each MPC leg is its own element); a bush is one
-    element over its ``BushLines`` cell and its ``Bushes`` point (grids ``GA``/``GB``)."""
-    ids, item_elem, ent_e, ent_g = {}, {}, [], []
+    element over its ``BushLines`` cell and its ``Bushes`` point (grids ``GA``/``GB``). A group is a block,
+    or both bush blocks."""
+    groups = {}  # group -> [(path, eid)]
+    for path, ds, kind, n, eid, _ in blocks:
+        if path in CONNECTOR_BLOCKS and eid is not None:
+            groups.setdefault("bush" if path in ("Bushes", "BushLines") else path, []).append((path, eid))
+    item_elem, elem_group, start = {}, [], 0
+    for g, members in enumerate(groups.values()):
+        uniq = np.unique(np.concatenate([e[e >= 0] for _, e in members]))
+        legs = 0
+        for path, e in members:
+            ok = e >= 0
+            elem = np.empty(len(e), np.int64)
+            elem[ok] = start + np.searchsorted(uniq, e[ok])
+            elem[~ok] = start + len(uniq) + legs + np.arange(int((~ok).sum()))
+            legs += int((~ok).sum())
+            item_elem[path] = elem
+        elem_group.append(np.full(len(uniq) + legs, g, np.int64))
+        start += len(uniq) + legs
 
-    def element(key):
-        return ids.setdefault(key, len(ids))
-
-    for path, ds, kind, n, eid in blocks:
-        if path not in CONNECTOR_BLOCKS or eid is None:
+    ent_e, ent_g = [], []
+    for path, ds, kind, n, eid, _ in blocks:
+        if path not in item_elem:
             continue
-        group = "bush" if path in ("Bushes", "BushLines") else path
-        item_elem[path] = np.array([element((group, int(e)) if e >= 0 else (path, "leg", i))
-                                    for i, e in enumerate(eid)], dtype=np.int64)
         if kind == "cell":
             nid = get_array(ds.GetPointData(), "NID")
             sizes, conn = _cell_points(ds)
@@ -399,7 +410,10 @@ def _connector_elements(blocks):
                     ent_e.append(item_elem[path][g > 0])
                     ent_g.append(g[g > 0])
     cat = lambda parts: np.concatenate(parts) if parts else np.zeros(0, np.int64)
-    return len(ids), item_elem, cat(ent_e), cat(ent_g)
+    return start, item_elem, cat(elem_group), cat(ent_e), cat(ent_g)
+
+
+FOLLOWS = {"MassOffsets": "Masses", "BeamSections": "Lines"}  # drawn for the kept items of that block (by EID)
 
 
 def scope_masks(mb, vis, names=None):
@@ -411,79 +425,100 @@ def scope_masks(mb, vis, names=None):
 
     1. Mesh blocks (shells, solids, lines) keep what the reader keeps: the checklists, the EID lists and the
        selection file.
-    2. A rigid, connector or bush element stays when one of its grids touches a kept mesh cell. Its other
-       grids then carry the chain on over grids no mesh element uses (rigid -> free grid -> bush -> ...).
-    3. Masses, SPCs and loads stay when their grid belongs to a kept mesh cell or a kept connector; a
-       mass offset line follows its mass. An item's own checklists (property, type, ...) still apply.
-    4. Any other block that holds an element named in Show Only / the selection keeps just the named ones (named
-       EIDs win over the grid join).
-    5. EIDs in Hide / a hiding selection always go.
+    2. Items the scope names by EID (Show Only, or a Show only selection file of EIDs) and that the reader
+       keeps: a block that holds any keeps just those (named EIDs win over the grid join). A named rigid,
+       connector or bush element is kept. EIDs match as in the reader (an MPC leg's EID is its set id).
+    3. Any other rigid, connector or bush element stays when one of its grids touches a kept mesh cell. A
+       kept element's grids count as kept, and those no mesh element uses carry the chain on (rigid -> free
+       grid -> bush -> ...).
+    4. Masses, SPCs and loads stay when their grid belongs to a kept mesh cell or a kept element; a mass
+       offset line follows its mass, a beam section its beam.
+    5. A Show only selection file of grids, properties, materials, families or groups adds what it lists
+       (and the reader keeps) to rules 3 and 4: a listed item stays, a listed element counts as kept.
+    6. The item's own checklists (property, type, ...), the Hide EIDs and a Hide selection file always
+       apply: what they hide is not drawn and carries no chain.
     """
     if vis.everything:
         return None
-    blocks, own = [], {}
+    blocks = []
     for path, ds in iter_blocks(mb):
         kind = _item_kind(ds)
         n = ds.GetNumberOfPoints() if kind == "point" else ds.GetNumberOfCells()
-        blocks.append((path, ds, kind, n, _element_eids(ds, kind)))
-        own[path] = type(vis)(hidden=vis.hidden).mask(item_labels(path, ds, names), None, n)
+        blocks.append((path, ds, kind, n, _element_eids(ds, kind), item_labels(path, ds, names)))
+    selected = vis.selection_masks(mb)[0]  # the reader's masks of the selection file
+    listed = {}  # a Show only file: the items it lists themselves (not those joined by grid)
+    if vis.select is not None and not vis.select_hide:
+        listed = item_masks(mb, vis.select, vis.select_grids, attach=False)[0]
+    by_eid = vis.select is not None and vis.select.key == "EID"
+    hides = type(vis)(hidden=vis.hidden, hidden_eids=vis.hidden_eids)  # checklists and Hide, not Show Only
 
-    keep_ids, drop_ids = vis.show_only, set(vis.hidden_eids)
-    if vis.select is not None and vis.select.key == "EID":
-        if vis.select_hide:
-            drop_ids |= set(vis.select.ids)
-        else:
-            keep_ids = frozenset(vis.select.ids) if keep_ids is None else keep_ids & vis.select.ids
-    selected = vis.selection_masks(mb)[0]
-
-    masks = {}
+    masks, allowed, named, extra = {}, {}, {}, {}
     touched, mesh_grids = [], []  # grids of the kept mesh cells; of every mesh cell
-    for path, ds, kind, n, eid in blocks:
-        if path not in MESH:
+    for path, ds, kind, n, eid, labels in blocks:
+        raw = get_array(_attr(ds, kind), "EID")  # what the reader's EID lists match: an MPC leg's set id too
+        raw = None if raw is None else np.asarray(raw).astype(np.int64)
+        kept = hides.mask(labels, raw, n)
+        shown = np.isin(raw, list(vis.show_only)) if vis.show_only is not None and raw is not None else None
+        reader = kept & (True if shown is None else shown) & selected.get(path, True)  # = vis.mask & selected
+        if path in MESH:
+            masks[path] = reader
+            nid = get_array(ds.GetPointData(), "NID")
+            sizes, conn = _cell_points(ds)
+            if nid is not None and len(conn):
+                grids = np.asarray(nid)[conn].astype(np.int64)
+                mesh_grids.append(grids)
+                touched.append(grids[np.repeat(reader, sizes)])
             continue
-        masks[path] = vis.mask(item_labels(path, ds, names), eid, n) & selected.get(path, True)
-        nid = get_array(ds.GetPointData(), "NID")
-        sizes, conn = _cell_points(ds)
-        if nid is not None and len(conn):
-            grids = np.asarray(nid)[conn].astype(np.int64)
-            mesh_grids.append(grids)
-            touched.append(grids[np.repeat(masks[path], sizes)])
+        allowed[path] = kept & (selected.get(path, True) if vis.select_hide else True)
+        file_hit = listed.get(path)
+        hit = file_hit if by_eid else None
+        if shown is not None:
+            hit = shown if hit is None else hit | shown
+        named[path] = reader & hit if hit is not None else np.zeros(n, bool)
+        extra[path] = reader & file_hit if file_hit is not None and not by_eid else np.zeros(n, bool)
     uniq = lambda parts: np.unique(np.concatenate(parts)) if parts else np.zeros(0, np.int64)
     touch, mesh = uniq(touched), uniq(mesh_grids)
     kept_grids = touch
 
-    n_elem, item_elem, ent_e, ent_g = _connector_elements(blocks)
-    elem_kept = np.zeros(n_elem, bool)
+    n_elem, item_elem, elem_group, ent_e, ent_g = _connector_elements(blocks)
+    usable = np.ones(n_elem, bool)  # no item of the element is hidden
+    elem_named = np.zeros(n_elem, bool)
+    elem_kept = np.zeros(n_elem, bool)  # named and listed elements, then the join
+    for path, elem in item_elem.items():
+        usable[elem[~allowed[path]]] = False
+        elem_named[elem[named[path]]] = True
+        elem_kept[elem[named[path] | extra[path]]] = True
+    elem_kept &= usable
+    joins = usable & ~np.isin(elem_group, elem_group[elem_named & usable])  # a named block keeps just the named
+    new = elem_kept
     while True:
-        hit = np.bincount(ent_e[np.isin(ent_g, touch)], minlength=n_elem) > 0
-        new = hit & ~elem_kept
-        if not new.any():
-            break
-        elem_kept |= new
         g = np.unique(ent_g[new[ent_e]])
         kept_grids = np.union1d(kept_grids, g)
         touch = np.union1d(touch, g[~np.isin(g, mesh)])  # only grids no mesh element uses carry the chain on
-    for path, ds, kind, n, eid in blocks:
-        if path in item_elem:
-            masks[path] = own[path] & elem_kept[item_elem[path]]
-        elif path not in MESH and path != "MassOffsets" and kind == "point":
-            nid = get_array(ds.GetPointData(), "NID")
-            masks[path] = own[path] & (np.isin(np.asarray(nid).astype(np.int64), kept_grids)
-                                       if nid is not None else True)
+        hit = np.bincount(ent_e[np.isin(ent_g, touch)], minlength=n_elem) > 0
+        new = hit & joins & ~elem_kept
+        if not new.any():
+            break
+        elem_kept |= new
 
-    for path, ds, kind, n, eid in blocks:  # named EIDs win; hidden EIDs go (mesh blocks: done above)
-        masks.setdefault(path, own[path])
-        if eid is None or path == "MassOffsets" or path in MESH:
+    for path, ds, kind, n, eid, labels in blocks:
+        if path in MESH or path in FOLLOWS:
             continue
-        if keep_ids is not None and np.isin(eid, list(keep_ids)).any():
-            masks[path] = own[path] & np.isin(eid, list(keep_ids))
-        if drop_ids:
-            masks[path] = masks[path] & ~np.isin(eid, list(drop_ids))
-    by_path = {path: eid for path, _, _, _, eid in blocks}
-    if "MassOffsets" in masks and by_path["MassOffsets"] is not None:  # an offset line follows its mass
-        mass = by_path.get("Masses")
-        follows = np.isin(by_path["MassOffsets"], mass[masks["Masses"]]) if mass is not None else True
-        masks["MassOffsets"] = own["MassOffsets"] & follows
+        if path in item_elem:
+            masks[path] = allowed[path] & elem_kept[item_elem[path]]
+        elif named[path].any():
+            masks[path] = named[path]
+        elif kind == "point" and (nid := get_array(ds.GetPointData(), "NID")) is not None:
+            masks[path] = allowed[path] & np.isin(np.asarray(nid).astype(np.int64), kept_grids) | extra[path]
+        else:
+            masks[path] = allowed[path]  # holds what the file lists (extra) too
+    by_path = {path: eid for path, _, _, _, eid, _ in blocks}
+    for path, source in FOLLOWS.items():  # an offset line follows its mass, a beam section its beam
+        if path not in allowed:
+            continue
+        eid, of = by_path[path], by_path.get(source)
+        follows = np.isin(eid, of[masks[source]]) if eid is not None and of is not None else True
+        masks[path] = allowed[path] & follows
     return masks
 
 

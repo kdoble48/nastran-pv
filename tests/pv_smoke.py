@@ -1715,6 +1715,153 @@ def scope_filter_checks(pv, nv, reader, view, deform, full):
     pv.Delete(s)
 
 
+LEGS_DECK = """$ shell 1 (grids 1-4) and shell 2 (5-8), joined by CBUSH 11 (2-5) and CELAS2 12 (3-6): with shell 2
+$ hidden, both stay in the scope (they touch shell 1), and their ends on 5 and 6 are on hidden shells only
+GRID,1,,0.,0.,0.
+GRID,2,,1.,0.,0.
+GRID,3,,1.,1.,0.
+GRID,4,,0.,1.,0.
+GRID,5,,3.,0.,0.
+GRID,6,,3.,1.,0.
+GRID,7,,4.,1.,0.
+GRID,8,,4.,0.,0.
+CQUAD4,1,1,1,2,3,4
+CQUAD4,2,1,5,8,7,6
+PSHELL,1,1,0.01
+MAT1,1,7.0e10,,0.3,2700.
+PBUSH,51,K,1.0e6,1.0e6,1.0e6
+CBUSH,11,51,2,5,0.,0.,1.
+CELAS2,12,1.0e6,3,1,6,1
+"""
+
+
+def _x_by_nid(src, block, t):
+    """{NID: x} of the points of block ``block`` in the output of ``src`` at time ``t``."""
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    from nastran_pv.assemble import get_block
+    from nastran_pv.tree import as_multiblock
+
+    src.UpdatePipeline(t)
+    blk = get_block(as_multiblock(rm.nv.fetch(src)), block)
+    if blk is None:
+        return {}
+    nid = vtk_to_numpy(blk.GetPointData().GetArray("NID")).astype(int)
+    return {int(n): round(float(x), 6) for n, x in zip(nid, vtk_to_numpy(blk.GetPoints().GetData())[:, 0])}
+
+
+def scope_deform_checks(pv, nv):
+    """Nastran Scope, and Nastran Deform on the reader, look the grid displacements up in the whole
+    model: with shell 2 hidden, the ends of CBUSH 11 and CELAS2 12 on its grids 5 and 6 follow mode 1
+    (T1 = 1 on grids 1-7) like their ends on shell 1."""
+    from op2_fixture import make_op2
+
+    keep = set(pv.GetSources().values())
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        path, op2 = os.path.join(tmp, "legs.bdf"), os.path.join(tmp, "legs.op2")
+        with open(path, "w") as f:
+            f.write(LEGS_DECK)
+        make_op2().write_op2(op2)
+        r = rm.load_reader(path)
+        r.OP2FileName = op2
+        r.UpdatePipelineInformation()
+        mode1 = rm.timesteps(r)[1]
+        r.HiddenElements = "2"
+        deform = pv.NastranDeform(Input=r)
+        deform.ScaleFactor = 0.5
+        scope = pv.NastranScope(Input=deform)
+        for src, what in ((scope, "Nastran Scope"), (deform, "Nastran Deform")):
+            bush, spring = _x_by_nid(src, "BushLines", mode1), _x_by_nid(src, "Connectors", mode1)
+            check(bush == {2: 1.5, 5: 3.5} and spring == {3: 1.5, 6: 3.5},
+                  f"{what}: connector ends on grids of hidden shells move too: {bush} {spring}")
+        from vtkmodules.vtkCommonDataModel import vtkDataObject
+
+        def data_time():
+            return r.GetClientSideObject().GetOutputDataObject(0).GetInformation().Get(vtkDataObject.DATA_TIME_STEP())
+
+        other = pv.CreateRenderView()               # a view at mode 2 is active; the reader is at mode 1
+        other.ViewTime = rm.timesteps(r)[2]
+        pv.SetActiveView(other)
+        check(nv.scope_active(r) and data_time() == mode1,
+              f"scope_active does not run the reader at the active view's time (reader at {data_time()})")
+        pv.Delete(other)
+        for src in sorted((s for s in pv.GetSources().values() if s not in keep),
+                          key=lambda v: -int(v.GetGlobalIDAsString())):
+            pv.Delete(src)
+
+
+def scene_review_checks(pv, nv, reader):
+    """Scene layers PR 1 review: a coloring that writes no text takes the replaced coloring's text along;
+    a view whose reader was deleted forgets it (NPV Clear selects a live one); scope_active follows the
+    visibility the reader applied (unparseable EID lists and unreadable files are ignored); a Show only
+    file of grids keeps the masses on them in NPV Masses."""
+    view = pv.CreateRenderView()
+    m = nv.apply("family", reader=reader, view=view)
+    info = pv.FindSource(nv._name(m, "info"))
+    check(info in nv.shown_sources(view), "Family writes the info text")
+    nv.apply("pid", reader=reader, view=view)
+    check(info not in nv.shown_sources(view) and nv.scene_of(view).info is None,
+          "PID (no text) replacing Family hides Family's text")
+    nv.apply("masses", reader=reader, view=view)
+    nv.apply("thickness", reader=reader, view=view)
+    check(info in nv.shown_sources(view) and nv.scene_of(view).info == "masses",
+          "Thickness (no text) keeps the Masses summary")
+    nv.clear(view)
+
+    keep = set(pv.GetSources().values())
+    twin = rm.load_reader(DECK)
+    text = pv.FindSource(nv._name(nv.apply("masses", reader=twin, view=view), "info"))
+    for src in sorted((s for s in pv.GetSources().values() if any(u == twin for u in nv.upstream(s))),
+                      key=lambda v: -int(v.GetGlobalIDAsString())):
+        pv.Delete(src)                              # Delete Tree on the twin reader: its info text stays
+    check(nv.scene_of(view).model is None and text not in nv.shown_sources(view),
+          "a scene whose reader was deleted is emptied, and what is left of it (its info text) hidden")
+    pv.SetActiveSource(None)
+    nv.clear(view)
+    check(pv.GetActiveSource() is reader,
+          "NPV Clear after the scene's reader was deleted selects an open reader, not the deleted one")
+    for src in [s for s in pv.GetSources().values() if s not in keep]:
+        pv.Delete(src)
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        good, bad = os.path.join(tmp, "groups.bdf"), os.path.join(tmp, "bad.bdf")
+        for path, text in ((good, GROUP_DECK), (bad, BAD_DECK)):
+            with open(path, "w") as f:
+                f.write(text)
+        r = rm.load_reader(good)
+        r.HiddenElements = "2"
+        r.UpdatePipeline()
+        check(nv.scope_active(r), "Hidden Elements 2 is a scope")
+        r.FileName = bad
+        r.UpdatePipeline()
+        check(not nv.scope_active(r), "after a read that failed there is no scope (the reader hid nothing)")
+        pv.Delete(r)
+
+    for prop, text in (("ShowOnlyElements", "1 x 3"), ("HiddenElements", "2 THRU")):
+        setattr(reader, prop, text)
+        check(not nv.scope_active(reader), f"unparseable {prop} {text!r}: the reader ignores it, so no scope")
+        setattr(reader, prop, "")
+    reader.SelectionFile = os.path.join(tempfile.gettempdir(), "npv-no-such-file.csv")
+    reader.SelectionMode = "Show only"
+    check(not nv.scope_active(reader), "a Selection File the reader cannot read is no scope")
+    m = nv.apply("masses", reader=reader, view=view)
+    check("in the reader's scope" not in _info(nv, m), "Masses under an unreadable Selection File: whole model text")
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        grids = os.path.join(tmp, "grids.csv")
+        with open(grids, "w") as f:
+            f.write("GRID\n1\n5\n")                 # CONM2 201's grid and an SPC grid; no element on both
+        reader.SelectionFile = grids
+        check(nv.scope_active(reader), "a readable Selection File is a scope")
+        m = nv.apply("masses", reader=reader, view=view)
+        g = pv.FindSource(nv._name(m, "mass glyphs"))
+        check(_point_values(g, "EID") == {201} and "1 items in the reader's scope" in _info(nv, m),
+              f"a Show only file of grids 1 and 5: NPV Masses draws CONM2 201 ({_info(nv, m)!r})")
+        reader.SelectionMode = "Show only"
+        reader.SelectionFile = ""
+    nv.clear(view)
+    pv.Delete(view)
+    pv.SetActiveSource(reader)
+
+
 def main():
     reader = rm.load_reader(DECK)
     model = rm.Model(reader)
@@ -1734,6 +1881,8 @@ def main():
     stray_checks(pv, nv, reader)
     overlay_scope_checks(pv, nv, reader)
     group_scope_checks(pv, nv)
+    scene_review_checks(pv, nv, reader)
+    scope_deform_checks(pv, nv)
     pv.SetActiveSource(reader)
     selection_file_checks(pv, nv, reader)
 
