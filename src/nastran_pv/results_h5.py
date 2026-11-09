@@ -81,7 +81,7 @@ class H5Results(_Results):
             else:
                 continue
             found.append((path, rows[id_field].astype(np.int64), rows["DOMAIN_ID"].astype(np.int64),
-                          np.asarray(vals, dtype=float), rtype.h5.kind(pat) if rtype.steps else None))
+                          np.asarray(vals, dtype=float), rtype.h5.kind(pat) if rtype.defines_steps else None))
         if rtype.steps:
             for path in rtype.h5.datasets:
                 if f"{path}_CPLX" in res:
@@ -116,27 +116,24 @@ class H5Results(_Results):
             groups.setdefault(signature[did], set()).add(did)
         return {did: groups[sig] for did, sig in signature.items()}
 
-    def _collect_steps(self) -> list[Step]:
+    def _steps_of(self, rtype) -> list[Step]:
         steps = []
-        for rtype in self.registry:
-            if not rtype.steps:
-                continue
-            for path, _, domain_ids, _, kind in self.tables[rtype.name]:
-                dids, first = np.unique(domain_ids, return_index=True)
-                for did in dids[np.argsort(first)]:
-                    d = self._domain(int(did))
-                    get = (lambda n, default=0: d[n].item() if d is not None and n in d.dtype.names else default)
-                    sc = int(get("SUBCASE", 0))
-                    value = float(get("TIME_FREQ_EIGR", np.nan))
-                    if kind == "eigenvector":
-                        mode = int(get("MODE", 0))
-                        freq = _mode_frequency([value], None, 0)
-                        steps.append(Step(f"Subcase {sc} mode {mode} ({freq:.6g} Hz)", kind, int(did), 0, freq,
-                                          value, path))
-                    else:
-                        stp = int(get("STEP", 0))
-                        label = f"Subcase {sc}" + (f" step {stp}" if stp else "")
-                        steps.append(Step(label, kind, int(did), 0, time=value, table=path))
+        for path, _, domain_ids, _, kind in self.tables[rtype.name]:
+            dids, first = np.unique(domain_ids, return_index=True)
+            for did in dids[np.argsort(first)]:
+                d = self._domain(int(did))
+                get = (lambda n, default=0: d[n].item() if d is not None and n in d.dtype.names else default)
+                sc = int(get("SUBCASE", 0))
+                value = float(get("TIME_FREQ_EIGR", np.nan))
+                if kind == "eigenvector":
+                    mode = int(get("MODE", 0))
+                    freq = _mode_frequency([value], None, 0)
+                    steps.append(Step(f"Subcase {sc} mode {mode} ({freq:.6g} Hz)", kind, int(did), 0, freq,
+                                      value, path))
+                else:
+                    stp = int(get("STEP", 0))
+                    label = f"Subcase {sc}" + (f" step {stp}" if stp else "")
+                    steps.append(Step(label, kind, int(did), 0, time=value, table=path))
         return steps
 
     # ------------------------------------------------------------------ data
@@ -144,7 +141,7 @@ class H5Results(_Results):
         """A step-defining type reads the step's own table and domain; the others every domain
         of the same subcase/step/mode/time (``_domain_signature``)."""
         tables = self.tables[rtype.name]
-        if rtype.steps:
+        if self._gives_steps(rtype):
             for path, ids, did, vals, _ in tables:
                 if path == step.table:
                     m = did == step.key
