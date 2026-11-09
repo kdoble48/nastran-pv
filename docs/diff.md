@@ -216,7 +216,7 @@ The comparison is kept per model content and Compare/Tolerances settings: it run
 model changes (another deck, other reader options) or a setting of those groups does. Changing a
 Show setting only filters it again; a reader's visibility (its checklists and ID lists) and the time
 step do not run it either, and each step's results are put on the kept output. On uCRM-9 coarse
-the comparison takes 1.3 s once, and a scope change after it 0.9 s instead of 2.1 s.
+the comparison takes 1.1 s once, and a scope change after it 0.75 s instead of 2.1 s.
 NPV Diff reruns keep these settings, and its summary says what is shown.
 From Python: `pv.NastranDiff(Input=b, Reference=a, Kinds=["Elements", "Loads"], ShowSame=0)`.
 

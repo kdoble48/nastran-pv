@@ -290,7 +290,7 @@ Nastran Diff's *Input*), and **A**, the reference (its *Reference*). The compari
   again from either view draws the same pair again in place.
 - **Changing a layer does not compare again.** The Nastran Diff runs again only when a model's content
   changes (a new deck, other reader options, a tolerance); the scope and the time step only cut and
-  update the kept comparison (uCRM-9: 1.3 s to compare, then 0.2 s for NPV Masses and 0.9 s for a
+  update the kept comparison (uCRM-9: 1.1 s to compare, then 0.14 s for NPV Masses and 0.75 s for a
   scope change).
 
 NPV Results deforms B's diff layers by B's displacement (A's removed items follow B's grids), and

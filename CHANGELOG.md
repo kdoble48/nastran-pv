@@ -15,7 +15,7 @@ All notable changes to nastran-pv are listed here. The format follows
   *NPV Side by Side* draws every later macro in both views and is drawn again in place from either
   view; the new *NPV Single* macro ends a comparison. The Nastran Diff compares again only when a
   model's content changes, not on a scope change or a time step (uCRM-9 coarse: a scope change after
-  NPV Diff 2.1 s -> 0.9 s, NPV Masses 0.9 s -> 0.2 s). The mass, bush, load and SPC glyphs and beam
+  NPV Diff 2.1 s -> 0.75 s, NPV Masses 0.9 s -> 0.14 s). The mass, bush, load and SPC glyphs and beam
   sections carry `DiffStatus`, and the diff's Removed block knows the grid of a removed mass or bush.
   `tests/data/same_name/` holds a same-named pair (#PR).
 - Card report: every card no block draws is counted per card type and reason (not drawn, scalar
