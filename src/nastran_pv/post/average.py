@@ -175,11 +175,15 @@ def average_block(ds, names, key: str | None = "PID", cache: dict | None = None,
 
 @dataclass
 class AverageResult:
+    """What :func:`nodal_average` made: the averaged mesh ``blocks`` (named as their sources),
+    the ``arrays`` averaged on some block, and ``warnings``."""
+
     blocks: vtkMultiBlockDataSet  # the averaged mesh blocks, named as their sources
     arrays: list = field(default_factory=list)  # the names averaged on some block
     warnings: list = field(default_factory=list)
 
     def summary(self, within="pid") -> str:
+        """The line ``convert`` prints."""
         what = ", ".join(self.arrays) if self.arrays else "no cell array at this step"
         return f"averaged to the grids within each {within}: {what}"
 

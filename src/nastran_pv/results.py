@@ -50,6 +50,10 @@ from .sections import sweep
 
 @dataclass
 class Step:
+    """One result step: ``label`` (the root ``ResultLabel``, e.g. ``Subcase 1 mode 3 (45.2 Hz)``),
+    ``kind`` (``displacement`` for a static step, ``eigenvector``, ``transient``, ``frequency`` or
+    ``complex_eigenvector``), and the ``frequency`` (Hz) or ``time`` value it has."""
+
     label: str
     kind: str  # "displacement" | "eigenvector" | "transient" | "frequency" | "complex_eigenvector"
     key: object  # subcase key in the OP2 result dict
@@ -131,6 +135,7 @@ class _Results:
 
     @property
     def times(self) -> list[float]:
+        """The steps' time values in ParaView and the series files: 0, 1, 2, ..."""
         return [float(i) for i in range(len(self.steps))]
 
     def select(self, names=None, ply=0):
@@ -337,6 +342,16 @@ class Op2Table(NamedTuple):
 
 
 class Op2Results(_Results):
+    """An OP2 file's results, by step (:func:`open_results` or :meth:`read`).
+
+    ``steps`` lists the :class:`Step` objects (a static subcase, a mode, a frequency, a time),
+    and ``times`` their time values 0, 1, 2, ...; ``available`` names the result types the file
+    has and ``skipped`` the tables nastran-pv could not attach, with why. :meth:`select` chooses
+    the types and the ply, ``phase`` (degrees) the phase angle of complex steps, and
+    :meth:`attach` writes one step's arrays onto a multiblock from
+    :func:`~nastran_pv.assemble.build_multiblock`.
+    """
+
     def __init__(self, op2, path=None, registry=None):
         """Wrap an already-read pyNastran ``OP2`` object (see :meth:`read`)."""
         self.path = Path(path) if path else None
@@ -350,6 +365,8 @@ class Op2Results(_Results):
 
     @classmethod
     def read(cls, path, registry=None) -> "Op2Results":
+        """Read the OP2 file ``path`` with pyNastran; ``registry``: the result types to look for
+        (default :data:`~nastran_pv.result_types.REGISTRY`)."""
         from cpylog import SimpleLogger
         from pyNastran.op2.op2 import read_op2
 
@@ -792,7 +809,8 @@ class PhaseSweep:
 
 
 def open_results(path):
-    """OP2 (``.op2``) or MSC/NX HDF5 (``.h5``/``.hdf5``) results."""
+    """OP2 (``.op2``) or MSC/NX HDF5 (``.h5``/``.hdf5``) results: an :class:`Op2Results` or a
+    :class:`~nastran_pv.results_h5.H5Results`, which share one interface."""
     suffix = Path(path).suffix.lower()
     if suffix in (".h5", ".hdf5"):
         from .results_h5 import H5Results
@@ -873,3 +891,6 @@ def attach_op2(mb, deck, op2_path, step_index: int = 0, types=None, phase: float
     for msg in results.skipped[known:]:
         deck.warn(msg)
     return results
+
+
+__all__ = ["Op2Results", "Step", "attach_op2", "open_results"]

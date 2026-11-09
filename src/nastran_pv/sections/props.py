@@ -294,3 +294,6 @@ def cap_mesh(rings):
         tris[flip] = tris[flip][:, ::-1]
         return pts, tris
     return None
+
+
+__all__ = ["Section", "equivalent_section", "library_section"]

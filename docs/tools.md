@@ -19,7 +19,7 @@ Every tool takes the same rules. On the CLI they are one `--rules` string:
 | `exclude=NAME,...` | Card types or groups to leave out. An excluded element is never reached and never joins two grids. |
 | `include=NAME,...` | Only these card types or groups. Give `include` or `exclude`, not both. |
 | `exclude_pids=ID,...` | Leave out the elements with these PIDs; ranges such as `10-20` too. |
-| `within=pid\|mid\|family\|group` | Grow and path never leave the seeds' property, material, family or group. A seed grid on a boundary seeds every one it touches. Elements without that key are not entered: only shells carry family and group; rigid elements, connectors and bushes have no material; and rigid elements (RBE2, RBE3, ...), MPCs and CELAS2/CDAMP2 have no PID, so `within=pid` never enters them and seeding an RBE2 reaches nothing. Seeds without the key warn that nothing can be reached. `within_pids` is the old spelling of `within=pid`. Parts and the checks have no seeds, so they ignore it with a warning. |
+| `within=pid\|mid\|family\|group` | Grow and path never leave the seeds' property, material, family or group. A seed grid on a boundary seeds every one it touches. Elements without that key are not entered: only shells carry family and group; rigid elements, connectors and bushes have no material; and rigid elements (RBE2, RBE3, ...), MPCs and CELAS2/CDAMP2 have no PID, so `within=pid` never enters them and seeding an RBE2 reaches nothing. Seeds without the key warn that nothing can be reached. `within_pids`, the old spelling of `within=pid`, still works until 1.0.0 with a deprecation line. Parts and the checks have no seeds, so they ignore it with a warning. |
 | `max_hops=N` | Stop N elements away from the seeds. |
 
 Names are card types (`RBE2`, `CQUAD4`, `CELAS2`, ...) or groups, and the two mix freely:
@@ -120,7 +120,7 @@ Check*. They share these properties, and with *Auto Apply* on they update as you
 | Card Types | A checklist of the card types in the model. Uncheck RBE2/RBE3 to stop at them. The list keeps the cards of an earlier input; an unchecked one the current model lacks does nothing. |
 | Traverse Shells … Traverse Connectors | Group switches; an element must pass both its group and its card type. |
 | Exclude PIDs | PIDs to leave out, as the reader's element lists take IDs: `7 8`, `7;8`, `10-20`. |
-| Stay Within | *seed properties / materials / families / groups*: Grow and Path never leave them (`within=`). States and scripts that set the old `StayWithinSeedPIDs = 1` still get *seed properties*. |
+| Stay Within | *seed properties / materials / families / groups*: Grow and Path never leave them (`within=`). States and scripts that set the old `StayWithinSeedPIDs = 1` still get *seed properties* until 1.0.0, with a deprecation line in Output Messages. |
 | Limit Hops, Max Hops | A slider from 0 to 200 element hops. |
 
 The graph is built once per model, so moving the slider or a checkbox only reruns the traversal.

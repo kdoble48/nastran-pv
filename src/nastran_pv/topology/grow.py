@@ -12,6 +12,9 @@ from .graph import MESH_GROUPS, Graph, Rules, Seeds, graph_for
 
 @dataclass
 class GrowResult:
+    """What :func:`grow` reached: the cell and grid counts, the largest hop (-1: nothing) and,
+    with ``extract=True``, the reached cells as a multiblock."""
+
     cells: int                       # reached cells
     grids: int                       # reached grids
     max_hop: int                     # -1 when nothing was reached

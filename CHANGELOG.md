@@ -8,6 +8,20 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Added
 
+- The Python API on the docs site ([Python API](docs/api.md)): `load_deck`, `build_multiblock`
+  and `Options`, `open_results` and the results objects, the `.vtm` and VTKHDF writers, the
+  result types, fields, model tools, beam sections and results helpers, rendered by autodoc from
+  their docstrings (several written for it). Each of those modules lists its public names in
+  `__all__`, and the page defines the public Python API of the version policy. A deprecation
+  policy ([Deprecation](docs/versioning.md#deprecation)): a renamed or removed public name warns
+  (`DeprecationWarning`, or a line on stderr for a CLI flag), is listed under *Deprecated*, and
+  lives at least until the next minor release before 1.0 and the next major release after; the
+  helpers are in `nastran_pv.deprecation` (`flag_alias` for CLI flags). The docs build now
+  installs pyNastran, VTK and h5py, which autodoc imports (#76).
+- Without h5py (the `h5` extra), `write_vtkhdf` and an uncompacted series still write, and a
+  compacted VTKHDF series, reading a VTKHDF file back and `H5Results` stop with an `ImportError`
+  that names the extra, before writing anything (#76).
+
 - Composite plies in ParaView: the reader's *Ply* (`convert --ply`: a ply id, or 0 for each
   element's critical ply), the *Nastran Ply Axes* filter (a ply's fibre and 2-directions as lines
   through each shell, from the layup table, so on converted files too; ply 0 draws the reader's ply
@@ -248,6 +262,13 @@ All notable changes to nastran-pv are listed here. The format follows
   without `tests/data`; `license` is an SPDX expression (built by setuptools 77 or newer); the
   version is written once, as `nastran_pv.__version__`, which `pyproject.toml` reads; the
   README's links are absolute, so they work on PyPI (#69).
+
+### Deprecated
+
+- `Rules(within_pids=True)` and the `--rules` token `within_pids`, the old spellings of
+  `within=pid`, and the model-tool filters' hidden `StayWithinSeedPIDs` property (use *Stay Within*
+  = seed properties): they keep working until 1.0.0, now with a `DeprecationWarning` or a
+  `nastran-pv:` line on stderr (ParaView's Output Messages) (#76).
 
 ### Fixed
 

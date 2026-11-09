@@ -151,3 +151,6 @@ def group_stats(mb, by: str, field: str, aggs=AGGS, broadcast: bool = True, bloc
                 replace_array(ds.GetCellData(), f"{field}_{a}_by_{by.upper()}", stats[a][pos])
     return rows
 
+
+
+__all__ = ["calculate", "group_stats"]

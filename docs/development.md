@@ -139,7 +139,8 @@ The docs describe behavior that lives in code. Update them in the same change wh
 | `publish.yml`, `tests/check_dists.py`, `__version__` | [versioning.md](versioning.md#releasing), `README.md` (PyPI shows it) |
 | `tests.yml`, `.github/pynastran-main.txt` | [development.md](#pynastran-main-in-ci) |
 | A speedup or slowdown of a timed stage; `tests/benchmark.py`, `tests/perf_deck.py`, `tests/test_performance.py` `RECORDED` | [performance.md](performance.md) |
-| Any user-facing change; a public name or default (see [Versioning](versioning.md#public-api)) | `CHANGELOG.md` (*Unreleased*), [versioning.md](versioning.md) when the policy changes |
+| Any user-facing change; a public name or default (see [Versioning](versioning.md#public-api)) | `CHANGELOG.md` (*Unreleased*), [versioning.md](versioning.md) when the policy changes; a renamed or removed public name is deprecated first ([Deprecation](versioning.md#deprecation)) |
+| A function or class on [api.md](api.md), or a module's `__all__` | its docstring (the page is autodoc), [api.md](api.md) (`tests/test_api_docs.py` checks the two agree) |
 
 ## Regenerating the gallery
 
@@ -163,6 +164,11 @@ the ParaView GUI before re-running `install_deps.py`: it locks the files in `par
 python -m venv .venv && .venv/Scripts/python -m pip install -r docs/requirements.txt
 .venv/Scripts/python -m sphinx -W -b html docs docs/_build/html
 ```
+
+The [Python API](api.md) page is autodoc: Sphinx imports `nastran_pv` from `src/`, so the docs
+requirements include its dependencies (pyNastran, VTK, h5py). Re-run the `pip install` when
+`docs/requirements.txt` changes. A docstring on that page is reStructuredText (double backticks
+for code, `:func:` roles), and `-W` fails on a broken one.
 
 To include the gallery, unzip `build/gallery-assets.zip` (from `docs/build_gallery.py`) into
 `docs/_static/gallery/` first.

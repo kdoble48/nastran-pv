@@ -116,6 +116,12 @@ def select_body(mb, seeds, rules: Rules | None = None, graph: Graph | None = Non
 
 @dataclass
 class FreeBodyResult:
+    """A free body's sums (:func:`sum_free_body`): ``rows``, one dict per row of ``ROWS`` (Cut,
+    Elements, MPC, Applied, SPC, Imbalance: ``Source``, ``FX`` ... ``MZ``, ``Grids``), about
+    ``point`` (``about`` says what it is), from the grid point forces (``method`` ``gpforce``) or
+    from equilibrium; ``cells`` and ``grids`` of the body, its ``cut_grids`` (a mask over the
+    graph's grids) and ``warnings``."""
+
     rows: list  # one dict per ROWS entry: Source, FX ... MZ, Grids
     method: str  # "gpforce" | "equilibrium"
     point: np.ndarray

@@ -208,6 +208,23 @@ def test_series_without_compaction_is_equivalent(model, tmp_path):
                                           vtk_to_numpy(pb.GetPointData().GetArray(name)))
 
 
+def test_without_h5py(model, tmp_path, monkeypatch):
+    """h5py is the h5 extra: a snapshot and an uncompacted series write without it; a compacted
+    series and reading back say what to install, before anything is written."""
+    import nastran_pv.vtkhdf as vh
+
+    deck, mb = model
+    monkeypatch.setattr(vh, "h5py", None)
+    assert vh.write_vtkhdf(mb, tmp_path / "one.vtkhdf").exists()
+    res = Op2Results(make_op2())
+    assert write_vtkhdf_series(mb, res, tmp_path / "raw.vtkhdf", deck=deck, compact=False).exists()
+    with pytest.raises(ImportError, match=r'pip install "nastran-pv\[h5\]"'):
+        write_vtkhdf_series(mb, res, tmp_path / "s.vtkhdf", deck=deck)
+    assert not (tmp_path / "s.vtkhdf").exists()
+    with pytest.raises(ImportError, match="reading a VTKHDF file needs h5py"):
+        read_vtkhdf(tmp_path / "one.vtkhdf")
+
+
 def test_old_vtk_writer_is_refused(model, tmp_path, monkeypatch):
     # VTK 9.3's vtkHDFWriter drops the model summary and the time steps: refuse it, clearly
     import nastran_pv.vtkhdf as vh

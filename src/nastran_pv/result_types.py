@@ -951,6 +951,9 @@ GRID_POINT_FORCE = ResultType(
     h5=H5Source(("NODAL/GRID_FORCE",), compute=gpforce_h5_table),
     frame="grid_cd", key="NID", default=False)  # a row per element and grid: chosen, or by the free body
 
+#: Every result type nastran-pv reads, in the order they attach: Displacement, VonMisesMax,
+#: SPCForce, MPCForce, AppliedLoad, the element forces, stresses and strains, Velocity,
+#: Acceleration, GridPointForce and the ply types (``docs/model.md#result-types``).
 REGISTRY: tuple[ResultType, ...] = (
     DISPLACEMENT, VON_MISES_MAX, SPC_FORCE, MPC_FORCE, APPLIED_LOAD,
     SHELL_FORCE, LINE_FORCE, BUSH_FORCE, SPRING_FORCE,
@@ -1002,6 +1005,7 @@ def unread_reason(name: str, read: bool, complex_: bool = False, curvature: bool
 
 # ------------------------------------------------------------------ selection
 def by_name(name: str, registry=REGISTRY) -> ResultType:
+    """The type of ``registry`` called ``name`` (any case); a ValueError lists the known names."""
     for t in registry:
         if t.name.lower() == str(name).strip().lower():
             return t
@@ -1031,3 +1035,6 @@ def parse(spec, registry=REGISTRY) -> tuple[str, ...]:
     if says_all(spec):
         return tuple(t.name for t in registry)
     return tuple(t.name for t in registry if t.name in chosen)
+
+
+__all__ = ["REGISTRY", "ResultType", "by_name", "parse"]

@@ -32,6 +32,20 @@ MESH_BLOCKS = ("Shells", "Lines", "Solids")
 
 @dataclass
 class Options:
+    """What :func:`build_multiblock` builds.
+
+    The block switches (``shells``, ``lines``, ``solids``, ``masses``, ``rigid``, ``connectors``,
+    ``plotels``, ``bushes``, ``constraints``, ``loads``; all on by default, the CLI's ``--no-*``
+    flags turn them off) leave a block out when False; ``bushes`` covers Bushes and BushLines,
+    ``loads`` covers Loads and Pressures. The other fields: ``k_ref`` (``--k-ref``), the stiffness
+    the bush glyphs' log scale starts at (None: the softest bush); ``nodal_arrays`` (on;
+    ``--no-nodal-arrays``), the ``SPC_DOF`` and ``F_<sid>``/``M_<sid>`` point arrays on the mesh
+    blocks, for at most ``max_nodal_load_sets`` load sets (8; no flag); ``nsm_set``
+    (``--nsm-set``), the bulk NSM set to apply (None: the Case Control ``NSM =``, 0: none);
+    ``beam_sections`` (off; ``--beam-sections``), the swept CBAR/CBEAM sections as the
+    BeamSections block.
+    """
+
     shells: bool = True
     lines: bool = True
     solids: bool = True
@@ -117,6 +131,15 @@ def _add_nodal_arrays(deck, mesh, opts, spc, active_spc, lsets, active_loads) ->
 
 
 def build_multiblock(deck: Deck, opts: Options | None = None, progress: Progress = NULL) -> vtkMultiBlockDataSet:
+    """The model as a ``vtkMultiBlockDataSet`` of named blocks (``Shells``, ``Lines``,
+    ``Solids``, ``Masses``, ``Rigid``, ``Bushes``, ``Loads``, ...) with the root field data and
+    ``*_`` tables: masses and CG, materials, coordinate systems, beam sections, include files,
+    the card report and ``Warnings``. The blocks and arrays are listed in ``docs/model.md``.
+
+    ``opts`` (:class:`Options`; default ``Options()``: every block, no BeamSections) chooses the
+    blocks; ``progress`` reports each stage.
+    Building records into ``deck`` the cards it cannot draw (the card report) and its warnings.
+    """
     opts = opts or Options()
     model = deck.model
     blocks = _Blocks()
@@ -237,3 +260,6 @@ def build_multiblock(deck: Deck, opts: Options | None = None, progress: Progress
     cards.write_table(mb, cards.report(deck))
     vtkutil.add_string_array(fd, "Warnings", deck.warnings)
     return mb
+
+
+__all__ = ["Options", "build_multiblock"]

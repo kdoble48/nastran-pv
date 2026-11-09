@@ -22,7 +22,8 @@ python docs/build_diff_example.py --ucrm9 gpk4zn73xn-1/uCRM9/uCRM9/Mesh/Coarse/F
 
 Environment:
 - "python" is the system Python (`C:/Users/Owner/AppData/Local/Programs/Python/Python312/python.exe`).
-  In Git Bash the repo's `.venv` comes first on PATH and has no numpy: it is for Sphinx only.
+  In Git Bash the repo's `.venv` comes first on PATH: it is for Sphinx only (autodoc imports
+  nastran_pv there, so re-run `pip install -r docs/requirements.txt` in it when that file changes).
 - pv_smoke from a worktree (no `paraview/_vendor` there) needs
   `NASTRAN_PV_SITE_PACKAGES=D:/ws/nastran_pv/paraview/_vendor` and `NASTRAN_PV_PYTHON=<system python>`.
   Run it, renders and the gallery in the background, and offscreen: pass `--force-offscreen-rendering`
@@ -80,7 +81,7 @@ the model into the reader's model tree; plugin filters `gather` it, run the same
 | `results.py`, `results_h5.py`, `randvib.py`, `deform.py` | results, random vibration, deformation |
 | `fields/`, `topology/`, `sections/`, `selection.py`, `diff.py`, `diff_items.py` | derived data, topology tools, beam sections, ID-file selection, model diff |
 | `vtkio.py`, `vtkhdf.py`, `store.py`, `tree.py`, `glyphs.py`, `scene.py` | output formats, run store, model tree, glyph geometry, view scene layers |
-| `cli.py`, `launch.py`, `locate.py`, `progress.py` | commands, ParaView launcher, progress |
+| `cli.py`, `launch.py`, `locate.py`, `progress.py`, `deprecation.py` | commands, ParaView launcher, progress, deprecated aliases |
 | `paraview/nastran_bdf_reader.py`, `paraview/nastran_views.py` | the plugin (reader, filters, shared-property decorators) and the views/macros |
 
 ## Gotchas that bite on any change

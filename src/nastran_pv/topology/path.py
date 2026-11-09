@@ -13,6 +13,9 @@ from .graph import Graph, Rules, graph_for
 
 @dataclass
 class PathResult:
+    """What :func:`path` found: the number of elements on the path (-1: unreachable) and, with
+    ``extract=True``, the path's cells as a multiblock."""
+
     length: int                      # elements on the path, -1 when unreachable
     warnings: list = field(default_factory=list)
     extracted: object = None         # vtkMultiBlockDataSet of the path cells (extract=True)
