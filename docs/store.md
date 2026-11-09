@@ -30,6 +30,7 @@ nastran-pv store query --db runs.sqlite "SELECT run_id, SUM(value) FROM element_
 
 | Table | Contents |
 |---|---|
-| `runs` | One row per run: deck, results step, masses, counts |
-| `elements`, `nodes` | Index tables per run |
-| `element_values`, `node_values` | Scalar fields in long format |
+| `runs` | One row per run: deck, results step, masses, counts (`n_elements`: the `elements` rows other than masses) |
+| `elements` | `run_id block eid pid mid etype family`: one row per element of the mesh blocks (`Shells`, `Solids`, `Lines`), `Rigid` and `Connectors` (springs, dampers, gaps, fasteners), and per concentrated mass (block `Masses`, etype `MASS`). MPC equations have no element id and are not stored. |
+| `nodes` | `run_id nid x y z`: the grids of the mesh blocks |
+| `element_values`, `node_values` | Scalar fields in long format: the cell arrays of the mesh blocks and the masses' point arrays, the mesh blocks' point arrays |

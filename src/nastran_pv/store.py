@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS node_values (run_id INTEGER, nid INTEGER, field TEXT,
 CREATE INDEX IF NOT EXISTS ev_idx ON element_values (run_id, field, eid);
 """
 ID_ARRAYS = {"EID", "PID", "MID", "ElementType", "FamilyId", "GroupId", "FileId", "NID", "vtkOriginalCellIds"}
+ELEMENT_LINKS = ("Rigid", "Connectors")  # line blocks whose elements (no values) go in ``elements``
 GROUP_COLUMN = {"EID": "e.eid", "PID": "e.pid", "MID": "e.mid", "FAMILY": "e.family", "ETYPE": "e.etype",
                 "BLOCK": "e.block"}
 
@@ -93,13 +94,12 @@ class Store:
              label[0] if label else None, _dt.datetime.now().isoformat(timespec="seconds"),
              int(fv("SOL") or -1), fv("ModelMass"), fv("StructuralMass"), fv("ConcentratedMass")))
         run_id = cur.lastrowid
-        n_el = n_nodes = 0
         for path, ds in iter_blocks(mb):
             block = path.split("/")[0]
             cd, pd = ds.GetCellData(), ds.GetPointData()
             eid = get_array(cd, "EID")
-            if block in MESH or block == "Rigid":
-                n_el += self._add_elements(run_id, block, ds, eid)
+            if block in MESH or block in ELEMENT_LINKS:
+                self._add_elements(run_id, block, ds, eid)
             if block == "Masses":
                 eid_p = get_array(pd, "EID")
                 self.con.executemany("INSERT OR IGNORE INTO elements VALUES (?,?,?,?,?,?,?)",
@@ -112,6 +112,8 @@ class Store:
                                      [(run_id, int(n), *map(float, p)) for n, p in zip(nid, xyz)])
                 self._add_values("node_values", run_id, nid, pd, unique=True)
         n_nodes = self.con.execute("SELECT COUNT(*) FROM nodes WHERE run_id=?", (run_id,)).fetchone()[0]
+        n_el = self.con.execute("SELECT COUNT(*) FROM elements WHERE run_id=? AND block != 'Masses'",
+                                (run_id,)).fetchone()[0]  # elements, not rigid or connector legs
         vtm = None
         if save_vtm:
             if fmt == "vtkhdf":
@@ -124,9 +126,11 @@ class Store:
         self.con.commit()
         return run_id
 
-    def _add_elements(self, run_id, block, ds, eid) -> int:
+    def _add_elements(self, run_id, block, ds, eid) -> None:
+        """One row per element (the legs of an RBE3 share their EID: INSERT OR IGNORE keeps one).
+        MPC legs are left out: an MPC has no element id, their EID is the MPC set id."""
         if eid is None:
-            return 0
+            return
         cd = ds.GetCellData()
         pid, mid = get_array(cd, "PID"), get_array(cd, "MID")
         et, fam = get_array(cd, "ElementType"), get_array(cd, "FamilyId")
@@ -139,6 +143,8 @@ class Store:
         fam_names = field_strings(ds, "FamilyNames")
         rows = []
         for i, e in enumerate(eid):
+            if block == "Connectors" and et is not None and 0 <= et[i] < len(et_names) and et_names[et[i]] == "MPC":
+                continue
             rows.append((run_id, block, int(e),
                          int(pid[i]) if pid is not None else None, int(mid[i]) if mid is not None else None,
                          et_names[et[i]] if et is not None and 0 <= et[i] < len(et_names) else None,
@@ -146,7 +152,6 @@ class Store:
         self.con.executemany("INSERT OR IGNORE INTO elements VALUES (?,?,?,?,?,?,?)", rows)
         if block in MESH:
             self._add_values("element_values", run_id, eid, cd, unique=False)
-        return len(rows)
 
     def _add_values(self, table, run_id, ids, attr, unique):
         verb = "INSERT OR IGNORE" if unique else "INSERT"

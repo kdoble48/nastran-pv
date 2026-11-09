@@ -527,3 +527,202 @@ def test_check_findings_of_one_severity(topo_mb):
     assert block_names(errors) == ["CoincidentGrids", "DuplicateElements", "DanglingConnectors"]
     assert strings(errors, "CHECK_Name") == list(CHECKS)  # the summary table stays whole
     assert res.only(None) is res.findings
+
+
+CONNECTOR_CARDS = """\
+$ plates A (CQUAD4 1, grids 1-4) and B (CQUAD4 2, grids 5-8, 3 to the right), joined by
+$   CELAS1 10 (PID 11): grid 2 C2 -> grid 5 C3     CDAMP1 20 (PID 21): grid 3 C4 -> grid 8 C4
+$   CFAST 30 (PID 31): GA 1 -> GB 6                MPC 9: grid 4 C3 = (grids 7 + 8) / 2 (legs 4-7, 4-8)
+$ MPC set 7: grid 9 = (grids 1 + 2) / 2, a spider hub above plate A (legs 9-1, 9-2); grid 10 -> 5
+$ MPC set 8: grid 11 C1 -> grid 7, grid 12 C2 -> grid 6; grids 11 and 12 coincide
+$ CONM2 on grids 10, 11 and 12 (so they are used); no SPC
+GRID,1,,0.,0.,0.
+GRID,2,,1.,0.,0.
+GRID,3,,1.,1.,0.
+GRID,4,,0.,1.,0.
+GRID,5,,3.,0.,0.
+GRID,6,,4.,0.,0.
+GRID,7,,4.,1.,0.
+GRID,8,,3.,1.,0.
+GRID,9,,0.5,0.5,1.
+GRID,10,,3.5,0.5,1.
+GRID,11,,6.,0.,0.
+GRID,12,,6.,0.,0.
+MAT1,1,1.e7,,0.3,1.
+PSHELL,1,1,0.1,1
+CQUAD4,1,1,1,2,3,4
+CQUAD4,2,1,5,6,7,8
+PELAS,11,100.
+PDAMP,21,5.
+PFAST,31,1.,,,1.,1.,1.
+CELAS1,10,11,2,2,5,3
+CDAMP1,20,21,3,4,8,4
+CFAST,30,31,ELEM,1,2,,1,6
+,0.5,0.,0.
+MPC,7,9,1,1.,1,1,-.5,
+,,2,1,-.5
+MPC,7,10,1,1.,5,1,-1.
+MPC,8,11,1,1.,7,1,-1.
+MPC,8,12,2,1.,6,2,-1.
+MPC,9,4,3,1.,7,3,-.5,
+,,8,3,-.5
+CONM2,100,10,,1.
+CONM2,101,11,,1.
+CONM2,102,12,,1.
+"""
+
+
+@pytest.fixture(scope="module")
+def conn_base(tmp_path_factory):
+    p = tmp_path_factory.mktemp("conn") / "connectors.bdf"
+    p.write_text(CONNECTOR_CARDS)
+    return build_multiblock(load_deck(p, echo=False))
+
+
+@pytest.fixture()
+def conn_mb(conn_base):
+    from nastran_pv.fields.common import shallow_clone
+
+    return shallow_clone(conn_base)
+
+
+def by_leg(mb, name):
+    """Connectors cell array ``name`` keyed by each leg's grid pair (unique in CONNECTOR_CARDS)."""
+    con = get_block(mb, "Connectors")
+    return dict(zip(legs(con), arr(con, name, "cell").tolist()))
+
+
+def test_connector_cards(conn_mb):
+    """CELAS1/CDAMP1 carry their PID and G1's component as DOF, CFAST its GA -> GB leg and PID, and
+    a multi-term MPC one leg from the dependent grid to each other term (DOF: the dependent's)."""
+    con = get_block(conn_mb, "Connectors")
+    names = strings(con, "ConnectorTypeNames")
+    rows = sorted(zip(arr(con, "EID", "cell").tolist(), [names[c] for c in arr(con, "ConnectorType", "cell")],
+                      legs(con), arr(con, "DOF", "cell").tolist(), arr(con, "PID", "cell").tolist()))
+    assert rows == [(7, "MPC", (9, 1), 1, 0), (7, "MPC", (9, 2), 1, 0), (7, "MPC", (10, 5), 1, 0),
+                    (8, "MPC", (11, 7), 1, 0), (8, "MPC", (12, 6), 2, 0),
+                    (9, "MPC", (4, 7), 3, 0), (9, "MPC", (4, 8), 3, 0),
+                    (10, "CELAS1", (2, 5), 2, 11), (20, "CDAMP1", (3, 8), 4, 21), (30, "CFAST", (1, 6), 0, 31)]
+
+
+def test_connector_cards_traversal(conn_mb):
+    """From plate A every connector on it is hop 1; plate B and the MPC legs on grids 5, 6 and 7 (which
+    the hop-1 CELAS1, CFAST and MPC 9 reach) are hop 2. The PIDs of CELAS1, CDAMP1 and CFAST
+    leave them out."""
+    grow(conn_mb, "EID 1")
+    assert by_eid(conn_mb, "Shells", "Hops") == {1: 0, 2: 2}
+    assert by_leg(conn_mb, "Hops") == {(9, 1): 1, (9, 2): 1, (10, 5): 2, (11, 7): 2, (12, 6): 2, (4, 7): 1,
+                                       (4, 8): 1, (2, 5): 1, (3, 8): 1, (1, 6): 1}
+    grow(conn_mb, "EID 1", Rules.parse("exclude=MPC exclude_pids=11,21"))
+    assert by_eid(conn_mb, "Shells", "Hops") == {1: 0, 2: 2}  # through the CFAST
+    grow(conn_mb, "EID 1", Rules.parse("exclude=MPC exclude_pids=11,21,31"))
+    assert by_eid(conn_mb, "Shells", "Hops") == {1: 0, 2: -1}
+
+
+def test_connector_cards_link_parts(conn_mb):
+    """With only shells traversed, the springs, the damper, the fastener and MPC 9 (two legs, one
+    row) join plates A and B; MPC sets 7 and 8 stay on one plate each."""
+    res = parts(conn_mb, Rules.parse("include=shells"))
+    assert res.count == 2
+    assert res.links == [{"EID": e, "CardType": t, "PartA": 0, "PartB": 1}
+                         for e, t in ((9, "MPC"), (10, "CELAS1"), (20, "CDAMP1"), (30, "CFAST"))]
+
+
+def test_mpc_equations_are_elements_in_the_checks(conn_mb):
+    """An MPC equation, not its set, is one element: the hub of the equation 9 = (1 + 2) / 2 is not a
+    loose end although set 7 has another equation, and coincident grids 11 and 12, each tied to
+    plate B by another equation of set 8, are not tied to each other."""
+    g = Graph.from_multiblock(conn_mb)
+    element = dict(zip(legs(get_block(conn_mb, "Connectors")), g.element[slice(*g.spans["Connectors"])].tolist()))
+    assert element[(9, 1)] == element[(9, 2)] and element[(4, 7)] == element[(4, 8)]
+    assert len({element[leg] for leg in ((9, 1), (10, 5), (11, 7), (12, 6), (4, 7))}) == 5
+    res = check(conn_mb)
+    assert {r["Name"]: r["Count"] for r in res.summary} == {
+        "FreeEdges": 8, "FreeFaces": 0, "CoincidentGrids": 1, "DuplicateElements": 0,
+        "DanglingConnectors": 0, "FloatingParts": 1}
+    cg = get_block(res.findings, "CoincidentGrids")
+    assert (arr(cg, "NID").tolist(), arr(cg, "OtherNID").tolist()) == ([11], [12])
+
+
+QUADRATIC = """\
+GRID,1,,0.,0.,0.
+GRID,2,,1.,0.,0.
+GRID,3,,2.,0.,0.
+GRID,4,,2.,1.,0.
+GRID,5,,1.,1.,0.
+GRID,6,,0.,1.,0.
+GRID,11,,.5,0.,0.
+GRID,12,,1.,.5,0.
+GRID,13,,.5,1.,0.
+GRID,14,,0.,.5,0.
+GRID,15,,1.5,0.,0.
+GRID,16,,2.,.5,0.
+GRID,17,,1.5,1.,0.
+MAT1,1,1.e7,,0.3,1.
+PSHELL,1,1,0.1,1
+"""
+
+
+@pytest.mark.parametrize("cards", [
+    "CQUAD4,1,1,1,2,5,6\nCQUAD4,2,1,2,3,4,5\n",
+    "CQUAD8,1,1,1,2,5,6,11,12,\n,13,14\nCQUAD8,2,1,2,3,4,5,15,16,\n,17,12\n",
+])
+def test_free_edges_count_element_edges_on_quadratic_shells(tmp_path, cards):
+    """Two quads side by side have 6 free edges, linear or quadratic (midside grids do not split them)."""
+    p = tmp_path / "quads.bdf"
+    p.write_text(QUADRATIC + cards)
+    res = check(build_multiblock(load_deck(p, echo=False)), checks=("FreeEdges",))
+    assert res.summary[0]["Count"] == 6
+
+
+def test_graph_blocks_without_type_array_or_eid_warn(topo_mb):
+    """A .vtm from elsewhere: a block without its type array gets its block name as card type (listed,
+    so it can be excluded) and one without EID makes each cell its own element; both warn."""
+    get_block(topo_mb, "Shells").GetCellData().RemoveArray("ElementType")
+    get_block(topo_mb, "Rigid").GetCellData().RemoveArray("EID")
+    g = Graph.from_multiblock(topo_mb)
+    assert any("Shells" in w and "SHELLS" in w for w in g.warnings), g.warnings
+    assert any("Rigid" in w and "EID" in w for w in g.warnings), g.warnings
+    assert "SHELLS" in card_types(topo_mb)
+    assert Rules(exclude=frozenset({"SHELLS"})).allowed(g).sum() == 8
+    assert len(set(g.element[slice(*g.spans["Rigid"])].tolist())) == 2
+    assert set(g.warnings) <= set(grow(topo_mb, "EID 1", graph=g).warnings)
+    assert set(g.warnings) <= set(check(topo_mb, graph=g).warnings)
+
+
+def test_check_takes_check_names_as_text(topo_mb):
+    assert [r["Name"] for r in check(topo_mb, checks="FreeEdges").summary] == ["FreeEdges"]
+    assert [r["Name"] for r in check(topo_mb, checks="FreeEdges, CoincidentGrids").summary] == [
+        "FreeEdges", "CoincidentGrids"]
+
+
+def test_check_module_is_not_hidden_by_the_function():
+    import nastran_pv.topology.checks as checks
+
+    assert checks.CHECKS == CHECKS and checks.check is check
+
+
+def test_check_warns_that_within_needs_seeds(topo_mb):
+    assert check(topo_mb, Rules(within="pid")).warnings == ["within=pid needs seeds; ignored for check"]
+
+
+def test_check_on_a_model_without_elements(tmp_path):
+    from nastran_pv.topology import NoElementsError
+
+    p = tmp_path / "masses.bdf"
+    p.write_text("GRID,1,,0.,0.,0.\nGRID,2,,0.,0.,0.\nCONM2,1,1,,1.\nCONM2,2,2,,1.\n")
+    mb = build_multiblock(load_deck(p, echo=False))
+    res = check(mb)
+    assert {r["Name"]: r["Count"] for r in res.summary} == dict.fromkeys(CHECKS, 0)
+    assert res.findings.GetNumberOfBlocks() == 0
+    with pytest.raises(NoElementsError, match="nothing to traverse"):
+        grow(mb, "GRID 1")
+
+
+def test_parse_pids():
+    from nastran_pv.topology.graph import parse_pids
+
+    assert parse_pids("7 8, 10-12;20") == frozenset({7, 8, 10, 11, 12, 20})
+    assert parse_pids("") == frozenset()
+    with pytest.raises(ValueError, match=r"Exclude PIDs '7;x': not an ID or a range: 'x'"):
+        parse_pids("7;x")

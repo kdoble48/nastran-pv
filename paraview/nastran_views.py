@@ -1528,21 +1528,25 @@ def _fetch_selection():
     return data, sel
 
 
+def _leaves(data):
+    """The datasets of a (composite) data object."""
+    it = data.NewIterator() if data is not None and data.IsA("vtkCompositeDataSet") else None
+    if it is None:
+        return [data] if data is not None else []
+    leaves = []
+    it.InitTraversal()
+    while not it.IsDoneWithTraversal():
+        leaves.append(it.GetCurrentDataObject())
+        it.GoToNextItem()
+    return leaves
+
+
 def _vertex_eids(data):
     """Point EIDs of selected vertex-only pieces: masses and bushes keep EID on their points."""
     from vtkmodules.util.numpy_support import vtk_to_numpy
 
     out = set()
-    it = data.NewIterator() if data is not None and data.IsA("vtkCompositeDataSet") else None
-    leaves = []
-    if it is None:
-        leaves = [data] if data is not None else []
-    else:
-        it.InitTraversal()
-        while not it.IsDoneWithTraversal():
-            leaves.append(it.GetCurrentDataObject())
-            it.GoToNextItem()
-    for ds in leaves:
+    for ds in _leaves(data):
         eid = ds.GetPointData().GetArray("EID") if ds is not None else None
         if eid is None or ds.GetCellData().GetArray("EID") is not None or not ds.GetNumberOfCells():
             continue
@@ -1551,11 +1555,40 @@ def _vertex_eids(data):
     return out
 
 
+def _mpc_legs(ds):
+    """Mask of a piece's MPC legs (their EID is the MPC set id, which names no element), or None
+    without a ConnectorType array."""
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    from nastran_pv.categories import CONNECTOR_TYPES
+    from nastran_pv.fields.common import field_strings
+
+    codes = ds.GetCellData().GetArray("ConnectorType")
+    if codes is None:
+        return None
+    names = field_strings(ds, "ConnectorTypeNames") or CONNECTOR_TYPES
+    return np.array([0 <= c < len(names) and names[c] == "MPC" for c in vtk_to_numpy(codes)], bool)
+
+
+def _cell_eids(data):
+    """Cell EIDs of the selected pieces, without MPC legs."""
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    out = set()
+    for ds in _leaves(data):
+        eid = ds.GetCellData().GetArray("EID") if ds is not None else None
+        if eid is not None:
+            mpc = _mpc_legs(ds)
+            out.update(int(v) for v in (vtk_to_numpy(eid) if mpc is None else vtk_to_numpy(eid)[~mpc]))
+    return out
+
+
 def selected_ids():
-    """("EID", ids) for a cell selection, ("GRID", ids) for a point selection on the active source."""
+    """("EID", ids) for a cell selection, ("GRID", ids) for a point selection on the active source.
+    MPC legs name no element, so a selection of only MPC legs gives their grids."""
     data, sel = _fetch_selection()
     if "POINT" not in _selection_kinds(sel):
-        eids = sorted({int(v) for v in _gather(data, "EID", "CELLS")} | _vertex_eids(data))
+        eids = sorted(_cell_eids(data) | _vertex_eids(data))
         if eids:
             return "EID", eids
     return "GRID", sorted({int(v) for v in _gather(data, "NID", "POINTS")})
@@ -1659,7 +1692,7 @@ def reached_eids(reader=None):
     MPC legs are left out: their EID is the MPC set id."""
     from vtkmodules.util.numpy_support import vtk_to_numpy
 
-    from nastran_pv.fields.common import field_strings, iter_blocks
+    from nastran_pv.fields.common import iter_blocks
     from nastran_pv.tree import as_multiblock
 
     model = Model(reader or find_reader())
@@ -1667,16 +1700,14 @@ def reached_eids(reader=None):
     if g is None or not (g.SeedIDs or "").strip():
         raise RuntimeError("Nothing grown yet: select a grid or elements, then click 'NPV Grow from Selection'.")
     out = set()
-    for path, ds in iter_blocks(as_multiblock(fetch(g))):
+    for _, ds in iter_blocks(as_multiblock(fetch(g))):
         for attr in (ds.GetCellData(), ds.GetPointData()):
             hops, eid = attr.GetArray("Hops"), attr.GetArray("EID")
             if hops is None or eid is None:
                 continue
             keep = vtk_to_numpy(hops) >= 0
-            if path == "Connectors" and attr is ds.GetCellData():
-                names = field_strings(ds, "ConnectorTypeNames")
-                codes = vtk_to_numpy(attr.GetArray("ConnectorType"))
-                keep &= np.array([names[c] != "MPC" if 0 <= c < len(names) else True for c in codes], bool)
+            if attr is ds.GetCellData() and (mpc := _mpc_legs(ds)) is not None:
+                keep &= ~mpc
             out.update(int(e) for e in vtk_to_numpy(eid)[keep])
             break  # cell EIDs when the block has them, else point EIDs (masses, bushes)
     return model.reader, out

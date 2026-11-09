@@ -150,3 +150,32 @@ def test_negative_nsm_set_exits(tmp_path, capsys):
 def test_bad_rules_exit(tmp_path):
     with pytest.raises(SystemExit, match="max_hops"):
         main(["convert", TOPO, "--parts", "--rules", "max_hops=x", "-o", str(tmp_path / "x.vtm")])
+
+
+def test_rules_without_parts_or_grow_exit(tmp_path):
+    with pytest.raises(SystemExit, match="--rules needs --parts or --grow"):
+        main(["convert", TOPO, "--rules", "exclude=rigid", "-o", str(tmp_path / "x.vtm")])
+
+
+def test_check_warnings_and_a_model_without_elements(tmp_path, capsys):
+    assert main(["check", TOPO, "--rules", "within=pid"]) == 0
+    assert "within=pid needs seeds; ignored for check" in capsys.readouterr().err
+    masses = tmp_path / "masses.bdf"
+    masses.write_text("GRID,1,,0.,0.,0.\nCONM2,1,1,,1.\n")
+    assert main(["check", str(masses), "--strict"]) == 0
+    rows = [line.split() for line in capsys.readouterr().out.splitlines()[1:]]
+    assert {r[0]: r[1] for r in rows if r} == dict.fromkeys(
+        ("FreeEdges", "FreeFaces", "CoincidentGrids", "DuplicateElements", "DanglingConnectors", "FloatingParts"), "0")
+
+
+def test_store_keeps_connectors(tmp_path):
+    """Springs, dampers, gaps and fasteners are elements in the store; MPC equations (EID: the set
+    id, here 1 like CQUAD4 1) are not. n_elements counts elements, not rigid or connector legs."""
+    db = tmp_path / "runs.sqlite"
+    assert main(["store", "add", TOPO, "--db", str(db), "--no-vtm", "-q"]) == 0
+    with Store(db) as st:
+        _, rows = st.query("SELECT block, eid, pid, etype FROM elements WHERE block IN ('Rigid', 'Connectors') "
+                           "ORDER BY eid")
+        assert rows == [("Rigid", 100, None, "RBE2"), ("Connectors", 300, 0, "CELAS2"),
+                        ("Connectors", 301, 0, "CELAS2")]
+        assert st.runs()[0]["n_elements"] == 13  # 8 shells, CHEXA, CBAR, RBE2, 2 CELAS2

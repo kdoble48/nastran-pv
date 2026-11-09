@@ -64,13 +64,20 @@ def _summary(mb, graph, part_cell, part_grid, n):
 
 
 def _links(graph, allowed, part_grid):
+    """Rows for the excluded cells whose grids lie in two or more parts, one per part pair, EID and
+    card type (the legs of one RBE3 or MPC give one row)."""
+    cells = np.flatnonzero(~allowed)
+    inc = graph.incidence[cells].tocoo()
+    part = part_grid[inc.col]
+    hit = part >= 0
+    pairs = np.unique(np.column_stack([cells[inc.row[hit]], part[hit]]), axis=0)  # (cell, part), sorted
+    cell, first, count = np.unique(pairs[:, 0], return_index=True, return_counts=True)
+    multi = count > 1  # only these join parts: few, so the loop is short
     rows = set()
-    for c in np.flatnonzero(~allowed):
-        ps = np.unique(part_grid[graph.cell_grids(c)])
-        ps = ps[ps >= 0]
-        for i in range(len(ps)):
-            for j in range(i + 1, len(ps)):
-                rows.add((int(ps[i]), int(ps[j]), int(graph.eid[c]), graph.card_names[graph.card[c]]))
+    for c, s, k in zip(cell[multi].tolist(), first[multi].tolist(), count[multi].tolist()):
+        ps = pairs[s:s + k, 1].tolist()
+        key = (int(graph.eid[c]), graph.card_names[graph.card[c]])
+        rows.update((a, b, *key) for i, a in enumerate(ps) for b in ps[i + 1:])
     return [{"EID": e, "CardType": t, "PartA": a, "PartB": b} for a, b, e, t in sorted(rows)]
 
 
@@ -78,7 +85,7 @@ def parts(mb, rules: Rules | None = None, graph: Graph | None = None) -> PartsRe
     """Write ``PartId`` cell/point arrays and the ``PART_*``/``LINK_*`` root tables onto ``mb``."""
     rules = rules or Rules()
     graph = graph or Graph.from_multiblock(mb)
-    warnings = [f"within={rules.within} needs seeds; ignored for parts"] if rules.within else []
+    warnings = graph.warnings + ([f"within={rules.within} needs seeds; ignored for parts"] if rules.within else [])
     allowed = rules.allowed(graph)
     part_cell, part_grid, n = label_parts(graph, allowed)
     write_cells(mb, graph, "PartId", part_cell)

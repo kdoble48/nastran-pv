@@ -14,12 +14,13 @@ from vtkmodules.vtkFiltersGeometry import vtkDataSetSurfaceFilter, vtkGeometryFi
 from .. import vtkutil
 from ..fields.common import get_array, iter_blocks, replace_array
 from .common import gather_cells
-from .graph import LINK_GROUPS, MESH_GROUPS, Graph, Rules
+from .graph import LINK_GROUPS, MESH_GROUPS, Graph, NoElementsError, Rules
 from .parts import label_parts
 
 CHECKS = ("FreeEdges", "FreeFaces", "CoincidentGrids", "DuplicateElements", "DanglingConnectors", "FloatingParts")
 SEVERITY = {"FreeEdges": "info", "FreeFaces": "info", "CoincidentGrids": "error", "DuplicateElements": "error",
             "DanglingConnectors": "error", "FloatingParts": "info"}
+MESH_ONLY = ("FreeEdges", "FreeFaces")  # read the Shells/Solids blocks, not the graph
 
 
 @dataclass
@@ -87,6 +88,7 @@ def _free_edges(blocks, graph, rules, tol):
     if shells is None:
         return 0, None
     geo = vtkGeometryFilter()
+    geo.SetNonlinearSubdivisionLevel(0)  # a CQUAD8 edge is one free edge, not two segments
     geo.SetInputData(_merged_by_nid(shells))
     fe = vtkFeatureEdges()
     fe.SetInputConnection(geo.GetOutputPort())
@@ -117,7 +119,7 @@ def _coincident(blocks, graph, rules, tol):
         owners = {}
         for c in np.flatnonzero(graph.group_mask(LINK_GROUPS)):
             for g in graph.cell_grids(c).tolist():
-                owners.setdefault(g, set()).add((int(graph.card[c]), int(graph.eid[c])))
+                owners.setdefault(g, set()).add(int(graph.element[c]))
         pairs = np.array([p for p in pairs.tolist() if not owners.get(p[0], set()) & owners.get(p[1], set())],
                          dtype=np.int64).reshape(-1, 2)
     if not len(pairs):
@@ -156,7 +158,7 @@ def _used_by_points(blocks, graph):
 
 def _dangling(blocks, graph, rules, tol):
     C = graph.n_cells
-    keys = np.unique(np.column_stack([graph.card, graph.eid]), axis=0, return_inverse=True)[1].ravel()
+    keys = graph.element  # one MPC equation is one element, not its whole set
     onehot = sparse.csr_matrix((np.ones(C), (np.arange(C), keys)), shape=(C, int(keys.max()) + 1))
     per_grid = (graph.incidence.T.tocsr() @ onehot).tocsr()
     per_grid.data[:] = 1
@@ -189,24 +191,34 @@ FUNCS = {"FreeEdges": _free_edges, "FreeFaces": _free_faces, "CoincidentGrids": 
 
 
 def check(mb, rules: Rules | None = None, tol: float = 1e-6, checks=CHECKS, graph: Graph | None = None) -> CheckResult:
-    """Run ``checks`` (default all). ``tol`` is the coincident-grid distance as a fraction of the
-    model diagonal; ``rules`` decide what a part is for ``FloatingParts``."""
+    """Run ``checks`` (default all; names, or one text such as ``"FreeEdges, CoincidentGrids"``).
+    ``tol`` is the coincident-grid distance as a fraction of the model diagonal; ``rules`` decide
+    what a part is for ``FloatingParts``. A model without elements gets zero counts."""
+    if isinstance(checks, str):
+        checks = checks.replace(",", " ").split()
     unknown = sorted(set(checks) - set(CHECKS))
     if unknown:
         raise ValueError(f"unknown check(s) {unknown}; choose from {', '.join(CHECKS)}")
     rules = rules or Rules()
-    graph = graph or Graph.from_multiblock(mb)
+    warnings = [f"within={rules.within} needs seeds; ignored for check"] if rules.within else []
+    if graph is None:
+        try:
+            graph = Graph.from_multiblock(mb)
+        except NoElementsError:
+            warnings.append("no element blocks with a NID array: every count is 0")
+    if graph is not None:
+        warnings = graph.warnings + warnings
     blocks = dict(iter_blocks(mb))
     out = vtkMultiBlockDataSet()
     rows = []
     for name in CHECKS:
         if name not in checks:
             continue
-        count, block = FUNCS[name](blocks, graph, rules, tol)
+        count, block = FUNCS[name](blocks, graph, rules, tol) if graph is not None or name in MESH_ONLY else (0, None)
         rows.append({"Name": name, "Count": int(count), "Severity": SEVERITY[name]})
         if count and block is not None:
             # the check's code on every cell, for categorical coloring of all findings at once
             replace_array(block.GetCellData(), "Check", np.full(block.GetNumberOfCells(), CHECKS.index(name), np.int32))
             vtkutil.add_block(out, name, block)
     vtkutil.write_field_table(out, "CHECK_", rows)
-    return CheckResult(out, rows)
+    return CheckResult(out, rows, warnings)

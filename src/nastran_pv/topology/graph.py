@@ -7,7 +7,7 @@ appended type codes may differ) resolves to the same names.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 from scipy import sparse
@@ -49,6 +49,34 @@ def _index(names: list[str], name: str) -> int:
     return names.index(name)
 
 
+def _fallback_card(path: str) -> str:
+    """The card name of every cell of a graph block without its type array: CBUSH for BushLines
+    (all its cells are), else the block name (SHELLS), which is also the block's group."""
+    return "CBUSH" if path == "BushLines" else path.upper()
+
+
+class NoElementsError(ValueError):
+    """The multiblock has no element block with a ``NID`` array, so there is nothing to traverse."""
+
+
+def _elements(card, eid, lead, dof, has_eid, mpc_card) -> np.ndarray:
+    """One id per element: the cells of one card and EID (an RBE3's legs) share it. An MPC has no
+    EID (its legs carry the set id), so one equation is one element: its set id, dependent grid and
+    component. A cell of a block without EID is an element of its own."""
+    sub = np.full((len(card), 2), -1, np.int64)
+    mpc = card == mpc_card
+    sub[mpc] = np.column_stack([lead[mpc], dof[mpc]])
+    sub[~has_eid, 0] = np.flatnonzero(~has_eid)
+    keys = np.column_stack([card, eid, sub])
+    order = np.lexsort(keys.T[::-1])  # np.unique(axis=0) does the same, several times slower
+    ordered = keys[order]
+    new = np.ones(len(keys), bool)
+    new[1:] = np.any(ordered[1:] != ordered[:-1], axis=1)
+    element = np.empty(len(keys), np.int64)
+    element[order] = np.cumsum(new) - 1
+    return element
+
+
 @dataclass
 class Graph:
     nids: np.ndarray                 # (G,) sorted grid ids
@@ -63,6 +91,8 @@ class Graph:
     mid: np.ndarray = None           # (C,) MID, -1 where the block has none
     family: np.ndarray = None        # (C,) FamilyId, -1 where none
     group_id: np.ndarray = None      # (C,) GroupId (pre-processor group), -1 where none
+    element: np.ndarray = None       # (C,) element id: equal on the cells of one element (see _elements)
+    warnings: list = field(default_factory=list)  # blocks that lack a type array or EID
 
     def within_values(self, key: str) -> np.ndarray:
         """The per-cell array a ``within=<key>`` rule compares (-1 = none; for pid and mid 0 too)."""
@@ -80,6 +110,7 @@ class Graph:
     def from_multiblock(cls, mb) -> "Graph":
         rows, cols, nid_parts, xyz_parts = [], [], [], []
         eid, pid, card, group = [], [], [], []
+        lead, dof, has_eid, warnings = [], [], [], []  # for the element ids
         extra = {"MID": [], "FamilyId": [], "GroupId": []}
         card_names: list[str] = []
         spans = {}
@@ -101,6 +132,12 @@ class Graph:
             xyz_parts.append(vtkutil.to_numpy(ds.GetPoints().GetData()).astype(float))
             e = get_array(cd, "EID")
             eid.append(np.full(n, -1, np.int64) if e is None else np.asarray(e, dtype=np.int64))
+            has_eid.append(np.full(n, e is not None))
+            if e is None:
+                warnings.append(f"{path}: no EID cell array; each of its cells is an element of its own in the checks")
+            lead.append(nid[conn[np.minimum(offsets[:-1], len(conn) - 1)]] if len(conn) else np.full(n, -1, np.int64))
+            d = get_array(cd, "DOF")
+            dof.append(np.zeros(n, np.int64) if d is None else np.asarray(d, dtype=np.int64))
             p = get_array(cd, "PID")
             pid.append(np.full(n, -1, np.int64) if p is None else np.asarray(p, dtype=np.int64))
             for name, parts in extra.items():
@@ -109,7 +146,11 @@ class Graph:
             codes = get_array(cd, type_array) if type_array else None
             names = field_strings(ds, names_table) if names_table else []
             if codes is None or not names:
-                card.append(np.full(n, _index(card_names, "CBUSH" if path == "BushLines" else path.upper())))
+                fallback = _fallback_card(path)
+                card.append(np.full(n, _index(card_names, fallback)))
+                if type_array:
+                    warnings.append(f"{path}: no {type_array} cell array or {names_table} table, so its card "
+                                    f"types are unknown: all its cells are {fallback} in the rules")
             else:
                 lut = np.array([_index(card_names, s) for s in names], dtype=np.int64)
                 card.append(lut[np.asarray(codes, dtype=np.int64)])
@@ -117,7 +158,7 @@ class Graph:
             spans[path] = (start, start + n)
             start += n
         if not spans:
-            raise ValueError("no element blocks with a NID array: nothing to traverse")
+            raise NoElementsError("no element blocks with a NID array: nothing to traverse")
         nids, first = np.unique(np.concatenate(nid_parts), return_index=True)
         xyz = np.concatenate(xyz_parts)[first]
         row = np.concatenate(rows)
@@ -125,9 +166,12 @@ class Graph:
         inc = sparse.csr_matrix((np.ones(len(row), dtype=np.int8), (row, col)), shape=(start, len(nids)))
         inc.sum_duplicates()
         inc.data[:] = 1
-        return cls(nids, xyz, inc, np.concatenate(eid), np.concatenate(pid),
-                   np.concatenate(card).astype(np.int64), np.concatenate(group).astype(np.int64),
-                   card_names, spans, *(np.concatenate(v) for v in extra.values()))
+        eid, card = np.concatenate(eid), np.concatenate(card).astype(np.int64)
+        element = _elements(card, eid, np.concatenate(lead), np.concatenate(dof), np.concatenate(has_eid),
+                            card_names.index("MPC") if "MPC" in card_names else -1)
+        return cls(nids, xyz, inc, eid, np.concatenate(pid), card, np.concatenate(group).astype(np.int64),
+                   card_names, spans, *(np.concatenate(v) for v in extra.values()), element=element,
+                   warnings=warnings)
 
     def grid_index(self, ids) -> np.ndarray:
         """Row of each grid id in :attr:`nids`, -1 where unknown."""
@@ -262,17 +306,28 @@ class Seeds:
 
 
 def card_types(mb) -> list[str]:
-    """Card types present in the graph blocks, sorted (the plugin's checklist)."""
+    """Card types present in the graph blocks, sorted (the plugin's checklist). A block without its
+    type array lists its fallback name (SHELLS), as :class:`Graph` names its cells."""
     found = set()
     for path, ds in iter_blocks(mb):
         if path not in GRAPH_BLOCKS or ds.GetNumberOfCells() == 0:
             continue
         _, type_array, names_table = GRAPH_BLOCKS[path]
-        if type_array is None:
-            found.add("CBUSH")
-            continue
-        names = field_strings(ds, names_table)
-        codes = get_array(ds.GetCellData(), type_array)
-        if codes is not None:
+        names = field_strings(ds, names_table) if names_table else []
+        codes = get_array(ds.GetCellData(), type_array) if type_array else None
+        if codes is None or not names:
+            found.add(_fallback_card(path))
+        else:
             found.update(names[c] for c in np.unique(codes) if 0 <= c < len(names))
     return sorted(found)
+
+
+def parse_pids(text) -> frozenset:
+    """PIDs from free text, as the reader's element lists take them: ``7 8``, ``7,8;9``, ``10-20``
+    or ``10 THRU 20`` (the plugin's Exclude PIDs)."""
+    from ..tree import parse_ids
+
+    try:
+        return frozenset(parse_ids(text))
+    except ValueError as exc:
+        raise ValueError(f"Exclude PIDs {text!r}: {exc}; give PIDs such as 7 8 or 10-20") from None

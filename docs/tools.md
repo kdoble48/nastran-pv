@@ -19,7 +19,7 @@ Every tool takes the same rules. On the CLI they are one `--rules` string:
 | `exclude=NAME,...` | Card types or groups to leave out. An excluded element is never reached and never joins two grids. |
 | `include=NAME,...` | Only these card types or groups. Give `include` or `exclude`, not both. |
 | `exclude_pids=ID,...` | Leave out the elements with these PIDs. |
-| `within=pid\|mid\|family\|group` | Grow and path never leave the seeds' property, material, family or group. A seed grid on a boundary seeds every one it touches. Elements without that key are not entered: only shells carry family and group, and rigid elements, connectors and bushes have no material. Seeds without the key warn that nothing can be reached. `within_pids` is the old spelling of `within=pid`. |
+| `within=pid\|mid\|family\|group` | Grow and path never leave the seeds' property, material, family or group. A seed grid on a boundary seeds every one it touches. Elements without that key are not entered: only shells carry family and group; rigid elements, connectors and bushes have no material; and rigid elements (RBE2, RBE3, ...), MPCs and CELAS2/CDAMP2 have no PID, so `within=pid` never enters them and seeding an RBE2 reaches nothing. Seeds without the key warn that nothing can be reached. `within_pids` is the old spelling of `within=pid`. Parts and the checks have no seeds, so they ignore it with a warning. |
 | `max_hops=N` | Stop N elements away from the seeds. |
 
 Names are card types (`RBE2`, `CQUAD4`, `CELAS2`, ...) or groups, and the two mix freely:
@@ -37,6 +37,11 @@ Hops count elements: the seed elements are hop 0, an element sharing a grid with
 is hop k+1, and a grid's hop is the lowest hop of its elements. `exclude=rigid` answers "what is
 connected to this without going through RBEs?".
 
+`--rules` acts through `--parts` or `--grow` (or `nastran-pv check`); given without them it is an
+error. A `.vtm` not written by nastran-pv may lack a block's card-type array: its cells then all
+get the block name as card type (`SHELLS`, which the rules and the plugin's checklist accept), and
+a block without `EID` makes each cell an element of its own in the checks. Both warn.
+
 ## Grow
 
 Grow writes `Hops` cell and point arrays (−1 where unreached) from seed elements, grids or PIDs:
@@ -46,7 +51,7 @@ nastran-pv convert run.bdf --grow "EID 1001 1002; GRID 55; PID 7" --rules "exclu
 ```
 
 Seeds of an excluded card type are dropped with a warning. MPC legs carry the MPC set id as their
-`EID`, so EID seeds skip them.
+`EID`, so EID seeds skip them, and in ParaView a selection of only MPC legs seeds their grids.
 
 ## Parts
 
@@ -81,7 +86,7 @@ nastran-pv check run.bdf --strict -o out/findings.vtm  # exit 1 on errors; findi
 
 | Check | Severity | Finds |
 |---|---|---|
-| `FreeEdges` | info | Shell boundary edges. Plate boundaries are free edges; a free edge inside a panel is an unmerged seam. |
+| `FreeEdges` | info | Shell boundary edges, one per element edge (CQUAD8 and CTRIA6 too). Plate boundaries are free edges; a free edge inside a panel is an unmerged seam. |
 | `FreeFaces` | info | Solid boundary faces. Clip the model to see interior cracks. |
 | `CoincidentGrids` | error | Distinct grids closer than `--tol` × the model diagonal (default 1e-6), unless one rigid, bush or connector element ties them (zero-length springs and bolt spiders are normal). |
 | `DuplicateElements` | error | Elements in one mesh block with the same card type, PID and grids (`DuplicateOf` names the first). A rod with a parallel damper or a doubler with its own PID is not a duplicate. |
@@ -89,7 +94,9 @@ nastran-pv check run.bdf --strict -o out/findings.vtm  # exit 1 on errors; findi
 | `FloatingParts` | info | Parts with no SPC grid. Expected in free-free modal runs. |
 
 `--strict` fails only on error checks. `--rules` decides what a part is for `FloatingParts`;
-`--only CHECK ...` runs a subset.
+`--only CHECK ...` runs a subset. For the dangling and coincident checks one MPC equation is one
+element (its legs share the MPC set id, but a set of many equations is not one element). A model
+without element blocks gets zero counts.
 
 ## ParaView
 
@@ -98,9 +105,9 @@ Check*. They share these properties, and with *Auto Apply* on they update as you
 
 | Property | Effect |
 |---|---|
-| Card Types | A checklist of the card types in the model. Uncheck RBE2/RBE3 to stop at them. |
+| Card Types | A checklist of the card types in the model. Uncheck RBE2/RBE3 to stop at them. The list keeps the cards of an earlier input; an unchecked one the current model lacks does nothing. |
 | Traverse Shells … Traverse Connectors | Group switches; an element must pass both its group and its card type. |
-| Exclude PIDs | PIDs to leave out, e.g. `7 8`. |
+| Exclude PIDs | PIDs to leave out, as the reader's element lists take IDs: `7 8`, `7;8`, `10-20`. |
 | Stay Within | *seed properties / materials / families / groups*: Grow and Path never leave them (`within=`). States and scripts that set the old `StayWithinSeedPIDs = 1` still get *seed properties*. |
 | Limit Hops, Max Hops | A slider from 0 to 200 element hops. |
 
