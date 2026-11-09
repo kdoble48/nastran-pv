@@ -1,0 +1,9 @@
+# The versions tests/test_performance.py RECORDED was measured with; CI's perf job installs them
+# (pip install -e ".[test]" -c tests/perf-constraints.txt), so an upstream release cannot move the
+# budget. Re-recording, and moving these: docs/performance.md#ci-check.
+numpy==1.26.4
+scipy==1.17.0
+vtk==9.5.2
+pyNastran==1.4.1
+cpylog==1.6.0
+h5py==3.16.0

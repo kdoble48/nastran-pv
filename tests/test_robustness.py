@@ -94,6 +94,87 @@ def test_results_rotated_from_cd_to_basic(tmp_path):
     np.testing.assert_allclose(out[1, 3:], [0, 2, 0], atol=1e-12)
 
 
+CURVILINEAR_CD = """\
+CORD2C,20,,0.,0.,0.,0.,0.,1.,
+,1.,0.,0.
+CORD2S,30,,0.,0.,0.,0.,0.,1.,
+,1.,0.,0.
+CORD2C,40,,0.,0.,1.,0.,0.,2.,
+,0.,1.,1.
+GRID,1,,0.,0.,0.
+GRID,2,,0.,2.,5.,20
+GRID,3,,0.,1.,1.,30
+GRID,4,,1.,1.,0.,20
+GRID,5,,0.,3.,1.,40
+"""
+
+
+def test_results_rotated_from_cylindrical_and_spherical_cd(tmp_path):
+    """Every grid of a curvilinear CD gets the axes at its own position (hand-computed):
+    grid 2 at theta = 90 deg (e_r = +Y, e_theta = -X); grid 3 in CORD2S at azimuth 90 deg, polar
+    45 deg (e_r = (0, s, s), e_polar = (0, s, -s), e_azimuth = -X); grid 4 at theta = 45 deg;
+    grid 5 in CORD2C 40 (origin z = 1, its x-axis = basic +Y) at local theta = 0: e_r = +Y,
+    e_theta = -X. Grid 1 (basic) and the unknown grid 99 are left as they are."""
+    deck = load_deck(write(tmp_path, "cd.bdf", CURVILINEAR_CD), echo=False)
+    rows = np.tile([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], (6, 1))
+    out = to_basic(deck, np.array([5, 99, 3, 1, 2, 4]), rows)
+    s = np.sqrt(0.5)
+    np.testing.assert_allclose(out[0], [-2, 1, 3, -5, 4, 6], atol=1e-12)
+    np.testing.assert_allclose(out[1], [1, 2, 3, 4, 5, 6])
+    np.testing.assert_allclose(out[2], [-3, 3 * s, -s, -6, 9 * s, -s], atol=1e-12)
+    np.testing.assert_allclose(out[3], [1, 2, 3, 4, 5, 6])
+    np.testing.assert_allclose(out[4], [-2, 1, 3, -5, 4, 6], atol=1e-12)
+    np.testing.assert_allclose(out[5], [-s, 3 * s, 3, -s, 9 * s, 6], atol=1e-12)
+    assert not [w for w in deck.warnings if "CD" in w]
+
+
+def test_bases_and_to_basic_equal_a_loop_over_basis_bit_for_bit(tmp_path):
+    """``basis`` at a point is ``bases`` at that one point, and ``to_basic`` rotates each grid of a
+    curvilinear CD as a loop of ``basis`` and a 3-vector matmul would: equal, not just close."""
+    deck = load_deck(write(tmp_path, "cd.bdf", CURVILINEAR_CD), echo=False)
+    rng = np.random.default_rng(0)
+    xyz = rng.standard_normal((400, 3)) * 10.0
+    for cid in (20, 30, 40):
+        assert np.array_equal(deck.bases(cid, xyz), np.array([deck.basis(cid, x) for x in xyz]))
+    nids = np.array([5, 99, 3, 1, 2, 4])
+    data = rng.standard_normal((len(nids), 6))
+    loop = data.copy()
+    for r, nid in enumerate(nids.tolist()):
+        i = deck.lookup([nid])[0]
+        if i >= 0 and deck.cd[i] > 0:
+            R = deck.basis(int(deck.cd[i]), deck.xyz[i])
+            loop[r, :3], loop[r, 3:] = loop[r, :3] @ R, loop[r, 3:] @ R
+    assert np.array_equal(to_basic(deck, nids, data.copy()), loop)
+
+
+CYLINDRICAL_MCID = """\
+CORD2C,20,,0.,0.,0.,0.,0.,1.,
+,1.,0.,0.
+GRID,1,,-1.,4.,0.
+GRID,2,,1.,4.,0.
+GRID,3,,1.,6.,0.
+GRID,4,,-1.,6.,0.
+GRID,5,,4.,-1.,0.
+GRID,6,,6.,-1.,0.
+GRID,7,,6.,1.,0.
+GRID,8,,4.,1.,0.
+MAT1,1,7.e4,,.3,2.7e-9
+PSHELL,1,1,.1,1
+CQUAD4,1,1,1,2,3,4,20
+CQUAD4,2,1,5,6,7,8,20
+"""
+
+
+def test_material_axis_from_a_cylindrical_mcid(tmp_path):
+    """MCID 20 (cylindrical about z): the material axis is e_r at each centroid, in the plate's plane:
+    +Y for the plate centred at (0, 5, 0), +X for the one at (5, 0, 0)."""
+    mb = build_multiblock(load_deck(write(tmp_path, "mcid.bdf", CYLINDRICAL_MCID), echo=False))
+    shells = get_block(mb, "Shells")
+    axis = arr(shells, "MaterialAxis", "cell")
+    np.testing.assert_allclose(axis[row_of(shells, "EID", 1, "cell")], [0, 1, 0], atol=1e-12)
+    np.testing.assert_allclose(axis[row_of(shells, "EID", 2, "cell")], [1, 0, 0], atol=1e-12)
+
+
 def test_composite_element_ids_and_complex_results_are_handled():
     assert _element_ids(SimpleNamespace(element_layer=np.array([[7, 1], [7, 2]]))).tolist() == [7, 7]
     assert _element_ids(SimpleNamespace(element=np.array([3]))).tolist() == [3]

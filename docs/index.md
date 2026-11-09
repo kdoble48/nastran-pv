@@ -41,6 +41,8 @@ you use.
   and how to select blocks.
 - [Beam sections](beam-sections.md): CBAR/CBEAM cross sections swept in 3D, element frames and
   offsets, section properties (J, shear center) and the section table.
+- [Performance](performance.md): how long each stage takes on large models (load, build,
+  convert, check, diff, ParaView views), the budget it is held to, and how to benchmark.
 
 ## Development
 
@@ -86,6 +88,7 @@ gallery/index
 model
 output-formats
 beam-sections
+performance
 ```
 
 ```{toctree}

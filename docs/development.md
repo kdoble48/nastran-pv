@@ -7,6 +7,11 @@ pvpython --force-offscreen-rendering tests/pv_smoke.py   # the plugin, views and
 python -m pyflakes src paraview/*.py tests  # lint (skip paraview/_vendor)
 ```
 
+Test decks are files in `tests/data` with hand-computed expected values. Two inputs are generated
+instead: OP2 results (`tests/op2_fixture.py`) and the performance deck (`tests/perf_deck.py`,
+shared by `tests/benchmark.py` and the [CI check](performance.md#ci-check)), whose counts test
+derives its expected values by hand from the layout's parameters.
+
 Every push to `main` and every pull request runs the tests and lint on Linux, Windows and macOS
 with Python 3.10 to 3.14 (`.github/workflows/tests.yml`; 3.13 and 3.14 with pyNastran `main`,
 see below), and builds this site (`.github/workflows/docs.yml`). Tests that need ParaView,
@@ -20,6 +25,8 @@ wheel into a fresh venv outside the checkout, and checks that `nastran-pv setup 
 the plugin there. The *publish* workflow (`.github/workflows/publish.yml`) publishes releases
 ([Releasing](versioning.md#releasing)); a pull request that changes it or `check_dists.py` runs
 its build job alone.
+A separate job holds the [performance budget](performance.md#ci-check) (`python -m pytest -m perf`;
+the default run deselects those timing tests).
 
 ## pyNastran main in CI
 
@@ -131,6 +138,7 @@ The docs describe behavior that lives in code. Update them in the same change wh
 | Dependencies, extras, environment variables, `locate.py`, `setup.py`, `MANIFEST.in` | [install.md](install.md), [development.md](#packaging) |
 | `publish.yml`, `tests/check_dists.py`, `__version__` | [versioning.md](versioning.md#releasing), `README.md` (PyPI shows it) |
 | `tests.yml`, `.github/pynastran-main.txt` | [development.md](#pynastran-main-in-ci) |
+| A speedup or slowdown of a timed stage; `tests/benchmark.py`, `tests/perf_deck.py`, `tests/test_performance.py` `RECORDED` | [performance.md](performance.md) |
 | Any user-facing change; a public name or default (see [Versioning](versioning.md#public-api)) | `CHANGELOG.md` (*Unreleased*), [versioning.md](versioning.md) when the policy changes |
 
 ## Regenerating the gallery
