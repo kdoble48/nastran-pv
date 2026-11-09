@@ -1,0 +1,79 @@
+name: paraview
+
+# pv_smoke in a real, headless ParaView on Linux, on both supported versions, with nastran-pv
+# installed the way a user installs it: the wheel, then `nastran-pv setup` (which finds the
+# ParaView unpacked in the home folder by itself).
+on:
+  pull_request:
+    paths:
+      - "paraview/**"
+      - "src/**"
+      - "tests/**"
+      - "setup.py"
+      - "pyproject.toml"
+      - ".github/workflows/paraview.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: paraview-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: pv_smoke / ParaView ${{ matrix.paraview }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 6.0 has a single Linux build: it picks X, EGL or its bundled OSMesa (lib/mesa) at run time
+          - paraview: "6.0.1"
+            url: https://www.paraview.org/files/v6.0/ParaView-6.0.1-MPI-Linux-Python3.12-x86_64.tar.gz
+          # 5.13 still ships separate headless builds
+          - paraview: "5.13.1"
+            url: https://www.paraview.org/files/v5.13/ParaView-5.13.1-osmesa-MPI-Linux-Python3.10-x86_64.tar.gz
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Cache the ParaView download
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ~/paraview.tar.gz
+          key: paraview-${{ matrix.url }}
+      - name: Download ParaView ${{ matrix.paraview }}
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: curl -fsSL --retry 3 -o ~/paraview.tar.gz "${{ matrix.url }}"
+      - name: Unpack it into the home folder
+        run: tar xzf ~/paraview.tar.gz -C ~ && ls -d ~/ParaView-*
+      - name: Install nastran-pv from its wheel
+        run: |
+          python -m pip install build
+          python -m build --wheel --outdir dist
+          python -m venv ~/venv
+          ~/venv/bin/python -m pip install "$(ls dist/*.whl)[h5]"
+      - name: nastran-pv setup
+        run: |
+          cd ~
+          ~/venv/bin/nastran-pv setup 2>&1 | tee ~/setup.log
+          grep "ParaView-${{ matrix.paraview }}" ~/setup.log | head -1
+          ls ~/.config/ParaView/Macros | head -3
+      - name: pv_smoke, headless
+        env:
+          VTK_DEFAULT_OPENGL_WINDOW: vtkOSOpenGLRenderWindow   # 6.0: OSMesa (the 5.13 osmesa build has only that)
+        run: |
+          pv=$(ls -d ~/ParaView-*/)
+          vendor=$(sed -n 's/^vendor folder: //p' ~/setup.log)
+          export LD_LIBRARY_PATH="${pv}lib/mesa${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          # the checkout's plugin (../src), with the packages setup vendored for this ParaView
+          export NASTRAN_PV_SITE_PACKAGES="$vendor" NASTRAN_PV_PYTHON=~/venv/bin/python
+          "${pv}bin/pvpython" tests/pv_smoke.py
