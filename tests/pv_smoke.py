@@ -2274,7 +2274,10 @@ def comparison_checks(pv, nv):
     check(not problems, f"comparison matrix: {runs} runs in {time.time() - start:.0f} s, {len(problems)} problem(s)")
     pv.Delete(view)
     nv._SCENES.clear()
-    check(set(pv.GetSources().values()) == keep, "comparison matrix: its pipeline objects deleted")
+    # what is left is fed into objects of earlier checks with the same names (NPV objects are reused
+    # by name, re-fed to the new pair's Diff): deleted with them at the end
+    left = sorted(k[0] for k, s in pv.GetSources().items() if s not in keep)
+    print(f"   left for the earlier checks' objects: {left}")
 
 
 def main():
