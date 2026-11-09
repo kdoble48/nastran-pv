@@ -21,8 +21,7 @@ All notable changes to nastran-pv are listed here. The format follows
   (*Nastran Deform* *Phase*), and `convert --phase-sweep N --step K` writes N phases of one
   frequency as a series. `--random-output` (reader *Random Output*) shows a SOL 111 run's own PSD,
   RMS and zero-crossing tables in the random arrays and views (`AccelRMS`, `DispRMS`, `AccelN0`,
-  `AccelASD`; root `RandomSource`). Existing outputs are unchanged (#PR).
-
+  `AccelASD`; root `RandomSource`). Existing outputs are unchanged (#72).
 - NPV Forces and NPV Stress views (`view`/`render --preset forces stress`): each block colored by its
   element forces (shells `MembraneForce`, lines `AxialForce`, bushes, springs) or by von Mises stress
   (shells at the top fibre, solids, lines `MaxStress`); `nv.apply("stress", quantity=, fibre=,

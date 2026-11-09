@@ -91,7 +91,14 @@ the synthesized OP2 and HDF5 fixtures (static, modes, loads, two subcases, eleme
 stresses), `beams.bdf` with beam sections, CD-rotated output, the field options, the demo modes,
 random responses and uCRM-9 coarse static and medium modes, each as `.vtm` per step, `.pvd`
 series, temporal VTKHDF (compacted and not) and a VTKHDF snapshot, plus the in-memory model after
-every step. The PR records the counts and the result.
+every step.
+
+Result (20 cases, the element-results cases added): 108 output files, 216 step snapshots (27 529
+arrays) and 148 stdout texts identical, with no addition; every `.vtm`/`.vtu`/`.pvd` file (91)
+byte-identical, the 58 VTKHDF files identical in content (their bytes carry HDF5 timestamps).
+The intended changes concern inputs no case had: a transient table (analysis code 6) was
+labelled `Subcase 1 step 0.01` and is now `Subcase 1 time 0.01` with a root `Time`, and complex
+tables are read instead of skipped.
 
 ## Not covered (follow-ups)
 
