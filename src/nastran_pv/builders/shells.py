@@ -13,7 +13,7 @@ from vtkmodules.vtkCommonDataModel import (
 from .. import vtkutil
 from ..deck import RECTANGULAR, Deck
 from ..families import Families
-from .common import (CellRows, add_mid_density, elements_of, grid_checks, known_grids, node_matrix, per_unique,
+from .common import (CellRows, add_mid_density, elements_of, factorize, grid_checks, known_grids, node_matrix,
                      points_of, property_info, rows_mesh, shell_mass_per_area, unit, warn_skipped)
 
 # etype -> (corner count, linear vtk type, full node count, quadratic vtk type). A cell is
@@ -70,20 +70,20 @@ def build_shells(deck: Deck, families: Families):
     if not len(rows):
         return None
 
-    ug, kept = rows_mesh(deck, eids, elems, rows)
+    ug, kept, cell_eids, cell_pids = rows_mesh(deck, eids, elems, rows)
     cd = ug.GetCellData()
 
-    pids = np.asarray([elems[i].Pid() for i in kept.tolist()])
-    cell_eids = np.asarray([eids[i] for i in kept.tolist()])
+    pids, cell_eids = np.asarray(cell_pids), np.asarray(cell_eids)
     vtkutil.add_array(cd, "FamilyId", np.array([families.family_id(e) for e in cell_eids], dtype=np.int32))
     vtkutil.add_array(cd, "GroupId", np.array([families.group_id(e) for e in cell_eids], dtype=np.int32))
     vtkutil.set_field_strings(ug, "FamilyNames", families.names)
     vtkutil.set_field_strings(ug, "GroupNames", families.groups)
 
-    add_mid_density(cd, model, per_unique(pids, lambda p: property_info(model, p)[0], np.int64))
-    vtkutil.add_array(cd, "Thickness", per_unique(pids, lambda p: property_info(model, p)[1], float),
-                      skip_all_nan=True)
-    vtkutil.add_array(cd, "MassPerArea", per_unique(pids, lambda p: shell_mass_per_area(model, p), float),
+    u, inverse = factorize(pids)  # one property_info per PID (a PCOMP expands its plies)
+    info = [property_info(model, p) for p in u]
+    add_mid_density(cd, model, np.array([mid for mid, _ in info], dtype=np.int64)[inverse])
+    vtkutil.add_array(cd, "Thickness", np.array([t for _, t in info], dtype=float)[inverse], skip_all_nan=True)
+    vtkutil.add_array(cd, "MassPerArea", np.array([shell_mass_per_area(model, p) for p in u], dtype=float)[inverse],
                       skip_all_nan=True)
 
     theta_mcid = [getattr(elems[i], "theta_mcid", 0.0) for i in kept.tolist()]
@@ -142,7 +142,7 @@ def material_axes(deck: Deck, normal, xaxis, centroids, theta_mcid, g1g2=None) -
         if mcid == 0 or coord.type in RECTANGULAR:
             a = np.broadcast_to(deck.basis(int(mcid))[0], (len(sel), 3))
         else:
-            a = np.array([deck.basis(int(mcid), c)[0] for c in centroids[sel]])
+            a = deck.bases(int(mcid), centroids[sel])[:, 0]
         n = normal[sel]
         proj = a - np.sum(a * n, axis=1, keepdims=True) * n
         ok = np.linalg.norm(proj, axis=1) > 1e-12

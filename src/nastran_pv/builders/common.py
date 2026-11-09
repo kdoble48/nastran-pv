@@ -110,9 +110,7 @@ class CellRows:
         parts = (positions, ids, points)
         if vtk_type in self.groups:  # several cards draw as one VTK type (CQUAD4, CQUADR, ...)
             parts = [np.concatenate([old, new]) for old, new in zip(self.groups[vtk_type], parts)]
-            order = np.argsort(parts[0], kind="stable")
-            parts = [a[order] for a in parts]
-        self.groups[vtk_type] = tuple(parts)
+        self.groups[vtk_type] = tuple(parts)  # in any order: cells() puts the cells in element order
 
     def __len__(self) -> int:
         return sum(len(g[0]) for g in self.groups.values())
@@ -195,12 +193,18 @@ def warn_skipped(deck: Deck, eids, elems, skipped: np.ndarray, midside: np.ndarr
     warn_midside(deck, missing)
 
 
+def factorize(values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """(distinct values, the index of each value among them): ``np.unique`` with a flat inverse."""
+    u, inverse = np.unique(values, return_inverse=True)
+    return u, inverse.reshape(-1)
+
+
 def per_unique(values: np.ndarray, fn, dtype) -> np.ndarray:
     """``np.array([fn(v) for v in values], dtype)``, calling ``fn`` once per distinct value."""
     if not len(values):
         return np.zeros(0, dtype=dtype)
-    u, inverse = np.unique(values, return_inverse=True)
-    return np.array([fn(v) for v in u], dtype=dtype)[inverse.reshape(-1)]
+    u, inverse = factorize(values)
+    return np.array([fn(v) for v in u], dtype=dtype)[inverse]
 
 
 def add_mid_density(cd, model, mids: np.ndarray) -> None:
@@ -249,14 +253,15 @@ def compact_mesh(deck: Deck, table: CellTable):
 
 
 def rows_mesh(deck: Deck, eids, elems, rows: CellRows):
-    """:func:`mesh_from_cells` of the :class:`CellRows` of ``elems`` (and their ``eids``), and the
-    positions of its cells in ``elems``."""
+    """:func:`mesh_from_cells` of the :class:`CellRows` of ``elems`` (and their ``eids``): (ugrid,
+    the positions of its cells in ``elems``, their EIDs and PIDs as lists)."""
     pos, vtk, sizes, flat_ids, flat_points = rows.cells()
     kept = pos.tolist()
+    cell_eids, cell_pids = [eids[i] for i in kept], [elems[i].Pid() for i in kept]
     codes = {t: code_of(ELEMENT_TYPES, t) for t in dict.fromkeys(elems[i].type for i in kept)}
-    ug, *_ = mesh_from_cells(deck, [eids[i] for i in kept], [elems[i].Pid() for i in kept],
-                             [codes[elems[i].type] for i in kept], vtk, sizes, flat_ids, ELEMENT_TYPES, flat_points)
-    return ug, pos
+    ug, *_ = mesh_from_cells(deck, cell_eids, cell_pids, [codes[elems[i].type] for i in kept], vtk, sizes,
+                             flat_ids, ELEMENT_TYPES, flat_points)
+    return ug, pos, cell_eids, cell_pids
 
 
 def mesh_from_cells(deck: Deck, eids, pids, type_codes, vtk_types, sizes, flat_nids, type_names, points=None):

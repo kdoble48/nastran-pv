@@ -7,6 +7,11 @@ pvpython --force-offscreen-rendering tests/pv_smoke.py   # the plugin, views and
 python -m pyflakes src paraview/*.py tests  # lint (skip paraview/_vendor)
 ```
 
+Test decks are files in `tests/data` with hand-computed expected values. Two inputs are generated
+instead: OP2 results (`tests/op2_fixture.py`) and the performance deck (`tests/perf_deck.py`,
+shared by `tests/benchmark.py` and the [CI check](performance.md#ci-check)), whose counts test
+derives its expected values by hand from the layout's parameters.
+
 Every push to `main` and every pull request runs the tests and lint on Linux, Windows and macOS
 with Python 3.10 to 3.12 (`.github/workflows/tests.yml`), and builds this site
 (`.github/workflows/docs.yml`). Tests that need ParaView, MYSTRAN or the real datasets skip there.

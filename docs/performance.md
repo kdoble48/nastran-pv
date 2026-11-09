@@ -90,11 +90,22 @@ its ratio exceeds 3x the one recorded in `RECORDED` (plus 0.05 s of timer noise)
 this is for, a Python loop per element or per grid coming back, cost 5x to 60x.
 
 The timings are marked `perf` and left out of a plain `python -m pytest`; CI runs them in their own
-job (*performance budget*) on one runner type:
+job (*performance budget*) on one runner type, with the numpy, scipy, VTK, pyNastran, cpylog and
+h5py versions `RECORDED` was measured with (`tests/perf-constraints.txt`), so a new upstream
+release cannot move the budget. The job is advisory (`continue-on-error`): a failure shows on the
+pull request for the reviewer to read, but it does not fail the run or block a merge.
 
 ```bash
 python -m pytest -m perf -s tests/test_performance.py   # prints each stage's ratio and limit
 ```
 
-A change that makes a stage faster or slower on purpose updates `RECORDED` (the median ratio of
-three runs on the reference machine) and the tables on this page.
+**Re-recording.** A change that makes a stage faster or slower on purpose, or that moves the
+pinned versions, records again in the same pull request:
+
+1. Install the versions to record with: `pip install -e ".[test]" -c tests/perf-constraints.txt`
+   (after editing the file, when moving them).
+2. On an otherwise idle reference machine, run
+   `python -m pytest -m perf -s tests/test_performance.py` three times.
+3. Put each stage's median ratio (the `x calibration` figure) in `RECORDED`, and update the tables
+   on this page when the stage times changed.
+4. Check the perf job's log on the pull request: its ratios should be near the recorded ones.

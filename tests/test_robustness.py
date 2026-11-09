@@ -128,6 +128,53 @@ def test_results_rotated_from_cylindrical_and_spherical_cd(tmp_path):
     assert not [w for w in deck.warnings if "CD" in w]
 
 
+def test_bases_and_to_basic_equal_a_loop_over_basis_bit_for_bit(tmp_path):
+    """``basis`` at a point is ``bases`` at that one point, and ``to_basic`` rotates each grid of a
+    curvilinear CD as a loop of ``basis`` and a 3-vector matmul would: equal, not just close."""
+    deck = load_deck(write(tmp_path, "cd.bdf", CURVILINEAR_CD), echo=False)
+    rng = np.random.default_rng(0)
+    xyz = rng.standard_normal((400, 3)) * 10.0
+    for cid in (20, 30, 40):
+        assert np.array_equal(deck.bases(cid, xyz), np.array([deck.basis(cid, x) for x in xyz]))
+    nids = np.array([5, 99, 3, 1, 2, 4])
+    data = rng.standard_normal((len(nids), 6))
+    loop = data.copy()
+    for r, nid in enumerate(nids.tolist()):
+        i = deck.lookup([nid])[0]
+        if i >= 0 and deck.cd[i] > 0:
+            R = deck.basis(int(deck.cd[i]), deck.xyz[i])
+            loop[r, :3], loop[r, 3:] = loop[r, :3] @ R, loop[r, 3:] @ R
+    assert np.array_equal(to_basic(deck, nids, data.copy()), loop)
+
+
+CYLINDRICAL_MCID = """\
+CORD2C,20,,0.,0.,0.,0.,0.,1.,
+,1.,0.,0.
+GRID,1,,-1.,4.,0.
+GRID,2,,1.,4.,0.
+GRID,3,,1.,6.,0.
+GRID,4,,-1.,6.,0.
+GRID,5,,4.,-1.,0.
+GRID,6,,6.,-1.,0.
+GRID,7,,6.,1.,0.
+GRID,8,,4.,1.,0.
+MAT1,1,7.e4,,.3,2.7e-9
+PSHELL,1,1,.1,1
+CQUAD4,1,1,1,2,3,4,20
+CQUAD4,2,1,5,6,7,8,20
+"""
+
+
+def test_material_axis_from_a_cylindrical_mcid(tmp_path):
+    """MCID 20 (cylindrical about z): the material axis is e_r at each centroid, in the plate's plane:
+    +Y for the plate centred at (0, 5, 0), +X for the one at (5, 0, 0)."""
+    mb = build_multiblock(load_deck(write(tmp_path, "mcid.bdf", CYLINDRICAL_MCID), echo=False))
+    shells = get_block(mb, "Shells")
+    axis = arr(shells, "MaterialAxis", "cell")
+    np.testing.assert_allclose(axis[row_of(shells, "EID", 1, "cell")], [0, 1, 0], atol=1e-12)
+    np.testing.assert_allclose(axis[row_of(shells, "EID", 2, "cell")], [1, 0, 0], atol=1e-12)
+
+
 def test_composite_element_ids_and_complex_results_are_handled():
     assert _element_ids(SimpleNamespace(element_layer=np.array([[7, 1], [7, 2]]))).tolist() == [7, 7]
     assert _element_ids(SimpleNamespace(element=np.array([3]))).tolist() == [3]

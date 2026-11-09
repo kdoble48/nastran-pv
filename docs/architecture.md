@@ -19,10 +19,10 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
     INCLUDEs on pyNastran main.
   - pyNastran log warnings are captured, truncated, into `Deck.warnings`.
   - The `Deck` object holds sorted `nids` and `xyz` in basic coordinates (SPOINTs dropped).
-    `lookup`/`index` map grid ids to rows (`rows` is the dict for one id at a time), and
-    `basis(cid, at_xyz)` gives local axes, including curvilinear systems; `bases(cid, xyz)` gives
-    them at many points with the same bits (`results.to_basic` rotates every grid of a
-    cylindrical or spherical CD at once).
+    `lookup`/`index` map grid ids to rows (call them once for many ids: a numpy call per id
+    costs more than the id), and `basis(cid, at_xyz)` gives local axes, including curvilinear
+    systems. For a cylindrical or spherical system `basis` is `bases(cid, xyz)` at one point, so
+    `results.to_basic` and the shells' MCID axes take every point at once with the same bits.
 - `families.py`: parses pre-processor `$ ... family <NAME>` comments (ICEM/TACS decks such as uCRM-9)
   into `FamilyId`/`GroupId` cell arrays and `FamilyNames`/`GroupNames` on the Shells block only.
   These back the FAMILY/GROUP keys of `map_table` and the `family` view.
@@ -287,7 +287,8 @@ Every gotcha found so far, by area. The few that bite on any change are also in 
 - Vectorizing without changing a bit: numpy's `(3,) @ (3, 3)` (BLAS gemv) and `(n, 3) @ (3, 3)`
   (gemm) or `einsum` round differently in the last bit. A per-point rotation done for many points at
   once stays a stacked `(n, 1, 3) @ (n, 3, 3)` matmul, which runs gemv per point (`Deck.bases`,
-  `results.to_basic`). `np.asarray` of a list of Python ints is int32 on Windows with numpy 1.x, so a
+  `results.to_basic`; `Deck.basis` is `bases` at one point, and the tests compare them with
+  `np.array_equal`). `np.asarray` of a list of Python ints is int32 on Windows with numpy 1.x, so a
   refactor keeps the lists where the old code made its arrays from lists.
 - Bash heredocs containing `\n` inside Python string literals get mangled by the tool runner. Write
   patch scripts to the scratchpad with the Write tool instead.

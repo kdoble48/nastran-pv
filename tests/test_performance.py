@@ -56,23 +56,24 @@ def model(deck):
 
 
 def test_synthetic_deck_counts(tmp_path):
-    """Every block has the cells the layout gives (hand-counted in perf_deck.counts), half the solids
-    are flipped to VTK's winding and the duplicates are found."""
+    """A small layout builds the blocks its parameters give, counted by hand: half the solids are
+    flipped to VTK's winding and the duplicates are found. ``perf_deck.counts`` must agree."""
     from nastran_pv.topology import check
 
     lay = perf_deck.Layout(nx=12, ny=9, tri_rows=3, sx=3, sy=2, sz=2, mass_every=7, spiders=2, bush_every=11,
                            force_every=3, duplicates=2)
-    want = perf_deck.counts(lay)
-    assert (want["Shells"], want["Solids"], want["flipped"]) == (12 * 6 + 2 + 2 * 12 * 3, 12, 6)
+    # 13 x 10 = 130 plate grids. Shells: 12 x (9 - 3) quads + 2 duplicates + 2 x 12 x 3 trias = 146;
+    # solids 3 x 2 x 2 = 12, every other one reversed: 6; one bar per cell of the y = 0 edge: 12;
+    # masses on grids 1, 8, ..., 127: 19; 2 spiders of 8 legs: 16; bushes on grids 1, 12, ..., 122: 12;
+    # FORCE on grids 1, 4, ..., 130: 44
+    want = {"Shells": 146, "Solids": 12, "Lines": 12, "Masses": 19, "Rigid": 16, "Bushes": 12}
     d = load_deck(perf_deck.write_deck(tmp_path / "small.bdf", lay), echo=False)
     mb = build_multiblock(d)
-    for block in ("Shells", "Solids", "Lines", "Masses", "Rigid", "Bushes"):
-        assert get_block(mb, block).GetNumberOfCells() == want[block], block
-    assert f"info: reordered {want['flipped']} solid element(s) to VTK orientation" in d.warnings
-    loads = get_block(get_block(mb, "Loads"), "SID_1")
-    assert loads.GetNumberOfPoints() == want["forces"]
-    dup = {r["Name"]: r["Count"] for r in check(mb).summary}["DuplicateElements"]
-    assert dup == want["duplicates"]
+    assert {b: get_block(mb, b).GetNumberOfCells() for b in want} == want
+    assert "info: reordered 6 solid element(s) to VTK orientation" in d.warnings
+    assert get_block(get_block(mb, "Loads"), "SID_1").GetNumberOfPoints() == 44
+    assert {r["Name"]: r["Count"] for r in check(mb).summary}["DuplicateElements"] == 2
+    assert perf_deck.counts(lay) == {"plate_grids": 130, **want, "flipped": 6, "forces": 44, "duplicates": 2}
 
 
 def _shifted(deck):

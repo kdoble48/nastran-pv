@@ -434,13 +434,15 @@ def build_tree(mb, vis: Visibility | None = None, names=None, max_pieces: int = 
         blocks.append((path, ds, kind, labels, kept))
 
     cats = list(CATEGORIES)
-    memo = {}
+    memo = {"cats": None, "keys": {}}  # the latest categories tried: count's keys serve the pieces too
 
     def keys_of(i, cs):
-        """``_piece_keys`` of block ``i`` for categories ``cs``, computed once."""
-        if (i, tuple(cs)) not in memo:
-            memo[i, tuple(cs)] = _piece_keys(blocks[i][3], blocks[i][4], cs)
-        return memo[i, tuple(cs)]
+        """``_piece_keys`` of block ``i`` for categories ``cs``, computed once for the latest ``cs``."""
+        if memo["cats"] != tuple(cs):
+            memo["cats"], memo["keys"] = tuple(cs), {}
+        if i not in memo["keys"]:
+            memo["keys"][i] = _piece_keys(blocks[i][3], blocks[i][4], cs)
+        return memo["keys"][i]
 
     def count(cs):
         return sum(len(keys_of(i, cs)[1]) for i in range(len(blocks)))

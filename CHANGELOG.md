@@ -97,8 +97,9 @@ All notable changes to nastran-pv are listed here. The format follows
   the model is 1.8x faster (Linderholt's 270k solids 1.7 s to 0.9 s, uCRM-9 fine 1.3 s to 0.7 s),
   results rotate from cylindrical and spherical CDs about 40x faster per step (2.7 s to 0.07 s on
   323k grids), `check` 1.3x to 1.5x, and the plugin cuts its model tree in half the time on a
-  scope change. Outputs are unchanged. `tests/benchmark.py` times every stage, and a CI job fails
-  a stage that takes 3x its recorded time on a synthetic deck (#68).
+  scope change. Outputs are unchanged, bit for bit. `tests/benchmark.py` times every stage, and an
+  advisory CI job flags a stage that takes 3x its recorded time on a synthetic deck, with the
+  library versions it was recorded with (#68).
 - `nastran-pv render` and `docs/build_gallery.py` run pvpython with `--force-offscreen-rendering`,
   so batch screenshots and gallery exports no longer open a ParaView window; `render --onscreen`
   opts out, and `--dry-run` quotes the command it prints (#62).

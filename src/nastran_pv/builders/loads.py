@@ -43,21 +43,44 @@ class LoadSet:
         return not (self.force or self.moment or self.grav or self.pressure)
 
 
-def _xyz(deck: Deck, nid: int) -> np.ndarray:
-    i = deck.rows.get(nid)  # an unknown or blank grid: index raises the error the skip warning quotes
+def _grids(card) -> tuple:
+    """The grids a FORCE/MOMENT{,1,2} card's direction uses."""
+    if card.type in ("FORCE", "MOMENT"):
+        return (card.node_id,)
+    if card.type in ("FORCE1", "MOMENT1"):
+        return card.G1(), card.G2()
+    return card.G1(), card.G2(), card.G3(), card.G4()
+
+
+def _rows(deck: Deck, cards) -> dict:
+    """``{grid id: point index}`` of the known grids of ``cards``, looked up in one call: one
+    numpy call per card would cost more than the cards themselves (51k FORCE on uCRM-9 fine)."""
+    ids = []
+    for card in cards:
+        if card.type in NODAL_TYPES:
+            try:
+                ids += [g for g in _grids(card) if isinstance(g, (int, np.integer))]
+            except Exception:  # the card's own read in direct_load_set reports it
+                pass
+    rows = deck.lookup(ids) if ids else np.zeros(0, dtype=np.int64)
+    return {g: int(i) for g, i in zip(ids, rows.tolist()) if i >= 0}
+
+
+def _xyz(deck: Deck, nid: int, rows: dict) -> np.ndarray:
+    i = rows.get(nid)  # an unknown or blank grid: index raises the error the skip warning quotes
     return deck.xyz[i] if i is not None else deck.xyz[deck.index([nid])[0]]
 
 
-def _direction(deck: Deck, card) -> np.ndarray:
-    """Unit direction (basic) of FORCE/MOMENT{,1,2} at its grid."""
+def _direction(deck: Deck, card, rows: dict) -> np.ndarray:
+    """Unit direction (basic) of FORCE/MOMENT{,1,2} at its grid (``rows``: from :func:`_rows`)."""
     if card.type in ("FORCE", "MOMENT"):
-        at = _xyz(deck, card.node_id)
+        at = _xyz(deck, card.node_id, rows)
         return deck.vector_to_basic(card.Cid(), np.asarray(card.xyz, dtype=float), at)
     if card.type in ("FORCE1", "MOMENT1"):
-        return unit(_xyz(deck, card.G2()) - _xyz(deck, card.G1()))
+        return unit(_xyz(deck, card.G2(), rows) - _xyz(deck, card.G1(), rows))
     if card.type in ("FORCE2", "MOMENT2"):
-        a = _xyz(deck, card.G2()) - _xyz(deck, card.G1())
-        b = _xyz(deck, card.G4()) - _xyz(deck, card.G3())
+        a = _xyz(deck, card.G2(), rows) - _xyz(deck, card.G1(), rows)
+        b = _xyz(deck, card.G4(), rows) - _xyz(deck, card.G3(), rows)
         return unit(np.cross(a, b))
     raise TypeError(card.type)
 
@@ -66,11 +89,13 @@ def direct_load_set(deck: Deck, sid: int) -> LoadSet:
     """The FORCE*/MOMENT*, GRAV and PLOAD/PLOAD2/PLOAD4 cards of set ``sid``; the other load cards
     are in the card report. A card that cannot be drawn is skipped with a warning."""
     ls = LoadSet(sid)
-    for card in deck.model.loads.get(sid, []):
+    cards = deck.model.loads.get(sid, [])
+    rows = _rows(deck, cards)
+    for card in cards:
         t = card.type
         try:
             if t in NODAL_TYPES:
-                vec = float(card.mag) * _direction(deck, card)
+                vec = float(card.mag) * _direction(deck, card, rows)
                 target = ls.force if t.startswith("FORCE") else ls.moment
                 nid = card.node_id
                 target[nid] = target.get(nid, np.zeros(3)) + vec

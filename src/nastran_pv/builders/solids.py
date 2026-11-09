@@ -24,7 +24,7 @@ from vtkmodules.vtkCommonDataModel import (
 )
 
 from ..deck import Deck
-from .common import (CellRows, add_mid_density, elements_of, grid_checks, known_grids, node_matrix, per_unique,
+from .common import (CellRows, add_mid_density, elements_of, factorize, grid_checks, known_grids, node_matrix,
                      points_of, property_info, rows_mesh, warn_skipped)
 
 # Nastran -> VTK node permutation for the full (quadratic) element.
@@ -107,13 +107,12 @@ def build_solids(deck: Deck):
         return None
 
     _fix_orientation(deck, rows)
-    ug, pos = rows_mesh(deck, eids, elems, rows)
-    cd = ug.GetCellData()
-    pids = np.asarray([elems[i].Pid() for i in pos.tolist()])
-    missing = sorted(int(p) for p in np.unique(pids) if int(p) not in model.properties)
+    ug, _, _, cell_pids = rows_mesh(deck, eids, elems, rows)
+    u, inverse = factorize(np.asarray(cell_pids))
+    missing = sorted(int(p) for p in u if int(p) not in model.properties)
     if missing:
         deck.warn(f"solid property id(s) not defined (open the run deck?): {missing}")
-    add_mid_density(cd, model, per_unique(pids, lambda p: property_info(model, p)[0], np.int64))
+    add_mid_density(ug.GetCellData(), model, np.array([property_info(model, p)[0] for p in u], dtype=np.int64)[inverse])
     return ug
 
 

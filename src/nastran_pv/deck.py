@@ -43,7 +43,6 @@ class Deck:
     skipped: dict = field(default_factory=dict)
     _n_mass: int = field(default=0, repr=False)  # where the next mass warning goes (see warn)
     _n_pinned: int = field(default=0, repr=False)  # leading load errors kept first (xref failure)
-    _rows: dict | None = field(default=None, init=False, repr=False, compare=False)  # see rows
 
     # ------------------------------------------------------------------ nodes
     def lookup(self, node_ids) -> np.ndarray:
@@ -58,14 +57,6 @@ class Deck:
             raise KeyError(f"unknown GRID id(s): {missing[:10].tolist()}")
         return idx
 
-    @property
-    def rows(self) -> dict:
-        """``{grid id: point index}``: :meth:`lookup` of one id at a time without numpy's
-        per-call cost (cards read one by one). Built on first use."""
-        if self._rows is None:
-            self._rows = dict(zip(self.nids.tolist(), range(len(self.nids))))
-        return self._rows
-
     def node_xyz(self, node_ids) -> np.ndarray:
         return self.xyz[self.index(node_ids)]
 
@@ -75,7 +66,7 @@ class Deck:
 
         For cylindrical/spherical systems the axes depend on position, so
         ``at_xyz`` (basic coordinates) must be given; the returned rows are
-        (e_r, e_theta, e_z) or (e_r, e_theta, e_phi).
+        (e_r, e_theta, e_z) or (e_r, e_theta, e_phi), from :meth:`bases` at that one point.
         """
         if cid is None or cid == 0:
             return np.eye(3)
@@ -87,25 +78,15 @@ class Deck:
             return beta
         if at_xyz is None:
             raise ValueError(f"position needed for non-rectangular coordinate system {cid}")
-        local = (np.asarray(at_xyz, dtype=float) - np.asarray(coord.origin, dtype=float)) @ beta.T
-        x, y, z = local
-        theta = np.arctan2(y, x)
-        ct, st = np.cos(theta), np.sin(theta)
-        if coord.type in CYLINDRICAL:
-            rows = np.array([[ct, st, 0.0], [-st, ct, 0.0], [0.0, 0.0, 1.0]])
-        else:  # spherical: (r, theta=polar from z, phi=azimuth)
-            rho = np.hypot(x, y)
-            polar = np.arctan2(rho, z)
-            cp, sp = np.cos(polar), np.sin(polar)
-            rows = np.array(
-                [[sp * ct, sp * st, cp], [cp * ct, cp * st, -sp], [-st, ct, 0.0]]
-            )
-        return rows @ beta
+        return self.bases(cid, np.asarray(at_xyz, dtype=float).reshape(1, 3))[0]
 
     def bases(self, cid: int, at_xyz) -> np.ndarray:
-        """:meth:`basis` of a non-rectangular ``cid`` at many points: (n, 3, 3) for (n, 3) basic
-        ``at_xyz``. Each point goes through the same arithmetic as :meth:`basis` (one 3x3 matmul
-        per point, not one batched product), so the axes are bit-identical to a loop over it."""
+        """The local axes of a cylindrical or spherical ``cid`` at many points: (n, 3, 3) for (n, 3)
+        basic ``at_xyz``, row i as :meth:`basis` gives it at point i (which calls this for one
+        point, so there is one implementation). The products are stacked matmuls,
+        ``(n, 1, 3) @ (3, 3)`` and ``(n, 3, 3) @ (3, 3)``: numpy runs them one small matrix per point,
+        so a point's axes do not depend on the others (a ``(n, 3) @ (3, 3)`` product or ``einsum``
+        would round differently in the last bit)."""
         coord = self.model.coords.get(cid)
         if coord is None:
             raise KeyError(f"unknown coordinate system {cid}")
@@ -120,7 +101,7 @@ class Deck:
         rows = np.zeros((len(local), 3, 3))
         if coord.type in CYLINDRICAL:
             rows[:, 0, 0], rows[:, 0, 1], rows[:, 1, 0], rows[:, 1, 1], rows[:, 2, 2] = ct, st, -st, ct, 1.0
-        else:  # spherical, as in basis
+        else:  # spherical: (r, theta=polar from z, phi=azimuth)
             polar = np.arctan2(np.hypot(x, y), z)
             cp, sp = np.cos(polar), np.sin(polar)
             rows[:, 0, 0], rows[:, 0, 1], rows[:, 0, 2] = sp * ct, sp * st, cp
