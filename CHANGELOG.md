@@ -90,6 +90,10 @@ All notable changes to nastran-pv are listed here. The format follows
   looks in the per-user folder; `setup` refuses a Microsoft Store Python, whose writes under AppData
   ParaView cannot see. CI builds the wheel (from the sdist and from the tree) and checks it in a
   fresh venv (#58).
+- ParaView CI: `tests/pv_smoke.py` runs in headless ParaView 6.0.1 and 5.13.1 on Linux, after
+  installing the wheel and `nastran-pv setup`, on pull requests that touch `paraview/`, `src/` or
+  `tests/`. `setup`, `view` and `render` also find a ParaView unpacked in the home folder
+  (`~/ParaView-*`), and pick the newest ParaView by version rather than by name (#59).
 
 ### Changed
 
@@ -160,6 +164,17 @@ All notable changes to nastran-pv are listed here. The format follows
 - Physical mass glyphs keep their disc and rod shapes and warn on impossible inertia (#29).
 - Mode GIFs are captured with SaveScreenshot, and modes whose frames never change are reported (#28).
 - Empty 3D window on categorical gallery views (#2).
+- `install_deps.py` on macOS asked for scipy wheels for macOS 11, and scipy has none for Apple
+  silicon below macOS 12, so it found no scipy; it now asks for this Mac's version. Linux on
+  aarch64 gets aarch64 wheels, and `install_deps.py` uses the CLI's pvpython search and shows
+  pvpython's own error (a missing system library, ...) when it fails to start. An empty
+  `XDG_CONFIG_HOME` put the macros in the current folder (#59).
+- ParaView 6.0 on Linux could crash after a Nastran filter was deleted (a VTK bug in how it frees a
+  deleted Python filter's state); the plugin's filters and the VTKHDF series writer now release
+  their cached data when they are deleted (#59).
+- A deleted Nastran reader, and every filter with a checklist (Load and SPC Glyphs, Nastran Files,
+  Nastran Diff and the topology filters), was never freed, so its deck, model and results stayed in
+  memory for the session; they are freed now (#59).
 
 ## [0.1.0]
 
