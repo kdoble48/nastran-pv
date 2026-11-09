@@ -68,6 +68,7 @@ grids, which is the check.
 | Element rows only | The `APP-LOAD`, `F-OF-SPC`, `F-OF-MPC` and `*TOTALS*` rows are dropped (by name; MYSTRAN writes non-zero ids on them) | They are `AppliedLoad`, `SPCForce` and `MPCForce`; the element rows are the same at every static step (the model's grid-element pairs), so the root arrays keep one size through a VTKHDF series |
 | Sign | Rows are normalised to the MSC convention, the force of the element on the grid: per table and step, when the rows only balance the grids' non-element rows with the element rows negated, they are negated and the results say so | MYSTRAN 19 prints the MSC sign in its `.f06` but writes the element rows negated in its OP2 (checked on a cantilever: grid 1's `F-OF-SPC` -100 and the bar's row -100 sum to -200, not to its `*TOTALS*` 0) |
 | Equilibrium fallback | Without GPFORCE the cut load is the sum of the applied, SPC and MPC forces at the interior grids (needs `OLOAD=`, plus `SPCFORCES=`/`MPCFORCES=` where the body has constraints or rigid elements); the table says `equilibrium` and its imbalance is NaN (it would be zero by construction) | Every static run with OLOAD then gets the total; no per-grid split and no check, and a NaN does not pass for a check that held |
+| Cost | uCRM-9 coarse, MYSTRAN `GPFORCE=ALL` (100 220 element rows): `.vtm` 8.4 → 12.1 MB, one-step VTKHDF 44.1 → 47.8 MB (the root table goes onto the mesh partitions, like the other root arrays), convert 2.5 → 3.7 s | Small next to what the run wrote; `--result-types` without `GridPointForce` (or the reader's *Result Types*) leaves it out |
 | Element end forces | Not used | `LineForce` sums only work for cuts through bars, beams and rods, and need each element's force convention and offsets; GPFORCE and the fallback cover any cut |
 
 ### The free body
@@ -103,11 +104,24 @@ grids, which is the check.
   cantilever, one bar, the truss's tip members) equals the applied load on its side, about the
   cut centroid, a grid and the origin; the equilibrium fallback gives the same; a negated table is
   normalised.
-- Manual: uCRM-9 coarse static solved by MYSTRAN with `GPFORCE=ALL OLOAD=ALL SPCFORCES=ALL
-  MPCFORCES=ALL` (see the PR).
+- Manual, MYSTRAN 19 (it writes GPFORCE to its OP2, element rows negated):
+  - a CBAR cantilever, two subcases: the cut load of the tip bars equals the tip loads once the
+    rows are normalised;
+  - uCRM-9 coarse static (the cruise aero load plus 1 g), with `GPFORCE=ALL OLOAD=ALL SPCFORCES=ALL
+    MPCFORCES=ALL` (the deck's CQUADR written as CQUAD4 and PSHELL MID4 blanked in a copy;
+    100 220 element rows): the panels whose elements all lie outboard of y = 5, 15 and 25 have
+    231, 127 and 40 cut grids, and their cut loads equal the loads applied to them to 3e-8
+    (force) and 2e-5 (moment) relative, the float32 precision of the OP2. Outboard of y = 15:
+    Cut (-16052.4, -28607.5, 376057) N, Applied (-16052.4, -28607.5, 376057) N. The whole model
+    has no cut and Applied + SPC leaves 1e-2 N of the 6.3e5 N lift. Each sum takes 0.04 s once
+    the graph is built.
 
 ## No output change
 
 Files without GPFORCE convert as before (the new types add nothing without their options or
-tables): the registry change's parity harness reruns its 12 cases on `origin/main` and on this
-branch.
+tables). The registry change's parity harness ran its 12 cases on `origin/main` and on this
+branch (the synthesized fixtures, CD-rotated output, the field options, the demo modes, a random
+response, uCRM-9 coarse static by MYSTRAN without GPFORCE, uCRM-9 medium modes in HDF5; `.vtm`
+per step, `.pvd`, temporal VTKHDF compacted and not, VTKHDF snapshots, the model after every
+step, stdout): 66 files, 158 step snapshots and 90 stdout texts identical, and every
+`.vtm`/`.vtu`/`.pvd` byte-identical (the VTKHDF files carry HDF5 timestamps).
