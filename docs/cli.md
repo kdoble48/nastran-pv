@@ -36,11 +36,13 @@ Without `-o`, the output is `<input>.vtm` in the current folder. `--results` att
 step, `--step N` (0-based, default 0); `--all-steps` writes them all. On a converted series (a temporal
 `.vtkhdf`, or the `.pvd` of a `.vtm` series), `--step N` picks the step to read. `--result-types`
 chooses what the steps carry, by [result type](model.md#result-types): `--result-types VonMisesMax`
-attaches the stresses without the displacements (names are case-insensitive and may be
-comma-separated; `all` is every type; the default is every type, `Displacement VonMisesMax
-SPCForce MPCForce AppliedLoad`). A type named that the results file lacks gives a warning. With SPC
-forces, MPC forces or applied loads attached, `convert` prints their resultant at the attached
-step (`--step`, also with `--all-steps`), e.g. `SPCForce resultant (Subcase 1): force (0, -100, -50), moment (-2, 100, -200) about the
+attaches the stresses without the displacements, `--result-types ShellStress,SolidStress` the
+stress components (names are case-insensitive and may be comma-separated; `all` is every type;
+the default is `Displacement VonMisesMax SPCForce MPCForce AppliedLoad` and the element forces).
+`convert` prints the types the file has that it left out, and a type named that the results
+file lacks gives a warning. With SPC forces, MPC forces or applied loads attached, `convert`
+prints their resultant at the attached step (`--step`, also with `--all-steps`), e.g.
+`SPCForce resultant (Subcase 1): force (0, -100, -50), moment (-2, 100, -200) about the
 basic origin`; `stats` and `store add` take the flag too. `--no-nodal-arrays` leaves
 the `SPC_DOF`/`F_<sid>` point arrays off the mesh blocks, and `--ascii` writes ASCII XML for
 debugging.
@@ -196,8 +198,8 @@ nastran-pv render out/modes.vtkhdf --step 3 --preset results   # a converted ser
 
 `--preset` defaults to `family masses loads spc`, `--out` to `shots/` and `--size` to `1600 1000`.
 `--step` is 0-based. The presets are the views from the toolbar macros: `masses`, `bushes`, `bushrotations`, `beams`, `loads`, `spc`, `rigid`,
-`family`, `group`, `pid`, `mid`, `elementtype`, `thickness`, `nsm`, `results`, `random`, `randomsweep`,
-`parts`, `check` and `diff`. The two random views need `--random` (or a converted random series),
+`family`, `group`, `pid`, `mid`, `elementtype`, `thickness`, `nsm`, `results`, `forces`, `stress`, `random`,
+`randomsweep`, `parts`, `check` and `diff`. The two random views need `--random` (or a converted random series),
 and `diff` needs `--against A`. Rendering is offscreen, so no ParaView window opens; `--onscreen`
 renders in a visible window instead, for a ParaView build whose offscreen PNGs come out blank.
 `--dry-run` prints the pvpython command, quoted so it can be pasted into a shell.

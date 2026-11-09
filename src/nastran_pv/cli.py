@@ -337,6 +337,10 @@ def cmd_convert(args) -> int:
     elif results is not None:
         print(f"{len(results.steps)} result step(s): " + "; ".join(s.label for s in results.steps[:5])
               + (" ..." if len(results.steps) > 5 else ""))
+        attached = {t.name for t in results.attached()}
+        others = [n for n in results.available if n not in attached]
+        if others:
+            print(f"result types not attached: {', '.join(others)} (--result-types to choose)")
         for line in resultants:
             print(line)
     print("\n".join(summarize(mb)))

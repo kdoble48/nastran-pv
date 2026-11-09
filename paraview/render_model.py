@@ -37,7 +37,7 @@ def render(deck, presets, cameras, out, size, op2=None, step=0, nsm_set=None, ra
     written = []
     for preset in presets:
         view = nv.white_view(size, t)
-        nv.apply(preset, reader=reader, view=view, model=model)
+        model = nv.apply(preset, reader=reader, view=view, model=model)  # read again when a view turned types on
         for cam in cameras:
             nv.set_camera(view, cam)
             path = os.path.join(out, f"{base}_{preset}_{cam}.png")
