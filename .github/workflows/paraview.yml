@@ -25,7 +25,7 @@ jobs:
   smoke:
     name: pv_smoke / ParaView ${{ matrix.paraview }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -74,10 +74,12 @@ jobs:
           ~/venv/bin/nastran-pv setup 2>&1 | tee ~/setup.log
           grep "ParaView-${{ matrix.paraview }}" ~/setup.log | head -1
           ls ~/.config/ParaView/Macros | head -3
-      - name: Diagnostics (temporary) - write the scripts
+      - name: "V (temporary): parity checks under valgrind"
         if: matrix.paraview == '6.0.1'
+        continue-on-error: true
+        timeout-minutes: 75
         run: |
-          sudo apt-get install -y -q xvfb libgl1-mesa-dri libglx-mesa0 libegl1 libegl-mesa0 > /dev/null
+          sudo apt-get install -y -q valgrind > /dev/null
           cat > ~/parity_only.py <<'EOF'
           import os, sys
           sys.path.insert(0, os.path.abspath("tests"))
@@ -85,33 +87,21 @@ jobs:
           from paraview import simple as pv
           import nastran_views as nv
           pv_smoke.rm.load_reader(pv_smoke.DECK)  # loads the plugin: nastran_pv and the vendored pyNastran
-          from vtkmodules.vtkRenderingCore import vtkRenderWindow
-          w = pv.GetActiveViewOrCreate("RenderView").GetRenderWindow()
-          print("window", w.GetClassName(), flush=True)
           pv_smoke.parity_checks(pv, nv)
           print("parity only: done", flush=True)
           EOF
-          cat > ~/pvrun.sh <<'EOF'
           pv=$(ls -d ~/ParaView-*/)
+          export LD_LIBRARY_PATH="${pv}lib/mesa${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           export NASTRAN_PV_SITE_PACKAGES="$(sed -n 's/^vendor folder: //p' ~/setup.log)" NASTRAN_PV_PYTHON=~/venv/bin/python
-          export PYTHONFAULTHANDLER=1
+          export VTK_DEFAULT_OPENGL_WINDOW=vtkOSOpenGLRenderWindow PYTHONMALLOC=malloc LP_NUM_THREADS=0
           unset GITHUB_ACTOR
-          $WRAP "${pv}bin/pvpython" "$@" 2>&1 | grep -E "^(window|parity)|Fatal|Segmentation|Abort|beams.vtkhdf: Nastran" | tail -12
-          EOF
-      - name: "X1 (temporary): Xvfb + system Mesa (GLX)"
-        if: matrix.paraview == '6.0.1'
-        continue-on-error: true
-        run: WRAP="xvfb-run -a" bash ~/pvrun.sh ~/parity_only.py
-      - name: "X2 (temporary): EGL + system Mesa"
-        if: matrix.paraview == '6.0.1'
-        continue-on-error: true
-        run: VTK_DEFAULT_OPENGL_WINDOW=vtkEGLRenderWindow bash ~/pvrun.sh ~/parity_only.py
-      - name: "X3 (temporary): bundled OSMesa, one llvmpipe thread"
-        if: matrix.paraview == '6.0.1'
-        continue-on-error: true
-        run: |
-          pv=$(ls -d ~/ParaView-*/)
-          LD_LIBRARY_PATH="${pv}lib/mesa" VTK_DEFAULT_OPENGL_WINDOW=vtkOSOpenGLRenderWindow LP_NUM_THREADS=0 bash ~/pvrun.sh ~/parity_only.py
+          mkdir -p ~/vg
+          timeout 70m valgrind --trace-children=yes --undef-value-errors=no --error-limit=no --num-callers=30 \
+            --log-file=$HOME/vg/vg.%p.log "${pv}bin/pvpython" ~/parity_only.py 2>&1 | grep -E "^(ok: beams|parity)|Fatal|Segmentation" | tail -10 || true
+          for f in ~/vg/vg.*.log; do
+            echo "== $f: $(grep -c '^==[0-9]*== Invalid' "$f") invalid accesses"
+            grep -A 32 -m 4 "^==[0-9]*== Invalid \(write\|read\)" "$f" | head -150
+          done
       - name: pv_smoke, headless
         env:
           VTK_DEFAULT_OPENGL_WINDOW: vtkOSOpenGLRenderWindow   # 6.0: OSMesa (the 5.13 osmesa build has only that)
