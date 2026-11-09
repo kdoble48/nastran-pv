@@ -186,6 +186,15 @@ All notable changes to nastran-pv are listed here. The format follows
   a `vX.Y.Z` tag to PyPI ([Releasing](docs/versioning.md#releasing)). The package metadata gains
   classifiers, project URLs and keywords, and test CI also runs Python 3.13 and 3.14, with
   pyNastran `main` at a pinned commit and pyNastran's own self-checks on (#69).
+- Gallery result scenes: `docs/build_gallery.py` also solves, with MYSTRAN, the uCRM-9 static
+  cruise case (a copy with CQUADR written as CQUAD4 and PSHELL MID4 blanked), the demo tray under
+  1 g and a pressure (`make_demo.py --deck static`) and a composite plate (`--deck plate`), and
+  shows displacement, element forces, stress, SPC and MPC forces, applied loads, a free body, nodal
+  averaging, the deck's pressures and GRAV, and plies. A gallery entry can be a view with fixed
+  arguments or a filter scene (`export_site.py`), a single static step is one scene (not a
+  one-mode tab), and `--out` builds elsewhere. Frequency response, transient and complex results
+  have no scene (MYSTRAN solves none); the gallery index says so. The export takes each display's
+  own color map for its legend, so the plies scene no longer shows a stray 0 to 1 scale bar (#TBD).
 
 ### Changed
 

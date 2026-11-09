@@ -3499,11 +3499,18 @@ def main():
             single.eigenvectors.clear()  # one static step, no frequency
             static = os.path.join(tmp, "static.op2")
             single.write_op2(static)
+            from op2_fixture import make_freebody_op2
+
+            fb_op2 = os.path.join(tmp, "fb.op2")
+            make_freebody_op2().write_op2(fb_op2)
             models = [
                 {"id": "tiny", "title": "Tiny", "deck": DECK, "results": modes,
                  "views": ["pid", "bushes", "results"], "credit": "test"},
                 {"id": "one", "title": "One", "deck": DECK, "results": static,
                  "views": ["results"], "credit": "test"},
+                # a view with fixed arguments (VARIANTS) and a filter scene (SCENES)
+                {"id": "fb", "title": "FB", "deck": os.path.join(HERE, "data", "freebody.bdf"), "results": fb_op2,
+                 "views": ["spcforces", "freebody"], "view_args": {"freebody": {"seeds": "PID 2"}}, "credit": "test"},
                 {"id": "gone", "title": "Gone", "deck": os.path.join(tmp, "missing.bdf"),
                  "results": None, "views": ["pid"], "credit": "test"},
             ]
@@ -3530,8 +3537,21 @@ def main():
                   and all(os.path.exists(os.path.join(out, fr["scene"])) for fr in res["frames"]),
                   f"results: one scene per step {[fr['label'] for fr in res['frames']]}")
             one = meta("one-results.json")
-            check(len(one["frames"]) == 1 and one["frames"][0]["frequency"] is None,
-                  "single static step: one frame, frequency null")
+            check(not one["frames"] and one["scene"] == "one-results.vtksz"
+                  and os.path.exists(os.path.join(out, one["scene"])),
+                  "single static step: one scene, no per-step frames (no 'Mode 1' tab)")
+            spc = meta("fb-spcforces.json")
+            check(spc["title"] == "SPC forces" and "SPC forces" in spc["gui"]
+                  and 'nastran_views.apply("loads", source="SPC forces")' in spc["reproduce"][1]
+                  and spc["results"] == "fb.op2" and any("SPC forces" in t for t in spc["text"]),
+                  f"SPC forces entry: the loads view with Source SPC forces {spc['reproduce']}, {spc['text']}")
+            body = meta("fb-freebody.json")
+            check(any(lg["array"] == "FreeBody" and lg["kind"] == "categorical" for lg in body["legends"])
+                  and '--free-body "PID 2"' in body["reproduce"][0] and "Nastran Free Body" in body["gui"]
+                  and any("Cut: F" in t for t in body["text"]),
+                  f"free body scene: FreeBody legend, reproduce and the cut row {body['text']}")
+            check(not [s for s in pv.GetSources().values() if s.GetXMLName() == "NastranPVFreeBody"],
+                  "the free body scene deletes its filters after the export")
             check(not os.path.exists(os.path.join(out, "gone-pid.json")), "missing deck skipped")
             check(all("legends" in fr for fr in res["frames"]) and "--results modes.op2" in res["reproduce"][1],
                   f"results frames carry their own legends; render line {res['reproduce'][1]!r}")

@@ -156,6 +156,21 @@ python docs/build_gallery.py --ucrm9 gpk4zn73xn-1/uCRM9/uCRM9/Mesh/Coarse/FEM/ru
 Get MYSTRAN 19.0.0 from <https://github.com/MYSTRANsolver/MYSTRAN/releases> and put it in
 `tools/` (gitignored). Regenerate whenever a view, `export_site.py` or the demo deck changes. Close
 the ParaView GUI before re-running `install_deps.py`: it locks the files in `paraview/_vendor`.
+`--out DIR` builds somewhere else than `build/gallery` (the zip goes next to it); `--upload` is
+best left off until the pages have been checked locally (below).
+
+The result scenes come from MYSTRAN static solves that the script writes and runs itself (about
+a minute and a half in all), each in its own folder under `<out>/solve/`:
+
+| Model | Solve | Scenes |
+|---|---|---|
+| uCRM-9 static cruise | a copy of the run deck (`ucrm9_for_mystran`): CQUADR written as CQUAD4 and PSHELL MID4 blanked, which MYSTRAN 19 does not run, `PARAM,K6ROT` given a decimal point, and `FORCE`, `SPCFORCES`, `MPCFORCES`, `OLOAD` and `GPFORCE` requested. The scenes show the original deck with the copy's OP2 | displacement, forces, stress, SPC and MPC forces, applied loads, a free body of the wing outboard of y = 14.9 m, nodal averaging |
+| Demo tray, static | `make_demo.py --deck static`: 1 g plus a PLOAD4 pressure growing across the tray | the deck's pressures and GRAV, displacement, bush, bar and shell forces, stress |
+| Composite plate | `make_demo.py --deck plate`: a [0/45/-45/90]s cantilever | ply 2's fibre stress and fibre directions (MYSTRAN writes no failure indices) |
+
+MYSTRAN solves no frequency response, transient or complex eigenvalue run, so those results have
+no scene; the gallery's index says so. Without `--mystran` every result scene is skipped, and
+without `--ucrm9` the uCRM-9 ones.
 
 ## Building the site locally
 

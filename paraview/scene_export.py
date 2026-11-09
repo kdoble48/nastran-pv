@@ -149,6 +149,20 @@ def representations(view):
             yield src, rep
 
 
+def _lut(rep, array):
+    """The lookup table ``rep`` colors with: its own under *Use Separate Color Map* (the plies view's),
+    else the one shared by ``array``."""
+    lut = getattr(rep, "LookupTable", None)
+    return lut if lut is not None else pv.GetColorTransferFunction(array)
+
+
+def _bar_shown(lut, view):
+    """True if ``view`` shows a scalar bar of ``lut``. A lookup only: GetScalarBar would add a
+    visible bar for a table that has none, to the screenshot taken next."""
+    return any(r.GetXMLName() == "ScalarBarWidgetRepresentation" and r.LookupTable == lut and r.Visibility
+               for r in view.Representations)
+
+
 def overlays(view):
     """Visible text sources and the legends of shown scalar bars in ``view``."""
     text, legends = [], []
@@ -161,8 +175,8 @@ def overlays(view):
         arr = getattr(rep, "ColorArrayName", None)
         if not arr or not arr[1] or any(lg["array"] == arr[1] for lg in legends):
             continue
-        lut = pv.GetColorTransferFunction(arr[1])
-        if pv.GetScalarBar(lut, view).Visibility:
+        lut = _lut(rep, arr[1])
+        if _bar_shown(lut, view):
             legends.append(_legend(arr[1], lut))
     return {"text": text, "legends": legends}
 
@@ -173,6 +187,6 @@ def hide_overlays(view):
     for src, rep in representations(view):
         if src.GetXMLName() == "TextSource":
             rep.Visibility = 0
-        arr = getattr(rep, "ColorArrayName", None)
-        if arr and arr[1]:
-            pv.GetScalarBar(pv.GetColorTransferFunction(arr[1]), view).Visibility = 0
+    for r in view.Representations:
+        if r.GetXMLName() == "ScalarBarWidgetRepresentation":
+            r.Visibility = 0
