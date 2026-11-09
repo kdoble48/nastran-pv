@@ -3242,7 +3242,7 @@ def play_mode(mode=None, frames=ANIMATE_FPS, reader=None, view=None):
     in the view as it is: every Nastran Deform of the model holds the mode's time step and turns
     the time steps into one looping cycle of ``frames`` phases, so whatever is shown (masses,
     groups, a show-only subset, ...) moves. The mode and its frequency are shown in the view, and
-    the view is left at the peak of the cycle. Any view, :func:`stop_mode_animation` or Animate All
+    the view is left at the peak of the cycle (a complex step: its largest displacement). Any view, :func:`stop_mode_animation` or Animate All
     Modes gives the time controls back to the modes. Returns the mode."""
     reader = reader or subject(view)
     view = view or pv.GetActiveViewOrCreate("RenderView")
@@ -3269,11 +3269,25 @@ def play_mode(mode=None, frames=ANIMATE_FPS, reader=None, view=None):
     scene.UpdateAnimationUsingDataTimeSteps()
     scene.PlayMode = "Snap To TimeSteps"
     scene.Loop = 1
-    _set_time(view, round(frames / 4) / frames)  # sin = 1: the peak
+    _set_time(view, _peak_time(model, frames))
     _show_mode_label(model, view, mode_label(model, mode))
     pv.Render(view)
     _finish_deform(reader)
     return mode
+
+
+def _peak_time(model, frames):
+    """The phase time :func:`play_mode` leaves the view at: a quarter cycle (sin = 1) for a real
+    mode; for a complex step the frame nearest its largest displacement, since Nastran Deform turns
+    it through its PhaseAngle + Phase + 360 t (``deform.peak_phase``, ``reference_phase``)."""
+    from nastran_pv.deform import peak_phase, reference_phase
+
+    theta = peak_phase(model.data) if is_complex_step(model) else None
+    if theta is None:
+        return round(frames / 4) / frames
+    main = pv.FindSource(_name(model, "deform"))
+    start = reference_phase(model.data) + (float(main.Phase) if main is not None else 0.0)
+    return (round((((theta - start) / 360.0) % 0.5) * frames) % frames) / frames
 
 
 def stop_mode_animation(reader=None, view=None):
@@ -3527,11 +3541,13 @@ def save_mode_animations(modes=None, cycles=1, frames=24, folder=None, fps=ANIMA
                     deflect(k, frames)
                     pv.Render(view)
                     shots[key] = capture_view(view, scratch)
-            if deflect.spin:  # phase 0 vs a quarter cycle on
-                peak, rest = shots[0], shots[keys[min(len(keys) - 1, frames // 4)]]
+            if deflect.spin:  # through its phase: still only when every frame is the first one
+                peak = shots[0]
+                moved = any(not np.array_equal(np.asarray(peak), np.asarray(im)) for im in shots.values())
             else:
                 peak, rest = shots[max(shots)], shots[min(shots, key=abs)]  # largest vs smallest swing
-            if len(shots) > 1 and np.array_equal(np.asarray(peak), np.asarray(rest)):
+                moved = not np.array_equal(np.asarray(peak), np.asarray(rest))
+            if len(shots) > 1 and not moved:
                 still.append(mode)
                 continue
             palette = peak.quantize(256, method=Image.Quantize.FASTOCTREE)

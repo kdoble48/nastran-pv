@@ -94,9 +94,6 @@ def test_part_names_are_only_for_copying_arrays():
     assert rt.part_names(rt.ArraySpec("VonMises", (0, 1, 2, 3, 4, 5), derive="von_mises")) == ()
     assert rt.VON_MISES_MAX.complex == ()  # an envelope has no phase
     assert all(t.complex == rt.COMPLEX_PARTS for t in rt.REGISTRY if t is not rt.VON_MISES_MAX)
-    with pytest.raises(ValueError, match="reduction"):
-        rt.ResultType("Envelope", "cell", ("Shells",), (rt.ArraySpec("E", (0,)),), op2=rt.Op2Source(("stress.*",)),
-                      h5=rt.H5Source(("ELEMENTAL/STRESS/*",)), reduce="max")
     with pytest.raises(ValueError, match="form"):
         rt.Op2Source(("displacements",), form="imaginary")
 
@@ -490,3 +487,158 @@ def test_convert_random_output(files, tmp_path):
     assert "exclude each other" in str(code)
     code, _ = run_cli(["convert", DATA / "tiny_run.bdf", "--random-output", "-o", tmp_path / "y.vtm"])
     assert "--random-output needs --results" in str(code)
+
+
+# ------------------------------------------------------------------ review fixes (PR #72)
+def test_a_max_type_has_no_complex_parts_by_default():
+    """A max envelope declared as in the registry spec (no ``complex=``) is valid and reads no
+    complex table; naming complex parts on it is the error."""
+    envelope = rt.ResultType("Envelope", "cell", ("Shells",), (rt.ArraySpec("E", (0,)),),
+                             op2=rt.Op2Source(("stress.*",), columns=("von_mises",)),
+                             h5=rt.H5Source(("ELEMENTAL/STRESS/*",), compute=rt.von_mises_table), reduce="max")
+    assert envelope.complex == ()
+    assert rt.ResultType("P", "point", ("Shells",), (rt.ArraySpec("P", (0,)),), op2=rt.Op2Source(("x",)),
+                         h5=rt.H5Source(("y",))).complex == rt.COMPLEX_PARTS
+    with pytest.raises(ValueError, match="reduction"):
+        rt.ResultType("Envelope", "cell", ("Shells",), (rt.ArraySpec("E", (0,)),), op2=rt.Op2Source(("stress.*",)),
+                      h5=rt.H5Source(("ELEMENTAL/STRESS/*",)), reduce="max", complex=rt.COMPLEX_PARTS)
+
+
+def _modes_and_frequencies():
+    """Real modes 1 and 2 and a frequency response at 1 and 2 Hz under one subcase key (SOL 111):
+    the complex plate stress at 2 Hz must not pair with real mode 2 (time value 2 too)."""
+    from pyNastran.op2.tables.oug.oug_eigenvectors import RealEigenvectorArray
+
+    op2 = F.make_frequency_op2()
+    for table in (op2.displacements[1], op2.op2_results.stress.cquad4_stress[1]):
+        table._times = np.array([1.0, 2.0])
+    shapes = np.zeros((2, len(F.ELEMENT_NIDS), 6), dtype="float32")
+    shapes[:, :, 2] = 1.0
+    op2.eigenvectors[1] = RealEigenvectorArray.add_modal_case("BOUGV1", F._grids(F.ELEMENT_NIDS), shapes, 1, [1, 2],
+                                                             [100.0, 400.0], [1.59, 3.18])
+    return op2
+
+
+def test_a_complex_table_never_pairs_with_a_real_step(elements):
+    res = Op2Results(_modes_and_frequencies()).select("all")
+    mode2 = next(i for i, s in enumerate(res.steps) if s.kind == "eigenvector" and s.time == 2.0)
+    freq2 = next(i for i, s in enumerate(res.steps) if s.kind == "frequency" and s.time == 2.0)
+    assert res.values(rt.SHELL_STRESS, res.steps[mode2]) is None
+    assert res.values(rt.SHELL_STRESS, res.steps[freq2]) is not None
+    mb = build_multiblock(elements)
+    res.attach(mb, mode2, elements)
+    assert get_block(mb, "Shells").GetCellData().GetArray("StressBottom") is None
+
+
+def test_a_transient_table_pairs_only_with_transient_steps(tiny):
+    """A real transient stress at t = 1 does not pair with a real mode whose time value is 1."""
+    from pyNastran.op2.tables.oug.oug_eigenvectors import RealEigenvectorArray
+
+    op2 = F.make_transient_op2()
+    shapes = np.zeros((1, len(F.NIDS), 6), dtype="float32")
+    shapes[0, :, 2] = 1.0
+    op2.eigenvectors[1] = RealEigenvectorArray.add_modal_case("BOUGV1", F._grids(F.NIDS), shapes, 1, [1],
+                                                             [100.0], [1.59])
+    res = Op2Results(op2)
+    mode = next(s for s in res.steps if s.kind == "eigenvector")
+    later = next(s for s in res.steps if s.kind == "transient" and s.time == 1.0)
+    assert mode.time == 1.0 and res.values(rt.VON_MISES_MAX, mode) is None
+    close(res.values(rt.VON_MISES_MAX, later)[1][:, 0], [2.0])
+
+
+def _complex_plate_strain(s_code):
+    from pyNastran.op2.tables.oes_stressStrain.complex.oes_plates import ComplexPlateStrainArray
+    from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import oes_complex_data_code, set_freq_case
+    from pyNastran.op2.tables.oes_stressStrain.real.oes_plates import set_element_node_fiber_case
+
+    dc = oes_complex_data_code("OSTR1X", "CQUAD4", 15)
+    dc.update(num_wide=15, element_type=33, format_code=2, s_code=s_code,
+              stress_bits=[int(b) for b in f"{s_code:05b}"])
+    return set_freq_case(ComplexPlateStrainArray, True, 1, dc,
+                         lambda cls, c, sort1, sc, *a: set_element_node_fiber_case(cls, c, sort1, sc, 1, *a),
+                         (np.array([[1, 0], [1, 0]], np.int32), np.array([-0.005, 0.005], "float32"),
+                          F._per_freq(list(F.PLATE_STRAIN))), list(F.FREQS))
+
+
+def test_complex_plate_strain_per_fibre_is_read_and_as_curvature_reported(elements, tmp_path):
+    op2 = F.make_frequency_op2()
+    op2.op2_results.strain.cquad4_strain[1] = _complex_plate_strain(15)  # per fibre
+    mb = attached(Op2Results(op2), elements)
+    close(cell(mb, "Shells", "StrainTop_Real", 1), [0, 0, 6e-3])  # (0, 0, 2e-3) x UNIT
+    op2.op2_results.strain.cquad4_strain[1] = _complex_plate_strain(11)  # mid-plane strain and curvature
+    res = Op2Results(op2)
+    assert "ShellStrain" not in res.available
+    assert f"strain.cquad4_strain, subcase 1: {rt.CURVATURE}" in res.skipped
+    assert rt.unread_reason("QUAD4_CPLX", read=False, complex_=True, curvature=True) == rt.CURVATURE
+    # HDF5: a STRAIN/QUAD4_CPLX with the curvature flags 0 and -1 on every row
+    import h5py
+
+    path = H.write_frequency_h5(tmp_path / "f.h5")
+    with h5py.File(path, "a") as h5:
+        rows = h5["/NASTRAN/RESULT/ELEMENTAL/STRESS/QUAD4_CPLX"][()]
+        rows["FD1"], rows["FD2"] = 0.0, -1.0
+        h5["/NASTRAN/RESULT/ELEMENTAL/STRAIN/QUAD4_CPLX"] = rows
+    res = open_results(path)
+    assert f"ELEMENTAL/STRAIN/QUAD4_CPLX: {rt.CURVATURE}" in res.skipped
+
+
+def test_random_responses_clear_each_other(files, tiny):
+    """The modal response and the solver's output share one model in the plugin: each attach drops
+    what the other wrote (DominantMode, the RANDOM_ tables, RandomSource, a DispRMS it does not
+    write)."""
+    from nastran_pv.randvib import RandomResponse, SolverRandom
+
+    mb = build_multiblock(tiny)
+    modes = Op2Results(F.make_modes_op2())
+    modes.attach(mb, 0, tiny)
+    RandomResponse(modes, mb, "20:0.01,2000:0.01", frames=3, g=9.80665, deck=tiny).attach(mb, 0, tiny)
+    assert get_block(mb, "Shells").GetPointData().GetArray("DominantMode") is not None
+    SolverRandom(open_results(files["random"]), tiny).attach(mb, 0, tiny)
+    pd, fd = get_block(mb, "Shells").GetPointData(), mb.GetFieldData()
+    assert pd.GetArray("DominantMode") is None and pd.GetArray("DominantModeShare") is None
+    names = [fd.GetArrayName(i) for i in range(fd.GetNumberOfArrays())]
+    assert not [n for n in names if n.startswith(("RANDOM_", "RANDOMIN_"))] and "RandomDrive" not in names
+    assert strings(mb, "RandomSource") == ["SOL 111"]
+    RandomResponse(modes, mb, "20:0.01,2000:0.01", frames=3, deck=tiny).attach(mb, 0, tiny)  # no g: no DispRMS
+    pd, fd = get_block(mb, "Shells").GetPointData(), mb.GetFieldData()
+    assert fd.GetAbstractArray("RandomSource") is None and strings(mb, "RandomDrive") == ["Z"]
+    assert pd.GetArray("DispRMS") is None and pd.GetArray("DominantMode") is not None
+
+
+def test_random_warnings_are_not_repeated(files, tiny):
+    """attach_op2 already warned the results' own messages: the random responses warn only theirs
+    (their ``skipped`` still lists both, for the reader's report)."""
+    from nastran_pv.randvib import random_response, solver_random
+
+    res = open_results(files["random"])
+    res.skipped.append("a results message")
+    before = len(tiny.warnings)
+    rr = solver_random(res, tiny)
+    assert "a results message" not in tiny.warnings[before:] and "a results message" in rr.skipped
+    modes = Op2Results(F.make_modes_op2())
+    modes.skipped.append("a modes message")
+    mb = build_multiblock(tiny)
+    modes.attach(mb, 0, tiny)
+    before = len(tiny.warnings)
+    rr = random_response(modes, mb, "20:0.01,2000:0.01", frames=3, deck=tiny)
+    assert "a modes message" not in tiny.warnings[before:] and "a modes message" in rr.skipped
+
+
+def test_reference_and_peak_phase(files, elements, tiny, tmp_path):
+    """The Deform's reference is the PhaseAngle the arrays were attached at, on the root or, in a
+    VTKHDF series as ParaView reads it, on the blocks; the peak of (3 + 4i) U is at -53.13 deg
+    (mod 180)."""
+    from nastran_pv.deform import peak_phase, reference_phase
+    from nastran_pv.vtkhdf import read_vtkhdf
+
+    mb = attached(open_results(files["freq"]), elements, phase=90, types=None)
+    assert reference_phase(mb) == 90.0
+    close(peak_phase(mb), 180 - PHASE)
+    out = tmp_path / "p.vtkhdf"
+    code, text = run_cli(["convert", DATA / "elements.bdf", "--results", files["freq"], "--phase", "90",
+                          "--all-steps", "-o", out])
+    assert code == 0, text
+    raw = read_vtkhdf(out, 0.0)  # as ParaView's reader gives it: the root fields sit on the blocks
+    assert raw.GetFieldData().GetArray("PhaseAngle") is None and reference_phase(raw) == 90.0
+    assert peak_phase(attached(open_results(files["transient"]), tiny, types=None)) is None
+    assert reference_phase(build_multiblock(tiny)) == 0.0

@@ -352,7 +352,7 @@ class Op2Results(_Results):
             for key, obj in result.items():
                 reason = result_types.unread_reason(
                     name, (name, key) in read, complex_=getattr(obj, "is_complex", False),
-                    curvature=(_headers(obj) or [""])[0] == "fiber_curvature")
+                    curvature=result_types.op2_curvature(name, obj, _headers(obj)))
                 if reason is not None:
                     reasons.setdefault((name, reason), []).append(_subcase(key))
         return [f"{name}, {_subcases(scs)}: {reason}" for (name, reason), scs in reasons.items()]
@@ -387,7 +387,8 @@ class Op2Results(_Results):
     # ------------------------------------------------------------ values
     def _rows(self, rtype, step):
         """A step-defining type reads the step's own table at its index; the others every table
-        of the step's subcase, at the row whose time value matches the step's."""
+        of the step's subcase and form (:func:`_same_form`), at the row whose time value matches
+        the step's."""
         for table in self.tables[rtype.name]:
             if table.key != step.key:
                 continue
@@ -396,6 +397,8 @@ class Op2Results(_Results):
                     continue
                 itime = step.itime
             else:
+                if not _same_form(table.obj, step):
+                    continue
                 itime = _time_index(table.obj, step)
                 if itime is None:
                     continue
@@ -662,6 +665,17 @@ def _element_ids(obj):
             return a[:, 0]
     a = getattr(obj, "element", None)
     return a if a is not None and np.ndim(a) == 1 else None
+
+
+def _same_form(obj, step: Step) -> bool:
+    """A table pairs only with steps of its form: a complex one with complex steps, a real one
+    solved in time (analysis code 6) with transient steps, any other real one with the other real
+    steps. Time values alone would pair a 2 Hz frequency with mode 2, or t = 1 with mode 1, when a
+    run writes both under one subcase (SOL 111, SOL 112)."""
+    is_complex = bool(getattr(obj, "is_complex", False))
+    if is_complex or step.is_complex:
+        return is_complex == step.is_complex
+    return (getattr(obj, "analysis_code", None) == 6) == (step.kind == result_types.TRANSIENT)
 
 
 def _time_index(obj, step: Step):

@@ -346,13 +346,15 @@ class RandomResponse:
             vtkutil.add_array(pd, "AccelN0", pick(self.accel_n0), skip_all_nan=True)
             if self.disp_rms is not None:
                 vtkutil.add_array(pd, "DispRMS", pick(self.disp_rms), skip_all_nan=True)
+            else:  # none without g: not one from the solver's output either
+                pd.RemoveArray("DispRMS")
             vtkutil.add_array(pd, "DominantMode", np.where(ok, self.dominant_mode[j], 0).astype(np.int64))
             vtkutil.add_array(pd, "DominantModeShare", pick(self.dominant_share), skip_all_nan=True)
             vtkutil.add_array(pd, "AccelASD", pick(self.frame_asd[i]), skip_all_nan=True)
 
         fd = mb.GetFieldData()
         for arr_name in ("ResultLabel", "Frequency", "ResultStep", "RandomDrive", "RandomInputRMS",
-                         "RandomAccelASDRange", "RandomFrameFrequencies"):
+                         "RandomAccelASDRange", "RandomFrameFrequencies", SOURCE):
             fd.RemoveArray(arr_name)
         vtkutil.write_field_table(mb, "RANDOM_", self.modes)
         vtkutil.write_field_table(mb, "RANDOMIN_", [{"Frequency": float(a), "ASD": float(b)}
@@ -366,17 +368,23 @@ class RandomResponse:
         vtkutil.add_array(fd, "ResultStep", np.array([i]))
 
 
-def random_response(results, mb, asd, drive="Z", damping=0.05, g=None, frames=100, deck=None):
-    """:class:`RandomResponse` with every warning also sent to ``deck`` (when given)."""
-    rr = RandomResponse(results, mb, asd, drive, damping, g, frames, deck)
+def _warn_own(rr, results, deck):
+    """Send ``deck`` the messages the random response added to the results' own (``skipped``
+    starts with those, which ``attach_op2`` has already warned)."""
     if deck is not None:
-        for msg in rr.skipped:
+        for msg in rr.skipped[len(getattr(results, "skipped", [])):]:
             deck.warn(msg)
     return rr
 
 
+def random_response(results, mb, asd, drive="Z", damping=0.05, g=None, frames=100, deck=None):
+    """:class:`RandomResponse` with its own warnings also sent to ``deck`` (when given)."""
+    return _warn_own(RandomResponse(results, mb, asd, drive, damping, g, frames, deck), results, deck)
+
+
 # ------------------------------------------------------------------ the solver's own random output
 SOLVER = "SOL 111"  # root RandomSource of a random response read from the results file
+SOURCE = "RandomSource"
 SOLVER_TABLES = ("psd.accelerations", "rms.accelerations", "no.accelerations", "rms.displacements")
 RANDOM_FAMILIES = ("psd.*", "rms.*", "no.*", "crm.*", "ato.*")  # pyNastran's random result families
 
@@ -482,7 +490,7 @@ class SolverRandom:
             if name not in names:
                 continue
             pd = get_block(mb, name).GetPointData()
-            for array, _ in arrays:
+            for array in [a for a, _ in arrays] + ["DominantMode", "DominantModeShare"]:  # the modal response's too
                 pd.RemoveArray(array)
             nid_arr = pd.GetArray("NID")
             if nid_arr is None:
@@ -495,10 +503,12 @@ class SolverRandom:
                     v[ok] = values[idx[ok]]
                     vtkutil.add_array(pd, array, v, skip_all_nan=True)
         fd = mb.GetFieldData()
-        for arr_name in ("ResultLabel", "Frequency", "ResultStep", "RandomDrive", "RandomInputRMS", "RandomSource",
+        for arr_name in ("ResultLabel", "Frequency", "ResultStep", "RandomDrive", "RandomInputRMS", SOURCE,
                          "RandomAccelASDRange", "RandomFrameFrequencies"):
             fd.RemoveArray(arr_name)
-        vtkutil.add_string_array(fd, "RandomSource", [SOLVER])
+        for prefix in ("RANDOM_", "RANDOMIN_"):  # the modal response's mode and input tables
+            vtkutil.write_field_table(mb, prefix, [])
+        vtkutil.add_string_array(fd, SOURCE, [SOLVER])
         vtkutil.add_array(fd, "RandomAccelASDRange", np.array(self.asd_range), skip_all_nan=True)
         vtkutil.add_array(fd, "RandomFrameFrequencies", np.asarray(self.frame_freqs, dtype=float), skip_all_nan=True)
         vtkutil.add_string_array(fd, "ResultLabel", [self.steps[i].label])
@@ -507,9 +517,5 @@ class SolverRandom:
 
 
 def solver_random(results, deck=None) -> SolverRandom:
-    """:class:`SolverRandom` with every warning also sent to ``deck`` (when given)."""
-    rr = SolverRandom(results, deck)
-    if deck is not None:
-        for msg in rr.skipped:
-            deck.warn(msg)
-    return rr
+    """:class:`SolverRandom` with its own warnings also sent to ``deck`` (when given)."""
+    return _warn_own(SolverRandom(results, deck), results, deck)

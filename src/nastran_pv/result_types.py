@@ -83,6 +83,11 @@ class ArraySpec:
         return not self.magnitude and not self.derive
 
 
+def reads(form: str, is_complex: bool) -> bool:
+    """A source of ``form`` (``FORMS``) reads a real (or complex) table."""
+    return form != ("real" if is_complex else "complex")
+
+
 def _check_picks(owner, picks, columns) -> int:
     """The number of columns ``picks`` gives (0 without picks)."""
     if picks and columns:
@@ -131,7 +136,7 @@ class Op2Source:
 
     def reads(self, is_complex: bool) -> bool:
         """The source reads a real (or complex) table."""
-        return self.form != ("real" if is_complex else "complex")
+        return reads(self.form, is_complex)
 
     def kind(self, entry: str) -> str:
         """The step kind of the ``tables`` entry (name or pattern) a table came from."""
@@ -176,7 +181,7 @@ class H5Source:
             raise ValueError(f"H5 source {self.datasets}: form {self.form!r} is not one of {FORMS}")
 
     def reads(self, is_complex: bool) -> bool:
-        return self.form != ("real" if is_complex else "complex")
+        return reads(self.form, is_complex)
 
     def kind(self, entry: str) -> str:
         return self.kinds[self.datasets.index(entry)]
@@ -215,8 +220,9 @@ class ResultType:
       ``NID`` for point and ``EID`` for cell types (``EID`` on the points of ``Bushes``). A cell
       type keyed by ``EID`` never matches an MPC leg, whose ``EID`` is its set id (:meth:`block_ids`).
     * ``complex``: the parts (``COMPLEX_PARTS``: ``real imag mag phase``) its copying arrays get
-      from a complex table, next to their instantaneous values; ``()`` reads no complex table (a
-      ``max`` reduction must: a largest value has no phase).
+      from a complex table, next to their instantaneous values; ``()`` reads no complex table. By
+      default every part, and none for a ``max`` reduction (a largest value has no phase), which
+      cannot declare any.
     """
 
     name: str
@@ -232,13 +238,15 @@ class ResultType:
     default: bool = True
     resultant: bool = False
     key: str = ""
-    complex: tuple[str, ...] = COMPLEX_PARTS
+    complex: tuple[str, ...] | None = None  # None: COMPLEX_PARTS, () for a max reduction
 
     def __post_init__(self):
         for value, allowed in ((self.location, LOCATIONS), (self.reduce, REDUCTIONS), (self.frame, FRAMES),
                                (self.key, KEYS)):
             if value not in allowed:
                 raise ValueError(f"result type {self.name}: {value!r} is not one of {allowed}")
+        if self.complex is None:  # frozen: set the default once
+            object.__setattr__(self, "complex", COMPLEX_PARTS if self.reduce == "none" else ())
         if any(p not in COMPLEX_PARTS for p in self.complex):
             raise ValueError(f"result type {self.name}: complex parts {self.complex} are not among {COMPLEX_PARTS}")
         if self.complex and self.reduce != "none":
@@ -554,7 +562,7 @@ VON_MISES_MAX = ResultType(
     "VonMisesMax", "cell", MESH_BLOCKS, (ArraySpec("VonMisesMax", (0,)),),
     op2=Op2Source(("stress.*",), columns=("von_mises",)),
     h5=H5Source(("ELEMENTAL/STRESS/*",), compute=von_mises_table),
-    reduce="max", complex=())
+    reduce="max")  # no complex parts: an envelope has no phase
 
 def _grid_loads(name, force, moment, op2_table, h5_dataset) -> ResultType:
     """A force and moment per grid (T1-T3, R1-R3), rotated from CD like displacements, NaN where
@@ -742,13 +750,22 @@ CURVATURE = ("plate strains as mid-plane strain and curvature (STRAIN(STRCUR)) a
              "STRAIN(FIBER) writes them per fibre")
 
 
+def op2_curvature(name: str, table, headers) -> bool:
+    """An OP2 plate strain table written as mid-plane strain and curvature (STRAIN(STRCUR)): a real
+    table's first header says ``fiber_curvature``; a complex plate strain table's stress bits say
+    it (:func:`fibre_table`), its headers do not."""
+    if (headers or [""])[0] == "fiber_curvature":
+        return True
+    return bool(getattr(table, "is_complex", False)) and name in _tables("strain", SHELL_CARDS)         and not fibre_table(table)
+
+
 def unread_reason(name: str, read: bool, complex_: bool = False, curvature: bool = False) -> str | None:
     """Why the force, stress or strain table ``name`` (an OP2 result name or HDF5 dataset name) is
-    reported, or None when it is not: complex and read by no type, composite plies (also when
-    ``read``: VonMisesMax takes their von Mises), plate curvature, or no type reading it. Both
-    readers' ``_unread``."""
+    reported, or None when it is not: complex and read by no type (plate curvature, or complex),
+    composite plies (also when ``read``: VonMisesMax takes their von Mises), plate curvature, or
+    no type reading it. Both readers' ``_unread``."""
     if complex_:
-        return None if read else COMPLEX
+        return None if read else CURVATURE if curvature else COMPLEX
     if any(fnmatch.fnmatchcase(name, p) for p in PLY_TABLES):
         return PLIES_READ if read else PLIES
     if read:

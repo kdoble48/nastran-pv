@@ -180,6 +180,35 @@ def deform(data, scale: float, phase: float | None = None):
     return Deformer(data).apply(scale, phase)
 
 
+PHASE_ANGLE = "PhaseAngle"  # root field of a complex step: the phase its arrays were attached at
+
+
+def reference_phase(data) -> float:
+    """The phase angle (degrees) a complex step's ``Displacement`` and other arrays were attached
+    at: the root ``PhaseAngle``, else a block's copy of it (a VTKHDF series as ParaView's reader
+    gives it keeps the root fields on its mesh partitions), else 0. *Nastran Deform*'s *Phase* is
+    relative to it, so Phase 0 draws ``Displacement``."""
+    from .fields.common import field_value
+
+    found = field_value(data, PHASE_ANGLE)
+    if found is None and isinstance(data, vtkDataObjectTree):
+        found = next((v for v in (field_value(ds, PHASE_ANGLE) for _, ds in _leaves(data)) if v is not None), None)
+    return float(np.ravel(found)[0]) if found is not None and np.size(found) else 0.0
+
+
+def peak_phase(data) -> float | None:
+    """The phase angle (degrees, in [0, 180)) at which a complex step's displacement is largest:
+    the maximum over theta of sum |Real cos theta - Imag sin theta|^2 over every block's
+    ``Displacement_Real``/``_Imag`` (it recurs at theta + 180). None for a real step."""
+    parts = [p for p in (complex_parts(ds.GetPointData()) for _, ds in _leaves(data)) if p is not None]
+    if not parts:
+        return None
+    a, b = np.concatenate([p[0] for p in parts]), np.concatenate([p[1] for p in parts])
+    # (A + B)/2 + (A - B)/2 cos 2t - C sin 2t is largest where 2t = atan2(-2C, A - B)
+    theta = 0.5 * np.degrees(np.arctan2(-2.0 * float((a * b).sum()), float((a * a).sum() - (b * b).sum())))
+    return float(theta % 180.0)
+
+
 def peak_scale(data, fraction: float = 0.08) -> float:
     """Scale at which the largest displacement is ``fraction`` of the model diagonal (0 if none).
     A complex step is sized by its amplitude (``Displacement_Mag``), the largest swing over a cycle."""

@@ -1479,7 +1479,8 @@ class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
     phases 0, 1/n, ... (n-1)/n, and the model moves by Amplitude x sin(2 pi phase) x Displacement.
     A complex step (frequency response, complex mode: Displacement_Real/_Imag) turns through its
     phase instead, Amplitude x Re(U e^(i(theta + 360 phase))), theta the step's Phase Angle; Phase
-    draws it at theta + Phase without vibrating."""
+    draws it at theta + Phase without vibrating (theta: the input's PhaseAngle, also on a converted
+    VTKHDF series' blocks; 0 without one)."""
 
     def __init__(self):
         VTKPythonAlgorithmBase.__init__(self, nInputPorts=1, nOutputPorts=1, outputType="vtkDataObject")
@@ -1582,7 +1583,7 @@ class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
         import math
 
         try:
-            from nastran_pv.deform import DEFORM_PHASE, DEFORM_SCALE, Deformer, peak_scale
+            from nastran_pv.deform import DEFORM_PHASE, DEFORM_SCALE, Deformer, peak_scale, reference_phase
         except ImportError as exc:
             return _missing(exc)
         inp = vtkDataObject.GetData(inInfo[0], 0)
@@ -1597,7 +1598,7 @@ class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
             if self._auto_scale is None or self._auto_scale[:3] != key + (self._peak,):
                 self._auto_scale = key + (self._peak, peak_scale(inp, self._peak))
             scale = self._auto_scale[3]
-        start = _field_value(inp, "PhaseAngle")  # the phase the reader attached a complex step at
+        start = reference_phase(inp) if deformer.complex else 0.0  # the phase the arrays were attached at
         if self._vibrate:
             info = outInfo.GetInformationObject(0)
             key_t = vtkStreamingDemandDrivenPipeline.UPDATE_TIME_STEP()
@@ -1621,11 +1622,6 @@ class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
             out.GetInformation().Set(vtkDataObject.DATA_TIME_STEP(), phase)
         return 1
 
-
-def _field_value(data, name, default=0.0):
-    """The first value of a root field array of ``data`` (``default`` without one)."""
-    arr = data.GetFieldData().GetArray(name) if data is not None else None
-    return float(arr.GetValue(0)) if arr is not None and arr.GetNumberOfTuples() else default
 
 
 def _double_array(name, value):

@@ -1346,7 +1346,7 @@ def dynamic_result_checks(pv, nv):
     series in the reader and as converted VTKHDF series, the reader's Phase Angle, the complex step
     vibrating through its phase (play_mode, animate_modes, a GIF), and the SOL 111 random output
     (make_random_op2) in the random views."""
-    from op2_fixture import make_frequency_op2, make_random_op2, make_transient_op2
+    from op2_fixture import make_frequency_op2, make_modes_op2, make_random_op2, make_transient_op2
 
     tmp = tempfile.mkdtemp()  # not removed: the open VTKHDF readers keep their files locked
     elements = os.path.join(HERE, "data", "elements.bdf")
@@ -1385,6 +1385,8 @@ def dynamic_result_checks(pv, nv):
 
     nv.play_mode(1, frames=8, reader=reader, view=view)
     amp = deform.Amplitude
+    # paused at the largest swing: |3 cos t - 4 sin t| peaks at t = 126.87 deg, the nearest of 8 frames is 3
+    check(abs(view.ViewTime - 3 / 8) < 1e-9, f"play_mode pauses a complex step at its peak frame: {view.ViewTime}")
     zs = {}
     for phase in (0.0, 0.25):
         nv._set_time(view, phase)
@@ -1399,6 +1401,8 @@ def dynamic_result_checks(pv, nv):
           "animate_modes on a frequency: 4 phase frames, Phase put back")
     gifs = nv.save_mode_animations([1], frames=8, folder=os.path.join(tmp, "gifs"), reader=reader, view=view)
     check(len(gifs) == 1 and os.path.getsize(gifs[0]) > 0, f"a frequency's phase cycle as a GIF: {gifs}")
+    gifs = nv.save_mode_animations([1], frames=2, folder=os.path.join(tmp, "gifs2"), reader=reader, view=view)
+    check(len(gifs) == 1, f"a 2-frame phase cycle (0 and 180 deg) is no still: {gifs}")
 
     series = os.path.join(tmp, "freq.vtkhdf")
     convert(["convert", elements, "--results", freq, "--all-steps", "-o", series, "-q"])
@@ -1410,6 +1414,23 @@ def dynamic_result_checks(pv, nv):
     nv.apply("results", reader=src, view=view)
     check(nv.animate_modes([2], frames=4, reader=src, view=view, fps=0) == [2],
           "a converted frequency series animates through its phase")
+    # converted at 90 deg: Phase is relative to that (ParaView's VTKHDF reader keeps PhaseAngle on the blocks)
+    at90 = os.path.join(tmp, "freq90.vtkhdf")
+    convert(["convert", elements, "--results", freq, "--phase", "90", "--all-steps", "-o", at90, "-q"])
+    src90 = nv.load_reader(at90)
+    nv._set_time(view, 0.0)  # 10 Hz
+    model = nv.apply("results", reader=src90, view=view, scale=1.0)
+    d90 = pv.FindSource(nv._name(model, "deform"))
+    mesh90 = nv._extract(model, "Shells")
+    zmin = {}
+    for phase in (0.0, 1.0):
+        d90.Phase = phase
+        mesh90.UpdatePipeline(view.ViewTime)
+        zmin[phase] = mesh90.GetDataInformation().GetBounds()[4]
+    # 1e-3 n (3 + 4i): -0.004 n at 90 deg, n (0.003 cos 91 - 0.004 sin 91) = -0.0040518 n at 91 deg
+    check(np.allclose([zmin[0.0], zmin[1.0]], [-0.028, -0.0283626], rtol=1e-4),
+          f"converted at 90 deg: Phase 0 and 1 draw 90 and 91 deg {zmin}")
+    d90.Phase = 0.0
 
     trans = os.path.join(tmp, "transient.op2")
     make_transient_op2().write_op2(trans)
@@ -1429,7 +1450,9 @@ def dynamic_result_checks(pv, nv):
     nv.apply("results", reader=tsrc, view=view)
 
     rop2 = os.path.join(tmp, "random.op2")
-    make_random_op2().write_op2(rop2)
+    both = make_random_op2()  # the SOL 111 tables and the modes they came from
+    both.eigenvectors[1] = make_modes_op2().eigenvectors[1]
+    both.write_op2(rop2)
     rr = rm.load_reader(DECK, rop2, random={"output": True})
     frames = rm.timesteps(rr)
     check(len(frames) == 3, f"SOL 111 random output: one frame per PSD frequency ({len(frames)})")
@@ -1440,6 +1463,20 @@ def dynamic_result_checks(pv, nv):
     label.UpdatePipeline(frames[1])
     text = label.GetClientSideObject().GetOutput().GetValue(0, 0).ToString()
     check(text == "Random (SOL 111) 50 Hz", f"randomsweep label of the solver's frames: {text!r}")
+    # the two random responses share the reader's model: switching drops what the other wrote
+    rr.RandomOutput = 0
+    rr.RandomASD = "20:0.01,2000:0.01"
+    m = rm.Model(rr, rm.timesteps(rr)[0])
+    check(not m.field_strings(None, "RandomSource") and m.field_strings(None, "RandomDrive") == ["Z"]
+          and m.block("Shells").GetPointData().GetArray("DominantMode") is not None,
+          "Random ASD after Random Output: the modal response, no SOL 111 source left")
+    rr.RandomOutput = 1
+    m = rm.Model(rr, rm.timesteps(rr)[0])
+    names = [m.data.GetFieldData().GetArrayName(i) for i in range(m.data.GetFieldData().GetNumberOfArrays())]
+    check(m.field_strings(None, "RandomSource") == ["SOL 111"] and not m.field_strings(None, "RandomDrive")
+          and m.block("Shells").GetPointData().GetArray("DominantMode") is None
+          and not [n for n in names if n.startswith("RANDOM_")],
+          "Random Output again: no DominantMode, drive or mode table of the modal response left")
     pv.Delete(view)
 
 

@@ -258,27 +258,22 @@ class H5Results(_Results):
                 sc = int(get("SUBCASE", 0))
                 value = float(get("TIME_FREQ_EIGR", np.nan))
                 actual = result_types.step_kind(kind, table.is_complex, int(get("ANALYSIS", 0)))
-                if actual == "eigenvector":
-                    mode = int(get("MODE", 0))
-                    freq = _mode_frequency([value], None, 0)
-                    steps.append(Step(f"Subcase {sc} mode {mode} ({freq:.6g} Hz)", kind, int(did), 0, freq,
-                                      value, path))
-                elif actual != kind:  # frequency, complex mode (|EIGI| / 2 pi) or transient time
-                    mode = int(get("MODE", 0))
-                    freq = {"frequency": value, "complex_eigenvector": abs(float(get("EIGI", np.nan))) / (2 * np.pi)
-                            }.get(actual, np.nan)
-                    steps.append(Step(step_label(actual, sc, value, mode=mode, freq=freq), actual, int(did), 0,
-                                      freq, value, path))
-                else:
+                mode = int(get("MODE", 0))
+                freq = {"eigenvector": _mode_frequency([value], None, 0), "frequency": value,
+                        "complex_eigenvector": abs(float(get("EIGI", np.nan))) / (2 * np.pi)}.get(actual, np.nan)
+                if actual == kind == "displacement":  # static: the STEP number when there is one
                     stp = int(get("STEP", 0))
-                    label = f"Subcase {sc}" + (f" step {stp}" if stp else "")
-                    steps.append(Step(label, kind, int(did), 0, time=value, table=path))
+                    label = step_label(actual, sc, stp, n_rows=2 if stp else 1)
+                else:  # a mode, frequency, complex mode (|EIGI| / 2 pi) or transient time
+                    label = step_label(actual, sc, value, mode=mode, freq=freq)
+                steps.append(Step(label, actual, int(did), 0, freq, value, path))
         return steps
 
     # ------------------------------------------------------------------ data
     def _rows(self, rtype, step):
         """A step-defining type reads the step's own table and domain; the others every domain
-        of the same subcase/step/mode/time (``_domain_signature``)."""
+        of the same subcase/step/mode/time (``_domain_signature``) in the datasets of the step's
+        form (complex ``_CPLX`` ones for a complex step, the others for a real one)."""
         tables = self.tables[rtype.name]
         if self._gives_steps(rtype):
             for table in tables:
@@ -288,6 +283,8 @@ class H5Results(_Results):
             return
         same = self._same_domain.get(int(step.key), set()) | {int(step.key)}
         for table in tables:
+            if table.is_complex != step.is_complex:
+                continue
             for d in np.unique(table.domains):
                 if int(d) in same:
                     m = table.domains == d
