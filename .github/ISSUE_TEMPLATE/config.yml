@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://kdoble48.github.io/nastran-pv/
+    about: Install, the ParaView views and filters, the CLI, and every block and array nastran-pv writes.
+  - name: Install and setup problems
+    url: https://kdoble48.github.io/nastran-pv/install.html
+    about: The plugin not loading, pyNastran not found in ParaView, pvpython or ParaView not found.

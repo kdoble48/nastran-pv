@@ -57,7 +57,7 @@ gallery = ["pillow"]                   # docs/build_gallery.py thumbnails
 test = ["pytest", "pyflakes", "pyyaml", "vtk>=9.3", "h5py", "pillow"]   # pyyaml: the workflow tests
 
 [project.scripts]
-nastran-pv = "nastran_pv.cli:main"
+nastran-pv = "nastran_pv.__main__:main"   # answers --version before importing the CLI (versions.py)
 
 [project.urls]
 Homepage = "https://kdoble48.github.io/nastran-pv/"

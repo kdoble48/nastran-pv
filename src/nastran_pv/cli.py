@@ -794,11 +794,29 @@ def cmd_store(args) -> int:
     return 0
 
 
+class _VersionAction(argparse.Action):
+    """``--version`` within the CLI's parser (``-h`` lists it): :func:`nastran_pv.versions.report`.
+    The ``nastran-pv`` command answers ``nastran-pv --version`` before this module is imported
+    (``nastran_pv.__main__``), so the report prints even when a dependency does not import."""
+
+    def __init__(self, option_strings, dest=argparse.SUPPRESS, default=argparse.SUPPRESS, help=None):
+        super().__init__(option_strings, dest=dest, default=default, nargs=0, help=help)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        from .versions import report
+
+        print(report())
+        parser.exit()
+
+
 def main(argv=None) -> int:
     from .launch import nsm_set_id
 
     p = argparse.ArgumentParser(prog="nastran-pv", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--version", action=_VersionAction,
+                   help="print the versions of nastran-pv (and where it runs from), Python, pyNastran, numpy, VTK "
+                        "and h5py, the pvpython it finds and the OS, and exit (paste them into a bug report)")
     sub = p.add_subparsers(dest="command", required=True)
 
     c = sub.add_parser("convert", help="deck (or .vtm) -> VTK multiblock (.vtm), with optional extra fields")

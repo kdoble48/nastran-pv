@@ -21,7 +21,14 @@ All notable changes to nastran-pv are listed here. The format follows
 - Without h5py (the `h5` extra), `write_vtkhdf` and an uncompacted series still write, and a
   compacted VTKHDF series, reading a VTKHDF file back and `H5Results` stop with an `ImportError`
   that names the extra, before writing anything (#76).
-
+- `nastran-pv --version`: the version of nastran-pv, the folder it runs from (and the commit of a
+  source checkout), the versions of Python, pyNastran, numpy, VTK and h5py, the `pvpython` it finds
+  and the OS. It answers before the CLI imports its dependencies, so a missing or broken VTK or
+  pyNastran is named, not a traceback; the `nastran-pv` command now starts in
+  `nastran_pv.__main__:main`. A bug-report
+  issue form (`.github/ISSUE_TEMPLATE/bug_report.yml`) asks for them, for a deck that shows the
+  problem (a cut-down one for a confidential model), the results file when results are involved,
+  what was expected and seen, and the card report and warnings; the README links it (#78).
 - Composite plies in ParaView: the reader's *Ply* (`convert --ply`: a ply id, or 0 for each
   element's critical ply), the *Nastran Ply Axes* filter (a ply's fibre and 2-directions as lines
   through each shell, from the layup table, so on converted files too; ply 0 draws the reader's ply
