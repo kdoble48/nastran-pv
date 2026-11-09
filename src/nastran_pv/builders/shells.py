@@ -13,8 +13,8 @@ from vtkmodules.vtkCommonDataModel import (
 from .. import vtkutil
 from ..deck import RECTANGULAR, Deck
 from ..families import Families
-from .common import (CellRows, add_mid_density, elements_of, grid_checks, known_grids, node_matrix, per_unique, points_of,
-                     property_info, rows_mesh, shell_mass_per_area, unit, warn_skipped)
+from .common import (CellRows, add_mid_density, elements_of, grid_checks, known_grids, node_matrix, per_unique,
+                     points_of, property_info, rows_mesh, shell_mass_per_area, unit, warn_skipped)
 
 # etype -> (corner count, linear vtk type, full node count, quadratic vtk type). A cell is
 # quadratic when all its grids are given, else linear; a CQUAD without its centre grid G9 is an
@@ -34,8 +34,8 @@ PARTIAL = {"CQUAD": (8, VTK_QUADRATIC_QUAD)}
 
 def build_shells(deck: Deck, families: Families):
     """Every shell element whose corner grids exist: quadratic when all its grids exist, a CQUAD
-    without G9 as an 8-node quad. The grid checks run per card type on the elements' raw ``nodes``
-    (no Python loop per element)."""
+    without G9 as an 8-node quad. The grids are checked a card type at a time in numpy, on the
+    elements' raw ``nodes``."""
     model = deck.model
     eids, elems = elements_of(model, SHELLS)
     types = np.array([elem.type for elem in elems], dtype=object)
@@ -74,9 +74,9 @@ def build_shells(deck: Deck, families: Families):
     cd = ug.GetCellData()
 
     pids = np.asarray([elems[i].Pid() for i in kept.tolist()])
-    eids = np.asarray([eids[i] for i in kept.tolist()])
-    vtkutil.add_array(cd, "FamilyId", np.array([families.family_id(e) for e in eids], dtype=np.int32))
-    vtkutil.add_array(cd, "GroupId", np.array([families.group_id(e) for e in eids], dtype=np.int32))
+    cell_eids = np.asarray([eids[i] for i in kept.tolist()])
+    vtkutil.add_array(cd, "FamilyId", np.array([families.family_id(e) for e in cell_eids], dtype=np.int32))
+    vtkutil.add_array(cd, "GroupId", np.array([families.group_id(e) for e in cell_eids], dtype=np.int32))
     vtkutil.set_field_strings(ug, "FamilyNames", families.names)
     vtkutil.set_field_strings(ug, "GroupNames", families.groups)
 

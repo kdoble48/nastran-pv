@@ -104,7 +104,8 @@ def machine() -> dict:
             key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System\CentralProcessor\0")
             cpu = winreg.QueryValueEx(key, "ProcessorNameString")[0].strip()
         elif sys.platform == "darwin":
-            cpu = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True).stdout.strip()
+            cpu = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True,
+                                 text=True).stdout.strip()
         else:
             cpu = next(ln.split(":", 1)[1].strip() for ln in open("/proc/cpuinfo") if ln.startswith("model name"))
     return {"platform": platform.platform(), "cpu": cpu, "cpus": os.cpu_count(), "python": sys.version.split()[0],
@@ -227,7 +228,8 @@ def pv_stages(pvpython, path, scope, n, prof=None):
                 print(f"--- profile {Path(path).stem} ParaView stages\n{proc.stdout}")
                 continue
             if proc.returncode != 0 or not js.is_file():
-                print(f"  pvpython run {i + 1} failed ({proc.returncode}):\n{proc.stdout[-2000:]}\n{proc.stderr[-2000:]}")
+                print(f"  pvpython run {i + 1} failed ({proc.returncode}):\n{proc.stdout[-2000:]}\n"
+                      f"{proc.stderr[-2000:]}")
                 continue
             for k, v in json.loads(js.read_text()).items():
                 res[k].append(v)

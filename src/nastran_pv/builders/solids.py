@@ -24,8 +24,8 @@ from vtkmodules.vtkCommonDataModel import (
 )
 
 from ..deck import Deck
-from .common import (CellRows, add_mid_density, elements_of, grid_checks, known_grids, node_matrix, per_unique, points_of,
-                     property_info, rows_mesh, warn_skipped)
+from .common import (CellRows, add_mid_density, elements_of, grid_checks, known_grids, node_matrix, per_unique,
+                     points_of, property_info, rows_mesh, warn_skipped)
 
 # Nastran -> VTK node permutation for the full (quadratic) element.
 _HEX20 = list(range(8)) + list(range(8, 12)) + list(range(16, 20)) + list(range(12, 16))
@@ -82,8 +82,8 @@ def orientation(ncorner: int, p: np.ndarray) -> np.ndarray:
 
 
 def build_solids(deck: Deck):
-    """Every solid element whose corner grids exist; quadratic when all its grids exist. The grid
-    checks run per card type on the elements' raw ``nodes`` (no Python loop per element)."""
+    """Every solid element whose corner grids exist; quadratic when all its grids exist. The grids
+    are checked a card type at a time in numpy, on the elements' raw ``nodes``."""
     model = deck.model
     eids, elems = elements_of(model, SOLIDS)
     types = np.array([elem.type for elem in elems], dtype=object)
