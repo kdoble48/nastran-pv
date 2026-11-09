@@ -179,10 +179,12 @@ def test_composite_element_ids_and_complex_results_are_handled():
     assert _element_ids(SimpleNamespace(element_layer=np.array([[7, 1], [7, 2]]))).tolist() == [7, 7]
     assert _element_ids(SimpleNamespace(element=np.array([3]))).tolist() == [3]
     assert _element_ids(SimpleNamespace()) is None
-    complex_disp = SimpleNamespace(is_complex=True, data=np.zeros((1, 1, 6)))
+    # a complex displacement table is a frequency step (roadmap task 11), labelled by its frequency
+    complex_disp = SimpleNamespace(is_complex=True, data=np.zeros((1, 1, 6), complex), _times=[12.5],
+                                   node_gridtype=np.array([[1, 1]]), get_headers=lambda: [])
     op2 = SimpleNamespace(displacements={1: complex_disp}, eigenvectors={}, get_table_types=lambda: [])
     res = Op2Results(op2)
-    assert res.steps == [] and "complex" in res.skipped[0]
+    assert [(s.kind, s.label, s.frequency) for s in res.steps] == [("frequency", "Subcase 1 12.5 Hz", 12.5)]
 
 
 def test_bush_with_unknown_gb_does_not_crash(tmp_path):

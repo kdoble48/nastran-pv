@@ -139,8 +139,8 @@ A real solve checks the values: the uCRM-9 coarse static case solved again by MY
 - **Composite plies (task 13).** A `reduce="ply"` that keeps one ply's rows (OP2
   `element_layer[:, 1]`, HDF5 `PLY`), the ply chosen with the selection; the composite tables are
   reported today.
-- **Complex results (task 11).** The force and stress types gain the complex parts with the
-  registry sketch (`<name>_Real`/`_Imag`); the reports already name complex tables.
+- **Complex results (task 11).** Built: the force and stress types gain the complex parts
+  (`<name>_Real`/`_Imag`/`_Mag`/`_Phase`), see [2026-11-09-dynamic-results.md](2026-11-09-dynamic-results.md).
 - **More families.** CSHEAR (`max_shear avg_shear`), CBUSH and CELAS stresses, CGAP/CBEND/
   CFAST/CWELD forces and CDAMP1/2 dampers are reported today; each is one more source or type.
   (CVISC forces share the rods' columns and go into `LineForce`.)

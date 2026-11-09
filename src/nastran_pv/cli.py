@@ -58,7 +58,8 @@ def progress_for(args) -> Progress:
 
 
 DECK_ONLY = (("results", "--results"), ("result_types", "--result-types"), ("ply", "--ply"),
-             ("random", "--random"), ("nsm_set", "--nsm-set"), ("k_ref", "--k-ref"),
+             ("random", "--random"), ("random_output", "--random-output"), ("phase", "--phase"),
+             ("phase_sweep", "--phase-sweep"), ("nsm_set", "--nsm-set"), ("k_ref", "--k-ref"),
              ("no_nodal_arrays", "--no-nodal-arrays"))
 
 
@@ -110,25 +111,45 @@ def load_model(args, verbose=False):
         for msg in attach_ply(mb, ply):
             deck.warn(msg)
     results = None
+    random, random_output = getattr(args, "random", None), getattr(args, "random_output", False)
+    sweep = getattr(args, "phase_sweep", None)
+    if random and random_output:
+        raise SystemExit("nastran-pv: --random and --random-output exclude each other")
+    if sweep is not None and (random or random_output):
+        raise SystemExit("nastran-pv: --phase-sweep animates a complex step; it takes no random response")
     if getattr(args, "results", None):
         from .results import attach_op2, ply_summary
 
         with progress.stage(f"results {Path(args.results).name}"):
-            results = attach_op2(mb, deck, args.results, args.step, types, ply)
+            results = attach_op2(mb, deck, args.results, args.step, types, phase=getattr(args, "phase", None) or 0.0,
+                                 ply=ply)
         for msg in ply_summary(results, mb)[1]:  # a selected ply type with no value at the ply
             deck.warn(msg)
-        if getattr(args, "random", None):
-            from .randvib import random_response
+        if random or random_output:
+            from .randvib import random_response, solver_random
 
             with progress.stage("random response"):
                 try:
-                    results = random_response(results, mb, args.random, args.drive, args.damping, args.g,
-                                              args.random_frames, deck)
+                    results = solver_random(results, deck) if random_output else \
+                        random_response(results, mb, random, args.drive, args.damping, args.g, args.random_frames,
+                                        deck)
                 except ValueError as exc:
                     raise SystemExit(f"nastran-pv: {exc}") from None
                 results.attach(mb, args.step, deck)
-    elif getattr(args, "random", None):
+        elif sweep is not None:
+            from .results import PhaseSweep
+
+            try:
+                results = PhaseSweep(results, args.step, sweep, getattr(args, "phase", None) or 0.0)
+            except ValueError as exc:
+                raise SystemExit(f"nastran-pv: {exc}") from None
+            results.attach(mb, 0, deck)
+    elif random:
         raise SystemExit("--random needs --results with normal modes (SOL 103)")
+    elif random_output:
+        raise SystemExit("nastran-pv: --random-output needs --results with SOL 111 random output")
+    elif sweep is not None:
+        raise SystemExit("nastran-pv: --phase-sweep needs --results with a complex step (SOL 107-111)")
     progress.done()
     return mb, deck, results
 
@@ -221,6 +242,12 @@ def add_model_arguments(p, results=True):
                        help="composite ply: a ply id (the PCOMP ply number or a PCOMPG global ply id; -N for the "
                             "mirrored copy of a symmetric PCOMPG's ply N) lays that ply's layup on Shells and gives "
                             "the ply result types at that ply; max (the default) gives each element's critical ply")
+        p.add_argument("--phase", type=float, default=None, metavar="DEG",
+                       help="complex steps (frequency response, complex modes): the arrays are the response at "
+                            "this phase angle, Re(U e^(i DEG)); default 0, the real part")
+        p.add_argument("--phase-sweep", type=_frames, default=None, metavar="N",
+                       help="write N phases (--phase + 360 k/N) of the complex step --step as the steps of the "
+                            "series (implies --all-steps)")
         add_random_arguments(p.add_argument_group("random vibration (from the --results modes)"))
     p.add_argument("--k-ref", type=float, default=None, help="bush stiffness reference for log scaling")
     p.add_argument("--nsm-set", type=nsm_set_id, default=None, metavar="ID",
@@ -250,6 +277,17 @@ def ply_choice(text) -> int:
         return parse_ply(text)
     except ValueError as exc:
         raise argparse.ArgumentTypeError(str(exc)) from None
+
+
+def _frames(text):
+    """--phase-sweep: at least two phases."""
+    try:
+        n = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a whole number of phases") from None
+    if n < 2:
+        raise argparse.ArgumentTypeError("a phase sweep needs at least 2 phases")
+    return n
 
 
 def _select_key(text):
@@ -315,7 +353,7 @@ def write_output(mb, args, deck, results) -> Path:
     fmt = output_format(args)
     default = Path(args.input).with_suffix(".vtkhdf" if fmt == "vtkhdf" else ".vtm").name
     out = Path(args.output or default)
-    series = results is not None and args.all_steps and results.steps
+    series = results is not None and (args.all_steps or getattr(args, "phase_sweep", None)) and results.steps
     if fmt == "vtkhdf":
         from .vtkhdf import write_vtkhdf, write_vtkhdf_series
 
@@ -358,7 +396,8 @@ def cmd_convert(args) -> int:
     print(f"{Path(args.input).name}: load+build {t1 - t0:.1f}s, fields+write {t2 - t1:.1f}s -> {path}")
     if hasattr(results, "summary"):
         print("\n".join(results.summary()))
-        _print_rows(results.modes)
+        if results.modes:  # the modal random response's mode table (none for the solver's own)
+            _print_rows(results.modes)
     elif results is not None:
         print(f"{len(results.steps)} result step(s): " + "; ".join(s.label for s in results.steps[:5])
               + (" ..." if len(results.steps) > 5 else ""))
@@ -382,7 +421,8 @@ def _load_other(path, args):
     """The other model of a diff (deck, .vtm or VTKHDF), built with the same block/NSM options.
     Options that do not change what a diff compares (results, display scaling, nodal arrays) are
     not passed on, so a deck can be compared with a converted reference."""
-    unused = ("results", "result_types", "ply", "random", "step", "all_steps", "k_ref", "no_nodal_arrays")
+    unused = ("results", "result_types", "ply", "random", "random_output", "phase", "phase_sweep", "step",
+              "all_steps", "k_ref", "no_nodal_arrays")
     other = argparse.Namespace(**{k: v for k, v in vars(args).items() if k not in unused})
     other.input = path
     if Path(path).suffix.lower() in MODEL_SUFFIXES:
