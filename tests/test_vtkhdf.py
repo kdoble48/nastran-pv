@@ -127,6 +127,29 @@ def test_restore_field_data_refills_the_right_step(tmp_path):
             [ref.GetValue(i) for i in range(ref.GetNumberOfValues())]
 
 
+@pytest.mark.parametrize("compact", [True, False])
+def test_fill_lists_of_different_lengths_read_back(model, tmp_path, compact):
+    """Step 0 fills Frequency, the mode fills VonMisesMax on Shells and Solids: FillArrays is padded
+    to the same length at every step (vtkHDFWriter mis-offsets a field array whose size changes),
+    so the mode reads back without the NaN VonMisesMax."""
+    from nastran_pv.results import open_results
+    from nastran_pv.vtkio import read_model
+    from test_results_h5 import write_msc_h5
+
+    deck, mb = model
+    res = open_results(write_msc_h5(tmp_path / "r.h5"))
+    path = write_vtkhdf_series(mb, res, tmp_path / "s.vtkhdf", deck=deck, compact=compact)
+    with h5py.File(path, "r") as f:
+        sizes = f["VTKHDF/Shells/Steps/FieldDataSizes/FillArrays"][()]
+    assert sizes[:, -1].tolist() == [2, 2]
+    static, mode = read_model(path, 0), read_model(path, 1)
+    for block in ("Shells", "Solids"):
+        assert get_block(static, block).GetCellData().GetArray("VonMisesMax") is not None
+        assert get_block(mode, block).GetCellData().GetArray("VonMisesMax") is None
+    assert static.GetFieldData().GetArray("Frequency") is None
+    assert mode.GetFieldData().GetArray("Frequency") is not None
+
+
 def test_series_without_compaction_is_equivalent(model, tmp_path):
     deck, mb = model
     res = Op2Results(make_op2())

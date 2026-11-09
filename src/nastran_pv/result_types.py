@@ -95,6 +95,10 @@ class ResultType:
       source's ``kinds`` names the kind of step of each table); the other types are paired with
       those steps by subcase and time value.
     * ``default``: attached when nothing is selected.
+    * ``resultant``: a point type whose first two arrays are a force (columns 0-2) and a moment
+      (3-5) at each grid: ``attach_step`` also writes their sums at each step, root
+      ``<force array>Resultant`` and ``<moment array>Resultant`` (``resultant_names``): the
+      force sum and the moment about the basic origin (sum of M + r x F).
     """
 
     name: str
@@ -108,6 +112,7 @@ class ResultType:
     fill: float = float("nan")
     steps: bool = False
     default: bool = True
+    resultant: bool = False
 
     def __post_init__(self):
         for value, allowed in ((self.location, LOCATIONS), (self.reduce, REDUCTIONS), (self.frame, FRAMES)):
@@ -117,6 +122,15 @@ class ResultType:
                            or len(self.h5.kinds) != len(self.h5.datasets)):
             raise ValueError(f"result type {self.name} defines steps: give one step kind per OP2 table "
                              "and per H5 dataset (Op2Source.kinds, H5Source.kinds)")
+        if self.resultant and (self.location != "point" or len(self.arrays) < 2
+                               or [a.columns for a in self.arrays[:2]] != [(0, 1, 2), (3, 4, 5)]):
+            raise ValueError(f"result type {self.name}: a resultant needs a point type whose first two arrays "
+                             "take columns 0-2 (force) and 3-5 (moment)")
+
+    @property
+    def resultant_names(self) -> tuple[str, ...]:
+        """The root field arrays of the resultant (force, moment), or () for a type without one."""
+        return tuple(f"{a.name}Resultant" for a in self.arrays[:2]) if self.resultant else ()
 
     @property
     def id_array(self) -> str:
@@ -173,7 +187,23 @@ VON_MISES_MAX = ResultType(
     h5=H5Source(("ELEMENTAL/STRESS/*",), compute=von_mises_table),
     reduce="max")
 
-REGISTRY: tuple[ResultType, ...] = (DISPLACEMENT, VON_MISES_MAX)
+_GRID_VECTOR = ("X", "Y", "Z", "RX", "RY", "RZ")  # MSC/NX HDF5 fields of a nodal table
+
+
+def _grid_loads(name, force, moment, op2_table, h5_dataset) -> ResultType:
+    """A force and moment per grid (T1-T3, R1-R3), rotated from CD like displacements, NaN where
+    a grid has no output, with root resultants."""
+    return ResultType(
+        name, "point", RESULT_BLOCKS, (ArraySpec(force, (0, 1, 2)), ArraySpec(moment, (3, 4, 5))),
+        op2=Op2Source((op2_table,)), h5=H5Source((h5_dataset,), fields=_GRID_VECTOR),
+        frame="grid_cd", resultant=True)
+
+
+SPC_FORCE = _grid_loads("SPCForce", "SPCForce", "SPCMoment", "spc_forces", "NODAL/SPC_FORCE")
+MPC_FORCE = _grid_loads("MPCForce", "MPCForce", "MPCMoment", "mpc_forces", "NODAL/MPC_FORCE")
+APPLIED_LOAD = _grid_loads("AppliedLoad", "AppliedForce", "AppliedMoment", "load_vectors", "NODAL/APPLIED_LOAD")
+
+REGISTRY: tuple[ResultType, ...] = (DISPLACEMENT, VON_MISES_MAX, SPC_FORCE, MPC_FORCE, APPLIED_LOAD)
 
 
 # ------------------------------------------------------------------ selection

@@ -966,6 +966,83 @@ def selection_file_checks(pv, nv, reader):
     pv.Delete(view)
 
 
+def result_load_checks(pv, nv, main_reader):
+    """SPC forces, MPC forces and OLOAD (op2_fixture.make_loads_op2 / write_loads_h5): the reader's
+    ResultTypes, the arrays and root resultants, Nastran Load Glyphs' Source, the loads view with a
+    result source, and a converted VTKHDF series."""
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    from op2_fixture import make_loads_op2, write_loads_h5
+
+    tmp = tempfile.mkdtemp()  # not removed: an open VTKHDF reader keeps its file locked
+    op2 = os.path.join(tmp, "loads.op2")
+    make_loads_op2().write_op2(op2)
+    h5 = str(write_loads_h5(os.path.join(tmp, "loads.h5")))
+    spc, applied = [0.0, -100.0, -50.0], [0.0, 100.0, 50.0]
+    for results in (op2, h5):
+        reader = rm.load_reader(DECK, results)
+        ext = os.path.splitext(results)[1]
+        listed = nv._listed(reader, "ResultTypes")
+        check(listed == ["Displacement", "SPCForce", "MPCForce", "AppliedLoad"],
+              f"{ext}: ResultTypes lists the load results: {listed}")
+        model = rm.Model(reader, rm.timesteps(reader)[0])
+        shells = model.block("Shells")
+        nid = list(vtk_to_numpy(shells.GetPointData().GetArray("NID")))
+        f3 = vtk_to_numpy(shells.GetPointData().GetArray("SPCForce"))[nid.index(3)].tolist()
+        check(np.allclose(f3, [0, 0, -50]), f"{ext}: SPCForce at grid 3 {f3}")
+        got = [model.field(n).reshape(-1).tolist() for n in ("SPCForceResultant", "AppliedForceResultant",
+                                                             "SPCMomentResultant", "AppliedMomentResultant")]
+        check(np.allclose(got[0], spc) and np.allclose(got[1], applied)
+              and np.allclose(np.add(got[2], got[3]), 0), f"{ext}: resultants balance: {got}")
+        if results == op2:
+            view = pv.CreateRenderView()
+            view.ViewSize = [400, 300]
+            model = nv.apply("loads", reader=reader, view=view, source="SPC forces")
+            lg = pv.FindSource(nv._name(model, "load glyphs"))
+            check(nv.enum_text(lg, "Source") == "SPC forces" and _root(lg, "ArrowCount") == [3]
+                  and _point_values(lg, "NID") == {1, 3, 4}, "Source SPC forces: an arrow per grid with output")
+            text = _info(nv, model)
+            check("SPC forces (Subcase 1): 3 grids with output" in text
+                  and "Resultant force (0, -100, -50)" in text and "Resultant moment (-2, 100, -200)" in text,
+                  f"loads view with a result source gives the resultant: {text!r}")
+            lg.Show = "Forces and moments"
+            nv.apply("loads", reader=reader, view=view)
+            check(nv.enum_text(lg, "Source") == "SPC forces" and _root(lg, "ArrowCount") == [5],
+                  "Source and Show kept on rerun: 3 forces + 2 moments")
+            nv.apply("loads", reader=reader, view=view, source="Applied loads (OLOAD)", show="Forces")
+            check(_point_values(lg, "NID") == {3, 6} and "Resultant force (0, 100, 50)" in _info(nv, model),
+                  "Source Applied loads (OLOAD)")
+            reader.ResultTypes = ["Displacement"]
+            nv.apply("loads", reader=reader, view=view)
+            check(_root(lg, "ArrowCount") == [0] and "No Applied loads (OLOAD) to draw" in _info(nv, model),
+                  "AppliedLoad unchecked in Result Types: nothing to draw, and why")
+            reader.ResultTypes = listed
+            nv.apply("loads", reader=reader, view=view, source="Deck load sets")
+            check(nv.enum_text(lg, "Source") == "Deck load sets" and "LOAD_1001: 2 loaded grids" in _info(nv, model),
+                  "source= Deck load sets: back to the deck's LOAD 1001")
+            nv.clear(view)
+            pv.Delete(view)
+            tag = nv._name(model, "x").split(" ", 2)[2]  # "[tiny_run.bdf #<id>]": this reader's NPV objects
+            check(tag != nv._name(nv.Model(main_reader), "x").split(" ", 2)[2], f"the second reader has its own names {tag}")
+            for src in [s for k, s in pv.GetSources().items() if k[0].startswith("NPV ") and k[0].endswith(tag)]:
+                pv.Delete(src)
+        pv.Delete(reader)
+    series = os.path.join(tmp, "loads.vtkhdf")
+    convert(["convert", DECK, "--results", op2, "--all-steps", "-o", series, "-q"])
+    src = nv.load_reader(series)
+    t0 = (rm.timesteps(src) or [0.0])[0]  # one step: no TimestepValues
+    model = rm.Model(src, t0)
+    check(np.allclose(model.field("SPCForceResultant").reshape(-1), spc)
+          and model.block("Constraints").GetPointData().GetArray("SPCForce") is not None,
+          "converted VTKHDF series: SPCForce and its resultant")
+    g = pv.NastranLoadGlyphs(Input=src)
+    g.Source = "MPC forces"
+    g.UpdatePipeline(t0)
+    check(_point_values(g, "NID") == {2, 5}, "Load Glyphs on a converted series: the MPC forces at grids 2 and 5")
+    pv.Delete(g)
+    pv.Delete(src)
+
+
 def random_checks(pv, nv):
     """Random response from synthesized modes: reader properties, both views, a converted series."""
     from op2_fixture import make_modes_op2
@@ -2318,6 +2395,7 @@ def main():
     parity_checks(pv, nv)
     calc_nan_checks(pv, nv)
     random_checks(pv, nv)
+    result_load_checks(pv, nv, reader)
     topology_checks(pv, nv)
     diff_checks(pv, nv)
     clear_checks(pv, nv, reader)

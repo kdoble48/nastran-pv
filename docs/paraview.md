@@ -193,7 +193,7 @@ an `NPV ...` filter selected finds the model upstream of it.
 | NPV Bushes | CBUSH translational stiffness: K1/K2/K3 bars along the element axes (length ~ log stiffness, the clearly stiffest axis thicker, released directions grey) and thin GA–GB lines; *Show Only* keeps the grounded or zero-length ones |
 | NPV Bush Rotations | CBUSH rotational stiffness: K4/K5/K6 rings around the element axes (radius ~ log stiffness, on their own scale); says so when no CBUSH has rotational stiffness |
 | NPV Beams | CBAR/CBEAM cross sections swept along the beams, colored by PID, with the shear-center axis (black), neutral axis (orange) and, up to *Max Triads* (500) beams, x/y/z triads (*NPV beam axes*); undeformed like the ghost mesh (`nv.apply("beams", scale=10)` or the filters' *DeformationScale* deforms it; [Beam sections](beam-sections.md)) |
-| NPV Loads | Force arrows (*Nastran Load Glyphs*) for the active LOAD set, scaled by magnitude (at most 1,500 arrows a set, every Nth loaded grid, on large models); resultant force. Other sets, moments and fixed-length arrows are settings of *NPV load glyphs* |
+| NPV Loads | Force arrows (*Nastran Load Glyphs*) for the active LOAD set, scaled by magnitude (at most 1,500 arrows a set, every Nth loaded grid, on large models); resultant force. Other sets, moments and fixed-length arrows are settings of *NPV load glyphs*; its *Source* draws the results' SPC forces, MPC forces or applied loads instead, with their resultant |
 | NPV SPC | Constrained grids (*Nastran SPC Glyphs*) colored by DOF code; *SPC Sets* and *DOFs* pick which |
 | NPV Rigid | RBE2/RBE3/... spider legs by type |
 | NPV Family / Group / PID / MID / Element Type | Mesh with an indexed color per value, with names in the legend |
@@ -271,7 +271,7 @@ again keeps what you changed; from Python an argument you pass explicitly wins
 | Masses | *NPV mass glyphs* | *SizeMode*, *RadiusLaw*, *MinimumRelativeSize*, *Minimum Mass*, *Color By* (Mass, EID, NID); *Glyph Size* group |
 | Bushes, Bush Rotations | *NPV bush glyphs*, *NPV bush rotation glyphs* | *Stiffness*, *ShowTriads*, *ShowEllipsoids*; *Show Only* and *Glyph Size* groups |
 | Beams | *NPV beam sections* (the triads are on *NPV beam axes*) | *ShowSections*, *ShowAxes*, *ShowTriads*, *TriadSize*, *Max Triads*, *DeformationScale* |
-| Loads | *NPV load glyphs* | *Load Sets*, *Show*, *Arrow Length*, *Every Nth Point*; *Glyph Size* group |
+| Loads | *NPV load glyphs* | *Source*, *Load Sets*, *Show*, *Arrow Length*, *Every Nth Point*; *Glyph Size* group |
 | SPC | *NPV spc glyphs* | *SPC Sets*, *DOFs*; *Glyph Size* group |
 | Results, Animate Mode | *NPV deform* | *Auto Scale*, *Scale Factor*, *Auto Scale Peak* (advanced); the undeformed outline's opacity is the Display opacity of *NPV undeformed mesh* |
 | Random RMS, Random Sweep | the reader | *Random ASD*, *Random Drive*, *Random Damping*, *Random G*, *Random Frames* (the reader computes the response) |
@@ -355,7 +355,10 @@ the selection commands make no filter of their own.
     `Released` and `Dominant` are available for coloring.
 * **Nastran Load Glyphs** draws the loads of the checked *Load Sets* (the `Loads/*` blocks;
   checked first: the Case Control `LOAD`, else the first set with loads) as arrows with their
-  tail on the grid: forces single-headed, moments double-headed. *Show* picks **Forces**,
+  tail on the grid: forces single-headed, moments double-headed. *Source* **Deck load sets** (the
+  default) draws the deck's sets; **SPC forces**, **MPC forces** and **Applied loads (OLOAD)**
+  draw the current result step's [SPC forces, MPC forces or applied loads](model.md#result-types)
+  instead, one arrow per grid with output (*Load Sets* is hidden then: it applies to the deck). *Show* picks **Forces**,
   **Moments** or **Forces and moments**. *Arrow Length* **By magnitude** gives the largest force
   (and, on its own scale, the largest moment) over the checked sets *Size* × the model diagonal
   (0.08) and the others their share; **Fixed** draws every arrow that long. *Every Nth Point*

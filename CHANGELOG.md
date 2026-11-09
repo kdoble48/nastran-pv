@@ -8,6 +8,12 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Added
 
+- SPC forces, MPC forces and applied loads (OLOAD) as the result types `SPCForce`, `MPCForce` and
+  `AppliedLoad`, from OP2 and MSC/NX HDF5: point `SPCForce SPCMoment`, `MPCForce MPCMoment` and
+  `AppliedForce AppliedMoment` on the result blocks (rotated from CD into basic, NaN without
+  output) and, per step, the root resultants `<array>Resultant` (the moment about the basic
+  origin), which `convert` prints. *Nastran Load Glyphs* gains *Source* to draw them as arrows, one
+  per grid with output, and the loads view gives their resultant (#PRNUM).
 - Card report: every card no block draws is counted per card type and reason (not drawn, scalar
   points, grounded, patch form, heat transfer, matrix input, superelement, not read), with its
   first ids. `convert` prints it, `stats` and `check` on stderr, the reader in Output Messages,
@@ -99,6 +105,10 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Fixed
 
+- A VTKHDF series whose steps fill different numbers of arrays (stresses on shells and solids at a
+  static step, none at the modes) read the later steps wrongly (the NaN fill stayed, or garbage):
+  vtkHDFWriter mis-offsets a field array whose size changes, so `FillArrays` now has the same
+  length at every step (#PRNUM).
 - A random response with `--beam-sections` no longer leaves the first mode's `Displacement` on
   `BeamSections` (#60).
 - Overlays follow the scope as the reader applies it: a selection file of PIDs, MIDs, families,

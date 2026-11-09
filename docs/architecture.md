@@ -45,8 +45,9 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   `build_multiblock` before the masses; its warnings use `deck.warn(..., mass=True)`, which lists
   them first.
 - `result_types.py` / `results.py` / `results_h5.py`: what is attached is declared, one
-  `ResultType` per kind of result in `result_types.REGISTRY` (today `Displacement` and
-  `VonMisesMax`): its OP2 tables and H5 datasets, blocks, location, arrays, reduction and frame.
+  `ResultType` per kind of result in `result_types.REGISTRY` (today `Displacement`,
+  `VonMisesMax`, `SPCForce`, `MPCForce` and `AppliedLoad`): its OP2 tables and H5 datasets, blocks,
+  location, arrays, reduction, frame and (forces and moments at grids) a root resultant.
   `Op2Results` and `H5Results` share a base (`results._Results`) and its interface (`steps`, `times`,
   `skipped`, `available`, `select`, `values`, `attach`); each only finds a type's tables and
   yields raw rows per step (`_rows`). `_Results.values` joins, sorts and reduces them, and the
@@ -253,6 +254,9 @@ Every gotcha found so far, by area. The few that bite on any change are also in 
     frees the object.
   - Every array must exist at every time step; `_fill_missing` adds NaN arrays and lists them in
     the root `FillArrays` (read back, only those are dropped: `vtkutil.drop_fill_arrays`).
+  - vtkHDFWriter (VTK 9.5) writes the step offset of a field array whose size changes between steps
+    wrongly (the previous offset plus this step's size), and the reader then reads past the array.
+    So `FillArrays` is padded with `""` to the same length at every step (`_StepSource.fill_width`).
   - Empty `vtkStringArray`s break the reader, so `add_string_array` skips them.
   - A collection's own field data is not written, so the root summary is copied onto the mesh
     partitions and listed in `RootFieldNames`; `vtkutil.promote_root_fields` (in `tree.gather`, so

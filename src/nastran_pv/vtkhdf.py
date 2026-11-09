@@ -175,10 +175,20 @@ def _array_signature(mb) -> dict:
     return sig
 
 
-def _fill_missing(mb, union) -> list[str]:
+def _missing(sig, union) -> int:
+    """How many arrays of ``union`` a step with array signature ``sig`` lacks."""
+    return sum(name not in sig.get(key, {}) for key, arrays in union.items() for name in arrays)
+
+
+def _fill_missing(mb, union, width: int = 1) -> list[str]:
     """Add the arrays of ``union`` this step lacks, as NaN, and list them on the root as
     ``FillArrays`` (``"<block path>|point|<name>"``, ``"|field|<name>"`` for the root) so that
-    a reader drops exactly those (``vtkutil.drop_fill_arrays``). Returns that list."""
+    a reader drops exactly those (``vtkutil.drop_fill_arrays``). Returns that list.
+
+    The list is padded with ``""`` to ``width`` entries (the most any step of the series fills):
+    vtkHDFWriter (VTK 9.5) records the step offset of a field array whose size changes between
+    steps wrongly (the previous offset plus this step's size), so every step must hold the same
+    number of entries."""
     from . import vtkutil
 
     filled = []
@@ -190,7 +200,8 @@ def _fill_missing(mb, union) -> list[str]:
                 filled.append(f"{key[0]}|{key[1]}|{name}")
     root = mb.GetFieldData()
     root.RemoveArray(vtkutil.FILL_ARRAYS)
-    vtkutil.add_string_array(root, vtkutil.FILL_ARRAYS, filled or [""])  # at every step, as VTKHDF needs
+    entries = filled + [""] * (max(int(width), 1) - len(filled))  # never empty: VTKHDF needs it at every step
+    vtkutil.add_string_array(root, vtkutil.FILL_ARRAYS, entries)
     return filled
 
 
@@ -219,10 +230,13 @@ class _StepSource(VTKPythonAlgorithmBase):
         # a temporal VTKHDF file needs the same arrays at every step (e.g. VonMisesMax only
         # exists for stress steps, Frequency only for modes): collect the union first
         self.union: dict = {}
+        signatures = []
         for step in self.steps:
             self.results.attach(self.mb, int(step), self.deck)
-            for key, arrays in _array_signature(self.mb).items():
+            signatures.append(_array_signature(self.mb))
+            for key, arrays in signatures[-1].items():
                 self.union.setdefault(key, {}).update(arrays)
+        self.fill_width = max([_missing(sig, self.union) for sig in signatures] + [1])  # FillArrays entries a step
 
     def RequestInformation(self, request, inInfo, outInfo):
         info = outInfo.GetInformationObject(0)
@@ -237,7 +251,7 @@ class _StepSource(VTKPythonAlgorithmBase):
         step = min(self.steps, key=lambda s: abs(s - t))
         _unfill(self.mb, self._filled)
         self.results.attach(self.mb, int(step), self.deck)
-        self._filled = _fill_missing(self.mb, self.union)
+        self._filled = _fill_missing(self.mb, self.union, self.fill_width)
         out = vtkPartitionedDataSetCollection.GetData(outInfo, 0)
         # every root table (sections, materials, NSM, ...), as in a static file: the views and
         # filters need them at every step, and compact_static_arrays stores the static ones once

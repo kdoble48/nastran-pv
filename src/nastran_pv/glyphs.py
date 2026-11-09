@@ -515,6 +515,44 @@ def load_arrow(resolution: int = 6, heads: int = 1):
     return _template(normals)
 
 
+LOAD_SOURCES = ("deck", "SPCForce", "MPCForce", "AppliedLoad")  # Nastran Load Glyphs' Source: deck sets or a result type
+
+
+def result_load_points(mb, type_name: str) -> vtkPolyData:
+    """One point per grid that has output of result type ``type_name`` (one with a resultant:
+    ``SPCForce``, ``MPCForce``, ``AppliedLoad``), as a load set for :func:`load_glyphs`: point arrays
+    ``NID``, ``Force`` and ``Moment`` (the type's two arrays), at the grid's position in the first
+    block that has it (Masses last: a mass's point is its CG). Grids without output (NaN) are left out."""
+    from .fields.common import get_array, iter_blocks
+    from .result_types import by_name
+
+    rtype = by_name(type_name)
+    if not rtype.resultant:
+        raise ValueError(f"{rtype.name} is not a force and moment result (no resultant)")
+    force, moment = (a.name for a in rtype.arrays[:2])
+    blocks = iter_blocks(mb) if mb.IsA("vtkMultiBlockDataSet") else [("", mb)]
+    nids, xyz, vecs = [], [], []
+    for path, ds in sorted(blocks, key=lambda b: b[0] == "Masses"):
+        pd = ds.GetPointData()
+        f, m, nid = get_array(pd, force), get_array(pd, moment), get_array(pd, "NID")
+        if f is None or m is None or nid is None or not ds.GetNumberOfPoints():
+            continue
+        v = np.hstack([f.reshape(-1, 3), m.reshape(-1, 3)]).astype(float)
+        on = ~np.isnan(v).all(axis=1)
+        nids.append(nid.astype(np.int64)[on])
+        xyz.append(vtkutil.to_numpy(ds.GetPoints().GetData()).reshape(-1, 3).astype(float)[on])
+        vecs.append(v[on])
+    if not nids:
+        return vtkPolyData()
+    nid, first = np.unique(np.concatenate(nids), return_index=True)
+    v = np.nan_to_num(np.concatenate(vecs)[first])
+    pd = vtkutil.polydata(np.concatenate(xyz)[first])
+    vtkutil.add_array(pd.GetPointData(), "NID", nid)
+    vtkutil.add_array(pd.GetPointData(), "Force", v[:, :3])
+    vtkutil.add_array(pd.GetPointData(), "Moment", v[:, 3:])
+    return pd
+
+
 def load_sets_of(mb) -> list:
     """``[(name, block)]`` of the ``Loads/*`` blocks of a model, in block order."""
     from .fields.common import iter_blocks

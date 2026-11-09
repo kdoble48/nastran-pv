@@ -330,8 +330,12 @@ def cmd_convert(args) -> int:
         print("\n".join(results.summary()))
         _print_rows(results.modes)
     elif results is not None:
+        from .results import resultant_lines
+
         print(f"{len(results.steps)} result step(s): " + "; ".join(s.label for s in results.steps[:5])
               + (" ..." if len(results.steps) > 5 else ""))
+        for line in resultant_lines(mb, results.registry):
+            print(line)
     print("\n".join(summarize(mb)))
     for n in notes:
         print(n)

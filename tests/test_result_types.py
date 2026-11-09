@@ -34,9 +34,9 @@ def _cell(block, name):
 
 
 # ------------------------------------------------------------------ the registry
-def test_registry_holds_todays_types_in_order():
-    assert [t.name for t in rt.REGISTRY] == ["Displacement", "VonMisesMax"]
-    disp, vm = rt.REGISTRY
+def test_registry_starts_with_the_first_types():
+    assert [t.name for t in rt.REGISTRY][:2] == ["Displacement", "VonMisesMax"]  # appended to, never reordered
+    disp, vm = rt.REGISTRY[:2]
     assert disp is rt.DISPLACEMENT and vm is rt.VON_MISES_MAX
     assert (disp.location, disp.frame, disp.steps, disp.fill) == ("point", "grid_cd", True, 0.0)
     assert [a.name for a in disp.arrays] == list(DISP_ARRAYS)
@@ -47,7 +47,7 @@ def test_registry_holds_todays_types_in_order():
     assert np.isnan(vm.fill) and "Masses" not in vm.blocks
     assert vm.op2.tables == ("stress.*",) and vm.op2.columns == ("von_mises",)
     assert vm.h5.datasets == ("ELEMENTAL/STRESS/*",) and vm.h5.compute is rt.von_mises_table
-    assert all(t.default for t in rt.REGISTRY)
+    assert disp.default and vm.default
 
 
 def test_array_names_are_unique_across_types():
@@ -56,12 +56,12 @@ def test_array_names_are_unique_across_types():
 
 
 @pytest.mark.parametrize("spec, names", [
-    (None, ("Displacement", "VonMisesMax")),
+    (None, ("Displacement", "VonMisesMax", "SPCForce", "MPCForce", "AppliedLoad")),
     ("vonmisesmax", ("VonMisesMax",)),
     (["VONMISESMAX,displacement"], ("Displacement", "VonMisesMax")),  # registry order
     (["Displacement", "Displacement"], ("Displacement",)),
-    (["all"], ("Displacement", "VonMisesMax")),
-    ("all,vonmisesmax", ("Displacement", "VonMisesMax")),
+    (["all"], ("Displacement", "VonMisesMax", "SPCForce", "MPCForce", "AppliedLoad")),
+    ("all,vonmisesmax", ("Displacement", "VonMisesMax", "SPCForce", "MPCForce", "AppliedLoad")),
 ])
 def test_parse(spec, names):
     assert rt.parse(spec) == names
@@ -187,57 +187,83 @@ PSHELL,1,1,.1,1
 CQUAD4,1,1,1,2,3,4
 """
 
-SPC_FORCE = rt.ResultType(
-    "SPCForce", "point", rt.RESULT_BLOCKS,
-    (rt.ArraySpec("SPCForce", (0, 1, 2)), rt.ArraySpec("SPCMoment", (3, 4, 5))),
-    op2=rt.Op2Source(("spc_forces",)),
-    h5=rt.H5Source(("NODAL/SPC_FORCE",), fields=("X", "Y", "Z", "RX", "RY", "RZ")),
+VELOCITY = rt.ResultType(  # a type no registry has: declared here, read with no reader code
+    "Velocity", "point", rt.RESULT_BLOCKS,
+    (rt.ArraySpec("Velocity", (0, 1, 2)), rt.ArraySpec("AngularVelocity", (3, 4, 5))),
+    op2=rt.Op2Source(("velocities",)),
+    h5=rt.H5Source(("NODAL/VELOCITY",), fields=("X", "Y", "Z", "RX", "RY", "RZ")),
     frame="grid_cd")
+_NODAL = np.dtype([("ID", "<i8"), ("X", "<f8"), ("Y", "<f8"), ("Z", "<f8"),
+                   ("RX", "<f8"), ("RY", "<f8"), ("RZ", "<f8"), ("DOMAIN_ID", "<i8")])
 
 
-def _spc_op2():
+def _cd_op2(table):
+    """Displacements on grids 1-4 of CD_BULK plus ``table`` (velocities or spc_forces) at grids 1
+    and 2: grid 2 T1 = 5 in CD 10 (whose x is basic +Y), grid 1 R3 = 2 in basic."""
     from pyNastran.op2.op2 import OP2
     from pyNastran.op2.tables.oqg_constraintForces.oqg_spc_forces import RealSPCForcesArray
     from pyNastran.op2.tables.oug.oug_displacements import RealDisplacementArray
+    from pyNastran.op2.tables.oug.oug_velocities import RealVelocityArray
 
     op2 = OP2(debug=None)
     op2.set_mode("msc")
     ng = np.column_stack([[1, 2, 3, 4], np.ones(4, dtype=int)])
     op2.displacements[1] = RealDisplacementArray.add_static_case("OUGV1", ng, np.zeros((1, 4, 6), "float32"), 1)
     f = np.zeros((1, 2, 6), dtype="float32")
-    f[0, 1, 0] = 5.0  # grid 2: F1 = 5 in CD 10, whose x is basic +Y
-    f[0, 0, 5] = 2.0  # grid 1: M3 = 2 in basic
-    op2.spc_forces[1] = RealSPCForcesArray.add_static_case("OQG1", ng[:2], f, 1)
+    f[0, 1, 0] = 5.0
+    f[0, 0, 5] = 2.0
+    cls, name = {"velocities": (RealVelocityArray, "OVG1"), "spc_forces": (RealSPCForcesArray, "OQG1")}[table]
+    getattr(op2, table)[1] = cls.add_static_case(name, ng[:2], f, 1)
     return op2
 
 
-def test_a_new_point_type_is_declared_not_coded(tmp_path):
-    """SPC forces (roadmap task 10) as a declaration: read, rotated from CD into basic, written
-    with NaN where a grid has no row, on the OP2 and the HDF5 reader alike."""
-    (tmp_path / "cd.bdf").write_text(CD_BULK)
-    deck = load_deck(tmp_path / "cd.bdf", echo=False)
-    registry = rt.REGISTRY + (SPC_FORCE,)
-    h5 = tmp_path / "spc.h5"
-    nod = np.dtype([("ID", "<i8"), ("X", "<f8"), ("Y", "<f8"), ("Z", "<f8"),
-                    ("RX", "<f8"), ("RY", "<f8"), ("RZ", "<f8"), ("DOMAIN_ID", "<i8")])
-    with h5py.File(h5, "w") as f:
+def _cd_h5(path, dataset):
+    with h5py.File(path, "w") as f:
         r = f.create_group("/NASTRAN/RESULT")
         r["DOMAINS"] = np.array([(1, 1, 0)], dtype=[("ID", "<i8"), ("SUBCASE", "<i8"), ("STEP", "<i8")])
-        r["NODAL/DISPLACEMENT"] = np.array([(n, 0, 0, 0, 0, 0, 0, 1) for n in (1, 2, 3, 4)], dtype=nod)
-        r["NODAL/SPC_FORCE"] = np.array([(2, 5, 0, 0, 0, 0, 0, 1), (1, 0, 0, 0, 0, 0, 2, 1)], dtype=nod)
-    for res in (Op2Results(_spc_op2(), registry=registry), H5Results(h5, registry=registry)):
+        r["NODAL/DISPLACEMENT"] = np.array([(n, 0, 0, 0, 0, 0, 0, 1) for n in (1, 2, 3, 4)], dtype=_NODAL)
+        r[dataset] = np.array([(2, 5, 0, 0, 0, 0, 0, 1), (1, 0, 0, 0, 0, 0, 2, 1)], dtype=_NODAL)
+    return path
+
+
+def _cd_deck(tmp_path):
+    (tmp_path / "cd.bdf").write_text(CD_BULK)
+    return load_deck(tmp_path / "cd.bdf", echo=False)
+
+
+def test_a_new_point_type_is_declared_not_coded(tmp_path):
+    """A velocity type as a declaration: read, rotated from CD into basic, written with NaN where a
+    grid has no row, on the OP2 and the HDF5 reader alike."""
+    deck = _cd_deck(tmp_path)
+    registry = rt.REGISTRY + (VELOCITY,)
+    h5 = _cd_h5(tmp_path / "v.h5", "NODAL/VELOCITY")
+    for res in (Op2Results(_cd_op2("velocities"), registry=registry), H5Results(h5, registry=registry)):
+        assert res.available == ("Displacement", "Velocity")
+        mb = build_multiblock(deck)
+        res.attach(mb, 0, deck)
+        shells = get_block(mb, "Shells")
+        v, w = arr(shells, "Velocity"), arr(shells, "AngularVelocity")
+        np.testing.assert_allclose(v[row_of(shells, "NID", 2)], [0, 5, 0], atol=1e-12)
+        np.testing.assert_allclose(w[row_of(shells, "NID", 1)], [0, 0, 2], atol=1e-12)
+        assert np.isnan(v[row_of(shells, "NID", 3)]).all()  # no output there
+        res.select(["Displacement"]).attach(mb, 0, deck)
+        assert _point(shells, "Velocity") is None
+    with pytest.raises(ValueError, match="Velocity"):
+        Op2Results(_cd_op2("velocities")).select(["Velocity"])  # not in the default registry
+
+
+def test_spc_forces_and_their_resultant_are_rotated_into_basic(tmp_path):
+    """The registry's SPCForce: grid 2's F1 = 5 in CD 10 is basic +Y; the resultant, in basic, is
+    F (0, 5, 0) and M = (0, 0, 2) + (1, 0, 0) x (0, 5, 0) = (0, 0, 7) about the origin."""
+    deck = _cd_deck(tmp_path)
+    for res in (Op2Results(_cd_op2("spc_forces")), H5Results(_cd_h5(tmp_path / "s.h5", "NODAL/SPC_FORCE"))):
         assert res.available == ("Displacement", "SPCForce")
         mb = build_multiblock(deck)
         res.attach(mb, 0, deck)
         shells = get_block(mb, "Shells")
-        force, moment = arr(shells, "SPCForce"), arr(shells, "SPCMoment")
-        np.testing.assert_allclose(force[row_of(shells, "NID", 2)], [0, 5, 0], atol=1e-12)
-        np.testing.assert_allclose(moment[row_of(shells, "NID", 1)], [0, 0, 2], atol=1e-12)
-        assert np.isnan(force[row_of(shells, "NID", 3)]).all()  # no SPC force output there
-        res.select(["Displacement"]).attach(mb, 0, deck)
-        assert _point(shells, "SPCForce") is None
-    with pytest.raises(ValueError, match="SPCForce"):
-        Op2Results(_spc_op2()).select(["SPCForce"])  # not in the default registry
+        np.testing.assert_allclose(arr(shells, "SPCForce")[row_of(shells, "NID", 2)], [0, 5, 0], atol=1e-12)
+        np.testing.assert_allclose(arr(mb, "SPCForceResultant", "field").reshape(-1), [0, 5, 0], atol=1e-12)
+        np.testing.assert_allclose(arr(mb, "SPCMomentResultant", "field").reshape(-1), [0, 0, 7], atol=1e-12)
 
 
 def test_a_step_type_with_nan_fill_drops_a_stale_array():

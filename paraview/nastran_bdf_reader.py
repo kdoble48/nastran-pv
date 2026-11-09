@@ -910,19 +910,25 @@ class _GlyphFilter(_Settable, VTKPythonAlgorithmBase):
         data = as_multiblock(vtkDataObject.GetData(inInfo[0], 0))
         if data.IsA("vtkMultiBlockDataSet"):
             self._list(data)
-        block = _find_block(data, self.BLOCK, self.REQUIRED)
+        block = self._block(data)
         out = vtkPolyData.GetData(outInfo, 0)
         if block is None or block.GetNumberOfPoints() == 0:
             return 1
         out.ShallowCopy(self._glyphs(block, glyph_diagonal(data), data))
         return 1
 
+    def _block(self, data):
+        """What ``_glyphs`` draws from: the filter's block of the input (None: nothing to draw)."""
+        return _find_block(data, self.BLOCK, self.REQUIRED)
 
-# copies of nastran_pv.glyphs.MASS_COLOR_ARRAYS / BUSH_SHOW / LOAD_SHOW / LOAD_SCALES (test_plugin_constants)
+
+# copies of nastran_pv.glyphs.MASS_COLOR_ARRAYS / BUSH_SHOW / LOAD_SHOW / LOAD_SCALES / LOAD_SOURCES
+# (test_plugin_constants)
 _MASS_COLORS = ("Mass", "EID", "NID")
 _BUSH_SHOW = ("all", "grounded", "coincident")
 _LOAD_SHOW = ("force", "moment", "both")
 _LOAD_SCALES = ("magnitude", "fixed")
+_LOAD_SOURCES = ("deck", "SPCForce", "MPCForce", "AppliedLoad")
 
 
 @smproxy.filter(name="NastranPVMassGlyphs", label="Nastran Mass Glyphs")
@@ -1043,15 +1049,17 @@ class NastranPVBushGlyphs(_GlyphFilter):
 @smdomain.datatype(dataTypes=["vtkDataObject"], composite_data_supported=True)
 @_with_glyph_size(0.08, 0.001, 0.5, 6, 3, 32)
 class NastranPVLoadGlyphs(_GlyphFilter):
-    """FORCE/MOMENT arrows of the checked load sets (Loads/* blocks): forces single-headed, moments
-    double-headed, tail on the grid. Size: length of the largest arrow as a fraction of the model
-    diagonal. Every Nth Point 0 keeps at most 1500 arrows per set."""
+    """FORCE/MOMENT arrows of the checked load sets (Loads/* blocks), or with Source a result's
+    SPC forces, MPC forces or applied loads (OLOAD) at each grid with output: forces single-headed,
+    moments double-headed, tail on the grid. Size: length of the largest arrow as a fraction of the
+    model diagonal. Every Nth Point 0 keeps at most 1500 arrows per set."""
 
     BLOCK, REQUIRED = "Loads", "Force"
     LISTS = True
 
     def __init__(self):
         _GlyphFilter.__init__(self)
+        self._source = 0
         self._sets = _checklist(self)
         self._show = 0
         self._scale = 0
@@ -1059,7 +1067,15 @@ class NastranPVLoadGlyphs(_GlyphFilter):
         self._size = 0.08
         self._resolution = 6
 
+    @smproperty.intvector(name="Source", default_values=0)
+    @smdomain.xml(_enum_xml(("Deck load sets", "SPC forces", "MPC forces", "Applied loads (OLOAD)")))
+    def SetSource(self, v):
+        """What to draw: the deck's load sets, or the current step's SPC forces, MPC forces or applied
+        loads (OLOAD) from the results (one arrow per grid with output; Load Sets does not apply)."""
+        self._set("_source", int(v))
+
     @smproperty.dataarrayselection(name="LoadSets")
+    @smhint.xml('<PropertyWidgetDecorator type="GenericDecorator" mode="visibility" property="Source" value="0"/>')
     def GetLoadSets(self):
         """Load sets to draw (first shown: the Case Control LOAD, else the first set with loads)."""
         return self._sets
@@ -1089,13 +1105,27 @@ class NastranPVLoadGlyphs(_GlyphFilter):
         default = default_load_set(data)
         _fill_checklist(self, self._sets, [n for n, _ in load_sets_of(data)], {default} if default else set())
 
+    def _result_source(self):
+        """The result type drawn (SPCForce, MPCForce, AppliedLoad), or None for the deck's sets."""
+        source = _LOAD_SOURCES[self._source % len(_LOAD_SOURCES)]
+        return None if source == "deck" else source
+
+    def _block(self, data):
+        return data if self._result_source() else _GlyphFilter._block(self, data)
+
     def _glyphs(self, block, diag, model):
-        from nastran_pv.glyphs import load_glyphs, load_sets_of
+        from nastran_pv.glyphs import load_glyphs, load_sets_of, result_load_points
         from nastran_pv.vtkutil import add_string_array
 
-        on = set(_checked(self._sets))
-        sets = [(n, ds) for n, ds in load_sets_of(model) if n in on] if block.IsA("vtkMultiBlockDataSet") \
-            else [("Loads", block)]
+        rtype = self._result_source()
+        if rtype:  # the result's arrays on the model's blocks, one arrow per grid
+            points = result_load_points(model, rtype)
+            sets = [(rtype, points)] if points.GetNumberOfPoints() else []
+        elif block.IsA("vtkMultiBlockDataSet"):
+            on = set(_checked(self._sets))
+            sets = [(n, ds) for n, ds in load_sets_of(model) if n in on]
+        else:
+            sets = [("Loads", block)]
         out = load_glyphs(sets, diag, _LOAD_SHOW[self._show % 3], self._size, _LOAD_SCALES[self._scale % 2],
                           self._stride, self._resolution)
         add_string_array(out.GetFieldData(), "LoadSetNames", [n for n, _ in sets])

@@ -65,5 +65,6 @@ Two format details:
 * A temporal `.vtkhdf` holds every array at every step, so a step without stresses carries an
   all-NaN `VonMisesMax`. The writer lists that fill in `FillArrays`, and nastran-pv drops exactly
   those arrays when it reads a step (an all-NaN `--calc` result is kept); ParaView's array lists
-  still show them. Series written before nastran-pv recorded `FillArrays` keep the NaN
+  still show them. The same holds for `SPCForce` and the other result types of a subcase that
+  lacks them. Series written before nastran-pv recorded `FillArrays` keep the NaN
   `VonMisesMax` on the steps without stresses.
