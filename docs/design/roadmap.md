@@ -78,7 +78,7 @@ skills that quote changed flags or workflows, the gallery when a view changes, a
   - Review the classifiers and the CI Python matrix, adding 3.13 and 3.14 if they are green.
 - Exit: on a clean Windows and a clean Linux machine,
   `pip install nastran-pv==0.2.0 && nastran-pv setup` opens a `tests/data` deck in ParaView.
-- Depends on: 1, 2.
+- Depends on: 1, 2, and part A of task 6.
 
 ### 0.3: Composable views and model coverage
 
@@ -108,15 +108,27 @@ skills that quote changed flags or workflows, the gallery when a view changes, a
 - Depends on: 4.
 
 **6. Known-issue sweep**
-- Scope: close issues #6 to #14, plus the findings confirmed by the 2026-11-08 `/code-review high`
-  run of the whole workspace. The issues cover:
+- Scope, part A: the 2026-11-08 `/code-review high` findings on scene layers PR 1 (#54). These
+  came from reading the code, so each needs a failing test before its fix:
+  - `selection.scope_masks` applies the selection file only to mesh blocks: a Hide file of PBUSH
+    PIDs still draws those bushes, and a NID file drops masses and SPCs that the reader keeps;
+  - a hidden or unticked connector still carries the grid chain to the masses beyond it;
+  - a connector kept by Show Only does not keep the masses on its grids;
+  - BeamSections of hidden Lines stay in the scope;
+  - Nastran Scope deforms connector and bush lines from the scoped grids only, so legs to hidden
+    grids stay undeformed;
+  - a coloring that writes no text leaves the previous coloring's NPV info on screen;
+  - a view's scene keeps a deleted reader, which NPV Clear then acts on;
+  - `scope_active` reads the reader's raw properties, not the visibility it applied.
+- Scope, part B: close issues #6 to #14. They cover:
   - parts vectorization (#6), FreeEdges counts on quadratic shells (#7) and Connectors in the run
     store (#8);
   - missing topology tests (#9), the `within_pids` docs (#10) and stale checklist entries (#11);
   - blocks without a type array or EID (#12), MPC legs keyed by set id (#13) and the API and CLI
     rough edges (#14).
-- Exit: each issue is closed by a PR that adds a test or the docs change it asks for.
-- Depends on: nothing.
+- Exit: each finding and issue is closed by a PR that adds a test or the docs change it asks for.
+- Depends on: nothing. Part A lands before the 0.2.0 tag (task 3), so the first release does not
+  ship the scope bugs; part B can land any time.
 
 **7. Unsupported-card report, and cheap coverage**
 - Scope:
