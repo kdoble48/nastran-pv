@@ -34,10 +34,13 @@ so they need the deck (:func:`deck_reader`). ``show_only_file``, ``hide_file`` a
 ``highlight_file`` do the same from a CSV/text file of IDs (the reader's ``SelectionFile``);
 highlight makes a real ParaView selection.
 ``clear`` (NPV Clear) is the reset: it empties the view of every layer, sets the deformation
-back to 0 and deletes nothing (``side_by_side`` still resets its two views until comparisons follow
-the scene).
-``diff`` compares the active model (B) with a second open model (A) through the Nastran Diff filter,
-and :func:`side_by_side` shows A and B in two linked views with one color range.
+back to 0 and deletes nothing.
+``diff`` makes the view a comparison: the active model (B) against a second open model (A) through
+the Nastran Diff filter (an existing one whichever of the two is selected). In a comparison every
+layer of B's view is drawn from the diff's output (colored by DiffStatus, cut by both models' scope),
+with A's removed items in red; the visibility commands write both models, by ID; :func:`side_by_side`
+puts A and B in two linked views and every command then draws in both; :func:`single` (NPV Single)
+ends the comparison. Which model a command acts on follows the view (:func:`subject`).
 Plus :func:`index_colors`, which turns whatever integer array the active representation is
 coloured by into an indexed lookup table with names.
 
@@ -281,27 +284,39 @@ def raise_load_error(reader):
 
 
 class Model:
-    """Reader plus a client-side copy of its output (block names, arrays, size)."""
+    """Reader plus a client-side copy of its output (block names, arrays, size).
 
-    def __init__(self, reader, time=None):
+    In a comparison ``diff`` (the Nastran Diff) and ``role`` ("A" or "B") say which side this is. B's
+    side (:attr:`from_diff`) reads, and its views draw from, the diff's output instead of the reader
+    (:func:`compared`: cut by both models' scope, moved with B's deformation); A's side reads A's
+    reader as a single model does."""
+
+    def __init__(self, reader, time=None, diff=None, role=None):
         self.reader = reader
+        self.diff, self.role = diff, role
         if time is None:
             time = held_time(reader)  # the vibrating mode: the view time is a phase then
         if time is None:
             view = pv.GetActiveView()
             time = getattr(view, "ViewTime", 0.0) if view is not None else 0.0
         self.time = time
-        reader.UpdatePipeline(time)
+        src = compared(reader, diff) if self.from_diff else reader
+        src.UpdatePipeline(time)
         raise_load_error(reader)
         from nastran_pv.tree import as_multiblock
 
-        self.data = as_multiblock(fetch(reader))  # the reader outputs the model tree
+        self.data = as_multiblock(fetch(src))  # the reader outputs the model tree
         self.names = block_names(self.data)
         self._scoped = None  # (multiblock, block names) of NPV scope, fetched on first use
         self._scope_active = None  # scope_active(reader), asked once
-        b = reader.GetDataInformation().GetBounds()
+        b = src.GetDataInformation().GetBounds()
         self.bounds = b
         self.diag = float(np.linalg.norm(np.array(b[1::2]) - np.array(b[0::2]))) or 1.0
+
+    @property
+    def from_diff(self):
+        """B's side of a comparison: drawn from the diff's output."""
+        return self.diff is not None and self.role == "B"
 
     def has(self, name):
         return name in self.names
@@ -312,8 +327,9 @@ class Model:
     def scoped(self, name):
         """Block ``name`` of what the overlays draw (*NPV scope*: the whole model cut by the R2 join),
         or None when the scope keeps none of it. With nothing hidden that is the reader's own block
-        (NPV scope passes it through), so nothing is fetched again."""
-        if not self.scope_active():
+        (NPV scope passes it through), so nothing is fetched again. B's side of a comparison reads the
+        diff's output, which the comparison's own scope has cut already."""
+        if self.from_diff or not self.scope_active():
             return self.block(name)
         if self._scoped is None:
             from nastran_pv.tree import as_multiblock
@@ -382,12 +398,16 @@ def _name(model, what):
     return f"NPV {what} [{label}]"
 
 
+_FINISHED = [None]  # what the last command left selected: the user picked nothing since while it is active
+
+
 def _finish(obj):
     """End a view or command with ``obj`` (the filter it is about, else the model source) as the
-    active source, so the Properties panel shows what to adjust next. :func:`find_reader` walks
+    active source, so the Properties panel shows what to adjust next. :func:`subject` walks
     upstream from it, so a rerun, or another view, still finds the same model."""
     if obj is not None:
         pv.SetActiveSource(obj)
+        _FINISHED[0] = obj
     return obj
 
 
@@ -468,6 +488,29 @@ def scoped(model):
 _scope_filter = scoped  # _extract's ``scoped`` argument hides the function
 
 
+def _diff_what(diff, what):
+    """The name of a comparison object (``NPV <it> [B]``): ``diff <what>`` for B's own ``NPV diff``,
+    ``diff <id> <what>`` for any other Nastran Diff (a user's, or one against another A), so two
+    comparisons that share B keep their own objects."""
+    b = diff_sides(diff)[0]
+    own = pv.FindSource(_name(_ReaderOnly(b), "diff")) if b is not None else None
+    key = "" if own is not None and own == diff else f"{diff.GetGlobalIDAsString()} "
+    return f"diff {key}{what}".strip()
+
+
+def compared(reader, diff, undeformed=False):
+    """What B's side of a comparison draws (rule R3): ``NPV diff scope`` (*Nastran Scope* on the Nastran
+    Diff: the diff's whole output cut by B's scope, A's removed items by A's, then the Diff's Show
+    settings) and ``NPV deform diff`` on it, which moves with B's other deforms. ``undeformed``: the
+    scope itself. Both are named after B (``reader``) and the Diff (:func:`_diff_what`)."""
+    owner = _ReaderOnly(reader)
+    scope = _feed(_named(owner, _diff_what(diff, "scope"), lambda: pv.NastranScope(Input=diff), SCOPE_XML), diff)
+    if undeformed:
+        return scope
+    return _feed(_named(owner, f"deform {_diff_what(diff, '')}", lambda: pv.NastranDeform(Input=scope), DEFORM_XML),
+                 scope)
+
+
 def _feed(proxy, src):
     """Set ``proxy.Input`` to ``src`` unless it is fed by it already (objects made before the
     overlays followed the scope were fed by NPV deform)."""
@@ -498,20 +541,30 @@ def _missing_text(model, what, note=""):
 def _overlay(model, what, make, xml=None):
     """``NPV <what>``, an overlay filter made by ``make(src)`` on NPV scope, and fed from it (an older
     one was fed by NPV deform). NPV scope is updated first: filters such as the load glyphs fill their
-    checklists from their input's data, which a scope made just now has not produced yet."""
-    src = scoped(model)
+    checklists from their input's data, which a scope made just now has not produced yet. On B's
+    side of a comparison: ``NPV diff <what>``, on :func:`compared`."""
+    if model.from_diff:
+        src = compared(model.reader, model.diff)
+        what = _diff_what(model.diff, what)
+    else:
+        src = scoped(model)
     src.UpdatePipeline(model.time)  # a pass-through, or the cached cut, once the scope has run
     return _feed(_named(model, what, lambda: make(src), xml), src)
 
 
 def _extract(model, *blocks, what=None, undeformed=False, scoped=False):
     """``NPV <blocks>`` (an ExtractBlock of the model's NPV deform); ``scoped``: ``NPV scoped <blocks>``
-    from NPV scope (the overlays' cut); ``undeformed``: from a deform held at scale 0."""
+    from NPV scope (the overlays' cut); ``undeformed``: from a deform held at scale 0. On B's side of
+    a comparison every extract is ``NPV diff [undeformed] <blocks>``, of :func:`compared`."""
     has = (lambda b: model.scoped(b) is not None) if scoped else model.has
     blocks = [b for b in blocks if has(b) or "/" in b]
     if not blocks:
         return None
     name = what or "+".join(blocks)
+    if model.from_diff:
+        src = compared(model.reader, model.diff, undeformed)
+        return _named(model, _diff_what(model.diff, f"{'undeformed ' if undeformed else ''}{name}"),
+                      lambda: extract_blocks(src, blocks))
     if undeformed:  # through a deform filter at scale 0, which holds the mode while it vibrates
         rest = _named(model, "undeformed model", lambda: pv.NastranDeform(Input=model.reader))
         return _named(model, f"undeformed {name}", lambda: extract_blocks(rest, blocks))
@@ -544,20 +597,123 @@ _INFO_WRITES = 0  # info_text calls so far: apply tells from it which layer wrot
 def scene_of(view):
     """The layers shown in ``view`` (a :class:`nastran_pv.scene.Scene`, made on first use). Scenes of
     views that were closed are dropped, and a scene whose reader was deleted is emptied, hiding what
-    is left of it in ``view``: its objects still open and every ``NPV ...`` object (its info text)."""
+    is left of it in ``view``: its objects still open and every ``NPV ...`` object (its info text).
+    A comparison ends with its Nastran Diff or one of its models (the scene is emptied the same way;
+    a side-by-side pair stays a pair), and a pair whose other view was closed is a pair no more."""
     from nastran_pv.scene import Scene
 
     alive = {v.GetGlobalIDAsString() for v in pv.GetViews()}
     for key in [k for k in _SCENES if k not in alive]:
         del _SCENES[key]
     scene = _SCENES.setdefault(view.GetGlobalIDAsString(), Scene())
-    sources = pv.GetSources()
-    if scene.model is not None and scene.model not in list(sources.values()):
+    sources = list(pv.GetSources().values())
+    gone = scene.model is not None and scene.model not in sources
+    if scene.diff is not None and (scene.diff not in sources or any(s not in sources for s in diff_sides(scene.diff))):
+        scene.diff, gone = None, True
+        if scene.partner is None:
+            scene.end_comparison()
+    if scene.side is not None and scene.side not in sources:
+        scene.end_comparison()
+        gone = True
+    if scene.partner is not None and scene.partner not in alive:
+        scene.partner = None
+        if scene.diff is None:
+            scene.end_comparison()
+    if gone:
         cleared = scene.clear()
-        names = {v.GetGlobalIDAsString(): k[0] for k, v in sources.items()}
+        names = {v.GetGlobalIDAsString(): k[0] for k, v in pv.GetSources().items()}
         _hide([s for s in shown_sources(view)
                if s in cleared or names.get(s.GetGlobalIDAsString(), "").startswith("NPV ")], view)
     return scene
+
+
+def _partner(view):
+    """The other view of ``view``'s side-by-side pair, or None."""
+    pid = scene_of(view).partner if view is not None else None
+    return next((v for v in pv.GetViews() if v.GetGlobalIDAsString() == pid), None) if pid else None
+
+
+def _pair(view):
+    """``[view]``, or ``[view, its partner]`` in a side-by-side pair: where a command draws (rule R4)."""
+    other = _partner(view)
+    return [view] if other is None else [view, other]
+
+
+def _sides(scene):
+    """``(B, A)`` of a comparison scene: the Nastran Diff's (Swap Inputs aware), or of a pair without a
+    diff the models its two sides show; None for one model."""
+    if scene.diff is not None:
+        return diff_sides(scene.diff)
+    if scene.role is None:
+        return None
+    other = _SCENES.get(scene.partner) if scene.partner is not None else None
+    mine, theirs = scene.side, other.side if other is not None else None
+    return (mine, theirs) if scene.role == "B" else (theirs, mine)
+
+
+def _own_side(scene):
+    """The model a comparison scene's view is about: A's or B's (by its role), else None."""
+    sides = _sides(scene)
+    if sides is None:
+        return None
+    return sides[1] if scene.role == "A" else sides[0]
+
+
+def owner(src):
+    """The model a pipeline object (a pick, the active source) belongs to: the model source upstream of
+    it; through a Nastran Diff its B, unless the object draws the diff's Removed block (A's removed
+    items), which belongs to A (rule R3: picks resolve to their model)."""
+    removed = False
+    for node in upstream(src):
+        if _xml_name(node) == DIFF_XML:
+            b, a = diff_sides(node)
+            return a if removed else b
+        if _is_model_source(node):
+            return node
+        try:
+            selectors = list(getattr(node, "Selectors", None) or [])
+        except TypeError:
+            selectors = []
+        removed = removed or bool(selectors) and all(str(s).endswith("/Removed") for s in selectors)
+    named = _named_owner(src)  # a source of its own (an NPV text, the CG marker): the model in its name
+    return named if named is not None else find_reader(src)
+
+
+def _named_owner(src):
+    """The model an ``NPV <what> [<label>]`` object is named after, or None."""
+    name = next((k[0] for k, v in pv.GetSources().items() if v == src), "") if src is not None else ""
+    if not name.startswith("NPV "):
+        return None
+    for proxy in pv.GetSources().values():
+        if _is_model_source(proxy) and name.endswith(_name(_ReaderOnly(proxy), "")[len("NPV "):].strip()):
+            return proxy
+    return None
+
+
+def subject(view=None, reader=None):
+    """The model a command in ``view`` (default: active) acts on, rule R4: the model follows the view.
+
+    * A side of a comparison (one view after NPV Diff, or either view of a pair) is about its role's
+      model, whichever source is selected: B's from the Nastran Diff's Input, A's from its Reference.
+      ``reader`` may name either of the two (it is mapped to the role); another model is an error.
+    * A view of one model keeps its model, unless the user selected another model's object since the
+      last command (the Pipeline Browser): then that model, which starts a new scene there.
+    * An empty view: ``reader``, else the model of the active source (:func:`find_reader`)."""
+    view = view or pv.GetActiveView()
+    scene = scene_of(view) if view is not None else None
+    own = _own_side(scene) if scene is not None else None
+    if own is not None:
+        if reader is not None and reader != own and reader not in _sides(scene):
+            raise RuntimeError(f"This view compares {_label(_sides(scene)[0])} with {_label(_sides(scene)[1])}: "
+                               "click NPV Single first to look at another model here, or use another view.")
+        return own
+    if reader is not None:
+        return reader
+    active = pv.GetActiveSource()
+    if scene is not None and scene.model is not None:
+        if active is None or active == _FINISHED[0] or owner(active) == scene.model:
+            return scene.model
+    return owner(active) if active is not None else find_reader()
 
 
 def _show(src, view):
@@ -621,34 +777,57 @@ def _hide_strays(view, reader, fresh):
 
 
 def _clear_view(view):
-    """Hide everything shown in ``view``, forget its scene and turn the orientation axes back on."""
+    """Hide everything shown in ``view``, forget its layers (a comparison stays one) and turn the
+    orientation axes back on."""
     _hide(shown_sources(view), view)
-    _SCENES.pop(view.GetGlobalIDAsString(), None)
+    scene_of(view).clear()
     view.OrientationAxesVisibility = 1
 
 
 def clear(view=None):
-    """NPV Clear: empty ``view`` (default: active) of every layer, with the model undeformed (scale 0).
-    Deletes nothing; ends with the model's reader selected (None when no model is open)."""
+    """NPV Clear: empty ``view`` (default: active) of every layer, with the model undeformed (scale 0);
+    in a side-by-side pair both views. Deletes nothing and keeps the comparison (NPV Single ends it);
+    ends with the model's reader selected (None when no model is open)."""
     view = view or pv.GetActiveViewOrCreate("RenderView")
-    reader = scene_of(view).model
-    if reader is None:
-        try:
-            reader = find_reader()
-        except RuntimeError:  # no model open: just empty the view
-            reader = None
-    if reader is not None:
-        stop_mode_animation(reader, view)
-        set_deformation(_ReaderOnly(reader), 0.0)
-    _clear_view(view)
-    pv.Render(view)
-    return _finish(reader)
+    first = None
+    for v in _pair(view):
+        scene = scene_of(v)
+        reader = scene.model if scene.model is not None else _own_side(scene)
+        if reader is None:
+            try:
+                reader = subject(v)
+            except RuntimeError:  # no model open: just empty the view
+                reader = None
+        if reader is not None:
+            stop_mode_animation(reader, v)
+            set_deformation(_ReaderOnly(reader), 0.0)
+        _clear_view(v)
+        pv.Render(v)
+        if first is None:
+            first = reader
+    pv.SetActiveView(view)
+    return _finish(first)
 
 
-def solid(disp, rgb):
+def _old_lut(disp):
+    """The lookup table ``disp`` is colored with now, or None (a plain color, a text)."""
+    color = getattr(disp, "ColorArrayName", None)
+    return getattr(disp, "LookupTable", None) if color and color[1] else None
+
+
+def _drop_bar(lut, view):
+    """Hide the legend of ``lut`` (a representation's previous coloring) when nothing shown uses it: one
+    object can carry two colorings in turn (the mesh by PID, then by DiffStatus or as a ghost)."""
+    if lut is not None:
+        pv.HideScalarBarIfNotNeeded(lut, view or pv.GetActiveView())
+
+
+def solid(disp, rgb, view=None):
     """Switch a representation to a plain colour."""
+    old = _old_lut(disp)
     disp.ColorArrayName = ["POINTS", ""]
     disp.AmbientColor = disp.DiffuseColor = rgb
+    _drop_bar(old, view)
 
 
 def ghost_mesh(model, view, opacity=0.2):
@@ -695,6 +874,7 @@ def categorical(disp, array, values, labels=None, colors=None, legend_max=40, as
                 separate=False):
     """Indexed lookup table: one colour and one annotation per integer value. ``separate``: a color
     map of this representation's own, so the shared one (the mesh's PID legend) is left alone."""
+    old = _old_lut(disp)
     if separate:
         disp.UseSeparateColorMap = 1
         pv.ColorBy(disp, (association, array), separate=True)  # ColorBy's default resets UseSeparateColorMap
@@ -706,10 +886,13 @@ def categorical(disp, array, values, labels=None, colors=None, legend_max=40, as
     lut.Annotations = [x for i, v in enumerate(values) for x in (str(v), labels[i] if labels else str(v))]
     lut.IndexedColors = [c for rgb in (colors or palette(len(values))) for c in rgb]
     disp.SetScalarBarVisibility(view or pv.GetActiveView(), len(values) <= legend_max)
+    if old is not None and old != lut:
+        _drop_bar(old, view)
     return lut
 
 
 def continuous(disp, association, array, preset="Viridis (matplotlib)", view=None):
+    old = _old_lut(disp)
     pv.ColorBy(disp, (association, array))
     lut = pv.GetColorTransferFunction(array)
     lut.InterpretValuesAsCategories = 0
@@ -719,6 +902,8 @@ def continuous(disp, association, array, preset="Viridis (matplotlib)", view=Non
         pass
     disp.RescaleTransferFunctionToDataRange(True, False)
     disp.SetScalarBarVisibility(view or pv.GetActiveView(), True)
+    if old is not None and old != lut:
+        _drop_bar(old, view)
     return lut
 
 
@@ -768,7 +953,7 @@ def index_colors(source=None, view=None):
     values = sorted({int(v) for v in _gather(data, array, assoc)})
     if len(values) > 1024:
         raise RuntimeError(f"{array} has {len(values)} distinct values; too many for indexed colours.")
-    model = Model(find_reader(source))
+    model = Model(owner(source))
     return categorical(rep, array, values, labels_for(model, array, values), association=assoc, view=view)
 
 
@@ -822,6 +1007,22 @@ def _color_points(model, d, src, array, view, preset="Viridis (matplotlib)"):
     return continuous(d, "POINTS", array, preset=preset, view=view)
 
 
+def _status_colors(d, association, view):
+    """An overlay in B's view of a comparison: its items colored by DiffStatus, the diff's legend."""
+    from nastran_pv.diff import STATUS_NAMES
+
+    return categorical(d, "DiffStatus", list(range(len(STATUS_NAMES))), list(STATUS_NAMES), colors=DIFF_RGB,
+                       association=association, view=view)
+
+
+def _changes(model, data, association, item):
+    """'changes: 1 changed, 1 added; 1 removed (red)': the DiffStatus counts of an overlay's items
+    (``data``: a block or a multiblock of them) and A's removed items of ``item`` (ItemType)."""
+    from nastran_pv.diff import change_text, removed_count, status_counts
+
+    return change_text(status_counts(data, association), removed_count(model.block("Removed"), item))
+
+
 def view_masses(model, view, mode=None, relative=None, law=None, minimum=None, minimum_mass=None, color_by=None):
     """Mass glyphs. Sizing: ``mode`` Auto/Physical/Relative; in relative sizing the heaviest
     mass gets radius ``relative`` (the filter's Size) x model diagonal and the others follow ``law``
@@ -837,7 +1038,10 @@ def view_masses(model, view, mode=None, relative=None, law=None, minimum=None, m
                MinimumRelativeSize=minimum, MinimumMass=minimum_mass, ColorBy=color_by)
     glyphs.UpdatePipeline()
     d = _show(glyphs, view)
-    _color_points(model, d, glyphs, enum_text(glyphs, "ColorBy"), view)
+    if model.from_diff:
+        _status_colors(d, "POINTS", view)
+    else:
+        _color_points(model, d, glyphs, enum_text(glyphs, "ColorBy"), view)
     offsets = _extract(model, "MassOffsets", scoped=True)
     if offsets is not None:
         od = _show(offsets, view)
@@ -850,6 +1054,8 @@ def view_masses(model, view, mode=None, relative=None, law=None, minimum=None, m
     text = f"Concentrated mass: {conc[0]:.6g}  ({n} items)"
     if model.scope_active():
         text = f"Concentrated mass (whole model): {conc[0]:.6g}\n{n} items in the reader's scope"
+    if model.from_diff:
+        text += "\n" + _changes(model, masses, "POINTS", "mass")
     hidden = int(_glyph_field(glyphs, "HiddenMassCount"))
     if hidden:
         text += f"\n{hidden} lighter than Minimum Mass {glyphs.MinimumMass:g} not drawn"
@@ -901,7 +1107,10 @@ def _bush_view(model, view, kind, size=None, ellipsoids=None):
     links = _extract(model, "BushLines", scoped=True)
     if links is not None:
         ld = _show(links, view)
-        solid(ld, list(BUSH_LINE_RGB))
+        if model.from_diff:
+            _status_colors(ld, "CELLS", view)
+        else:
+            solid(ld, list(BUSH_LINE_RGB))
         ld.LineWidth = 1.5
     n = bushes.GetNumberOfPoints()
     first = 4 if rotation else 1
@@ -922,7 +1131,10 @@ def _bush_view(model, view, kind, size=None, ellipsoids=None):
     grey = "ellipsoid / released" if ellipsoid and released else "ellipsoid" if ellipsoid else "released"
     axes = ([0] if released or ellipsoid else []) + [1, 2, 3]
     labels = [grey if a == 0 else names[a - 1] for a in axes]
-    categorical(d, "Axis", axes, labels, [BUSH_RGB[a] for a in axes], view=view)
+    if model.from_diff:
+        _status_colors(d, "CELLS", view)
+    else:
+        categorical(d, "Axis", axes, labels, [BUSH_RGB[a] for a in axes], view=view)
     ref = _glyph_field(glyphs, "StiffnessReference", 1.0)  # what the glyphs used (old files: a fallback)
     ref_text = f"K_rot_ref = {ref:.4g}" if rotation else f"K_ref = {ref:.4g}"
     shape = ("rings around the element axes, radius" if rotation
@@ -936,6 +1148,8 @@ def _bush_view(model, view, kind, size=None, ellipsoids=None):
         lines.append(f"{released} with a released axis (grey)")
     if missing:
         lines.append(f"{missing} without PBUSH stiffness (not drawn)")
+    if model.from_diff:
+        lines.append(_changes(model, bushes, "POINTS", "bush"))
     info_text(model, view, "\n".join(lines))
     return glyphs
 
@@ -986,7 +1200,10 @@ def view_beams(model, view, triads=None, max_triads=None, scale=None):
     sections = _overlay(model, "beam sections", lambda src: pv.NastranBeamSections(Input=src))
     _set_given(sections, DeformationScale=scale)
     d = _show(sections, view)
-    categorical(d, "PID", values, labels_for(model, "PID", values), view=view, separate=True)
+    if model.from_diff:
+        _status_colors(d, "CELLS", view)
+    else:
+        categorical(d, "PID", values, labels_for(model, "PID", values), view=view, separate=True)
     axes = _beam_axes(model)
     _set_given(axes, DeformationScale=scale, ShowTriads=None if triads is None else int(triads),
                MaxTriads=max_triads if max_triads is not None else (0 if triads else None))
@@ -1088,8 +1305,11 @@ def view_loads(model, view, sets=None, show=None, size=None, stride=None, source
         info_text(model, view, text)
         return g
     d = _show(g, view)
-    continuous(d, "POINTS", "Magnitude", preset="Inferno (matplotlib)", view=view)
-    lines = []
+    if model.from_diff:
+        _status_colors(d, "POINTS", view)
+    else:
+        continuous(d, "POINTS", "Magnitude", preset="Inferno (matplotlib)", view=view)
+    lines = [_changes(model, loads, "POINTS", "load")] if model.from_diff else []
     from nastran_pv.vtkutil import vector_text
 
     mass, wtmass = model.field("ModelMass"), model.field("WTMASS")
@@ -1191,9 +1411,13 @@ def view_spc(model, view, sets=None, dofs=None, size=None):
                                f"{g.DOFs or '(none)'} ('NPV spc glyphs').")
         return g
     d = _show(g, view)
-    codes = sorted({int(v) for v in _gather(fetch(g), "DOFCode", "POINTS")})
-    categorical(d, "DOFCode", codes, labels_for(model, "DOFCode", codes), association="POINTS", view=view)
-    text = f"{shown} constrained grids, coloured by DOF code"
+    if model.from_diff:
+        _status_colors(d, "POINTS", view)
+        text = f"{shown} constrained grids, coloured by change\n" + _changes(model, constraints, "POINTS", "spc")
+    else:
+        codes = sorted({int(v) for v in _gather(fetch(g), "DOFCode", "POINTS")})
+        categorical(d, "DOFCode", codes, labels_for(model, "DOFCode", codes), association="POINTS", view=view)
+        text = f"{shown} constrained grids, coloured by DOF code"
     if shown < total:
         text += f"\n(of {total}: SPC Sets / DOFs {g.DOFs} on 'NPV spc glyphs')"
     info_text(model, view, text)
@@ -1206,10 +1430,15 @@ def view_rigid(model, view):
         info_text(model, view, _missing_text(model, "rigid elements"))
         return
     d = _show(_extract(model, "Rigid", scoped=True), view)
-    types = sorted({int(t) for t in _gather(rigid, "RigidType", "CELLS")})
-    categorical(d, "RigidType", types, labels_for(model, "RigidType", types), view=view)
+    text = f"{rigid.GetNumberOfCells()} rigid-element legs"
+    if model.from_diff:
+        _status_colors(d, "CELLS", view)
+        text += "\n" + _changes(model, rigid, "CELLS", "rigid")
+    else:
+        types = sorted({int(t) for t in _gather(rigid, "RigidType", "CELLS")})
+        categorical(d, "RigidType", types, labels_for(model, "RigidType", types), view=view)
     d.LineWidth = 2.5
-    info_text(model, view, f"{rigid.GetNumberOfCells()} rigid-element legs")
+    info_text(model, view, text)
 
 
 def _mesh_categorical(model, view, array, blocks=MESH):
@@ -1223,6 +1452,30 @@ def _mesh_categorical(model, view, array, blocks=MESH):
     values = model.unique(array, "cell", blocks)
     categorical(d, array, values, labels_for(model, array, values), view=view)
     return d
+
+
+def view_array(model, view, array, association=None):
+    """The mesh colored by any cell (else point) ``array``: indexed colors for ids and codes
+    (:data:`CATEGORICAL`), else a continuous map. Side by side's ``array=`` for the arrays no view
+    shows (``ElementMass``, ``DeltaElementMass``, ...); a coloring layer named "array"."""
+    blocks = [b for b in MESH if model.has(b)]
+    if association is None:
+        on_cells = any(model.array(b, array, "cell") is not None for b in blocks)
+        association = "CELLS" if on_cells else "POINTS"
+    mesh = _extract(model, *blocks, what="mesh")
+    if mesh is None:
+        info_text(model, view, f"No elements carry {array}.")
+        return None
+    d = _show(mesh, view)
+    d.Representation = "Surface"
+    d.Opacity = 1.0
+    d.LineWidth = 3
+    if array in CATEGORICAL:
+        values = model.unique(array, "cell" if association == "CELLS" else "point", blocks)
+        categorical(d, array, values, labels_for(model, array, values), association=association, view=view)
+    else:
+        continuous(d, association, array, view=view)
+    return None
 
 
 def view_family(model, view):
@@ -1577,11 +1830,11 @@ def _color_blocks(model, view, view_name, picks, component=None):
             src.LowerThreshold, src.UpperThreshold = -1e300, 1e300
         d = _show(src, view)
         d.Opacity = 1.0
-        old = d.LookupTable  # a reused extract's previous coloring: its legend goes when nothing else uses it
+        old = _old_lut(d)  # a reused extract's previous coloring: its legend goes when nothing else uses it
         pv.ColorBy(d, (assoc, array))
         lut = pv.GetColorTransferFunction(array)
-        if old is not None and old != lut:
-            pv.HideScalarBarIfNotNeeded(old, view)
+        if old != lut:
+            _drop_bar(old, view)
         lut.InterpretValuesAsCategories = 0
         comp = None
         if values.ndim == 2:  # the mode first, then the range: no magnitude range left in it
@@ -1874,6 +2127,31 @@ def view_parts(model, view, exclude=()):
     return p
 
 
+def _not_in(model, key, ids):
+    """'EID 3 not in B': the seed ids (EIDs, else grids) ``model`` lacks, as for a seed picked on A's
+    removed items in B's view of a comparison (rule R3); "" when it has them all."""
+    from nastran_pv.selection import missing_ids
+    from nastran_pv.tree import format_ids
+
+    blocks = [model.block(n) for n in model.names if n != "Removed"]  # not A's items in B's side
+    missing = missing_ids(blocks, key, ids)
+    if not missing:
+        return ""
+    return f"{'EID' if key == 'EID' else 'grid'} {format_ids(missing)} not in {model.role or 'this model'}"
+
+
+def _seeds_not_in(model, text):
+    """:func:`_not_in` for a Seed IDs text ("EID 1 2; GRID 4"); "" for a text the grow filter
+    reports itself."""
+    from nastran_pv.topology.graph import Seeds
+
+    try:
+        seeds = Seeds.parse(text)
+    except ValueError:
+        return ""
+    return "; ".join(t for t in (_not_in(model, "EID", seeds.eids), _not_in(model, "GRID", seeds.grids)) if t)
+
+
 def view_grow(model, view, seeds=None, exclude=()):
     g = _named(model, "grow", lambda: pv.NastranGrow(Input=model.reader))
     if seeds:
@@ -1892,7 +2170,8 @@ def view_grow(model, view, seeds=None, exclude=()):
     hops = _gather(fetch(g), "Hops", "CELLS")
     top = int(hops.max()) if hops.size else -1
     seeds = g.SeedIDs if len(g.SeedIDs) <= 40 else g.SeedIDs[:37] + "..."
-    info_text(model, view, f"Grow from {seeds}\nup to {top} element hops")
+    missing = _seeds_not_in(model, g.SeedIDs)
+    info_text(model, view, f"Grow from {seeds}\nup to {top} element hops" + (f"\n{missing}" if missing else ""))
     return g
 
 
@@ -1908,8 +2187,10 @@ def view_path(model, view):
     d.LineWidth = 4
     solid(d, list(SET1[0]))
     length = _root_value(p, "PathLength", -1)
-    info_text(model, view, f"Path grid {p.FromGrid} -> grid {p.ToGrid}: {length} element(s)" if length >= 0
-              else f"No path from grid {p.FromGrid} to grid {p.ToGrid} through the checked card types.")
+    missing = _not_in(model, "GRID", [p.FromGrid, p.ToGrid])
+    info_text(model, view, (f"Path grid {p.FromGrid} -> grid {p.ToGrid}: {length} element(s)" if length >= 0
+                            else f"No path from grid {p.FromGrid} to grid {p.ToGrid} through the checked card types.")
+              + (f"\n{missing}" if missing else ""))
     return p
 
 
@@ -1999,8 +2280,9 @@ def selected_source():
 
 
 def selected_reader():
-    """The Nastran reader upstream of the selection (with two decks open, not always the active one)."""
-    return find_reader(selected_source())
+    """The model the selection belongs to (with two decks open, not always the active one): its
+    :func:`owner`, so a pick on a comparison's removed items is A's (rule R3)."""
+    return owner(selected_source())
 
 
 def _fetch_selection():
@@ -2046,22 +2328,34 @@ def selected_ids():
     return "GRID", sorted({int(v) for v in _gather(data, "NID", "POINTS")})
 
 
+def _targets(view):
+    """The models a selection command seeds: in a comparison the model of each view of the pair (rule R4:
+    B in B's view, A in A's, whichever side was picked), else the selection's model."""
+    if scene_of(view).comparison:
+        return [subject(v) for v in _pair(view)]
+    return [selected_reader()]
+
+
 def grow_from_selection():
     kind, ids = selected_ids()
-    model = Model(selected_reader())
-    g = _named(model, "grow", lambda: pv.NastranGrow(Input=model.reader))
-    g.SeedIDs = f"{kind} {' '.join(map(str, ids))}"
-    apply("grow", reader=model.reader, model=model, reset_camera=False)
+    view = pv.GetActiveViewOrCreate("RenderView")
+    targets = _targets(view)
+    for r in targets:
+        g = _named(_ReaderOnly(r), "grow", lambda r=r: pv.NastranGrow(Input=r))
+        g.SeedIDs = f"{kind} {' '.join(map(str, ids))}"
+    apply("grow", reader=targets[0], view=view, reset_camera=False)
 
 
 def path_from_selection():
     kind, ids = selected_ids()
     if kind != "GRID" or len(ids) != 2:
         raise RuntimeError(f"Select exactly two grids with Select Points On (got {len(ids)} {kind} id(s)).")
-    model = Model(selected_reader())
-    p = _named(model, "path", lambda: pv.NastranPath(Input=model.reader))
-    p.FromGrid, p.ToGrid = ids
-    apply("path", reader=model.reader, model=model, reset_camera=False)
+    view = pv.GetActiveViewOrCreate("RenderView")
+    targets = _targets(view)
+    for r in targets:
+        p = _named(_ReaderOnly(r), "path", lambda r=r: pv.NastranPath(Input=r))
+        p.FromGrid, p.ToGrid = ids
+    apply("path", reader=targets[0], view=view, reset_camera=False)
 
 
 # ------------------------------------------------------ Femap-style visibility
@@ -2081,49 +2375,71 @@ def _listed(reader, prop):
     return list(reader.GetProperty(prop + "Info"))[0::2]
 
 
-def _refresh(reader):
-    """The reader output changed: drop its selections (they would point at other cells), redraw,
-    and select the reader (its visibility properties are what changed)."""
+def _scope_readers(reader, what="This command"):
+    """The deck readers a visibility command writes: ``reader``, and in a comparison (the active view's)
+    both of its models, by ID (rule R3: one scope for A and B). A converted file has no visibility lists
+    and is left out (at least one deck reader is needed)."""
+    view = pv.GetActiveView()
+    sides = _sides(scene_of(view)) if view is not None else None
+    readers = [reader] + ([r for r in sides if r is not None and r != reader] if sides and reader in sides else [])
+    decks = [r for r in readers if _xml_name(r) == READER_XML]
+    if not decks:
+        deck_reader(reader, what)  # the converted-file error
+    return decks
+
+
+def _refresh(readers):
+    """The readers' output changed: drop their selections (they would point at other cells), redraw
+    (both views of a pair), and select the first reader (its visibility properties are what changed)."""
+    readers = readers if isinstance(readers, list) else [readers]
     for src in _sources_with_selection().values():
-        if find_reader(src) == reader:
+        if owner(src) in readers:
             pv.ClearSelection(src)
-    reader.UpdatePipeline()
-    if pv.GetActiveView() is not None:
-        pv.Render()
-    _finish(reader)
+    for r in readers:
+        r.UpdatePipeline()
+    view = pv.GetActiveView()
+    for v in _pair(view) if view is not None else []:
+        pv.Render(v)
+    _finish(readers[0])
 
 
 def show_only_selected():
-    """Femap Show Only: the selected elements and nothing else (loads and SPCs stay)."""
+    """Femap Show Only: the selected elements and nothing else (loads and SPCs stay); in a comparison
+    on both models, by EID."""
     from nastran_pv.tree import format_ids
 
     ids = _selected_elements()
-    reader = deck_reader(selected_reader(), "Show Only")
-    reader.ShowOnlyElements = format_ids(ids)
-    reader.HiddenElements = ""
-    _refresh(reader)
+    readers = _scope_readers(selected_reader(), "Show Only")
+    for reader in readers:
+        reader.ShowOnlyElements = format_ids(ids)
+        reader.HiddenElements = ""
+    _refresh(readers)
 
 
 def hide_selected():
-    """Femap Hide: add the selected elements to the reader's Hidden Elements."""
+    """Femap Hide: add the selected elements to the reader's Hidden Elements (both models' in a
+    comparison)."""
     from nastran_pv.tree import format_ids, parse_ids
 
     ids = _selected_elements()
-    reader = deck_reader(selected_reader(), "Hide")
-    reader.HiddenElements = format_ids(parse_ids(reader.HiddenElements) | set(ids))
-    _refresh(reader)
+    readers = _scope_readers(selected_reader(), "Hide")
+    for reader in readers:
+        reader.HiddenElements = format_ids(parse_ids(reader.HiddenElements) | set(ids))
+    _refresh(readers)
 
 
 def show_all(reader=None):
-    """Clear the element ID lists and check every property, material, type, family, group and file."""
-    reader = deck_reader(reader or find_reader(), "Show All")
-    reader.ShowOnlyElements = ""
-    reader.HiddenElements = ""
-    reader.SelectionMode = "Off"  # keeps the SelectionFile for NPV Show Only/Hide/Highlight File
-    reader.UpdatePipelineInformation()
-    for prop in VISIBILITY_PROPS:
-        setattr(reader, prop, _listed(reader, prop))
-    _refresh(reader)
+    """Clear the element ID lists and check every property, material, type, family, group and file
+    (of both models in a comparison)."""
+    readers = _scope_readers(reader or subject(), "Show All")
+    for reader in readers:
+        reader.ShowOnlyElements = ""
+        reader.HiddenElements = ""
+        reader.SelectionMode = "Off"  # keeps the SelectionFile for NPV Show Only/Hide/Highlight File
+        reader.UpdatePipelineInformation()
+        for prop in VISIBILITY_PROPS:
+            setattr(reader, prop, _listed(reader, prop))
+    _refresh(readers)
 
 
 def _show_only_category(array, prop, what):
@@ -2131,12 +2447,15 @@ def _show_only_category(array, prop, what):
     ids = {int(v) for assoc in ("CELLS", "POINTS") for v in _gather(data, array, assoc) if v > 0}
     if not ids:
         raise RuntimeError(f"The selection carries no {array}: select elements that have a {what}.")
-    reader = deck_reader(selected_reader(), f"Show Only {what.capitalize()}")
-    reader.UpdatePipelineInformation()
-    keep = [n for n in _listed(reader, prop) if (m := re.search(r"_(\d+)$", n)) and int(m.group(1)) in ids]
-    setattr(reader, prop, keep)
-    _refresh(reader)
-    return keep
+    readers = _scope_readers(selected_reader(), f"Show Only {what.capitalize()}")
+    first = None
+    for reader in readers:  # by id: PSHELL_10 in A keeps PSHELL_10 in B
+        reader.UpdatePipelineInformation()
+        keep = [n for n in _listed(reader, prop) if (m := re.search(r"_(\d+)$", n)) and int(m.group(1)) in ids]
+        setattr(reader, prop, keep)
+        first = keep if first is None else first
+    _refresh(readers)
+    return first
 
 
 def reached_eids(reader=None):
@@ -2147,7 +2466,7 @@ def reached_eids(reader=None):
     from nastran_pv.fields.common import iter_blocks, mpc_legs
     from nastran_pv.tree import as_multiblock
 
-    model = Model(reader or find_reader())
+    model = _ReaderOnly(reader or subject())
     g = pv.FindSource(_name(model, "grow"))
     if g is None or not (g.SeedIDs or "").strip():
         raise RuntimeError("Nothing grown yet: select a grid or elements, then click 'NPV Grow from Selection'.")
@@ -2170,12 +2489,13 @@ def show_only_reached():
     from nastran_pv.tree import format_ids
 
     reader, eids = reached_eids()
-    deck_reader(reader, "Show Only Reached")
+    readers = _scope_readers(reader, "Show Only Reached")
     if not eids:
         raise RuntimeError("NPV grow reached no elements.")
-    reader.ShowOnlyElements = format_ids(eids)
-    reader.HiddenElements = ""
-    _refresh(reader)
+    for reader in readers:
+        reader.ShowOnlyElements = format_ids(eids)
+        reader.HiddenElements = ""
+    _refresh(readers)
 
 
 def hide_reached():
@@ -2183,11 +2503,12 @@ def hide_reached():
     from nastran_pv.tree import format_ids, parse_ids
 
     reader, eids = reached_eids()
-    deck_reader(reader, "Hide Reached")
+    readers = _scope_readers(reader, "Hide Reached")
     if not eids:
         raise RuntimeError("NPV grow reached no elements.")
-    reader.HiddenElements = format_ids(parse_ids(reader.HiddenElements) | eids)
-    _refresh(reader)
+    for reader in readers:
+        reader.HiddenElements = format_ids(parse_ids(reader.HiddenElements) | eids)
+    _refresh(readers)
 
 
 def show_only_property():
@@ -2205,25 +2526,30 @@ NO_SELECTION_FILE = ("Set 'Selection File' on the Nastran reader (a CSV/text/Exc
                      "names EID, GRID, PID, MID, FAMILY or GROUP), then run this again.")
 
 
-def _file_reader(path, key, reader, what):
-    """The deck reader with its SelectionFile (and SelectionKey) set from the arguments."""
-    reader = deck_reader(reader or find_reader(), what)
-    if path is not None:
-        reader.SelectionFile = os.path.abspath(str(path))
-    if key is not None:
-        from nastran_pv.selection import normalize_key
+def _file_readers(path, key, reader, what):
+    """The deck readers (:func:`_scope_readers`: both models in a comparison, the first being the view's)
+    with their SelectionFile (and SelectionKey) set from the arguments, else the first one's."""
+    readers = _scope_readers(reader or subject(), what)
+    if len(readers) > 1:  # the other model gets the view's file and key
+        path = path if path is not None else (readers[0].SelectionFile or None)
+        key = key if key is not None else enum_text(readers[0], "SelectionKey")
+    for r in readers:
+        if path is not None:
+            r.SelectionFile = os.path.abspath(str(path))
+        if key is not None:
+            from nastran_pv.selection import normalize_key
 
-        reader.SelectionKey = normalize_key(key) or "Auto"  # GRID -> NID, ELEMENT -> EID, ...
-    if not reader.SelectionFile:
+            r.SelectionKey = normalize_key(key) or "Auto"  # GRID -> NID, ELEMENT -> EID, ...
+    if not readers[0].SelectionFile:
         raise RuntimeError(NO_SELECTION_FILE)
-    return reader
+    return readers
 
 
 def file_ids(reader=None):
     """The reader's SelectionFile as a ``nastran_pv.selection.IdList`` (key resolved)."""
     from nastran_pv.selection import read_ids
 
-    reader = deck_reader(reader or find_reader(), "Selection File")
+    reader = deck_reader(reader or subject(), "Selection File")
     if not reader.SelectionFile:
         raise RuntimeError(NO_SELECTION_FILE)
     return read_ids(reader.SelectionFile, key=enum_text(reader, "SelectionKey"))
@@ -2243,13 +2569,15 @@ def enum_text(proxy, prop):
 
 
 def _file_mode(path, key, reader, mode, what):
-    reader = _file_reader(path, key, reader, what)
-    reader.SelectionMode = mode
-    # the same file name and mode leave the proxy unmodified: bump the token so an edited file is read
-    reader.SelectionReload = int(reader.GetPropertyValue("SelectionReload")) + 1
-    _refresh(reader)
-    raise_load_error(reader)
-    return reader, file_ids(reader)
+    readers = _file_readers(path, key, reader, what)
+    for r in readers:
+        r.SelectionMode = mode
+        # the same file name and mode leave the proxy unmodified: bump the token so an edited file is read
+        r.SelectionReload = int(r.GetPropertyValue("SelectionReload")) + 1
+    _refresh(readers)
+    for r in readers:
+        raise_load_error(r)
+    return readers[0], file_ids(readers[0])
 
 
 def show_only_file(path=None, key=None, reader=None):
@@ -2333,7 +2661,13 @@ NO_REFERENCE = ("The diff compares two models: open the reference model (A) too,
 DIFF_ITEM_BLOCKS = ("Masses", "Rigid", "Connectors", "BushLines", "Bushes", "Constraints", "Loads")
 SIDE_LINK = "NPV side-by-side"
 CATEGORICAL = ("PID", "MID", "ElementType", "FamilyId", "GroupId", "FileId", "DiffStatus", "PartId", "NSMSource")
-_SIDE_VIEWS = {}  # left view id -> its right view
+SHARED_CATEGORIES = ("PID", "MID", "ElementType", "FamilyId", "GroupId", "FileId", "NSMSource")  # one legend in a pair
+# A's removed items each overlay adds in red (diff_items.ITEM_TYPES names; the colorings add "element")
+REMOVED_ITEMS = {"masses": ("mass",), "bushes": ("bush",), "bushrotations": ("bush",), "loads": ("load",),
+                 "spc": ("spc",), "rigid": ("rigid",), "beams": ()}
+# the coloring a side by side array is drawn with: the view that colors the mesh by it, else "array"
+ARRAY_VIEWS = {"PID": "pid", "MID": "mid", "ElementType": "elementtype", "FamilyId": "family", "GroupId": "group",
+               "Thickness": "thickness", "DiffStatus": "diff"}
 
 
 def _label(src):
@@ -2358,10 +2692,37 @@ def diff_filters(model_src):
     return [p for p in pv.GetSources().values() if _xml_name(p) == DIFF_XML and _input_of(p) == model_src]
 
 
+def diff_with(model_src):
+    """The Nastran Diff ``model_src`` takes part in, as B, else as A (roles are the Diff's, rule R3:
+    selecting A never makes a reversed diff); the newest of them; None."""
+    diffs = [p for p in pv.GetSources().values() if _xml_name(p) == DIFF_XML]
+    for side in (0, 1):
+        found = [d for d in diffs if diff_sides(d)[side] == model_src]
+        if found:
+            return max(found, key=lambda d: int(d.GetGlobalIDAsString()))
+    return None
+
+
 def diff_sides(diff):
     """``(B, A)`` a Nastran Diff compares: (Input, Reference), the other way round with Swap Inputs."""
     b, a = _input_of(diff), _input_of(diff, "Reference")
     return (a, b) if getattr(diff, "SwapInputs", 0) else (b, a)
+
+
+def diff_for(b, a):
+    """A Nastran Diff of B against A, Swap Inputs aware: the newest one that compares those two, else a
+    new ``NPV diff [B]`` (``NPV diff vs <A> [B]`` when that name already compares B with another
+    model), never one of another pair."""
+    found = [d for d in pv.GetSources().values() if _xml_name(d) == DIFF_XML and diff_sides(d) == (b, a)]
+    if found:
+        return max(found, key=lambda d: int(d.GetGlobalIDAsString()))
+    owner_ = _ReaderOnly(b)
+    taken = pv.FindSource(_name(owner_, "diff"))
+    name = "diff" if taken is None else f"diff vs {_label(a)}"
+    diff = _named(owner_, name, lambda: pv.NastranDiff(Input=b, Reference=a))
+    if diff_sides(diff) != (b, a):  # "NPV diff vs <A>" left by a model of that name that was closed
+        diff.Input, diff.Reference, diff.SwapInputs = b, a, 0
+    return diff
 
 
 def diff_of(model, reference=None):
@@ -2371,24 +2732,20 @@ def diff_of(model, reference=None):
     if found and reference is None:
         return found[-1]
     reference = reference or reference_model(model.reader)
-    if reference is None:
-        return None
-    d = _named(model, "diff", lambda: pv.NastranDiff(Input=model.reader, Reference=reference))
-    if _input_of(d, "Reference") != reference:
-        d.Reference = reference
-    return d
+    return diff_for(model.reader, reference) if reference is not None else None
 
 
-def diff_summary(diff):
-    """``(DIFF_ rows, DIFFMASS_ rows)`` of a Nastran Diff's output."""
+def diff_summary(diff, data=None):
+    """``(DIFF_ rows, DIFFMASS_ rows)`` of a Nastran Diff's output (``data``: a copy of it already
+    fetched, such as B's side of a comparison)."""
     from nastran_pv.vtkutil import read_field_table
 
-    data = fetch(diff)
+    data = data if data is not None else fetch(diff)
     return read_field_table(data, "DIFF_"), read_field_table(data, "DIFFMASS_")
 
 
 def _diff_text(diff, model):
-    rows, masses = diff_summary(diff)
+    rows, masses = diff_summary(diff, model.data if model.from_diff else None)
     b_src, a_src = diff_sides(diff)
     lines = [f"{_label(b_src)} vs {_label(a_src)}"]
     for r in rows:
@@ -2409,40 +2766,75 @@ def _diff_text(diff, model):
     return "\n".join(lines)
 
 
-def _diff_layers(model, diff, view):
-    """B's mesh and masses by DiffStatus, and A's removed elements red and translucent."""
-    from nastran_pv.diff import STATUS_NAMES
+def removed_layer(diff, view, items=None, opacity=0.4):
+    """A's removed items (the diff's Removed block, cut by A's scope) drawn red in ``view``: all of
+    them (``items`` None), or those of ``items`` (``diff_items.ITEM_TYPES`` names: "element", "mass",
+    ...), as ``NPV diff removed [<items>] [B]``. None when there are none."""
+    from nastran_pv.diff_items import ITEM_TYPES
 
-    mesh = _named(model, "diff mesh", lambda: extract_blocks(diff, list(MESH) + list(DIFF_ITEM_BLOCKS)))
-    d = _show(mesh, view)
-    d.Representation = "Surface"
-    d.Opacity = 1.0
-    d.LineWidth = 3
-    d.PointSize = 10
-    d.RenderPointsAsSpheres = 1
-    categorical(d, "DiffStatus", list(range(len(STATUS_NAMES))), list(STATUS_NAMES), colors=DIFF_RGB, view=view)
-    removed = _named(model, "diff removed", lambda: extract_blocks(diff, ["Removed"]))
-    r = _show(removed, view)
+    b = diff_sides(diff)[0]
+    owner_ = _ReaderOnly(b)
+    src = compared(b, diff)
+    removed = _named(owner_, _diff_what(diff, "removed"), lambda: extract_blocks(src, ["Removed"]))
+    removed.UpdatePipeline(getattr(view, "ViewTime", 0.0))
+    if not removed.GetDataInformation().GetNumberOfCells():
+        return None
+    target = removed
+    if items is not None:
+        codes = [ITEM_TYPES.index(i) for i in items]
+        if not codes:
+            return None
+        target = _named(owner_, _diff_what(diff, "removed " + " ".join(items)), lambda: pv.Threshold(Input=removed))
+        target.Scalars = ["CELLS", "ItemType"]
+        target.LowerThreshold, target.UpperThreshold = min(codes), max(codes)
+        target.UpdatePipeline(getattr(view, "ViewTime", 0.0))
+        if not target.GetDataInformation().GetNumberOfCells():
+            return None
+    r = _show(target, view)
     r.Representation = "Surface"
-    r.Opacity = 0.4
+    r.Opacity = opacity
     r.LineWidth = 3
     r.PointSize = 10
     r.RenderPointsAsSpheres = 1
     solid(r, list(DIFF_RGB[-1]))
-    return (d, mesh), (r, removed)
+    return target
+
+
+def _diff_layers(model, view):
+    """B's mesh, and its masses, rigid elements, connectors, bushes, SPCs and loads, by DiffStatus,
+    and A's removed items red and translucent."""
+    from nastran_pv.diff import STATUS_NAMES
+
+    for what, blocks in (("mesh", MESH), ("items", DIFF_ITEM_BLOCKS)):
+        src = _extract(model, *[b for b in blocks if model.has(b)], what=what)
+        if src is None:
+            continue
+        d = _show(src, view)
+        d.Representation = "Surface"
+        d.Opacity = 1.0
+        d.LineWidth = 3
+        d.PointSize = 10
+        d.RenderPointsAsSpheres = 1
+        categorical(d, "DiffStatus", list(range(len(STATUS_NAMES))), list(STATUS_NAMES), colors=DIFF_RGB, view=view)
+    removed_layer(model.diff, view)
 
 
 def view_diff(model, view, reference=None):
-    """What changed from the reference model (A) to this one (B): B's elements by DiffStatus,
-    A's removed elements red and translucent, the counts and the mass change as text."""
-    diff = diff_of(model, reference)
-    if diff is None:
+    """What changed from the reference model (A) to this one (B), in a comparison (``apply("diff")``
+    starts it): B's elements and items by DiffStatus, A's removed items red and translucent, the counts
+    and the mass change as text. On A's side of a pair: A's ghost and its removed items, red."""
+    if model.diff is None:
         ghost_mesh(model, view, opacity=0.35)
         info_text(model, view, NO_REFERENCE)
         return
-    _diff_layers(model, diff, view)
-    info_text(model, view, _diff_text(diff, model))
-    return diff  # side_by_side and a rerun find B upstream of it
+    if model.role == "A":
+        ghost_mesh(model, view, opacity=0.25)
+        removed_layer(model.diff, view, opacity=1.0)
+        info_text(model, view, f"A: {_label(model.reader)} (the reference)\nits removed items in red")
+        return model.diff
+    _diff_layers(model, view)
+    info_text(model, view, _diff_text(model.diff, model))
+    return model.diff  # a rerun finds B upstream of it
 
 
 def _shown_array(view):
@@ -2463,15 +2855,11 @@ def _shown_array(view):
     return tuple(reps[0].ColorArrayName) if reps else None
 
 
-def _partner_view(left):
-    """The right-hand view of ``left``'s side-by-side pair: reused, else a new render view split off
-    ``left``'s layout cell."""
-    right = _SIDE_VIEWS.get(left.GetGlobalIDAsString())
-    if right is not None and right in pv.GetViews():
-        return right
+def _new_partner_view(left):
+    """A new render view split off ``left``'s layout cell, on its right (the B side of a pair)."""
     right = pv.CreateView("RenderView")
     right.ViewSize = list(left.ViewSize)
-    for prop in ("Background", "UseColorPaletteForBackground"):
+    for prop in ("Background", "UseColorPaletteForBackground", "ViewTime"):
         try:
             setattr(right, prop, getattr(left, prop))
         except AttributeError:
@@ -2481,8 +2869,22 @@ def _partner_view(left):
         cell = layout.GetViewLocation(left)
         first = layout.SplitHorizontal(cell, 0.5)  # left moves to the first child
         layout.AssignView(first + 1, right)
-    _SIDE_VIEWS[left.GetGlobalIDAsString()] = right
     return right
+
+
+def _close_view(view):
+    """Close ``view``: its layout cell goes back to its neighbour, its scene is forgotten."""
+    layout = pv.GetLayout(view)
+    cell = layout.GetViewLocation(view) if layout is not None else -1
+    _SCENES.pop(view.GetGlobalIDAsString(), None)
+    # ParaView 6: a view deleted while it shows anything, after a camera link, crashes the next render
+    # once the scene time changes; one emptied (and rendered empty) first does not
+    _hide(shown_sources(view), view)
+    pv.Render(view)
+    if cell >= 0:  # empty the cell, then fold it into its neighbour (deleting the view first leaves it)
+        layout.RemoveView(view)
+        layout.Collapse(cell)
+    pv.Delete(view)
 
 
 def _array_range(srcs, assoc, array):
@@ -2496,101 +2898,177 @@ def _array_range(srcs, assoc, array):
     return (lo, hi) if lo <= hi else None
 
 
-def _color_pair(pair, assoc, array, labels_model, views):
-    """Colour both ``(display, source)`` by ``array`` with one LUT over the values or range of both."""
-    if array in CATEGORICAL:
-        values = sorted({int(v) for _, s in pair for v in _gather(fetch(s), array, assoc)})
-        if array == "DiffStatus":
-            from nastran_pv.diff import STATUS_NAMES
-
-            values, labels, colors = list(range(len(STATUS_NAMES))), list(STATUS_NAMES), DIFF_RGB
-        else:
-            labels, colors = labels_for(labels_model, array, values), None
-        for (d, _), v in zip(pair, views):
-            lut = categorical(d, array, values, labels, colors=colors, association=assoc, view=v)
-        return lut
-    for (d, _), v in zip(pair, views):
-        lut = continuous(d, assoc, array, view=v)
-    rng = _array_range([s for _, s in pair], assoc, array)
-    if rng is not None:
-        lut.AutomaticRescaleRangeMode = "Never"
-        lut.RescaleTransferFunction(rng[0], rng[1])
+def _coloring_reps(view):
+    """``((association, array), [(display, source), ...])`` of the coloring layer's colored
+    representations in ``view`` (those colored by its first array), or ``(None, [])``."""
+    coloring = scene_of(view).coloring
+    found = []
+    for rep in list(getattr(view, "Representations", None) or []):
         try:
-            pv.GetOpacityTransferFunction(array).RescaleTransferFunction(rng[0], rng[1])
-        except Exception:
-            pass
-    return lut
+            if rep.Visibility and rep.ColorArrayName[1] and coloring is not None and rep.Input in coloring.objects:
+                found.append((rep, rep.Input))
+        except AttributeError:
+            continue
+    if not found:
+        return None, []
+    array = tuple(found[0][0].ColorArrayName)
+    return array, [(d, s) for d, s in found if tuple(d.ColorArrayName) == array]
+
+
+def _share_coloring(views, models):
+    """A pair compares by color: the array both coloring layers show gets one legend (ids and codes:
+    PID, MID, ...) or one range (a continuous array on a linear scale) over the two sides."""
+    found = [_coloring_reps(v) for v in views]
+    if found[0][0] is None or any(f[0] != found[0][0] for f in found):
+        return
+    assoc, array = found[0][0]
+    if array in SHARED_CATEGORIES:
+        where = "cell" if assoc == "CELLS" else "point"
+        values = sorted({v for m in models if m is not None for v in m.unique(array, where)})
+        names = next((m for m in reversed(models) if m is not None), None)
+        labels = labels_for(names, array, values) if names is not None else None
+        for v, (_, pairs) in zip(views, found):
+            for d, _ in pairs:
+                categorical(d, array, values, labels, association=assoc, view=v)
+    elif array not in CATEGORICAL:
+        lut = pv.GetColorTransferFunction(array)
+        if getattr(lut, "UseLogScale", 0):
+            return  # random views: each side keeps its decades
+        rng = _array_range([s for _, pairs in found for _, s in pairs], assoc, array)
+        if rng is not None:
+            lut.AutomaticRescaleRangeMode = "Never"
+            lut.RescaleTransferFunction(rng[0], rng[1])
+            try:
+                pv.GetOpacityTransferFunction(array).RescaleTransferFunction(rng[0], rng[1])
+            except Exception:
+                pass
+
+
+def _layers_wanted(scene, array=None):
+    """``(coloring, overlays)`` to draw a pair with: those of ``scene`` (the view a command came from),
+    the coloring ``array`` asks for instead (the view that colors by it, else "array"). A ghost is no
+    coloring of its own (the overlays draw it)."""
+    from nastran_pv.scene import ARRAY, GHOST
+
+    coloring, overlays = scene.layer_args()
+    if array:
+        coloring = (ARRAY_VIEWS[array], {}) if array in ARRAY_VIEWS else (ARRAY, {"array": array})
+    elif coloring is not None and coloring[0] == GHOST:
+        coloring = None
+    return coloring, overlays
+
+
+def _redraw(view, coloring, overlays, reader=None):
+    """Draw ``view``'s layers again because its session changed (a comparison started or ended, a
+    pair was made): the old layers are hidden, then ``coloring`` and each overlay ``(name, args)`` are
+    applied for the view's subject, reusing their ``NPV ...`` objects. Returns the last model drawn."""
+    from nastran_pv.scene import GHOST
+
+    _hide(scene_of(view).clear(), view)
+    model = None
+    if coloring is not None and coloring[0] != GHOST:
+        model, _ = _apply_view(coloring[0], view, reader, kwargs=coloring[1], redraw=True)
+    for name, args in overlays:
+        model, _ = _apply_view(name, view, reader, model=model, kwargs=args, redraw=True)
+    return model
 
 
 def side_by_side(array=None, reference=None, view=None):
-    """The reference model (A) in the active view and this model (B, or its diff) in a second view
-    beside it, cameras linked, both coloured by ``array`` (default: what the active view shows, else
-    PID) over one shared range. Returns ``(left view, right view)``; running it again reuses them."""
+    """A (the reference) in a left view and B in a right one, cameras linked (rule R4). From a view of
+    one model or of a comparison, a new view is split off on its right; from either view of a pair the
+    same pair is drawn again in place (never a third view). Roles come from the Nastran Diff when B has
+    one (whichever model is selected), else B is the view's model and A ``reference`` (default: the other
+    open model). Both views get the coloring and the overlays of the view it is run from (``array``:
+    the mesh colored by that array instead; with no coloring: DiffStatus when there is a diff, else PID),
+    each side from its own model, the coloring over one legend or range. Every later command in either
+    view is drawn in both. Returns ``(left view, right view)``."""
     ensure_plugin()
-    left = view or pv.GetActiveViewOrCreate("RenderView")
-    shown = _shown_array(left)
-    found = find_reader()
-    time = getattr(left, "ViewTime", 0.0)
-    diffs = diff_filters(found)
-    diff = diffs[-1] if diffs else None
-    if diff is not None and reference is None:
-        b_src, a_src = diff_sides(diff)  # Swap Inputs: the diff's B is its Reference
+    view = view or pv.GetActiveViewOrCreate("RenderView")
+    scene = scene_of(view)
+    partner = _partner(view)
+    sides, diff = _sides(scene), scene.diff
+    if sides is None:  # one model
+        target = subject(view)
+        diff = diff_with(target)
+        if diff is not None and reference is not None and reference not in diff_sides(diff):
+            diff = None
+        b, a = diff_sides(diff) if diff is not None else (target, reference or reference_model(target))
     else:
-        b_src, a_src = found, reference or reference_model(found)
-    model_b = Model(b_src, time)
-    if a_src is None:
+        b, a = sides
+        if reference is not None and reference != a:
+            raise RuntimeError(f"This pair compares {_label(b)} with {_label(a)}: click NPV Single first to "
+                               "compare with another model.")
+    if a is None or b is None:
         raise RuntimeError("Side by side needs two models: open the reference model (A) too, then select "
                            "the modified model (B) and run it again.")
-    model_a = Model(a_src, time)
-    if array:
-        assoc = "POINTS" if array in ("GridStatus", "DeltaXYZ") else "CELLS"
-    elif shown and not (shown[1] == "DiffStatus" and diff is None):
-        assoc, array = shown
+    coloring, overlays = _layers_wanted(scene, array)
+    if coloring is None:
+        coloring = ("diff", {}) if diff is not None else ("pid", {})
+    if coloring[0] == "diff" and diff is None:
+        raise RuntimeError("DiffStatus needs a diff: run 'NPV Diff' first (or pass another array).")
+    created = partner is None
+    if created:
+        left, right = view, _new_partner_view(view)
     else:
-        assoc, array = "CELLS", "DiffStatus" if diff is not None else "PID"
-    right = _partner_view(left)
-    for v in (left, right):
-        _clear_view(v)
-    if array == "DiffStatus":
-        if diff is None:
-            raise RuntimeError("DiffStatus needs a diff: run 'NPV Diff' first (or pass another array).")
-        ghost_mesh(model_a, left, opacity=0.25)
-        mesh_b, (_, removed) = _diff_layers(model_b, diff, right)
-        pv.Hide(removed, right)
-        r = pv.Show(removed, left)
-        r.Representation = "Surface"
-        r.Opacity = 1.0
-        r.LineWidth = 3
-        r.PointSize = 10
-        r.RenderPointsAsSpheres = 1
-        _color_pair([(r, removed), mesh_b], assoc, array, model_b, (left, right))
-    else:
-        mesh_a = _extract(model_a, *[b for b in MESH if model_a.has(b)], what="mesh")
-        src_b = (_named(model_b, "diff elements", lambda: extract_blocks(diff, list(MESH)))
-                 if diff is not None else _extract(model_b, *[b for b in MESH if model_b.has(b)], what="mesh"))
-        if mesh_a is None or src_b is None:
-            raise RuntimeError("Side by side shows the mesh blocks (Shells, Solids, Lines); a model has none.")
-        da, db = pv.Show(mesh_a, left), pv.Show(src_b, right)
-        for d in (da, db):
-            d.Representation = "Surface"
-            d.Opacity = 1.0
-            d.LineWidth = 3
-        _color_pair([(da, mesh_a), (db, src_b)], assoc, array, model_b, (left, right))
-    info_text(model_a, left, f"A: {_label(a_src)}")
-    info_text(model_b, right, f"B: {_label(b_src)}" + (f"\n{_diff_text(diff, model_b)}" if diff is not None else ""))
-    left.ResetCamera(False)
-    for prop in ("CameraPosition", "CameraFocalPoint", "CameraViewUp", "CameraParallelScale"):
-        setattr(right, prop, list(getattr(left, prop)) if prop != "CameraParallelScale" else left.CameraParallelScale)
+        left, right = (view, partner) if scene.role == "A" else (partner, view)
+    for v, other, role, side in ((left, right, "A", a), (right, left, "B", b)):
+        s = scene_of(v)
+        s.role, s.partner, s.diff, s.side = role, other.GetGlobalIDAsString(), diff, side
+    models = [_redraw(v, coloring, overlays) for v in (left, right)]
+    _share_coloring((left, right), models)
+    for v, side, role in ((left, a, "A"), (right, b, "B")):  # which model each view is, when no layer says
+        if scene_of(v).info is None:
+            text = f"{role}: {_label(side)}"
+            if role == "B" and diff is not None and models[1] is not None:
+                text += "\n" + _diff_text(diff, models[1])
+            info_text(_ReaderOnly(side), v, text)
+    if created:
+        left.ResetCamera(False)
+        for prop in ("CameraPosition", "CameraFocalPoint", "CameraViewUp", "CameraParallelScale"):
+            setattr(right, prop, list(getattr(left, prop)) if prop != "CameraParallelScale" else left.CameraParallelScale)
     try:
         pv.RemoveCameraLink(SIDE_LINK)
     except Exception:
         pass
     pv.AddCameraLink(left, right, SIDE_LINK)
-    _finish(found)  # two views, no one filter: the model a rerun finds
-    pv.SetActiveView(left)
-    pv.Render(left)
-    pv.Render(right)
+    for v in (left, right):
+        pv.Render(v)
+    pv.SetActiveView(view)
+    _finish(b)  # two views, no one filter: the changed model
     return left, right
+
+
+def single(view=None):
+    """NPV Single: end the comparison in ``view`` (default: active), which shows B as one model again
+    with the same overlays and coloring (DiffStatus becomes PID). In a side-by-side pair the right view
+    closes and the left one shows B. Deletes nothing: NPV Diff starts the comparison again with the
+    same Nastran Diff. A view of one model is left as it is. Ends with B selected."""
+    from nastran_pv.scene import GHOST
+
+    ensure_plugin()
+    view = view or pv.GetActiveViewOrCreate("RenderView")
+    scene = scene_of(view)
+    sides = _sides(scene)
+    if sides is None:
+        return _finish(subject(view))
+    b = sides[0]
+    coloring, overlays = scene.layer_args()
+    if coloring is not None and coloring[0] in ("diff", GHOST):
+        coloring = ("pid", {}) if coloring[0] == "diff" else None
+    partner = _partner(view)
+    if partner is not None:
+        left, right = (view, partner) if scene.role == "A" else (partner, view)
+        try:
+            pv.RemoveCameraLink(SIDE_LINK)
+        except Exception:
+            pass
+        _close_view(right)
+        view = left
+    scene_of(view).end_comparison()
+    pv.SetActiveView(view)
+    _redraw(view, coloring, overlays, reader=b)
+    pv.Render(view)
+    return _finish(b)
 
 
 VIEWS = {
@@ -2602,64 +3080,141 @@ VIEWS = {
 }
 
 
-def apply(name, reader=None, view=None, model=None, reset_camera=None, toggle=False, **kwargs):
-    """Add view ``name`` to the scene of ``view`` (default: active) for ``reader`` (default: found).
-    A coloring (PID, Thickness, Results, ...) replaces the scene's coloring; an overlay (Masses,
-    Loads, ...) adds itself, over a ghost mesh when the scene has no coloring, and with ``toggle``
-    (the toolbar macros) an overlay already shown is removed instead. A command for another model
-    starts a new scene; a fresh scene starts undeformed. The camera resets when ``reset_camera`` is
-    true, or (None) when the scene was empty. Ends with the filter the view is about selected (what
-    its view function returns), else the reader."""
+def _draw(name, model, view, kwargs):
+    """Draw view ``name`` (or the ghost, or the "array" coloring) and, in a comparison, A's removed items
+    that go with it (rule R3): the removed elements stay under every coloring, and an overlay adds
+    the removed items of its kind. Returns the object the view is about."""
+    from nastran_pv.scene import ARRAY, GHOST
+
+    if name == GHOST:
+        ghost_mesh(model, view, kwargs.get("opacity", 0.2))
+        selected = None
+    else:
+        selected = (view_array if name == ARRAY else VIEWS[name])(model, view, **kwargs)
+    if model.diff is not None and name != "diff":
+        items = REMOVED_ITEMS.get(name, ("element",))
+        if items:
+            removed_layer(model.diff, view, items, opacity=1.0 if name in REMOVED_ITEMS else 0.4)
+    return selected
+
+
+def _apply_view(name, view, reader=None, model=None, reset_camera=None, remove=False, kwargs=None, redraw=False):
+    """:func:`apply` in one view (a pair's apply runs it in both); ``(model, the object it is about)``.
+    ``remove``: take the overlay off. ``redraw``: the session changed, not the layer, so no undeformed
+    restart and no camera reset."""
     from nastran_pv.scene import GHOST, GHOST_OPACITY, Layer, kind
 
-    ensure_plugin()
-    view = view or pv.GetActiveViewOrCreate("RenderView")
-    reader = reader or find_reader()
+    kwargs = dict(kwargs or {})
+    scene = scene_of(view)
+    reader = subject(view, reader)
     stop_mode_animation(reader, view)  # back on the mode's time step, time controls step modes again
     turned_on = turn_on_result_types(reader, view_result_types(name, kwargs))  # before the model is read
     _TURNED_ON[name] = turned_on
-    ply_changed = name == "plies" and set_reader_ply(reader, kwargs.get("ply"))
-    if model is None or turned_on or ply_changed:
-        model = Model(reader, getattr(view, "ViewTime", 0.0) if model is None else model.time)
-    scene = scene_of(view)
-    if scene.model is not None and scene.model != reader:  # one subject per single-model scene
+    ply_changed = name == "plies" and set_reader_ply(reader, kwargs.get("ply"))  # also before the model is read
+    diff, role = (scene.diff, scene.role) if scene.diff is not None else (None, None)
+    if model is None or model.reader != reader or model.diff != diff or model.role != role:
+        model = Model(reader, getattr(view, "ViewTime", 0.0), diff=diff, role=role)
+    elif turned_on or ply_changed:  # the reader reads them now: a model of its new output, at the same time
+        model = Model(reader, model.time, diff=diff, role=role)
+    if scene.model is not None and scene.model != reader:  # one subject per scene
         _hide(scene.clear(), view)
     pv.SetActiveView(view)
     fresh = scene.empty
     _hide_strays(view, reader, fresh)
-    if fresh and name != "results":  # a new scene is undeformed; later only results changes the scale
+    if fresh and not redraw and name != "results":  # a new scene is undeformed; later only results changes it
         set_deformation(model, 0.0)
     scene.model = reader
     if kind(name) == "overlay":
-        if toggle and name in scene.overlays:
-            layer = scene.overlays[name]
+        if remove:
+            layer = scene.overlays.get(name)
+            if layer is None:
+                return model, reader
             wrote = scene.info == name
             _hide(scene.remove_overlay(name), view)
             info = pv.FindSource(_name(model, "info")) if wrote else None
             if info is not None:  # only the text this overlay wrote: another one's summary stays
                 pv.Hide(info, view)
-            pv.Render(view)
-            _finish(layer.selected or reader)
-            return model
+            return model, layer.selected if layer.selected is not None else reader
         if scene.coloring is None:
-            objects, _ = _recorded(lambda: ghost_mesh(model, view, GHOST_OPACITY.get(name, 0.2)))
-            _hide(scene.set_coloring(Layer(GHOST, objects)), view)
+            ghost = {"opacity": GHOST_OPACITY.get(name, 0.2)}
+            objects, _ = _recorded(lambda: _draw(GHOST, model, view, ghost))
+            _hide(scene.set_coloring(Layer(GHOST, objects, args=ghost)), view)
     writes, writer = _INFO_WRITES, scene.info
-    objects, selected = _recorded(lambda: VIEWS[name](model, view, **kwargs))
-    if kind(name) == "overlay":
-        _hide(scene.add_overlay(Layer(name, objects, selected)), view)
-    else:
-        _hide(scene.set_coloring(Layer(name, objects, selected)), view)
+    objects, selected = _recorded(lambda: _draw(name, model, view, kwargs))
+    layer = Layer(name, objects, selected, kwargs)
+    _hide(scene.add_overlay(layer) if kind(name) == "overlay" else scene.set_coloring(layer), view)
     if _INFO_WRITES != writes:
         scene.info = name
     elif writer is not None and scene.info is None:  # the replaced coloring wrote it, this one writes none
         info = pv.FindSource(_name(model, "info"))
         if info is not None:
             pv.Hide(info, view)
-    if reset_camera or (reset_camera is None and fresh):
+    if reset_camera or (reset_camera is None and fresh and not redraw):
         view.ResetCamera(False)
-    pv.Render(view)
-    _finish(selected or model.reader)
+    return model, selected
+
+
+def _begin_comparison(view, reader=None, reference=None):
+    """NPV Diff: make ``view`` (both views of a pair) a comparison, rule R3: the Nastran Diff its model
+    takes part in, as B or as A (selecting A never makes a reversed diff), else ``NPV diff`` against
+    ``reference`` (default: the other open model). Returns ``[(view, overlays)]`` of the views whose
+    overlays were drawn as one model (they are drawn again from the diff). With no second model
+    nothing changes (NPV Diff then says so)."""
+    scene = scene_of(view)
+    if scene.diff is not None and reference is None:
+        return []
+    sides = _sides(scene)
+    if sides is not None and scene.diff is None:  # a pair without a diff: its two models, in their roles
+        diff = diff_for(*sides)
+    else:
+        target = subject(view, reader)
+        diff = diff_with(target) if reference is None else None
+        if diff is None:
+            ref = reference or reference_model(target)
+            if ref is None:
+                return []
+            diff = diff_for(target, ref)
+    out = []
+    for v in _pair(view):
+        s = scene_of(v)
+        if s.diff != diff and s.overlays:
+            out.append((v, s.layer_args()[1]))
+        s.diff = diff
+        if s.role is None:
+            s.role = "B"
+    return out
+
+
+def apply(name, reader=None, view=None, model=None, reset_camera=None, toggle=False, **kwargs):
+    """Add view ``name`` to the scene of ``view`` (default: active) for the view's model (:func:`subject`;
+    ``reader`` for a view of no model yet). A coloring (PID, Thickness, Results, ...) replaces the
+    scene's coloring; an overlay (Masses, Loads, ...) adds itself, over a ghost mesh when the scene has
+    no coloring, and with ``toggle`` (the toolbar macros) an overlay already shown is removed instead.
+    A command for another model starts a new scene; a fresh scene starts undeformed. ``diff`` makes the
+    view a comparison (rule R3), whose every layer is drawn from the diff; in a side-by-side pair the
+    command is drawn in both views (rule R4). The camera resets when ``reset_camera`` is true, or
+    (None) when the scene was empty. Ends with the filter the view is about selected (what its view
+    function returns), else the reader."""
+    from nastran_pv.scene import kind
+
+    ensure_plugin()
+    kind(name)  # an unknown view raises here
+    view = view or pv.GetActiveViewOrCreate("RenderView")
+    redraw = _begin_comparison(view, reader, kwargs.pop("reference", None)) if name == "diff" else []
+    remove = bool(toggle) and kind(name) == "overlay" and name in scene_of(view).overlays
+    views = _pair(view)
+    results = [_apply_view(name, v, reader if v is view else None, model if v is view else None,
+                           reset_camera, remove, kwargs) for v in views]
+    for v, overlays in redraw:  # the overlays of a view that just became a comparison: from the diff now
+        for overlay, args in overlays:
+            _apply_view(overlay, v, kwargs=args, redraw=True)
+    if len(views) > 1 and kind(name) == "coloring":
+        _share_coloring(views, [m for m, _ in results])
+    for v in views:
+        pv.Render(v)
+    pv.SetActiveView(view)
+    model, selected = results[0]
+    _finish(selected if selected is not None else model.reader)
     return model
 
 
@@ -2798,7 +3353,7 @@ def play_mode(mode=None, frames=ANIMATE_FPS, reader=None, view=None):
     groups, a show-only subset, ...) moves. The mode and its frequency are shown in the view, and
     the view is left at the peak of the cycle. Any view, :func:`stop_mode_animation` or Animate All
     Modes gives the time controls back to the modes. Returns the mode."""
-    reader = reader or find_reader()
+    reader = reader or subject(view)
     view = view or pv.GetActiveViewOrCreate("RenderView")
     mode = mode or current_step(reader, view)
     stop_mode_animation(reader, view)
@@ -2833,7 +3388,7 @@ def play_mode(mode=None, frames=ANIMATE_FPS, reader=None, view=None):
 def stop_mode_animation(reader=None, view=None):
     """Undo :func:`play_mode`: the time controls step through the modes again, on the mode that
     vibrated. Returns True if a mode was vibrating."""
-    reader = reader or find_reader()
+    reader = reader or subject(view)
     filters = [f for f in model_deforms(reader) if f.VibrateMode]
     if not filters:
         return False
@@ -2939,7 +3494,7 @@ def animate_modes(modes=None, cycles=1, frames=24, out=None, reader=None, view=N
     RuntimeError, after playing the others, for modes whose step has no displacement."""
     import time
 
-    reader = reader or find_reader()
+    reader = reader or subject(view)
     view = view or pv.GetActiveViewOrCreate("RenderView")
     times, modes = _prepare_modes(reader, view, modes, camera)
     if out:
@@ -2989,8 +3544,8 @@ def animate_mode(cycles=2, frames=ANIMATE_FPS):
     """Vibrate the mode the time controls are on (``cycles`` cycles), then leave the play button
     set up to loop it (:func:`play_mode`). Stop Mode Animation (or any view) gives the time controls
     back to the modes: step to another mode and click again."""
-    reader = find_reader()
     view = pv.GetActiveViewOrCreate("RenderView")
+    reader = subject(view)
     step = current_step(reader, view)
     if step is None:
         raise RuntimeError(NO_STEPS)
@@ -3031,7 +3586,7 @@ def save_mode_animations(modes=None, cycles=1, frames=24, folder=None, fps=ANIMA
     """
     from PIL import Image
 
-    reader = reader or find_reader()
+    reader = reader or subject(view)
     view = view or pv.GetActiveViewOrCreate("RenderView")
     model_file = _model_path(reader)
     folder = folder or (os.path.dirname(model_file) if model_file else os.getcwd())
@@ -3088,6 +3643,7 @@ ACTIONS = {"animate_mode": animate_mode, "animate_modes": animate_modes, "stop_m
            "hide_reached": hide_reached, "side_by_side": side_by_side}
 ACTIONS.update({"show_only_file": show_only_file, "hide_file": hide_file, "highlight_file": highlight_file})
 ACTIONS["clear"] = clear
+ACTIONS["single"] = single
 
 
 def run_macro(name):
