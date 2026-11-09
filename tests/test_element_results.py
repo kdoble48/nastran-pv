@@ -91,8 +91,9 @@ def test_forces_are_attached_by_default(results, deck):
 
 
 def test_every_type_is_available(results):
-    """Every type but the nodal SPC/MPC forces and applied loads, which the fixture lacks."""
-    loads = (rt.SPC_FORCE, rt.MPC_FORCE, rt.APPLIED_LOAD)
+    """Every type but the nodal SPC/MPC forces, applied loads, velocities and accelerations, which
+    the fixture lacks."""
+    loads = (rt.SPC_FORCE, rt.MPC_FORCE, rt.APPLIED_LOAD, rt.VELOCITY, rt.ACCELERATION)
     assert results.available == tuple(t.name for t in rt.REGISTRY if t not in loads)
     assert [t.name for t in results.attached()] == [t.name for t in rt.REGISTRY if t.default and t not in loads]
 
@@ -219,14 +220,16 @@ def test_shared_unread_reasons():
     assert rt.unread_reason("stress.cquad4_stress", read=True) is None
 
 
-def test_complex_element_tables_are_reported_per_table(monkeypatch):
-    from pyNastran.op2.tables.oef_forces.oef_force_objects import RealCBarForceArray
+def test_complex_element_tables_no_type_reads_are_reported_per_table(monkeypatch):
+    """A complex table no type reads (here a spring stress) says it is complex, once per table."""
+    from pyNastran.op2.tables.oes_stressStrain.real.oes_springs import RealSpringStressArray
 
     op2 = make_element_op2()
-    op2.op2_results.force.cbar_force[2] = op2.op2_results.force.cbar_force[1]
-    monkeypatch.setattr(RealCBarForceArray, "is_complex", True)
+    op2.op2_results.stress.celas1_stress[2] = op2.op2_results.stress.celas1_stress[1]
+    monkeypatch.setattr(RealSpringStressArray, "is_complex", True)
     skipped = Op2Results(op2).skipped
-    assert f"force.cbar_force, subcases 1, 2: {rt.COMPLEX}" in skipped
+    assert f"stress.celas1_stress, subcases 1, 2: {rt.COMPLEX}" in skipped
+    assert rt.unread_reason("force.cbar_force", read=True, complex_=True) is None  # a complex table read
 
 
 def test_subcases_are_summarised():

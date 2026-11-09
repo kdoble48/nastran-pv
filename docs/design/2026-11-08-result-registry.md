@@ -158,7 +158,8 @@ vocabulary in `result_types.py` and the shared code in `results.py`, not one rea
   that moves those blocks by their grids today); it changes outputs, so it was left out of this
   change.
 
-- **Complex results (task 11).** pyNastran marks complex tables `is_complex`; MSC writes `*_CPLX`
+- **Complex results (task 11).** Built as sketched, with the plain arrays at a phase angle next to
+  the parts: [2026-11-09-dynamic-results.md](2026-11-09-dynamic-results.md). pyNastran marks complex tables `is_complex`; MSC writes `*_CPLX`
   datasets. Today they are skipped (with a message for the step tables). A type gains
   `complex: tuple[str, ...] = ("real", "imag")` (or `("mag", "phase")`): `values` returns complex
   rows, and `_write` writes each `ArraySpec` once per part as `<name>_Real`/`<name>_Imag` or
@@ -174,7 +175,7 @@ vocabulary in `result_types.py` and the shared code in `results.py`, not one rea
 - **Element frames (task 9).** Forces and stresses stay in the element system as Nastran writes
   them (`frame="none"`, task 9); a later `frame="element_basic"` rotates them with the blocks'
   `Axis1-3` or material-axis arrays inside `_write`.
-- **Time and frequency series (task 11).** Steps are already one time value each, and the VTKHDF
+- **Time and frequency series (task 11).** Built: [2026-11-09-dynamic-results.md](2026-11-09-dynamic-results.md). Steps are already one time value each, and the VTKHDF
   series writer fills arrays a step lacks (`_fill_missing`), so new types need nothing there.
   Long transients may want a step range (`--steps`); the step-defining type could also come from
   another type when a file has no displacements (DISP=NONE): then the first type with tables
