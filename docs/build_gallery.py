@@ -217,7 +217,7 @@ def solve_results(ucrm9, mystran, out) -> dict:
         solved[key] = (deck, md.solve(deck, mystran))
     if ucrm9:
         copy = ucrm9_for_mystran(ucrm9, out / "ucrm9-mystran")
-        print(f"solving uCRM-9 static with MYSTRAN ({copy.parent})")
+        print(f"solving uCRM-9 static with MYSTRAN ({copy.parent})", flush=True)
         pids = outboard_pids(ucrm9, UCRM9_CUT_Y)
         solved["ucrm9"] = {"results": md.solve(copy, mystran), "body": "PID " + " ".join(map(str, pids))}
     return solved

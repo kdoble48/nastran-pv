@@ -293,6 +293,16 @@ def export_view(reader, model, entry, out):
     return meta
 
 
+def clear_pipeline(keep):
+    """Delete every pipeline object but those whose global id is in ``keep``, newest first
+    (consumers before their inputs). The next model may open a deck of the same file name (uCRM-9
+    and its static results), and nastran_views finds its objects (NPV deform, NPV load glyphs, ...)
+    by that name: left over, they would still read the deleted reader."""
+    made = [s for s in pv.GetSources().values() if s.GetGlobalIDAsString() not in keep]
+    for src in sorted(made, key=lambda s: int(s.GetGlobalIDAsString()), reverse=True):
+        pv.Delete(src)
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     models_json, out = argv
@@ -300,6 +310,7 @@ def main(argv=None):
     with open(models_json, encoding="utf-8") as f:
         models = json.load(f)
     written = 0
+    before = {s.GetGlobalIDAsString() for s in pv.GetSources().values()}  # a caller's own (pv_smoke)
     for model in models:
         if not os.path.exists(model["deck"]):
             print(f"skip model {model['id']}: deck not found: {model['deck']}")
@@ -307,8 +318,8 @@ def main(argv=None):
         views = list(model["views"])
         results = model.get("results")
         if results and not os.path.exists(results):
-            print(f"skip {model['id']}/results: results file not found: {results}")
-            results, views = None, [v for v in views if v != "results"]
+            print(f"skip {model['id']}'s result entries: results file not found: {results}")
+            results, views = None, [v for v in views if v not in RESULT_ENTRIES]
         model = dict(model, results=results)
         reader = nv.load_reader(os.path.abspath(model["deck"]), os.path.abspath(results) if results else None)
         for name in views:
@@ -320,7 +331,7 @@ def main(argv=None):
                 json.dump(meta, f, indent=1, allow_nan=False)
             written += 1
             print(f"exported {model['id']}/{name} ({meta['scene_bytes'] / 1e6:.2f} MB)")
-        pv.Delete(reader)
+        clear_pipeline(before)
     if not written:
         print("nothing exported")
         return 1

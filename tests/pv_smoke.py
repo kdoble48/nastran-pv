@@ -3518,7 +3518,12 @@ def main():
             with open(mj, "w", encoding="utf-8") as f:
                 json.dump(models, f)
             out = os.path.join(tmp, "out dir")  # spaces in paths must survive
+            before = {s.GetGlobalIDAsString() for s in pv.GetSources().values()}
             check(es.main([mj, out]) == 0, "export_site runs")
+            # each model's pipeline goes before the next opens (tiny and one share a deck name, which
+            # the NPV objects are named by), and the caller's own objects stay
+            after = {s.GetGlobalIDAsString() for s in pv.GetSources().values()}
+            check(after == before, f"export_site leaves the pipeline as it found it: {len(after)} vs {len(before)}")
 
             def meta(name):
                 with open(os.path.join(out, name), encoding="utf-8") as f:
