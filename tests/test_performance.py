@@ -9,7 +9,6 @@ counts test (not marked) checks the deck builds what its layout says, on every r
 import dataclasses
 import time
 
-import numpy as np
 import pytest
 
 import perf_deck
@@ -23,20 +22,24 @@ SLACK = 0.05  # seconds, for the fastest stages
 REPEAT = 3
 # best time / calibration loop, the median of three runs on the reference machine (Ryzen 9 9950X3D,
 # Windows, Python 3.12, VTK 9.5.2, pyNastran 1.4.1; docs/performance.md#ci-check)
-RECORDED = {"load": 13.2, "build": 3.55, "vtm": 1.25, "vtkhdf": 5.15, "check": 0.89, "to_basic": 0.11, "diff": 3.68,
-            "tree": 0.32, "tree_scope": 0.20}
+RECORDED = {"load": 16.2, "build": 3.94, "vtm": 1.55, "vtkhdf": 6.29, "check": 1.12, "to_basic": 0.15, "diff": 4.64,
+            "tree": 0.36, "tree_scope": 0.26}
 
 
 def calibration() -> float:
-    """A fixed mix of interpreted Python and numpy, the kinds of work the stages do (~40 ms)."""
+    """A fixed piece of interpreted Python (~50 ms): build and walk a dict of small tuples and parse
+    card-like strings, as pyNastran's reader and the builders' Python do. The interpreter's speed is
+    what varies most between runners and drives the slowest stages; numpy's kernels are left out,
+    because they vary with the CPU's vector units (its sorts run several times faster on AVX-512
+    machines), which would move the unit far more than the stages."""
     t = time.perf_counter()
-    d = {i: (i, float(i)) for i in range(150_000)}
+    d = {i: (i, float(i)) for i in range(100_000)}
     s = 0.0
     for k, v in d.items():
         s += v[1] * 0.5
-    a = np.random.default_rng(0).standard_normal(400_000)
-    np.unique(np.round(a * 1e4).astype(np.int64), return_inverse=True)
-    np.sort(a)
+    for i in range(60_000):
+        fields = f"GRID,{i},,{i * 0.5:.6g},{i * 0.25:.6g},0.".split(",")
+        s += float(fields[3]) + int(fields[1])
     return time.perf_counter() - t
 
 
