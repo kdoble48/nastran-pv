@@ -101,13 +101,14 @@ class _Results:
         """Attach only the types ``names`` from now on (``result_types.parse``: a list or a
         comma-separated string, ``all``); an empty list attaches none, None restores the defaults.
         ``ply``: the ply id the ply types attach, or 0 / None / ``max`` for each element's critical
-        ply (``result_types.parse_ply``). Returns ``self``."""
-        self.ply = result_types.parse_ply(ply)
+        ply (``result_types.parse_ply``). Returns ``self``; a ValueError leaves the selection as it was."""
+        ply = result_types.parse_ply(ply)
         if names is not None and not isinstance(names, str) and len(names) == 0:
-            self.selected = self.named = ()
-            return self
-        self.selected = None if names is None else result_types.parse(names, self.registry)
-        self.named = () if names is None or result_types.says_all(names) else self.selected
+            selected = named = ()
+        else:
+            selected = None if names is None else result_types.parse(names, self.registry)
+            named = () if names is None or result_types.says_all(names) else selected
+        self.selected, self.named, self.ply = selected, named, ply
         return self
 
     def attached(self) -> list:
@@ -133,7 +134,7 @@ class _Results:
         for col, value in rtype.missing:
             vals[vals[:, col] == value, col] = np.nan
         if rtype.reduce == "max":
-            return max_per_eid([ids], [vals])
+            return max_per_eid(ids, vals)
         if rtype.reduce == "ply":
             return result_types.reduce_plies(rtype, ids, vals, self.ply)
         order = np.argsort(ids)
@@ -149,16 +150,30 @@ class _Results:
         attach_step(self, mb, step_index, deck)
 
 
-def max_per_eid(eids: list, vals: list) -> tuple[np.ndarray, np.ndarray]:
-    """(sorted unique eids, the largest value of each) over lists of eid/value arrays; values
-    may be (n,) or (n, k) (the maximum of each column)."""
-    if not eids:
-        return np.zeros(0, dtype=np.int64), np.zeros(0)
-    uniq, inv = np.unique(np.concatenate(eids), return_inverse=True)
-    values = np.concatenate(vals)
+def max_per_eid(eids: np.ndarray, values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """(sorted unique eids, the largest value of each) of the rows ``eids``/``values``; values may
+    be (n,) or (n, k) (the maximum of each column)."""
+    uniq, inv = np.unique(eids, return_inverse=True)
     vmax = np.full((len(uniq),) + values.shape[1:], -np.inf)
     np.maximum.at(vmax, inv.reshape(-1), values)
     return uniq, vmax
+
+
+def ply_summary(results, mb) -> tuple[str | None, list[str]]:
+    """What the ply types attached to ``mb`` at its step: the line ``convert`` prints (None when
+    none of them wrote a value) and a warning per selected ply type that wrote none (the chosen ply
+    is in no element's output: SOUT=NO, or not written; or the step has no ply rows)."""
+    from .assemble import block_names, get_block
+
+    types = [t for t in getattr(results, "attached", lambda: [])() if t.reduce == "ply"]
+    if not types:
+        return None, []
+    shells = get_block(mb, "Shells") if "Shells" in block_names(mb) else None
+    wrote = [t.name for t in types if shells is not None and shells.GetCellData().GetArray(f"{t.name}Ply") is not None]
+    which = f"ply {results.ply}" if results.ply else "each element's critical ply"
+    warnings = [f"{t.name}: no element has {which} in the results at this step (SOUT=NO, or not written)"
+                for t in types if t.name not in wrote]
+    return (f"ply results: {which} ({', '.join(wrote)})" if wrote else None), warnings
 
 
 # ------------------------------------------------------------------ OP2

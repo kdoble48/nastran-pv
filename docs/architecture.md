@@ -54,7 +54,7 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   `PLY_*` field table, one row per ply of each PCOMP/PCOMPG the shells use, `LAM=SYM` mirrored
   here: pyNastran's global-ply getter fails on a symmetric PCOMPG); `attach_ply(mb, ply)` lays one
   ply's layup on the cells (`PlyAngle PlyAxis ...`, from the table, `MaterialAxis` and `Normal`:
-  no deck needed), for `--ply` and the reader's *Ply*. Design:
+  no deck needed), for `--ply` (and the reader's *Ply*: plugin, #74). Design:
   `docs/design/2026-11-09-composites.md`.
 - `nsm.py`: property NSM plus the NSM/NSM1/NSML/NSML1/NSMADD set selected by `--nsm-set`/`NSM=` →
   `NSMPerArea|NSMPerLength NSMMass NSMSource` and the `NSM_*` root tables. It runs in

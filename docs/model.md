@@ -149,23 +149,37 @@ the MPC forces, else the applied loads (static steps, one per subcase). [Nastran
 A deck whose shells use a PCOMP or PCOMPG gets the layup on the `Shells` block (other decks get
 none of this):
 
-* cell `PlyCount`: the plies of each element's property, `LAM=SYM` expanded (0 for a PSHELL or
-  PSHEAR). `Thickness` stays the total, `MID` the first ply's material and `MassPerArea` all plies.
+* cell `PlyCount`: the plies of each element's property, `LAM=SYM` and `SMCORE` expanded (0 for
+  a PSHELL or PSHEAR). `Thickness` stays the total, `MID` the first ply's material and
+  `MassPerArea` all plies.
 * field data `PLY_PID PLY_Index PLY_ID PLY_MID PLY_Thickness PLY_Angle PLY_Z PLY_SOUT PLY_FT`: one
   row per ply of each composite property the shells use, by PID and from the bottom ply
   (`PLY_Index` 1). `PLY_ID` is the ply id the results use: the ply number of a PCOMP, the global
   ply id of a PCOMPG (a ply shared by several properties, at any position in each). `PLY_Angle` is
   in degrees from the element's material axis, `PLY_Z` the ply's mid-plane from the reference
   plane (`Z0`, default -T/2), `PLY_SOUT` 1 for SOUT=YES, `PLY_FT` the property's failure theory
-  (empty when blank). With `LAM=SYM` the plies given are the bottom half, mirrored above them (ply
-  n+1 is ply n, ..., 2n is ply 1; a PCOMPG's mirrored plies keep their global ids).
+  (empty when blank).
+
+`LAM` builds the stack as Nastran does:
+
+* `SYM`: the plies given are the bottom half, mirrored above them (ply n+1 is ply n, ..., 2n is
+  ply 1).
+* `SMCORE`: the last ply given is the core; half of each face ply goes below it and half above,
+  mirrored (n given plies make 2n - 1, the core in the middle).
+* `MEM`, `BEND`, `SMEAR`: only the stiffness terms Nastran builds change; the plies stay as given.
+
+A PCOMPG lists a mirrored ply (`SYM`, or a face ply of `SMCORE`) under its global ply id twice, and
+Nastran groups ply output by global ply id. So nastran-pv addresses the mirrored (upper) copy as
+`-GPLYID`, in `PLY_ID`, in `--ply` and in the results, where an element's second row with the same
+ply id is that copy. Nastran's documentation does not say how it labels that copy; this is the
+reading that keeps both copies.
 
 The layup is a table per property rather than one array per ply: cells x plies arrays would be
 large on a big laminate, could not hold NaN for the integer columns and colour badly in ParaView.
 It is block field data, so it travels with `Shells` into `.vtm`, VTKHDF and every piece of the
 reader's model tree.
 
-**One ply.** `convert --ply N` (the reader's *Ply*) lays ply id `N`'s layup on the elements:
+**One ply.** `convert --ply N` lays ply id `N`'s layup on the elements (in ParaView: the reader's *Ply*, plugin #74):
 `PlyThickness PlyAngle PlyMID PlySOUT PlyZ PlyAxis` (NaN, or -1 for `PlyMID`/`PlySOUT`, where an
 element's property has no ply `N`) and the field `LayupPly` = N. `PlyAxis` is the ply's
 1-direction: `MaterialAxis` turned by the ply angle about `Normal`, as the PCOMP measures it. A ply
@@ -178,7 +192,9 @@ element's critical ply: the ply with the largest `PlyVonMises`, `PlyMaxShearStra
 `PlyFailureIndexMax` (with `PlyFailureIndex`, Nastran's failure index of the element). Every array
 of a type then holds that one ply, and `<type>Ply` (`PlyStressPly`, ...) its ply id. Principals,
 max shear and von Mises are computed from the components, for OP2 and HDF5 alike; strains have
-engineering shear, as for shells. `convert` says which ply it attached (`ply results: ply 3`).
+engineering shear, as for shells. `convert` says which ply and types it attached
+(`ply results: ply 3 (PlyStress)`), and warns about a selected ply type that has no value at that
+ply (`PlyStrain: no element has ply 2 in the results at this step`: SOUT=NO, or not written).
 
 ## Derived quantities
 

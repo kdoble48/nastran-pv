@@ -427,19 +427,32 @@ def derive(spec: ArraySpec, v) -> np.ndarray:
 
 # ------------------------------------------------------------------ plies
 def parse_ply(value) -> int:
-    """A ply choice as an int: a ply id (1 or more: the PCOMP ply number, a PCOMPG global ply id),
-    or 0 for each element's critical ply (also None, ``max``)."""
+    """A ply choice as an int: a ply id (the PCOMP ply number, a PCOMPG global ply id, ``-GPLYID``
+    for the mirrored copy of a symmetric PCOMPG's ply), or 0 for each element's critical ply (also
+    None, ``max``)."""
     if value is None or (isinstance(value, str) and value.strip().lower() in ("max", "")):
         return 0
-    if isinstance(value, bool) or isinstance(value, float):
-        raise ValueError(f"ply {value!r}: give a ply id (1, 2, ...) or max")
+    if isinstance(value, (bool, float)):
+        raise ValueError(f"ply {value!r}: give a ply id (1, 2, ...; -N for a mirrored copy) or max")
     try:
-        ply = int(str(value).strip())
+        return int(str(value).strip())
     except ValueError:
-        raise ValueError(f"ply {value!r}: give a ply id (1, 2, ...) or max") from None
-    if ply < 0:
-        raise ValueError(f"ply {value!r}: give a ply id (1, 2, ...) or max")
-    return ply
+        raise ValueError(f"ply {value!r}: give a ply id (1, 2, ...; -N for a mirrored copy) or max") from None
+
+
+def mirrored_plies(ids) -> np.ndarray:
+    """(n, 2) (EID, ply id) rows with each element's second row of a repeated ply id as ``-id``:
+    Nastran labels both copies of a symmetric PCOMPG's global ply with its id, the bottom one first
+    (each element's rows go from the bottom ply up), and the layup addresses the mirrored copy as
+    ``-GPLYID`` (``plies.plies_of``)."""
+    ids = np.array(ids, dtype=np.int64).reshape(-1, 2)
+    if not len(ids):
+        return ids
+    order = np.lexsort((np.arange(len(ids)), ids[:, 1], ids[:, 0]))  # by element and id, rows in order
+    pairs = ids[order]
+    repeat = np.r_[False, (pairs[1:] == pairs[:-1]).all(axis=1)]
+    ids[order[repeat], 1] *= -1
+    return ids
 
 
 def ply_criterion(rtype: ResultType, values) -> np.ndarray:
@@ -451,10 +464,10 @@ def ply_criterion(rtype: ResultType, values) -> np.ndarray:
 
 def reduce_plies(rtype: ResultType, ids, values, ply: int = 0):
     """(sorted EIDs, values + a ply id column) with one row per element from rows keyed by (n, 2)
-    ``ids`` (EID, ply id): with ``ply`` its row of that ply (the first one, when a ply id repeats),
-    else its critical ply, the row whose ``ply_by`` value is largest (NaN never wins; the first
-    such row on a tie). None when no element has the ply."""
-    ids, values = np.asarray(ids, dtype=np.int64).reshape(-1, 2), np.asarray(values, dtype=float)
+    ``ids`` (EID, ply id; a repeated id's second row is the mirrored copy, :func:`mirrored_plies`):
+    with ``ply`` its row of that ply, else its critical ply, the row whose ``ply_by`` value is
+    largest (NaN never wins; the first such row on a tie). None when no element has the ply."""
+    ids, values = mirrored_plies(ids), np.asarray(values, dtype=float)
     eid, plies = ids[:, 0], ids[:, 1]
     if ply:
         rows = np.flatnonzero(plies == ply)

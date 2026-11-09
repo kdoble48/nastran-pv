@@ -148,9 +148,112 @@ def test_ply_rows_take_a_ply_per_element():
 def test_ply_choices_parse():
     assert rt.parse_ply(None) == rt.parse_ply("max") == rt.parse_ply("MAX") == rt.parse_ply(0) == 0
     assert rt.parse_ply("3") == rt.parse_ply(3) == 3
-    for bad in ("-1", -2, "first", 1.5, True):
+    assert rt.parse_ply("-102") == -102  # a symmetric PCOMPG's mirrored copy of global ply 102
+    for bad in ("first", 1.5, True, "2.5"):
         with pytest.raises(ValueError, match="ply"):
             rt.parse_ply(bad)
+
+
+# ------------------------------------------------------------------ LAM options
+def _model(card, lam, **kw):
+    """A pyNastran model with property 1: faces MID 2 (0.002, 0 and 90 deg) and a core MID 3 (0.02),
+    as a PCOMP or a PCOMPG (global plies 11, 12, 13)."""
+    from pyNastran.bdf.bdf import BDF
+
+    model = BDF(debug=None)
+    args = dict(thetas=[0.0, 90.0, 0.0], souts=["YES"] * 3, lam=lam, **kw)
+    if card == "PCOMP":
+        model.add_pcomp(1, [2, 2, 3], [0.002, 0.002, 0.02], **args)
+    else:
+        model.add_pcompg(1, [11, 12, 13], [2, 2, 3], [0.002, 0.002, 0.02], args.pop("thetas"), **args)
+    return model
+
+
+def test_smcore_splits_the_faces_about_the_core():
+    """LAM=SMCORE: the last ply is the core, and half of each face ply goes below it and half above,
+    mirrored (QRG: "half the face sheet thicknesses above the core and the other half below"):
+    5 plies of 0.001 0.001 0.02 0.001 0.001, T = 0.024, Z0 = -T/2 = -0.012."""
+    table = plies.layup_table(_model("PCOMP", "SMCORE"), [1])
+    assert table["Index"].tolist() == [1, 2, 3, 4, 5] and table["ID"].tolist() == [1, 2, 3, 4, 5]
+    assert table["MID"].tolist() == [2, 2, 3, 2, 2]
+    close(table["Thickness"], [0.001, 0.001, 0.02, 0.001, 0.001])
+    close(table["Angle"], [0, 90, 0, 90, 0])
+    close(table["Z"], [-0.0115, -0.0105, 0.0, 0.0105, 0.0115])
+    # a PCOMPG's mirrored face plies are addressed as -GPLYID (the core is not mirrored)
+    assert plies.layup_table(_model("PCOMPG", "SMCORE"), [1])["ID"].tolist() == [11, 12, 13, -12, -11]
+
+
+@pytest.mark.parametrize("lam", [None, "MEM", "BEND", "SMEAR"])
+def test_other_lam_options_keep_the_plies_as_given(lam):
+    """MEM, BEND and SMEAR change which stiffness terms Nastran builds, not the plies: 3 plies, T = 0.024."""
+    table = plies.layup_table(_model("PCOMP", lam), [1])
+    assert table["ID"].tolist() == [1, 2, 3]
+    close(table["Thickness"], [0.002, 0.002, 0.02])
+    close(table["Z"], [-0.011, -0.009, 0.002])
+
+
+def test_a_symmetric_pcompg_mirrors_its_global_plies_as_negative_ids():
+    table = plies.layup_table(_model("PCOMPG", "SYM"), [1])
+    assert table["ID"].tolist() == [11, 12, 13, -13, -12, -11]
+    assert table["Index"].tolist() == [1, 2, 3, 4, 5, 6]
+    close(table["Z"], [-0.023, -0.021, -0.01, 0.01, 0.021, 0.023])  # T = 0.048, Z0 = -0.024
+
+
+SYM_PCOMPG_DECK = """SOL 101
+CEND
+BEGIN BULK
+GRID,1,,0.,0.,0.
+GRID,2,,1.,0.,0.
+GRID,3,,1.,1.,0.
+GRID,4,,0.,1.,0.
+CQUAD4,1,1,1,2,3,4
+PCOMPG,1,,,,,,,SYM
+,101,2,0.01,0.,YES
+,102,2,0.02,90.,YES
+MAT8,2,1.5+11,1.0+10,0.3,5.0+9,5.0+9,5.0+9,1600.
+ENDDATA
+"""
+
+
+def test_the_mirrored_copy_of_a_global_ply_is_its_own_ply(tmp_path):
+    """A symmetric PCOMPG lists 101 102 | 102 101 (T 0.06, Z0 -0.03). Nastran's composite output
+    labels both copies with the global ply id (results grouped by GPLYID), so the second row of an
+    element with that id is the mirrored copy, addressed as -GPLYID, in the layup and the results."""
+    deck_path = tmp_path / "sym.bdf"
+    deck_path.write_text(SYM_PCOMPG_DECK)
+    deck = load_deck(deck_path, echo=False)
+    mb = build_multiblock(deck)
+    shells = get_block(mb, "Shells")
+    for ply, z in ((102, -0.01), (-102, 0.01), (-101, 0.025)):
+        assert plies.attach_ply(mb, ply) == []
+        close(arr(shells, "PlyZ", "cell"), [z])
+    close(arr(shells, "PlyAngle", "cell"), [0.0])
+
+    from pyNastran.op2.op2 import OP2
+    from pyNastran.op2.tables.oes_stressStrain.real.oes_composite_plates import RealCompositePlateStressArray
+
+    op2 = OP2(debug=None)
+    op2.set_mode("msc")
+    data = np.zeros((1, 4, 9), dtype="float32")
+    data[0, :, 0] = [1, 2, 3, 4]  # S11 of 101, 102, the mirrored 102, the mirrored 101
+    layers = np.array([[1, 101], [1, 102], [1, 102], [1, 101]], dtype=np.int32)
+    op2.op2_results.stress.cquad4_composite_stress[1] = RealCompositePlateStressArray.add_static_case(
+        "OES1C", layers, data, 1, "CQUAD4")
+    from nastran_pv.results import Op2Results, Step
+
+    res = Op2Results(op2).select(["PlyStress"])
+    rtype = rt.PLY_STRESS
+    step = Step("Subcase 1", "displacement", 1, 0)
+    for ply, s11 in ((102, 2), (-102, 3), (101, 1), (-101, 4)):
+        eids, vals = res.select(["PlyStress"], ply=ply).values(rtype, step)
+        assert eids.tolist() == [1] and vals[0, 0] == s11 and vals[0, -1] == ply
+    eids, vals = res.select(["PlyStress"], ply=0).values(rtype, step)
+    assert vals[0, -1] == -101  # the critical ply: the mirrored 101 (S11 4)
+
+
+def test_mirrored_rows_of_a_repeated_ply_id():
+    ids = np.array([[1, 101], [1, 102], [1, 102], [1, 101], [2, 5], [2, 6]])
+    assert rt.mirrored_plies(ids).tolist() == [[1, 101], [1, 102], [1, -102], [1, -101], [2, 5], [2, 6]]
 
 
 # ------------------------------------------------------------------ ply results
@@ -295,10 +398,13 @@ def test_convert_with_a_ply(files, tmp_path, capsys):
     out = tmp_path / "c.vtm"
     assert main(["convert", str(DECK), "--results", str(files["op2"]), "--result-types", "PlyStress",
                  "--ply", "3", "-o", str(out), "-q"]) == 0
-    assert "ply results: ply 3 (--ply max: each element's critical ply)" in capsys.readouterr().out
+    assert "ply results: ply 3 (PlyStress)" in capsys.readouterr().out
     shells = get_block(read_model(out), "Shells")
     close(by_eid(shells, "PlyStress"), [[0, 0, 50], [0, 0, 20], [30, 0, 0]] + [[NAN] * 3] * 3)
-    close(by_eid(shells, "PlyAngle"), [90, 90, 60, NAN, NAN, NAN])  # the layup of ply 3
+    # the layup of ply 3 stays with the results attached (they never touch it)
+    close(by_eid(shells, "PlyAngle"), [90, 90, 60, NAN, NAN, NAN])
+    close(by_eid(shells, "PlyThickness"), [0.01, 0.01, 0.01, NAN, NAN, NAN])
+    close(by_eid(shells, "PlyAxis")[2], [0.5, math.sqrt(0.75), 0])  # CTRIA3 3: G1-G2 (+x) + 60 deg
     assert main(["convert", str(DECK), "--ply", "max", "-o", str(tmp_path / "d.vtm"), "-q"]) == 0
     assert get_block(read_model(tmp_path / "d.vtm"), "Shells").GetCellData().GetArray("PlyAngle") is None
     with pytest.raises(SystemExit, match="--ply needs the deck"):
@@ -310,6 +416,29 @@ def test_convert_warns_about_a_ply_no_property_has(tmp_path, capsys):
 
     assert main(["convert", str(DECK), "--ply", "9", "-o", str(tmp_path / "c.vtm"), "-q"]) == 0
     assert "ply 9: no composite shell property has it (ply ids: 1-4, 101-104)" in capsys.readouterr().out
+
+
+def test_convert_says_which_ply_types_have_the_ply(files, tmp_path, capsys):
+    """Ply 2 is in the layup, but only CTRIA3 3 writes a ply 2 stress (PCOMP 10's ply 2 has SOUT=NO)
+    and no element a ply 2 strain: PlyStrain attaches nothing, and convert says so."""
+    from nastran_pv.cli import main
+
+    args = ["convert", str(DECK), "--results", str(files["op2"]), "--ply", "2", "-q"]
+    assert main(args + ["--result-types", "PlyStress", "PlyStrain", "-o", str(tmp_path / "a.vtm")]) == 0
+    out = capsys.readouterr().out
+    assert "ply results: ply 2 (PlyStress)" in out
+    assert "PlyStrain: no element has ply 2 in the results at this step (SOUT=NO, or not written)" in out
+    assert main(args + ["--result-types", "PlyStrain", "-o", str(tmp_path / "b.vtm")]) == 0
+    out = capsys.readouterr().out
+    assert "ply results:" not in out and "PlyStrain: no element has ply 2" in out
+
+
+def test_a_bad_selection_leaves_the_last_one(files):
+    res = open_results(files["op2"]).select(["PlyStress"], ply=3)
+    for names, ply in ((["Bogus"], 0), (["PlyStress"], "first")):
+        with pytest.raises(ValueError):
+            res.select(names, ply=ply)
+        assert res.ply == 3 and res.selected == ("PlyStress",)
 
 
 def test_a_bad_ply_is_refused(capsys):

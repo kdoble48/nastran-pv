@@ -10,15 +10,15 @@ All notable changes to nastran-pv are listed here. The format follows
 
 - Composite layups and ply results (roadmap task 13). A deck whose shells use a PCOMP or PCOMPG
   gets Shells `PlyCount` and the field table `PLY_PID PLY_Index PLY_ID PLY_MID PLY_Thickness
-  PLY_Angle PLY_Z PLY_SOUT PLY_FT` (one row per ply, `LAM=SYM` expanded, PCOMPG global ply ids);
-  other decks are unchanged. The result types `PlyStress` (`PlyStress PlyInterlaminarStress
+  PLY_Angle PLY_Z PLY_SOUT PLY_FT` (one row per ply, `LAM=SYM` and `SMCORE` expanded, PCOMPG global ply ids,
+  `-GPLYID` for the mirrored copy of a symmetric PCOMPG's ply); other decks are unchanged. The result types `PlyStress` (`PlyStress PlyInterlaminarStress
   PlyPrincipalStress PlyMaxShearStress PlyVonMises`), `PlyStrain` and `PlyFailureIndex`
   (`PlyFailureIndex PlyBondIndex PlyFailureIndexMax`, on by default) read the OP2 composite stress,
   strain and failure-index tables and the MSC/NX HDF5 `*_COMP` datasets, one ply per element:
   `--ply N` (a ply id) for ply N, which also lays its layup on the shells (`PlyThickness PlyAngle
   PlyMID PlySOUT PlyZ PlyAxis`, the ply's fibre direction), or `--ply max` (the default) for each
-  element's critical ply, with its id in `PlyStressPly` and the like. Those tables leave the
-  "not attached" report (#71).
+  element's critical ply, with its id in `PlyStressPly` and the like; `convert` names the ply types that have
+  the ply and warns about the others. Those tables leave the "not attached" report (#71).
 - NPV Forces and NPV Stress views (`view`/`render --preset forces stress`): each block colored by its
   element forces (shells `MembraneForce`, lines `AxialForce`, bushes, springs) or by von Mises stress
   (shells at the top fibre, solids, lines `MaxStress`); `nv.apply("stress", quantity=, fibre=,
