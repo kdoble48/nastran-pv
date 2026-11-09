@@ -1595,7 +1595,7 @@ VIEW_SELECTS = {"masses": "mass glyphs", "bushes": "bush glyphs", "bushrotations
                 "beams": None, "loads": "load glyphs", "spc": "spc glyphs", "rigid": None, "family": None,
                 "group": None, "pid": None, "mid": None, "elementtype": None, "thickness": None, "nsm": None,
                 "results": "deform", "random": None, "randomsweep": None, "parts": "parts", "grow": "grow",
-                "path": "path", "check": "check"}
+                "path": "path", "check": "check", "forces": None, "stress": None}
 
 
 def clear_checks(pv, nv, reader):
