@@ -406,7 +406,8 @@ def element_result_checks(pv, nv):
             reader.ResultTypes = [t.name for t in REGISTRY if t.default]  # a new file: back to the defaults
             t0 = rm.timesteps(reader)[0]
             text += _messages(lambda: reader.UpdatePipeline(t0))
-            check(nv._listed(reader, "ResultTypes") == [t.name for t in REGISTRY], f"{kind}: every type listed")
+            listed = [t.name for t in REGISTRY if t.name not in ("SPCForce", "MPCForce", "AppliedLoad")]
+            check(nv._listed(reader, "ResultTypes") == listed, f"{kind}: every type the fixture has is listed")
             check(_by_eid(reader, "Lines", "AxialForce") == {21: 7.0, 22: 15.0, 23: 31.0},
                   f"{kind}: LineForce AxialForce of CBAR, CBEAM, CROD by default")
             check(_by_eid(reader, "Shells", "MembraneForce")[2] == [10.0, 20.0, 30.0], f"{kind}: ShellForce")
@@ -427,8 +428,11 @@ def element_result_checks(pv, nv):
             unread = "ELEMENTAL/STRESS/ELAS1" if kind == "H5" else "stress.celas1_stress"
             check(f"{unread}" in text and "no result type reads this table" in text,
                   f"{kind}: the reader reports the tables no type reads")
+            warnings = rm.Model(reader, t0).field_strings(None, "Warnings")
+            check(any(unread in w for w in warnings), f"{kind}: and keeps them in the root Warnings, as convert does")
             reader.ResultTypes = [t.name for t in REGISTRY]
-            reader.UpdatePipeline(t0)
+            again = _messages(lambda: reader.UpdatePipeline(t0))
+            check(unread not in again, f"{kind}: re-attaching the same results file reports nothing again")
             check(np.allclose(_by_eid(reader, "Shells", "VonMisesTop")[1], np.sqrt(3) * 50),
                   f"{kind}: ShellStress VonMisesTop when checked")
             check(_by_eid(reader, "Solids", "PrincipalStress")[11] == [30.0, 20.0, 10.0], f"{kind}: SolidStress")
@@ -1102,6 +1106,141 @@ def selection_file_checks(pv, nv, reader):
     pv.Delete(view)
 
 
+def result_load_checks(pv, nv, main_reader):
+    """SPC forces, MPC forces and OLOAD (op2_fixture.make_loads_op2 / write_loads_h5): the reader's
+    ResultTypes, the arrays and root resultants, Nastran Load Glyphs' Source, the loads view with a
+    result source, and a converted VTKHDF series."""
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    from nastran_pv.vtkutil import vector_text
+    from op2_fixture import LOAD_ROWS, make_loads_op2, write_loads_h5
+
+    tmp = tempfile.mkdtemp()  # not removed: an open VTKHDF reader keeps its file locked
+    op2 = os.path.join(tmp, "loads.op2")
+    make_loads_op2().write_op2(op2)
+    h5 = str(write_loads_h5(os.path.join(tmp, "loads.h5")))
+    spc, applied = [0.0, -100.0, -50.0], [0.0, 100.0, 50.0]
+    for results in (op2, h5):
+        reader = rm.load_reader(DECK, results)
+        ext = os.path.splitext(results)[1]
+        listed = nv._listed(reader, "ResultTypes")
+        check(listed == ["Displacement", "SPCForce", "MPCForce", "AppliedLoad"],
+              f"{ext}: ResultTypes lists the load results: {listed}")
+        model = rm.Model(reader, rm.timesteps(reader)[0])
+        shells = model.block("Shells")
+        nid = list(vtk_to_numpy(shells.GetPointData().GetArray("NID")))
+        f3 = vtk_to_numpy(shells.GetPointData().GetArray("SPCForce"))[nid.index(3)].tolist()
+        check(np.allclose(f3, [0, 0, -50]), f"{ext}: SPCForce at grid 3 {f3}")
+        got = [model.field(n).reshape(-1).tolist() for n in ("ResultantSPCForce", "ResultantAppliedForce",
+                                                             "ResultantSPCMoment", "ResultantAppliedMoment")]
+        check(np.allclose(got[0], spc) and np.allclose(got[1], applied)
+              and np.allclose(np.add(got[2], got[3]), 0), f"{ext}: resultants balance: {got}")
+        if results == op2:
+            view = pv.CreateRenderView()
+            view.ViewSize = [400, 300]
+            model = nv.apply("loads", reader=reader, view=view, source="SPC forces")
+            lg = pv.FindSource(nv._name(model, "load glyphs"))
+            check(nv.enum_text(lg, "Source") == "SPC forces" and _root(lg, "ArrowCount") == [3]
+                  and _point_values(lg, "NID") == {1, 3, 4}, "Source SPC forces: an arrow per grid with output")
+            text = _info(nv, model)
+            check("SPC forces (Subcase 1): 3 grids with output" in text
+                  and "Resultant force (0, -100, -50)" in text and "Resultant moment (-2, 100, -200)" in text,
+                  f"loads view with a result source gives the resultant: {text!r}")
+            lg.Show = "Forces and moments"
+            nv.apply("loads", reader=reader, view=view)
+            check(nv.enum_text(lg, "Source") == "SPC forces" and _root(lg, "ArrowCount") == [5],
+                  "Source and Show kept on rerun: 3 forces + 2 moments")
+            nv.apply("loads", reader=reader, view=view, source="Applied loads (OLOAD)", show="Forces")
+            check(_point_values(lg, "NID") == {3, 6} and "Resultant force (0, 100, 50)" in _info(nv, model),
+                  "Source Applied loads (OLOAD)")
+            reader.HiddenElements = "1 3"  # the reader's scope cuts the model: the text says whose numbers
+            nv.apply("loads", reader=reader, view=view, source="SPC forces")
+            drawn = _point_values(lg, "NID")
+            want = np.sum([LOAD_ROWS["spc_forces"][n][:3] for n in sorted(drawn)] or [[0, 0, 0]], axis=0)
+            text = _info(nv, model)
+            check(drawn <= {1, 3, 4} and "in the reader's scope" in text
+                  and f"Force sum of these grids {vector_text(want)}" in text
+                  and "Whole-model resultant force (0, -100, -50)" in text, f"scoped: the arrows' sum, labelled: {text!r}")
+            reader.HiddenElements = ""
+            nv.apply("loads", reader=reader, view=view, source="Applied loads (OLOAD)")
+            reader.ResultTypes = ["Displacement"]
+            nv.apply("loads", reader=reader, view=view)
+            check(_root(lg, "ArrowCount") == [0] and "No Applied loads (OLOAD) to draw" in _info(nv, model),
+                  "AppliedLoad unchecked in Result Types: nothing to draw, and why")
+            reader.ResultTypes = listed
+            nv.apply("loads", reader=reader, view=view, source="Deck load sets")
+            check(nv.enum_text(lg, "Source") == "Deck load sets" and "LOAD_1001: 2 loaded grids" in _info(nv, model),
+                  "source= Deck load sets: back to the deck's LOAD 1001")
+            nv.clear(view)
+            pv.Delete(view)
+            tag = nv._name(model, "x").split(" ", 2)[2]  # "[tiny_run.bdf #<id>]": this reader's NPV objects
+            check(tag != nv._name(nv.Model(main_reader), "x").split(" ", 2)[2], f"the second reader has its own names {tag}")
+            for src in [s for k, s in pv.GetSources().items() if k[0].startswith("NPV ") and k[0].endswith(tag)]:
+                pv.Delete(src)
+        pv.Delete(reader)
+    series = os.path.join(tmp, "loads.vtkhdf")
+    convert(["convert", DECK, "--results", op2, "--all-steps", "-o", series, "-q"])
+    src = nv.load_reader(series)
+    t0 = (rm.timesteps(src) or [0.0])[0]  # one step: no TimestepValues
+    model = rm.Model(src, t0)
+    check(np.allclose(model.field("ResultantSPCForce").reshape(-1), spc)
+          and model.block("Constraints").GetPointData().GetArray("SPCForce") is not None,
+          "converted VTKHDF series: SPCForce and its resultant")
+    g = pv.NastranLoadGlyphs(Input=src)
+    g.Source = "MPC forces"
+    g.UpdatePipeline(t0)
+    check(_point_values(g, "NID") == {2, 5}, "Load Glyphs on a converted series: the MPC forces at grids 2 and 5")
+    pv.Delete(g)
+    pv.Delete(src)
+
+
+def pressure_checks(pv, nv):
+    """PLOAD/PLOAD2/PLOAD4 faces and GRAV on tests/data/pressures.bdf (the hand-computed values are
+    in test_pressures.py): the Pressures block, the arrows and their switches, the view's text, the
+    scope, and a converted .vtm."""
+    path = os.path.join(HERE, "data", "pressures.bdf")
+    reader = rm.load_reader(path)
+    model = rm.Model(reader)
+    sets = nv.block_names(model.block("Pressures")) if model.has("Pressures") else []
+    check(sets == ["SID_10", "SID_20", "SID_30", "SID_40", "LOAD_100"], f"Pressures block per load set: {sets}")
+    view = pv.CreateRenderView()
+    view.ViewSize = [400, 300]
+    m = nv.apply("loads", reader=reader, view=view)
+    lg = pv.FindSource(nv._name(m, "load glyphs"))
+    text = _info(nv, m)
+    check(list(lg.LoadSets) == ["LOAD_100"] and _root(lg, "ArrowCount") == [5] and _point_values(lg, "LoadKind") == {2}
+          and "LOAD_100: 5 pressure faces, resultant force (1.5, 0, 44.25)" in text,
+          f"the Case Control LOAD: an arrow per pressure face, the resultant: {text!r}")
+    lg.ShowPressures = 0
+    nv.apply("loads", reader=reader, view=view)
+    check(_root(lg, "ArrowCount") == [0] and "Show Pressures" in _info(nv, m), "Show Pressures off: nothing, and why")
+    lg.ShowPressures = 1
+    nv.apply("loads", reader=reader, view=view, sets=["SID_50"])
+    text = _info(nv, m)
+    check(_point_values(lg, "LoadKind") == {3} and _root(lg, "ArrowCount") == [1]
+          and "SID_50: GRAV (0, 0, -9.81) at the CG, WTMASS x mass x a = (0, 0, -19.62)" in text,
+          f"GRAV: one arrow at the CG and its inertial force: {text!r}")
+    reader.HiddenElements = "2"
+    nv.apply("loads", reader=reader, view=view, sets=["LOAD_100"])
+    check(_root(lg, "PressureFaces") == [4], "the faces follow the reader's scope (quad 2 hidden)")
+    reader.HiddenElements = ""
+    nv.clear(view)
+    tag = nv._name(m, "x").split(" ", 2)[2]
+    for src in [x for k, x in pv.GetSources().items() if k[0].startswith("NPV ") and k[0].endswith(tag)]:
+        pv.Delete(src)
+    pv.Delete(reader)
+    pv.Delete(view)
+    tmp = tempfile.mkdtemp()
+    out = os.path.join(tmp, "pressures.vtm")
+    convert(["convert", path, "-o", out, "-q"])
+    src = nv.load_reader(out)
+    g = pv.NastranLoadGlyphs(Input=src)
+    g.UpdatePipeline()
+    check(list(g.LoadSets) == ["LOAD_100"] and _root(g, "ArrowCount") == [5], "Load Glyphs on a converted .vtm")
+    pv.Delete(g)
+    pv.Delete(src)
+
+
 def random_checks(pv, nv):
     """Random response from synthesized modes: reader properties, both views, a converted series."""
     from op2_fixture import make_modes_op2
@@ -1490,10 +1629,11 @@ def card_report_checks(pv, nv):
             vtkOutputWindow.SetInstance(previous)
         with open(log, encoding="utf-8", errors="replace") as f:
             text = f.read()
-    check(model.names == ["Shells", "Connectors", "Plotels", "Constraints", "Loads"], f"cards: blocks {model.names}")
-    check(model.field("SkippedCardCount").tolist() == [24] and "CTRIAX6" in model.field_strings(None, "SKIPPED_Card"),
+    check(model.names == ["Shells", "Connectors", "Plotels", "Constraints", "Loads", "Pressures"],
+          f"cards: blocks {model.names}")
+    check(model.field("SkippedCardCount").tolist() == [22] and "CTRIAX6" in model.field_strings(None, "SKIPPED_Card"),
           "cards: the SKIPPED_ table on the reader's output")
-    check("24 card(s) of 20 type(s) not drawn: 2 CTRIAX6" in text, "cards: the card report in the reader's messages")
+    check("22 card(s) of 19 type(s) not drawn: 2 CTRIAX6" in text, "cards: the card report in the reader's messages")
     shells = model.block("Shells")
     check(sorted(shells.GetCellType(i) for i in range(shells.GetNumberOfCells())) == [23, 28],
           "cards: CQUAD drawn biquadratic (9 grids) and quadratic (no G9)")
@@ -1806,7 +1946,12 @@ def filter_property_checks(pv, nv, reader, view):
     lg.UpdatePipeline()
     check(_root(lg, "ArrowCount") == [4], "Show forces and moments: 3 forces + 1 moment")
     nv.apply("loads", reader=reader, view=view, sets=["LOAD_1001"], show="Forces")
-    check(list(lg.LoadSets) == ["LOAD_1001"] and _root(lg, "ArrowCount") == [2], "loads view sets=/show= win")
+    check(list(lg.LoadSets) == ["LOAD_1001"] and _root(lg, "ArrowCount") == [3]  # 2 forces + its GRAV
+          and "LOAD_1001: GRAV (0, 0, -19.62) at the CG" in _info(nv, model), "loads view sets=/show= win")
+    lg.ShowGravity = 0
+    lg.UpdatePipeline()
+    check(_root(lg, "ArrowCount") == [2], "Show Gravity off: the two forces")
+    lg.ShowGravity = 1
     x0 = lg.GetDataInformation().GetBounds()
     lg.ArrowLength = "Fixed"
     lg.UpdatePipeline()
@@ -1820,6 +1965,9 @@ def filter_property_checks(pv, nv, reader, view):
             f.write(GRAV_MOMENT_DECK)
         gr = rm.load_reader(path)
         gm = nv.apply("loads", reader=gr, view=view)
+        text = _info(nv, gm)
+        check("SID_5: GRAV (0, 0, -9.81) at the CG" in text, f"the Case Control GRAV set is drawn first: {text!r}")
+        nv.apply("loads", reader=gr, view=view, sets=["SID_6"])
         text = _info(nv, gm)
         check("SID_6: no forces to draw" in text and "Show on 'NPV load glyphs'" in text,
               f"loads view on a moment-only set with Show Forces says so: {text!r}")
@@ -1905,6 +2053,37 @@ def scope_filter_checks(pv, nv, reader, view, deform, full):
     reader.ShowOnlyElements = ""
     deform.AutoScale, deform.ScaleFactor = auto, scale
     pv.Delete(s)
+
+
+def deleted_filter_checks(pv, reader):
+    """A deleted reader or filter is freed and lets go of its caches at once. Two things kept them:
+    ParaView 6.0's VTK released a deleted Python algorithm's dict late, inside FindObject, and
+    corrupted its ghost map (a crash on Linux; vtkutil.drop_state_on_delete), and the checklists'
+    observers and the deck's logger held their algorithm, so it was never freed at all
+    (vtkutil.modified_callback, load_deck)."""
+    import gc
+    import weakref
+
+    fresh = rm.load_reader(DECK)  # not `reader`: the other checks keep using it
+    filters = {"reader": fresh, "NastranMassGlyphs": pv.NastranMassGlyphs(Input=fresh),
+               "NastranLoadGlyphs": pv.NastranLoadGlyphs(Input=fresh),  # checklists
+               "NastranGrow": pv.NastranGrow(Input=fresh, SeedIDs="EID 1"),  # card types checklist
+               "NastranDeform": pv.NastranDeform(Input=fresh, ScaleFactor=2.0)}
+    states = {}
+    for name, proxy in filters.items():
+        proxy.UpdatePipeline()
+        states[name] = proxy.GetClientSideObject().__dict__
+    del proxy  # it would keep the last filter, and so the reader, alive
+    check(states["NastranDeform"].get("_deformer") is not None, "Nastran Deform caches its deformer")
+    deck = weakref.ref(states["reader"]["_deck"])
+    for name in ("NastranMassGlyphs", "NastranLoadGlyphs", "NastranGrow", "NastranDeform", "reader"):
+        pv.Delete(filters.pop(name))
+    del fresh
+    gc.collect()
+    for name, state in states.items():
+        check(not state, f"a deleted {name} is freed and drops its cached state (left: {sorted(state)})")
+    check(deck() is None, "a deleted reader frees its deck")
+    pv.SetActiveSource(reader)
 
 
 LEGS_DECK = """$ shell 1 (grids 1-4) and shell 2 (5-8), joined by CBUSH 11 (2-5) and CELAS2 12 (3-6): with shell 2
@@ -2453,9 +2632,12 @@ def main():
     pv.Delete(twin)
     converted_checks(pv, nv, reader)
     file_group_checks(pv, nv)
+    deleted_filter_checks(pv, reader)
     parity_checks(pv, nv)
     calc_nan_checks(pv, nv)
     random_checks(pv, nv)
+    result_load_checks(pv, nv, reader)
+    pressure_checks(pv, nv)
     topology_checks(pv, nv)
     diff_checks(pv, nv)
     clear_checks(pv, nv, reader)

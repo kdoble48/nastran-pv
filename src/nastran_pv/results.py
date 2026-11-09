@@ -7,7 +7,7 @@ modes) in the field data, so the VCR controls page through modes and
 ``Warp By Vector`` on ``Displacement`` animates them.
 
 What a step writes is declared by the result types of :mod:`nastran_pv.result_types`
-(``REGISTRY``). By default the mesh blocks receive
+(``REGISTRY``). Today the mesh blocks receive
 
 * point data ``Displacement`` (T1-T3), ``Rotation`` (R1-R3),
   ``DisplacementMagnitude``, rotated from each grid's CD system into basic
@@ -15,6 +15,10 @@ What a step writes is declared by the result types of :mod:`nastran_pv.result_ty
 * cell data ``VonMisesMax``: the largest von Mises value over all
   layers/nodes reported for the element in any stress table of that subcase
   and time, only when stress output exists (type ``VonMisesMax``);
+* point data ``SPCForce``/``SPCMoment``, ``MPCForce``/``MPCMoment`` and
+  ``AppliedForce``/``AppliedMoment`` (OLOAD), rotated like displacements, NaN on
+  grids without output, plus their root ``<array>Resultant`` sums about the basic
+  origin (types ``SPCForce``, ``MPCForce``, ``AppliedLoad``);
 * the element forces of shells, lines, bushes and springs (``ShellForce``, ``LineForce``,
   ``BushForce``, ``SpringForce``); the stress and strain components are chosen with ``select``.
 
@@ -27,12 +31,12 @@ from __future__ import annotations
 import fnmatch
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 
 from . import result_types, vtkutil
 from .assemble import block_names, get_block
-from .fields.common import mpc_legs
 from .sections import sweep
 
 
@@ -67,6 +71,26 @@ class _Results:
     available: tuple = ()
     selected: tuple | None = None  # type names to attach; None: the registry's defaults
     named: tuple = ()  # the types selected by name (not by "all"), which the file should have
+    step_type: str | None = None  # the type that gave the steps when no step-defining type has tables
+
+    def _collect_steps(self) -> list[Step]:
+        """The steps of the step-defining types; a file without any (DISP=NONE) takes them from
+        the first type with declared step kinds that has tables (``step_type``)."""
+        steps = [s for t in self.registry if t.steps for s in self._steps_of(t)]
+        if not steps:
+            fallback = next((t for t in self.registry if not t.steps and t.defines_steps and self.tables[t.name]),
+                            None)
+            if fallback is not None:
+                self.step_type = fallback.name
+                steps = self._steps_of(fallback)
+        return steps
+
+    def _gives_steps(self, rtype) -> bool:
+        """``rtype``'s tables are the step tables: read each step's own table, not by pairing."""
+        return rtype.steps or rtype.name == self.step_type
+
+    def _steps_of(self, rtype) -> list[Step]:
+        raise NotImplementedError
 
     @property
     def times(self) -> list[float]:
@@ -178,22 +202,13 @@ def _header_columns(obj, columns):
 
 
 def _pick_columns(obj, picks):
-    """``picks`` with header names resolved to column indices (a tuple of alternatives: the first
-    the table has; None stays None), or None when the table lacks one."""
+    """Per pick of ``picks``, the header indices of its columns (``result_types.resolve``; None
+    for a NaN column), or None when the table lacks one."""
     headers = _headers(obj)
-    if headers is None or not hasattr(obj, "data"):
+    named = result_types.resolve_picks(picks, headers) if headers is not None and hasattr(obj, "data") else None
+    if named is None:
         return None
-    out = []
-    for pos, cols in picks:
-        idx = []
-        for c in cols:
-            names = (c,) if isinstance(c, str) else (c or ())
-            hit = [headers.index(n) for n in names if n in headers]
-            if c is not None and not hit:
-                return None
-            idx.append(hit[0] if hit else None)
-        out.append((pos, idx))
-    return tuple(out)
+    return tuple(tuple(None if c is None else headers.index(c) for c in cols) for _, cols in named)
 
 
 def _ids(obj, rtype):
@@ -211,8 +226,23 @@ def _subcases(subcases) -> str:
     return f"subcase{'s' if len(u) > 1 else ''} {shown}"
 
 
-def _is_ply_table(name) -> bool:
-    return any(fnmatch.fnmatchcase(name, p) for p in result_types.PLY_TABLES)
+def _subcase(key) -> int:
+    return int(key) if np.isscalar(key) else key[0]
+
+
+class Op2Table(NamedTuple):
+    """A pyNastran table a result type reads: its result name and subcase key, the table, the
+    header indices to take (``columns``; None: every column) or, for a type with picks, one tuple
+    of indices per pick, the step kind (types that can define steps) and, with picks, the
+    :class:`~nastran_pv.result_types.PickPlan` of its rows (made once: the rows do not change
+    between steps)."""
+
+    name: str
+    key: object
+    obj: object
+    columns: object
+    kind: str | None
+    plan: result_types.PickPlan | None = None
 
 
 class Op2Results(_Results):
@@ -236,100 +266,94 @@ class Op2Results(_Results):
         return cls(op2, path, registry)
 
     # ------------------------------------------------------------ discovery
-    def _find_tables(self, rtype) -> list:
-        """(result name, subcase key, table, columns, step kind, picked) of every usable table:
-        the columns are header indices (None: all), or the source's picks with resolved indices
-        when ``picked``; the kind is None for a type that does not define steps."""
+    def _find_tables(self, rtype) -> list[Op2Table]:
+        """Every usable table of ``rtype``, over its sources: real, with ids, the ``requires``
+        headers and every column or pick column; the kind is None for a type that cannot define
+        steps."""
         found = []
         for src in rtype.op2_sources:
             for pat, name, result in _op2_results(self.op2, src.tables):
-                kind = src.kind(pat) if rtype.steps else None
+                kind = src.kind(pat) if rtype.defines_steps else None
                 for key, obj in result.items():
                     if getattr(obj, "is_complex", False):
                         if rtype.steps:
-                            sc = int(key) if np.isscalar(key) else key[0]
-                            self.skipped.append(f"{kind} subcase {sc}: complex results are not supported")
+                            self.skipped.append(f"{kind} subcase {_subcase(key)}: complex results are not supported")
                         continue
-                    if not rtype.steps and _ids(obj, rtype) is None:
+                    ids = _ids(obj, rtype)
+                    if not rtype.steps and ids is None:
                         continue
                     if src.requires and _header_columns(obj, src.requires) is None:
+                        continue
+                    if src.picks:
+                        cols = _pick_columns(obj, src.picks)
+                        if cols is None:
+                            continue
+                        plan = result_types.pick_plan(ids, [pos for pos, _ in src.picks])
+                        found.append(Op2Table(name, key, obj, cols, kind, plan))
                         continue
                     cols = None
                     if src.columns:
                         cols = _header_columns(obj, src.columns)
-                    elif src.picks:
-                        cols = _pick_columns(obj, src.picks)
-                    if cols is None and (src.columns or src.picks):
-                        continue
-                    found.append((name, key, obj, cols, kind, bool(src.picks)))
+                        if cols is None:
+                            continue
+                    found.append(Op2Table(name, key, obj, cols, kind))
         return found
 
     def _unread(self) -> list[str]:
-        """One message per force, stress or strain table that no type of the registry reads
-        (complex, composite plies, plate curvature, or a layout no type declares), with its
-        subcases; a composite table is reported even when ``VonMisesMax`` reads its von Mises."""
-        read = {(entry[0], entry[1]) for tables in self.tables.values() for entry in tables}
+        """One message per force, stress or strain table no type of the registry reads
+        (``result_types.unread_reason``), with its subcases."""
+        read = {(t.name, t.key) for tables in self.tables.values() for t in tables}
         reasons = {}
         for _, name, result in _op2_results(self.op2, result_types.REPORTED_OP2):
             for key, obj in result.items():
-                if getattr(obj, "is_complex", False):
-                    reason = result_types.COMPLEX
-                elif _is_ply_table(name):
-                    reason = result_types.PLIES + (" (VonMisesMax has their largest von Mises)"
-                                                   if (name, key) in read else "")
-                elif (name, key) in read:
-                    continue
-                elif (_headers(obj) or [""])[0] == "fiber_curvature":
-                    reason = result_types.CURVATURE
-                else:
-                    reason = result_types.NOT_READ
-                reasons.setdefault((name, reason), []).append(int(key) if np.isscalar(key) else key[0])
+                reason = result_types.unread_reason(
+                    name, (name, key) in read, complex_=getattr(obj, "is_complex", False),
+                    curvature=(_headers(obj) or [""])[0] == "fiber_curvature")
+                if reason is not None:
+                    reasons.setdefault((name, reason), []).append(_subcase(key))
         return [f"{name}, {_subcases(scs)}: {reason}" for (name, reason), scs in reasons.items()]
 
-    def _collect_steps(self) -> list[Step]:
+    def _steps_of(self, rtype) -> list[Step]:
         steps = []
-        for rtype in self.registry:
-            if not rtype.steps:
-                continue
-            for name, key, res, _, kind, _ in self.tables[rtype.name]:
-                sc = int(key) if np.isscalar(key) else key[0]
-                ntimes = res.data.shape[0]
-                times = np.asarray(getattr(res, "_times", []), dtype=float)
-                cycles = getattr(res, "mode_cycles", None)
-                eigns = getattr(res, "eigns", None)
-                modes = getattr(res, "modes", [])
-                for it in range(ntimes):
-                    t = float(times[it]) if len(times) > it else float("nan")
-                    if kind == "eigenvector":
-                        freq = _mode_frequency(eigns, cycles, it)
-                        mode = int(modes[it]) if len(modes) > it else it + 1
-                        label = f"Subcase {sc} mode {mode} ({freq:.6g} Hz)"
-                        steps.append(Step(label, kind, key, it, freq, t, name))
-                    else:
-                        label = f"Subcase {sc}" + (f" step {t:g}" if ntimes > 1 else "")
-                        steps.append(Step(label, kind, key, it, time=t, table=name))
+        for name, key, res, _, kind, _ in self.tables[rtype.name]:
+            sc = _subcase(key)
+            ntimes = res.data.shape[0]
+            times = np.asarray(getattr(res, "_times", []), dtype=float)
+            cycles = getattr(res, "mode_cycles", None)
+            eigns = getattr(res, "eigns", None)
+            modes = getattr(res, "modes", [])
+            for it in range(ntimes):
+                t = float(times[it]) if len(times) > it else float("nan")
+                if kind == "eigenvector":
+                    freq = _mode_frequency(eigns, cycles, it)
+                    mode = int(modes[it]) if len(modes) > it else it + 1
+                    label = f"Subcase {sc} mode {mode} ({freq:.6g} Hz)"
+                    steps.append(Step(label, kind, key, it, freq, t, name))
+                else:
+                    label = f"Subcase {sc}" + (f" step {t:g}" if ntimes > 1 else "")
+                    steps.append(Step(label, kind, key, it, time=t, table=name))
         return steps
 
     # ------------------------------------------------------------ values
     def _rows(self, rtype, step):
         """A step-defining type reads the step's own table at its index; the others every table
         of the step's subcase, at the row whose time value matches the step's."""
-        for name, key, obj, cols, _, picked in self.tables[rtype.name]:
-            if key != step.key:
+        for table in self.tables[rtype.name]:
+            if table.key != step.key:
                 continue
-            if rtype.steps:
-                if name != step.table:
+            if self._gives_steps(rtype):
+                if table.name != step.table:
                     continue
                 itime = step.itime
             else:
-                itime = _time_index(obj, step)
+                itime = _time_index(table.obj, step)
                 if itime is None:
                     continue
-            data = obj.data[itime]
-            if picked:
-                yield result_types.pick_rows(_ids(obj, rtype), data, cols)
+            data = table.obj.data[itime]
+            if table.plan is not None:
+                yield table.plan.ids, result_types.pick_values(data, table.plan, table.columns)
             else:
-                yield _ids(obj, rtype), (data if cols is None else data[:, cols])
+                yield _ids(table.obj, rtype), (data if table.columns is None else data[:, table.columns])
 
 
 # ------------------------------------------------------------------ attaching
@@ -356,14 +380,12 @@ def _write(mb, names, targets, rtype, got) -> None:
         if not write or not in_place:
             for spec in rtype.arrays:
                 attrs.RemoveArray(spec.name)
-        ids = attrs.GetArray(rtype.id_array)
-        if not write or ids is None:
+        if not write:
             continue
-        idx = vtkutil.match_ids(got[0], vtkutil.to_numpy(ids))
-        if rtype.location == "cell" and rtype.id_array == "EID":
-            legs = mpc_legs(block)  # their EID is the MPC set id, not an element's
-            if legs is not None:
-                idx[legs] = -1
+        ids = rtype.block_ids(block)
+        if ids is None:
+            continue
+        idx = vtkutil.match_ids(got[0], ids)
         ok = idx >= 0
         vals = np.full((len(idx), got[1].shape[1]), rtype.fill)
         vals[ok] = got[1][idx[ok]]
@@ -385,9 +407,77 @@ def _attach_sections(mb, names) -> None:
         sweep.attach_displacement(get_block(mb, "BeamSections"), get_block(mb, "Lines"))
 
 
+def _placed(mb, names, rtype, ids, deck):
+    """(basic xyz, placed mask) of ``ids``: the deck's grids, or without a deck the points of the
+    type's blocks by NID (a mass's point is its CG, so Masses only for grids no other block has)."""
+    xyz = np.zeros((len(ids), 3))
+    if deck is not None:
+        gidx = deck.lookup(ids)
+        ok = gidx >= 0
+        xyz[ok] = deck.xyz[gidx[ok]]
+        return xyz, ok
+    nids, pts = [], []
+    for name in sorted((b for b in rtype.blocks if b in names), key=lambda b: b == "Masses"):
+        block = get_block(mb, name)
+        nid = block.GetPointData().GetArray("NID")
+        if nid is not None and block.GetNumberOfPoints():
+            nids.append(vtkutil.to_numpy(nid))
+            pts.append(vtkutil.to_numpy(block.GetPoints().GetData()).reshape(-1, 3))
+    known, known_xyz = vtkutil.first_per_id(nids, pts)
+    idx = vtkutil.match_ids(known, ids)
+    ok = idx >= 0
+    xyz[ok] = known_xyz[idx[ok]]
+    return xyz, ok
+
+
+def _in_basic(mb, ids) -> bool:
+    """Rows of grids ``ids`` that were not rotated (no deck) are in basic: no grid of them has a CD
+    system (root ``GRIDCS_*``; a model without ``CoordSystemCount`` predates the table: unknown)."""
+    fd = mb.GetFieldData()
+    if fd.GetArray("CoordSystemCount") is None:
+        return False
+    nid, cd = fd.GetArray("GRIDCS_NID"), fd.GetArray("GRIDCS_CD")
+    if nid is None or cd is None:
+        return True  # no grid with a CP or CD system
+    in_cd = vtkutil.to_numpy(nid)[vtkutil.to_numpy(cd) != 0]
+    return not np.isin(ids, in_cd).any()
+
+
+def _write_resultant(mb, names, rtype, got, deck) -> None:
+    """Root ``rtype.resultant_names`` of ``got``: the force sum and the moment about the basic
+    origin, sum of M + r x F, each grid once and only the grids the model places; dropped when
+    ``got`` is None, and left out without a deck when a row stays in its grid's CD system."""
+    fd = mb.GetFieldData()
+    for name in rtype.resultant_names:
+        fd.RemoveArray(name)
+    if got is None or not rtype.resultant:
+        return
+    ids, first = np.unique(got[0], return_index=True)
+    if deck is None and rtype.frame == "grid_cd" and not _in_basic(mb, ids):
+        return  # CD-frame forces at basic positions would be no resultant
+    vals = got[1][first]
+    xyz, ok = _placed(mb, names, rtype, ids, deck)
+    for name, value in zip(rtype.resultant_names, vtkutil.resultant(xyz[ok], vals[ok, 0:3], vals[ok, 3:6])):
+        vtkutil.add_array(fd, name, value[None, :])
+
+
+def resultant_lines(mb, registry=result_types.REGISTRY) -> list[str]:
+    """One line per type of ``registry`` whose resultant is on ``mb``'s root (the attached step)."""
+    fd = mb.GetFieldData()
+    label = fd.GetAbstractArray("ResultLabel")
+    label = label.GetValue(0) if label is not None and label.GetNumberOfValues() else "?"
+    lines = []
+    for rtype in registry:
+        arrays = [fd.GetArray(n) for n in rtype.resultant_names]
+        if arrays and all(a is not None for a in arrays):
+            force, moment = (vtkutil.vector_text(vtkutil.to_numpy(a), 6) for a in arrays)
+            lines.append(f"{rtype.name} resultant ({label}): force {force}, moment {moment} about the basic origin")
+    return lines
+
+
 def remove_result_arrays(mb, registry=result_types.REGISTRY) -> None:
-    """Drop every array the registry's types write from their blocks of ``mb``, and the beam
-    sections' displacement (a random response replaces them)."""
+    """Drop every array the registry's types write from their blocks of ``mb`` (and their root
+    resultants), and the beam sections' displacement (a random response replaces them)."""
     names = block_names(mb)
     for rtype in registry:
         for name in rtype.blocks:
@@ -395,6 +485,8 @@ def remove_result_arrays(mb, registry=result_types.REGISTRY) -> None:
                 attrs = rtype.attributes(get_block(mb, name))
                 for spec in rtype.arrays:
                     attrs.RemoveArray(spec.name)
+        for name in rtype.resultant_names:
+            mb.GetFieldData().RemoveArray(name)
     _attach_sections(mb, names)
 
 
@@ -413,6 +505,7 @@ def attach_step(results, mb, step_index: int, deck=None) -> None:
         if got is not None and rtype.frame == "grid_cd" and deck is not None:
             got = (got[0], to_basic(deck, got[0], got[1]))
         _write(mb, names, targets, rtype, got)
+        _write_resultant(mb, names, rtype, got, deck)
 
     _attach_sections(mb, names)
 

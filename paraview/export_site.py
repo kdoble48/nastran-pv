@@ -32,7 +32,8 @@ VIEW_INFO = {
                                         "radius ~ log stiffness, on their own scale; released directions grey."),
     "beams": ("Beams", "CBAR/CBEAM cross sections swept along the beams (PBARL/PBEAML shapes, PBAR/PBEAM "
                        "equivalent rectangles), colored by PID, with the shear-center and neutral axes."),
-    "loads": ("Loads", "Force arrows for the active LOAD set, scaled by magnitude; resultant force."),
+    "loads": ("Loads", "Force, pressure and GRAV arrows for the active LOAD set, scaled by magnitude; "
+                       "resultant force."),
     "spc": ("SPC", "Constrained grids colored by DOF code."),
     "rigid": ("Rigid", "RBE2/RBE3 spider legs by type."),
     "family": ("Family", "Mesh colored by element family, from the pre-processor comments."),

@@ -94,10 +94,10 @@ with `cannot read DECK: <error>` and writes no PNG.
   `nv.selectors([...])` for `ExtractBlock`.
 - Each view's settings live on the filter it selects (`docs/paraview.md#filter-properties`):
   `NPV mass glyphs` (*Size*, *MinimumMass*, *ColorBy*), `NPV bush glyphs` (*ShowOnly* grounded or
-  zero-length), `NPV load glyphs` (*LoadSets*, *Show* forces/moments, *ArrowLength*,
-  *EveryNthPoint*), `NPV spc glyphs` (*SPCSets*, *DOFs*), `NPV beam axes` (*MaxTriads*),
+  zero-length), `NPV load glyphs` (*Source* deck sets or the results' SPC/MPC forces and
+  OLOAD, *LoadSets*, *Show* forces/moments, *ArrowLength*, *EveryNthPoint*), `NPV spc glyphs` (*SPCSets*, *DOFs*), `NPV beam axes` (*MaxTriads*),
   `NPV deform` (*AutoScale* in the results view). A rerun keeps them; pass arguments to override:
-  `nv.apply("loads", sets=["SID_2"], show="Moments")`, `nv.apply("spc", dofs="123")`,
+  `nv.apply("loads", sets=["SID_2"], show="Moments")`, `nv.apply("loads", source="SPC forces")`, `nv.apply("spc", dofs="123")`,
   `nv.apply("masses", minimum_mass=0.5, color_by="EID")`, `nv.apply("results", scale=50)`. Set
   checklists with a list of names (`g.LoadSets = ["LOAD_1001"]`) after `g.UpdatePipelineInformation()`.
 - Hiding parts from a script: set the reader's `VisibleProperties`/`VisibleMaterials`/
@@ -113,5 +113,5 @@ with `cannot read DECK: <error>` and writes no PNG.
 ## Report back with
 
 Paths to the PNGs you checked, which deck and load set were used (`ActiveLoadSets`), and any caveat
-the picture hides. For example, **GRAV is not drawn as arrows**, so a `LOAD` that combines aero
-forces with GRAV shows the aero forces only. Pressure (PLOAD*) is not drawn either (`docs/model.md#not-visualized-yet`).
+the picture hides. For example, GRAV is one arrow at the CG (not a force per mass), and PLOAD*
+pressures are one arrow per face, on their own scale; PLOAD1 is not drawn (`docs/model.md#not-visualized-yet`).

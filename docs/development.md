@@ -10,6 +10,26 @@ python -m pyflakes src paraview/*.py tests  # lint (skip paraview/_vendor)
 Every push to `main` and every pull request runs the tests and lint on Linux, Windows and macOS
 with Python 3.10 to 3.12 (`.github/workflows/tests.yml`), and builds this site
 (`.github/workflows/docs.yml`). Tests that need ParaView, MYSTRAN or the real datasets skip there.
+The *paraview* workflow (`.github/workflows/paraview.yml`, on pull requests that touch
+`paraview/`, `src/` or `tests/`, or by hand) installs the wheel on Linux, runs `nastran-pv setup`
+against a headless ParaView 6.0.1 and 5.13.1 unpacked in the home folder, and runs
+`tests/pv_smoke.py` on both; the downloads are cached. The *wheel* job builds the sdist and the wheel from it, checks that the wheel carries the plugin
+and no `_vendor`, installs it into a fresh venv outside the checkout, and checks that
+`nastran-pv setup --dry-run` finds the plugin there.
+
+## Packaging
+
+The wheel carries `paraview/*.py` and `paraview/*.json` as `nastran_pv/paraview/`. A `build_py`
+hook in `setup.py` copies them at build time (the metadata stays in `pyproject.toml`), and
+`MANIFEST.in` puts them in the sdist. An editable install copies nothing and uses `paraview/`.
+A new kind of file in `paraview/` needs a pattern in both. Build and check locally with:
+
+```bash
+python -m build --outdir out/dist       # pip install build; the wheel is built from the sdist
+python -m zipfile -l out/dist/nastran_pv-*.whl
+```
+
+The design and the lookup order are in `docs/design/2026-11-08-wheel-plugin.md`.
 Changes that affect users get a line in the
 [CHANGELOG](https://github.com/kdoble48/nastran-pv/blob/main/CHANGELOG.md); see
 [Versioning](versioning.md) for what bumps which version.
@@ -75,7 +95,7 @@ The docs describe behavior that lives in code. Update them in the same change wh
 | `diff.py`, the Nastran Diff proxy, the `diff` view, `side_by_side` | [diff.md](diff.md), [model.md](model.md), [paraview.md](paraview.md), [cli.md](cli.md) |
 | `selection.py`, the reader's *Selection* properties, the NPV *File* macros | [cli.md](cli.md#selection-from-an-id-file), [paraview.md](paraview.md#selection-from-an-id-file) |
 | `vtkio.py`, `vtkhdf.py`, `store.py` | [output-formats.md](output-formats.md), [store.md](store.md) |
-| Dependencies, extras, environment variables | [install.md](install.md) |
+| Dependencies, extras, environment variables, `locate.py`, `setup.py`, `MANIFEST.in` | [install.md](install.md), [development.md](#packaging) |
 | Any user-facing change; a public name or default (see [Versioning](versioning.md#public-api)) | `CHANGELOG.md` (*Unreleased*), [versioning.md](versioning.md) when the policy changes |
 
 ## Regenerating the gallery

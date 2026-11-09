@@ -35,7 +35,7 @@ the file skips deck parsing, which is much faster on large models. `summary.py` 
 | One snapshot for ParaView or VTK | `.vtm` (default) |
 | All result steps, or a large model | `.vtkhdf` with `--all-steps` (1/5 the size of a `.pvd` series on uCRM-9) |
 | One result step | `--results F --step N` |
-| Only some result types (e.g. stresses without displacements) | `--results F --result-types VonMisesMax` (names: `Displacement VonMisesMax ShellForce LineForce BushForce SpringForce` (the defaults), `ShellStress SolidStress LineStress ShellStrain SolidStrain LineStrain` (off by default), or `all`; docs/model.md#result-types) |
+| Only some result types (e.g. stresses without displacements) | `--results F --result-types VonMisesMax` (names: `Displacement VonMisesMax SPCForce MPCForce AppliedLoad ShellForce LineForce BushForce SpringForce` (the defaults), `ShellStress SolidStress LineStress ShellStrain SolidStrain LineStrain` (off by default), or `all`; docs/model.md#result-types) |
 | Element forces, stress or strain components | Forces come by default when the run wrote them (`MembraneForce`, `AxialForce`, `BushForce`, ...); components: `--result-types all` or `ShellStress,SolidStress,LineStress` → `StressTop/Bottom`, `VonMisesTop`, `PrincipalStress`, `MaxStress`, ... in the element frame. `convert` prints the types it left out; unread tables (composites, STRCUR strains, CSHEAR, ...) are in the warnings |
 | Random vibration (base drive) from SOL 103 modes: RMS, N0, dominant mode, response ASD per frequency frame | `--results modes.op2 --random "20:0.01,2000:0.01" [--drive Z --damping 0.05 --g 9806.65] --all-steps` (docs/random-vibration.md); check the printed captured-mass fraction |
 | Per-part mass breakdown | `--derive pidmass`, or `stats --by PID --field ElementMass` |
@@ -66,8 +66,10 @@ the file skips deck parsing, which is much faster on large models. `summary.py` 
   defined (open the run deck?)" and "model mass excludes the structural mass of N element(s)" mean the numbers are
   incomplete (`troubleshooting-nastran-models`). "reordered N solid element(s)" is info only.
 - **Half models:** uCRM-9 is semi-span (Y ≥ 0). Say that the mass and CG are for one side.
-- **Loads:** `ActiveLoadSets` comes from case control. GRAV is reported as field data and is not
-  turned into nodal forces, so `ResultantForce` is the nodal FORCE cards only.
+- **Loads:** `ActiveLoadSets` comes from case control. GRAV is field data (drawn as one arrow at
+  the CG), not nodal forces, and pressures are the `Pressures/*` faces, so `ResultantForce` on
+  `Loads/*` is the nodal FORCE cards only; `Pressures/*` carry their own `ResultantForce`. The
+  results' `ResultantAppliedForce` (OLOAD) is the total Nastran applied.
 - Complex results (SOL 107/108/110/111) are skipped with a message. They are not an error.
 
 ## Common mistakes

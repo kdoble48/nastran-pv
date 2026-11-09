@@ -91,8 +91,10 @@ def test_forces_are_attached_by_default(results, deck):
 
 
 def test_every_type_is_available(results):
-    assert results.available == tuple(t.name for t in rt.REGISTRY)
-    assert [t.name for t in results.attached()] == [t.name for t in rt.REGISTRY if t.default]
+    """Every type but the nodal SPC/MPC forces and applied loads, which the fixture lacks."""
+    loads = (rt.SPC_FORCE, rt.MPC_FORCE, rt.APPLIED_LOAD)
+    assert results.available == tuple(t.name for t in rt.REGISTRY if t not in loads)
+    assert [t.name for t in results.attached()] == [t.name for t in rt.REGISTRY if t.default and t not in loads]
 
 
 # ------------------------------------------------------------------ stress and strain (selected)
@@ -171,7 +173,50 @@ def test_h5_reports_every_dataset_no_type_reads(files):
         f"ELEMENTAL/ELEMENT_FORCE/BAR_CPLX: {rt.COMPLEX}",
         f"ELEMENTAL/STRESS/QUAD4_COMP: {rt.PLIES}",
         f"ELEMENTAL/STRESS/ELAS1: {rt.NOT_READ}",
+        f"ELEMENTAL/STRAIN/TRIA3: {rt.CURVATURE}",
     ])
+
+
+def test_h5_curvature_strains_are_not_fibres(files, deck):
+    """STRAIN(STRCUR) in HDF5 has the fibre layout, with FD1 = 0 and FD2 = -1 on every row (as the
+    OP2's rows): CTRIA3 2's mid-plane strain and curvature must not become StrainBottom/Top."""
+    mb = attached(open_results(files["h5"]), deck, ["ShellStrain"])
+    close(cells(mb, "Shells", "StrainTop")[1], [NAN] * 3)
+    close(cells(mb, "Shells", "StrainTop")[0], [0, 0, 2e-3])  # CQUAD4 1, a real fibre table
+    rows = np.zeros(2, dtype=[("FD1", "<f8"), ("FD2", "<f8")])
+    rows["FD1"], rows["FD2"] = [0, -0.005], [-1, 0.005]
+    assert rt.fibre_rows(rows)  # one row with fibre distances: fibres
+    rows["FD1"], rows["FD2"] = 0, -1
+    assert not rt.fibre_rows(rows)
+    assert rt.fibre_rows(np.zeros(1, dtype=[("X", "<f8")]))  # no fibre fields: not a plate table
+
+
+def test_h5_reads_a_picked_type_only_when_a_step_needs_it(files, deck, monkeypatch):
+    """A picked type keeps ids and domain ids at open; its values are read on its first attach,
+    once (not per step or per type), and never for a type left unselected."""
+    import nastran_pv.results_h5 as h5mod
+
+    calls = []
+    real = h5mod.pick_fields
+    monkeypatch.setattr(h5mod, "pick_fields", lambda rows, picks, slots="": calls.append(1) or real(rows, picks, slots))
+    res = open_results(files["h5"])
+    assert calls == [] and all(t.values is None for t in res.tables["ShellStress"])
+    attached(res, deck)  # the defaults: the forces are picked, the stresses are not
+    forces = len(calls)
+    assert forces > 0 and not any(k[0] == "ShellStress" for k in res._picked)
+    attached(res, deck)
+    assert len(calls) == forces  # kept
+    attached(res, deck, ["ShellStress"])
+    assert any(k[0] == "ShellStress" for k in res._picked)
+
+
+def test_shared_unread_reasons():
+    assert rt.unread_reason("stress.cquad4_composite_stress", read=True) == rt.PLIES_READ
+    assert rt.unread_reason("QUAD4_COMP", read=False) == rt.PLIES
+    assert rt.unread_reason("BAR_CPLX", read=False, complex_=True) == rt.COMPLEX
+    assert rt.unread_reason("strain.ctria3_strain", read=False, curvature=True) == rt.CURVATURE
+    assert rt.unread_reason("stress.cshear_stress", read=False) == rt.NOT_READ
+    assert rt.unread_reason("stress.cquad4_stress", read=True) is None
 
 
 def test_complex_element_tables_are_reported_per_table(monkeypatch):
@@ -191,12 +236,40 @@ def test_subcases_are_summarised():
 
 
 # ------------------------------------------------------------------ the vocabulary
-def test_pick_rows_by_position():
+def test_pick_plan_by_position():
     ids = np.array([7, 7, 7, 9, 9, 4])  # element 7: three rows, 9: two, 4: one
-    data = np.arange(12.0).reshape(6, 2)
-    eids, vals = rt.pick_rows(ids, data, ((0, (0,)), (1, (1, None)), (-1, (0,))))
-    assert eids.tolist() == [7, 9, 4]
-    close(vals, [[0, 3, NAN, 4], [6, 9, NAN, 8], [10, NAN, NAN, 10]])  # 4 has no second row
+    plan = rt.pick_plan(ids, [0, 1, -1])
+    assert plan.ids.tolist() == [7, 9, 4]
+    for step in (1.0, 2.0):  # one plan for every step of the table
+        data = step * np.arange(12.0).reshape(6, 2)
+        vals = rt.pick_values(data, plan, ((0,), (1, None), (0,)))
+        close(vals, step * np.array([[0, 3, NAN, 4], [6, 9, NAN, 8], [10, NAN, NAN, 10]]))  # 4 has no 2nd row
+    assert rt.pick_plan(np.zeros(0), [0]).ids.size == 0
+
+
+def test_op2_tables_keep_their_pick_plan(files):
+    res = open_results(files["op2"])
+    beam = next(t for t in res.tables["LineForce"] if t.name == "force.cbeam_force")
+    assert beam.plan is not None and beam.plan.ids.tolist() == [22] and beam.kind is None
+    assert all(t.plan is None for t in res.tables["Displacement"] + res.tables["VonMisesMax"])
+
+
+def test_columns_resolve_alike_in_both_readers():
+    assert rt.resolve("XY1", ("X1", "XY1")) == "XY1"
+    assert rt.resolve(("XY1", "TXY1"), ("TXY1",)) == "TXY1"
+    assert rt.resolve(None, ()) is None
+    with pytest.raises(KeyError):
+        rt.resolve(("A", "AS"), ("T",))
+    assert rt.resolve_picks(((0, ("A", None)),), ("A",)) == ((0, ("A", None)),)
+    assert rt.resolve_picks(((0, ("A", "B")),), ("A",)) is None
+
+
+def test_block_ids_miss_mpc_legs(deck):
+    mb = build_multiblock(deck)
+    conn, shells = get_block(mb, "Connectors"), get_block(mb, "Shells")
+    assert rt.SPRING_FORCE.block_ids(conn).tolist() == [-1, 41, 42]  # the MPC leg of set 41 matches nothing
+    assert rt.SHELL_FORCE.block_ids(shells).tolist() == arr(shells, "EID", "cell").tolist()
+    assert rt.BUSH_FORCE.block_ids(get_block(mb, "Bushes")).tolist() == [31, 32]  # points, by EID
 
 
 def test_h5_slots_count_back_from_the_last_used_one():

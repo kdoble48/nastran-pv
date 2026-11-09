@@ -4,8 +4,10 @@
     python paraview/install_macros.py --remove   # remove them again
 
 Each macro is a three-line stub in ParaView's user macro folder that imports
-``nastran_views`` from this checkout, so updating the repository updates the
-macros. Restart ParaView (or use Macros > Import) after installing.
+``nastran_views`` from the folder this script is in (a checkout's ``paraview/``, or
+``nastran_pv/paraview`` of an installed package), so updating the checkout or
+``pip install -U nastran-pv`` updates the macros; a new environment needs them
+installed again. Restart ParaView (or use Macros > Import) after installing.
 """
 import argparse
 import os
@@ -35,16 +37,27 @@ import sys
 _p = r"{path}"
 if _p not in sys.path:
     sys.path.insert(0, _p)
+_b, sys.dont_write_bytecode = sys.dont_write_bytecode, True  # no __pycache__ in an installed package
 import nastran_views
+sys.dont_write_bytecode = _b
 nastran_views.run_macro("{view}")
 '''
 
 
 def macro_dir() -> Path:
+    """ParaView's user macro folder: ``Macros`` next to its settings ini, which is
+    ``QSettings(IniFormat, UserScope, "ParaView")`` (ParaView 6.0 ``pqApplicationCore::settings``,
+    ``pqCoreUtilities::getParaViewUserDirectory``, ``pqPythonMacroSupervisor``). Qt puts that under
+    %APPDATA% on Windows, and under $XDG_CONFIG_HOME or ~/.config on Linux *and* macOS, where Qt
+    keeps its non-XDG path for INI files (qsettings.cpp ``make_user_path``): not ~/Library."""
     if sys.platform.startswith("win"):
-        base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+        base = Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming")
     else:
-        base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+        xdg = os.environ.get("XDG_CONFIG_HOME") or ""  # unset or empty: ~/.config
+        if sys.platform == "darwin":
+            base = Path.home() / (xdg or ".config")  # qsettings.cpp: a relative value is under ~
+        else:  # qstandardpaths_unix.cpp follows the XDG spec: a relative value is ignored
+            base = Path(xdg) if os.path.isabs(xdg) else Path.home() / ".config"
     return base / "ParaView" / "Macros"
 
 

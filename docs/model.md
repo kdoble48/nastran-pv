@@ -21,6 +21,7 @@ out when the deck has nothing for it.
 | `BushLines` | CBUSH GA–GB lines | cell: `EID PID`; point: `NID` |
 | `Constraints` | SPC/SPC1/SPCADD/GRID PS points per set | point: `NID SPCSet SPC_DOF DOFCode CD`, plus `SPCEnforced` (6: the SPC enforced value per DOF) when a value is not 0 |
 | `Loads/SID_n`, `Loads/LOAD_n` | FORCE/MOMENT(1,2) per set, LOAD combinations resolved | point: `NID Force Moment ForceMagnitude MomentMagnitude`; field: `LoadSet ResultantForce GravityAcceleration` (GRAV only) |
+| `Pressures/SID_n`, `Pressures/LOAD_n` | the faces PLOAD, PLOAD2 and PLOAD4 load, per set as for `Loads` (LOAD combinations scale and sum them); see [Pressure loads](#pressure-loads) | cell: `EID LoadCard Pressure PressureDirection PressureForce`; point: `NID CornerPressure`; field: `LoadSet ResultantForce LoadCardNames` |
 | `Removed` | the reference model's removed items (only with `convert --diff-against` or the Nastran Diff filter) | cell: `EID PID ElementType ElementMass DiffStatus DiffReason DeltaElementMass ItemType SID`; point: `NID`; see [Model diff](diff.md#diff-on-the-mesh) |
 | `BeamSections` | CBAR/CBEAM cross sections swept in 3D (only with `--beam-sections`) | cell: `EID PID MID ElementType BeamPart Face`; point: `GA GB StationT`, with results `Displacement DisplacementMagnitude` |
 
@@ -73,7 +74,9 @@ With an OP2 or HDF5 file loaded, the mesh blocks, `Masses`, `Rigid` and `Constra
 `Displacement Rotation DisplacementMagnitude`, the mesh blocks cell `VonMisesMax` (when the results
 have stresses), the element blocks their element forces (when the results have them),
 `BeamSections` gets the rigid-section `Displacement` of its points, and the root
-gets `ResultLabel ResultStep` and `Frequency` (modes only). Each comes from a
+gets `ResultLabel ResultStep` and `Frequency` (modes only). Runs that wrote SPC forces, MPC forces
+or applied loads also give point `SPCForce SPCMoment`, `MPCForce MPCMoment` and
+`AppliedForce AppliedMoment` on the same blocks and their resultants on the root. Each comes from a
 [result type](#result-types), which `--result-types` and the reader's *Result Types* choose; the
 stress and strain components are there when chosen.
 
@@ -85,6 +88,10 @@ The [field options](fields.md) add further arrays on top of these.
 |---|---|---|
 | `Displacement` | point `Displacement` (T1-T3), `Rotation` (R1-R3), `DisplacementMagnitude`, rotated from each grid's CD into basic; 0 on grids without output | `displacements`, `eigenvectors` / `NODAL/DISPLACEMENT`, `NODAL/EIGENVECTOR`; these define the result steps |
 | `VonMisesMax` | cell `VonMisesMax` on the mesh blocks: the largest value over the element's layers, fibres and nodes; NaN without output | every stress table with a von Mises column / `ELEMENTAL/STRESS/*`, computed from the components |
+| `SPCForce` | point `SPCForce` (F1-F3), `SPCMoment` (M1-M3), rotated from each grid's CD into basic; NaN on grids without output; root `ResultantSPCForce ResultantSPCMoment` | `spc_forces` / `NODAL/SPC_FORCE` (Case Control `SPCFORCES=`) |
+| `MPCForce` | point `MPCForce`, `MPCMoment`, as for `SPCForce`; root `ResultantMPCForce ResultantMPCMoment` | `mpc_forces` / `NODAL/MPC_FORCE` (`MPCFORCES=`) |
+| `AppliedLoad` | point `AppliedForce`, `AppliedMoment` (OLOAD: the load Nastran applied, GRAV and pressures included), as for `SPCForce`; root `ResultantAppliedForce ResultantAppliedMoment` | `load_vectors` / `NODAL/APPLIED_LOAD` (`OLOAD=`) |
+
 | `ShellForce` | Shells: `MembraneForce` (FX FY FXY), `BendingMoment` (MX MY MXY), `TransverseShear` (QX QY), per unit length at the centre | `force.c{tria3,tria6,triar,quad4,quad8,quadr}_force` / `ELEMENTAL/ELEMENT_FORCE/*` with `MX ... TY` |
 | `LineForce` | Lines: `AxialForce`, `Torque`, `ShearForce` (plane 1, 2), `BendingMomentA`, `BendingMomentB` (plane 1, 2: ends A and B); a CBEAM's shear, axial force and torque are at end A; rods have axial force and torque only | `force.cbar_force`, `force.cbeam_force`, `force.c{rod,onrod,tube,visc}_force` / `ELEMENT_FORCE/{BAR,BEAM,ROD,CONROD,TUBE,VISC}` |
 | `BushForce` | Bushes (point data, by `EID`): `BushForce` (FX FY FZ), `BushMoment` (MX MY MZ) | `force.cbush_force` / `ELEMENT_FORCE/BUSH` |
@@ -94,9 +101,24 @@ The [field options](fields.md) add further arrays on top of these.
 | `LineStress` | Lines: `AxialStress` (bars, rods), `TorsionalStress` (rods), `MaxStress`/`MinStress` (the largest S-MAX and smallest S-MIN of a bar's or beam's two ends; a rod's axial stress) | `stress.cbar_stress`, `stress.cbeam_stress`, `stress.c{rod,onrod,tube}_stress` / `STRESS/{BAR,BEAM,ROD,CONROD,TUBE}` |
 | `ShellStrain`, `SolidStrain`, `LineStrain` | as the stresses, with `Strain` for `Stress` (`StrainTop`, `PrincipalStrain`, `MaxShearStrainBottom`, `AxialStrain`, `MaxStrain`, ...) and no von Mises | the `strain.*` tables / `ELEMENTAL/STRAIN/*` |
 
-`Displacement`, `VonMisesMax` and the forces are attached by default, the stresses and strains
-when chosen (`--result-types ShellStress,SolidStress` or `all`; `convert` prints the types it left
-out). The types are declared in `src/nastran_pv/result_types.py`.
+
+`Displacement`, `VonMisesMax`, `SPCForce`, `MPCForce`, `AppliedLoad` and the forces are attached by
+default (a file without a type's tables gets none of its arrays), the stresses and strains when
+chosen (`--result-types ShellStress,SolidStress` or `all`; `convert` prints the types it left out).
+The types are declared in `src/nastran_pv/result_types.py`.
+
+The resultants are per step, named like the Loads blocks' `ResultantForce`: `Resultant<array>`
+is the sum of the forces, and the moment one the sum of M + r × F about the origin of the basic
+system (what the `.f06` prints as the SPCFORCE and OLOAD RESULTANT without `PARAM,GRDPNT`), each
+grid once, in basic. Rows of grids the model does not place (scalar points, grids the deck lacks)
+are left out; without the deck (the Python API's `attach` with no `deck`) the rows stay in each
+grid's CD system, so the resultant is written only when none of those grids has one. `convert`
+prints them for the attached `--step`, and in a static run `ResultantSPCForce` +
+`ResultantAppliedForce` is zero (and the moments too) when there are no other reactions.
+
+A run without displacement output (`DISP=NONE`) takes its result steps from the SPC forces, else
+the MPC forces, else the applied loads (static steps, one per subcase). [Nastran Load Glyphs](paraview.md#filter-properties) draws all three as arrows
+(*Source*).
 
 * **Frames.** Forces, stresses and strains are written as Nastran writes them, not rotated: in the
   element system for shells (or the material system when the run asks for it), bars, beams and
@@ -113,7 +135,8 @@ out). The types are declared in `src/nastran_pv/result_types.py`.
 * **Reported, not attached.** Every force, stress and strain table no type reads is named in the
   results' messages (the CLI's warnings, the reader's Output Messages), once per table with its
   subcases: complex tables, composite plies (roadmap task 13; `VonMisesMax` still takes an OP2 ply
-  table's von Mises), plate strains written as mid-plane strain and curvature (`STRAIN(STRCUR)`;
+  table's von Mises), plate strains written as mid-plane strain and curvature (`STRAIN(STRCUR)`: the
+  OP2's `fiber_curvature` header, or HDF5 fibre distances 0 and -1 on every row;
   ask for `STRAIN(FIBER)`), and the families no type covers yet (CSHEAR, CBUSH and CELAS stresses,
   CGAP, CBEND, CFAST, CWELD and damper forces, ...).
 
@@ -147,17 +170,54 @@ out). The types are declared in `src/nastran_pv/result_types.py`.
   concentrated masses.
 * **Material axis.** THETA is measured from the projected G1→G2 edge. MCID projects that coordinate
   system's x-axis onto the element plane.
-* **Results.** OP2 and HDF5 displacements and eigenvectors are rotated from each grid's CD system
-  into basic. Complex results (SOL 107/108/110/111) are skipped with a message.
+* **Results.** OP2 and HDF5 displacements, eigenvectors, SPC and MPC forces and applied loads are
+  rotated from each grid's CD system into basic. Complex results (SOL 107/108/110/111) are skipped with a message.
 * **Random vibration.** Computed by nastran-pv from the normal modes and an input ASD, by modal
   superposition on a lumped mass (see [Random vibration](random-vibration.md#method)).
 * **MSC/NX HDF5.** The reader handles `/NASTRAN/RESULT/{DOMAINS, NODAL/DISPLACEMENT,
-  NODAL/EIGENVECTOR, ELEMENTAL/ELEMENT_FORCE/*, ELEMENTAL/STRESS/*, ELEMENTAL/STRAIN/*}`. Von Mises
+  NODAL/EIGENVECTOR, NODAL/SPC_FORCE, NODAL/MPC_FORCE, NODAL/APPLIED_LOAD,
+  ELEMENTAL/ELEMENT_FORCE/*, ELEMENTAL/STRESS/*, ELEMENTAL/STRAIN/*}`. Von Mises
   is computed from the components: plates use `X1 Y1 XY1`/`X2 Y2 XY2` (or `TXY1`/`TXY2`) on both
   fibres, and solids use `X Y Z TXY TYZ TZX`, taking the maximum over corner and centre points.
   Array-valued fields (corner layouts such as `QUAD4_CN`, solids, CBEAM stations) give the centre
   from their first slot and a beam's end B from its last slot with a `GRID`. It is tested against
   files written in that layout; please report any real files it misreads.
+
+## Pressure loads
+
+PLOAD (three or four grids), PLOAD2 (shell elements) and PLOAD4 (shell elements, THRU ranges, and
+solid faces named by G1 and G3/G4) become the `Pressures/*` blocks: one polygon per loaded face on
+its corner grids (a quadratic face uses its corners), each face once per set (the same face loaded
+twice, directly or through a LOAD combination, sums its pressures; `LoadCard` 3, `several`, marks a
+face loaded by two kinds of card). `--no-loads` and the reader's *Loads* toggle drop them with the
+`Loads` block.
+
+* **Direction** (`PressureDirection`, the unit direction of positive pressure, basic): a shell's
+  normal (the right-hand rule on its grids), PLOAD's G1-G2-G3(-G4) normal, inward on a solid face,
+  or PLOAD4's N1-N3 (in its CID). Each face's points run in the order whose right-hand normal is
+  that direction (N1-N3 aside), starting at G1.
+* **Pressures**: `CornerPressure` at each corner (PLOAD4 P1-P4, P2-P4 defaulting to P1; for a solid
+  face P1 sits on G1 and P2-P4 follow the right-hand rule on the outward normal), `Pressure` their
+  mean, as signed on the card.
+* **Force** (`PressureForce`): the pressure integrated over the face with the corner values
+  interpolated (linear on a triangle, bilinear on a quad: 2 × 2 Gauss points, exact for a bilinear
+  face), along the direction; with N1-N3, the integral of the pressure over the actual area along
+  N. `ResultantForce` on the block is the sum over the set, which is what the faces contribute to
+  the OLOAD resultant.
+* The faces follow their elements in the reader's scope (a PLOAD face follows its grids) and their
+  grids when the model deforms. They are not equivalent nodal forces: `F_<sid>` holds FORCE/MOMENT
+  only.
+
+Solid faces follow the QRG's PLOAD4 rules: G3 diagonally opposite G1 names a quadrilateral face
+(CHEXA, CPENTA, the CPYRAM base); a blank G3 a CPENTA triangle holding G1; G4 the CTETRA corner off
+the face; and G1 and G3 adjacent base corners of a CPYRAM the triangle they make with the apex.
+
+A card that references an element or grid the deck lacks is a broken deck: a warning, and the card
+is skipped. In a list or THRU range of elements (PLOAD2, PLOAD4) the ids the deck lacks, or whose
+type the card cannot load, are skipped with one warning per card and the rest are drawn. A form
+nothing draws is a [card report](#cards-not-drawn) row: a PLOAD4 edge load (SORL=LINE or an LDIR
+other than NORM), G1 and G3/G4 that name no face, a PLOAD2 on an element that is not a shell. PLOAD1
+(beam loads) and the axisymmetric PLOADX1 stay in the card report too.
 
 ## Coordinate systems
 
@@ -212,10 +272,9 @@ card report: `convert` prints it after the block list, `stats` on stderr, the re
 Output Messages, and the root table keeps it, so a converted file reports what its deck did.
 
 ```text
-24 card(s) of 20 type(s) not drawn:
+22 card(s) of 19 type(s) not drawn:
   Card     Count  Reason                      IDs
   CTRIAX6  2      not drawn                   EID 40 41
-  PLOAD4   2      not drawn                   SID 9
   SPOINT   2      scalar points, no location  ID 101 102
   CDAMP5   1      heat transfer               EID 30
   CELAS2   1      grounded, one grid          EID 31
@@ -232,11 +291,14 @@ more. The reasons:
 
 | Reason | Cards |
 |---|---|
-| `not drawn` | card types no block shows: axisymmetric and plane elements (CTRIAX/CTRIAX6/CQUADX, CPLSTN/CPLSTS), CBUSH1D/2D, GENEL, CBEAM3, PLOAD*, TEMP, SPCD, LSEQ, SPCAX, SUPORT, dynamic loads (DAREA, TLOAD*, RLOAD*), CAERO panels and splines, contact bodies, bolts, any card type nastran-pv does not know |
+| `not drawn` | card types no block shows: axisymmetric and plane elements (CTRIAX/CTRIAX6/CQUADX, CPLSTN/CPLSTS), CBUSH1D/2D, GENEL, CBEAM3, PLOAD1, PLOADX1, TEMP, SPCD, LSEQ, SPCAX, SUPORT, dynamic loads (DAREA, TLOAD*, RLOAD*), CAERO panels and splines, contact bodies, bolts, any card type nastran-pv does not know |
 | `scalar points, no location` | SPOINT/EPOINT and what connects only them (CELAS3/4, CDAMP3/4, CMASS3/4), and CELAS1/2, CDAMP1/2, CMASS1/2, PLOTELs and MPC equations with a grid that is a scalar point (an MPC's other terms are still drawn; its row has the set id). Scalar points have no coordinates, so these are counted, not drawn; their mass is not in `ModelMass` |
 | `grounded, one grid` | CELAS1/2, CDAMP1/2, CGAP with one grid (or two DOFs of one grid): no line to draw |
 | `heat transfer` | CDAMP5 (a thermal capacitance), CHBDYE/G/P, QBDY1/2/3, QHBDY, QVOL, QVECT, and the thermal boundary conditions (CONV, CONVM, RADBC, RADM, TEMPBC). None is a structural link, so none joins the [model tools](tools.md)' graph |
 | `patch form, no GA/GB` | CFAST given by patches only |
+| `edge load (SORL=LINE or LDIR)` | PLOAD4 that loads an element's edge, not its face (IDs: the load set) |
+| `G1 and G3/G4 name no face` | PLOAD4 on a solid whose G1 and G3/G4 name none of its faces, such as a CPYRAM's apex (IDs: the load set) |
+| `element type it cannot load` | PLOAD2 on an element that is not a shell, PLOAD4 on one that is neither a shell nor a solid (IDs: the load set) |
 | `matrix input` | DMIG, DMI, DMIJ, DMIJI, DMIK, DMIAX |
 | `superelement` | the cards of a `BEGIN SUPER` section (data and control cards left out) and the superelement cards (SEBULK, SECONCT, SELOC, ...) |
 | `not read` | cards pyNastran rejected (unknown to it), and CWELD, which nastran-pv turns off because pyNastran 1.5 aborts the read on some of its forms |
@@ -250,7 +312,10 @@ every card is drawn or used); a file without it predates the report. The design 
 
 ## Not visualized yet
 
-Everything in the [card report](#cards-not-drawn) (pressure loads, axisymmetric and heat-transfer
-elements, CBUSH1D/2D, GENEL, DMIG, superelements, grounded springs, CFAST patch forms, CWELD,
-PLOTEL3/4/6/8 and the 3D plot elements), and GRAV as nodal forces (GRAV is reported as field data
-only). Scalar-point cards stay in the report: they have no location to draw at.
+Everything in the [card report](#cards-not-drawn) (beam and axisymmetric loads PLOAD1/PLOADX1,
+axisymmetric and heat-transfer elements, CBUSH1D/2D, GENEL, DMIG, superelements, grounded springs,
+CFAST patch forms, CWELD, PLOTEL3/4/6/8 and the 3D plot elements). Scalar-point cards stay in the
+report: they have no location to draw at. GRAV is drawn as one arrow at the model CG (at the
+centre of the model's bounds when it has no mass) ([Nastran Load Glyphs](paraview.md#filter-properties)),
+not as nodal forces; the results' applied
+loads (OLOAD, [result types](#result-types)) give the nodal forces Nastran made of it.

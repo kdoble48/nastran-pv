@@ -36,6 +36,11 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   which keeps the same code working in pip-vtk and in pvpython. Mesh builders go through
   `common.CellTable` → `compact_mesh`. `categories.py` holds the *global* ElementType and RigidType
   code tables; codes must be consistent across blocks for indexed LUTs.
+- `builders/loads.py` and `builders/pressures.py`: a `LoadSet` per SID (nodal FORCE*/MOMENT*,
+  GRAV, and the faces PLOAD/PLOAD2/PLOAD4 load, keyed by element, face grids and direction so a
+  face loaded twice sums), LOAD combinations scaling all three. `pressures.face_force` integrates
+  the interpolated corner pressures (2 × 2 Gauss on quads); solid faces are found from PLOAD4 G1 and
+  G3/G4 and oriented from the geometry (inward), so an element's own winding does not matter.
 - `assemble.py`: runs the builders according to `Options` and copies nodal SPC/load arrays onto the
   mesh blocks. It adds root field data: masses from `massprops.py` (numpy volumes when every solid is linear, else VTK cell sizes for the block; never
   pyNastran's slow `mass_properties`) and a `MAT_*` material table from `materials.py`. Derived
@@ -45,13 +50,19 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   `build_multiblock` before the masses; its warnings use `deck.warn(..., mass=True)`, which lists
   them first.
 - `result_types.py` / `results.py` / `results_h5.py`: what is attached is declared, one
-  `ResultType` per kind of result in `result_types.REGISTRY` (`Displacement`, `VonMisesMax`, the
-  element forces, and the stress and strain components per block family): its OP2 tables and H5
-  datasets (one source, or one per element family), blocks, location, id key, arrays, reduction
-  and frame. One row per element comes from `picks` (position and columns: a shell's two centre
-  fibre rows, a beam's ends; OP2 rows through `pick_rows`, HDF5 array slots through
-  `results_h5.pick_fields`), and principals, max shear and von Mises from `ArraySpec.derive` in
-  `_write`. Each reader also reports every force/stress/strain table no type reads (`_unread`).
+  `ResultType` per kind of result in `result_types.REGISTRY` (`Displacement`, `VonMisesMax`,
+  `SPCForce`, `MPCForce`, `AppliedLoad`, the element forces, and the stress and strain components
+  per block family): its OP2 tables and H5 datasets (one source, or one per element family),
+  blocks, location, id key, arrays, reduction, frame and (forces and moments at grids) a root
+  resultant. One row per element comes from `picks` (position and columns: a shell's two centre
+  fibre rows, a beam's ends; column names through `result_types.resolve` in both readers; OP2 rows
+  through a `PickPlan` made once per table, HDF5 array slots through `results_h5.pick_fields`, read
+  when a step first needs the type), and principals, max shear and von Mises from
+  `ArraySpec.derive` in `_write`. Table entries are `Op2Table`/`H5Table` named tuples. A cell type
+  keyed by EID matches blocks through `ResultType.block_ids` (MPC legs, whose EID is a set id, get
+  -1). Each reader also reports every force/stress/strain table no type reads (`_unread`, with
+  the shared `result_types.unread_reason`); the deck reader keeps those messages in its root
+  `Warnings`, as `convert` does.
   `Op2Results` and `H5Results` share a base (`results._Results`) and its interface (`steps`, `times`,
   `skipped`, `available`, `select`, `values`, `attach`); each only finds a type's tables and
   yields raw rows per step (`_rows`). `_Results.values` joins, sorts and reduces them, and the
@@ -119,8 +130,13 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
 - `store.py`: SQLite in long format (`runs`, `elements`, `nodes`, `element_values`,
   `node_values`), plus `<db>_vtm/run_<id>.vtm`.
 - `cli.py`: the `convert`, `stats`, `check`, `sections`, `diff` and `store` commands, with shared field options.
-  `launch.py` provides `view`, `render` and `setup`, and `locate.py` finds the ParaView executables
-  and the repo's `paraview/` folder.
+  `launch.py` provides `view`, `render` and `setup`, and `locate.py` (standard library only) finds
+  the ParaView executables (one search for the CLI and `install_deps.py`: env, `PATH`, then the newest
+  `ParaView*` by folder version in the install folders and the home folder), the plugin folder (`NASTRAN_PV_PARAVIEW_DIR`, then the wheel's
+  `nastran_pv/paraview`, then the checkout's `paraview/`) and the vendor folder (`vendor_dir`:
+  `paraview/_vendor` in a checkout, a per-user folder per ParaView Python for an installed package).
+  `nastran_pv/__init__.py` loads `Deck`/`load_deck` lazily, so `nastran_pv.locate` imports without
+  pyNastran.
 - `progress.py`: stderr stages and throttled counters (`Progress`, silent `NULL`). `load_deck` hooks
   pyNastran's include opener and the model's `add_card` only for the read and removes the hooks
   afterward. The CLI's `-q` disables it; the reader passes a callback that drives ParaView's
@@ -164,8 +180,11 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   - Each reader output is tagged (`NPVWholeModel`) with a registry entry `(whole multiblock,
     signature, Visibility, names, generation)`; `_whole_model` (Nastran Diff) and `_reader_scope`
     (Nastran Scope) find it while the array signature still matches (a deform keeps it).
-  - At import it bootstraps `sys.path` with `../src`, then `_vendor`, then
-    `NASTRAN_PV_SITE_PACKAGES`, and imports nastran_pv lazily.
+  - At import it bootstraps `sys.path` with `../src` (a checkout), or, for a wheel
+    (`nastran_pv/paraview/`), adds a meta path finder (`_InstalledPackage`) that imports the package
+    it ships in from that site-packages alone and writes no bytecode there (see
+    `docs/design/2026-11-08-wheel-plugin.md`). Then it appends `locate.vendor_dirs` (`_vendor_paths`),
+    then `NASTRAN_PV_SITE_PACKAGES`, and imports the rest of nastran_pv lazily.
   - The reader caches the deck by the mtimes of the main file and every INCLUDE, and caches the
     built multiblock by its options, so changing the time step only re-attaches results. The cut
     model tree is cached by the visibility settings too; its checklists are filled in
@@ -245,7 +264,27 @@ Every gotcha found so far, by area. The few that bite on any change are also in 
   `vtkMultiBlockDataSet` serializer is also registered for it (`_init_serializers` does this).
   trame-vtk is vendored only with `install_deps.py --site`. An open ParaView GUI locks the `.pyd`
   files in `paraview/_vendor`, so re-vendoring then fails partway and can leave scipy broken.
+- ParaView 6.0 (VTK 9.4/9.5) on Linux: a deleted Python algorithm keeps its `__dict__` in a stale
+  "ghost" that `vtkPythonUtil::FindObject` releases when a new object takes its address. Releasing
+  cached data objects there (they are `data_model` subclasses, so they leave ghosts too) makes it
+  erase its ghost-map entry twice and corrupts the heap; pv_smoke crashed in the parity checks.
+  Every Python algorithm calls `vtkutil.drop_state_on_delete` in its `__init__` (the plugin's
+  through `_Settable.__init_subclass__`; `vtkhdf._StepSource` itself): a `DeleteEvent` observer that
+  empties the dict during the deletion. VTK master releases the ghost only after erasing it.
+- A Python object that holds its algorithm keeps it alive for good when the reference runs through
+  C++ (an observer, a logger the deck keeps), because Python's garbage collector cannot see it: a
+  deleted reader or checklist filter was never freed, caches and all. Checklist observers use
+  `vtkutil.modified_callback` (a `vtkWeakReference`), and `load_deck` lets go of the caller's
+  progress when the read ends. pv_smoke deletes a reader and its filters and checks they are freed.
+- VTK reports the observers added through a wrapper to Python's garbage collector
+  (`PyVTKObject_Traverse`). When the cyclic collector frees a wrapper, it clears those observers
+  first, so a `DeleteEvent` observer would run cleared and crash. `vtkutil` keeps each
+  `DeleteEvent` observer in a module registry until it runs, and uses callable objects rather than
+  closures (`tests/test_vtk_lifetime.py` reproduces the crash in plain Python).
 - pyNastran quirks:
+  - pyNastran main turns on its developer self-checks when `GITHUB_ACTOR` (or `TRAVIS`, `APPVEYOR`)
+    is set (`pyNastran.IS_CI`). One of them, `_check_result_slice`, fails on the synthetic OP2
+    from `op2_fixture`, so the ParaView CI job runs pvpython with `GITHUB_ACTOR` unset.
   - `Subcase.has_parameter` returns a list.
   - Stress tables expose `get_headers()`; von Mises exists only when `stress_bits[4]` is set.
     A plate strain table's first header is `fiber_curvature` when its rows are mid-plane strain
@@ -267,6 +306,11 @@ Every gotcha found so far, by area. The few that bite on any change are also in 
     frees the object.
   - Every array must exist at every time step; `_fill_missing` adds NaN arrays and lists them in
     the root `FillArrays` (read back, only those are dropped: `vtkutil.drop_fill_arrays`).
+  - vtkHDFWriter (VTK 9.5) writes the step offset of a field array whose size changes between steps
+    wrongly (the previous offset plus this step's size), and the reader then reads past the array.
+    So every field array has one size at every step (`vtkhdf._field_widths`): `FillArrays` and the
+    other string arrays are padded with `""`, a string array a step lacks is filled with `""` and
+    listed in `FillArrays`, and a numeric field array whose size changes is refused (ValueError).
   - Empty `vtkStringArray`s break the reader, so `add_string_array` skips them.
   - A collection's own field data is not written, so the root summary is copied onto the mesh
     partitions and listed in `RootFieldNames`; `vtkutil.promote_root_fields` (in `tree.gather`, so

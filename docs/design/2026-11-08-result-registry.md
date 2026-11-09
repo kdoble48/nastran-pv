@@ -141,8 +141,9 @@ are identical).
    are large or rarely wanted. A step-defining type also names the step kind of each table
    (`kinds=`, one per `tables`/`datasets` entry).
 4. Test it from `tests/op2_fixture.py` and an H5 written in the MSC layout, like
-   `test_a_new_point_type_is_declared_not_coded` in `tests/test_result_types.py` (SPC forces
-   declared in the test, attached by both readers with no reader code). Add its arrays to
+   `test_a_new_point_type_is_declared_not_coded` in `tests/test_result_types.py` (a velocity
+   type declared in the test, attached by both readers with no reader code; SPC forces, the first
+   example, are now in the registry: task 10). Add its arrays to
    the Result types table in `docs/model.md`; the `--result-types` help and the reader's
    checklist list the registry by themselves.
 

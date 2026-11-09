@@ -27,8 +27,8 @@ def _scalar(names, rows):
 
 def write_element_h5(path):
     """Subcase 1 (domain 1): displacements, forces, stresses and strains, plus datasets that are
-    reported, not attached: a composite stress (QUAD4_COMP), a spring stress (ELAS1) and a complex
-    bar force (BAR_CPLX)."""
+    reported, not attached: a composite stress (QUAD4_COMP), a spring stress (ELAS1), a complex
+    bar force (BAR_CPLX) and a plate strain as mid-plane strain and curvature (STRAIN/TRIA3)."""
     nod = [("ID", ())] + [(c, ()) for c in ("X", "Y", "Z", "RX", "RY", "RZ")] + [("DOMAIN_ID", ())]
     disp = _table(nod, [(n, 0, 0, 0.01 * n, 0, 0, 0, 1) for n in F.ELEMENT_NIDS])
     force = {
@@ -73,6 +73,8 @@ def write_element_h5(path):
     eb, et = F.PLATE_STRAIN
     strain = {
         "QUAD4": _scalar(("FD1", "X1", "Y1", "XY1", "FD2", "X2", "Y2", "XY2"), [(1, -0.005, *eb, 0.005, *et)]),
+        # STRAIN(STRCUR): the fibre distances are the flags 0 (mid-plane strain) and -1 (curvature)
+        "TRIA3": _scalar(("FD1", "X1", "Y1", "TXY1", "FD2", "X2", "Y2", "TXY2"), [(2, 0.0, 1e-3, 0, 0, -1.0, 5.0, 0, 0)]),
         "HEXA": _table([("EID", ()), ("GRID", (9,))] + [(c, (9,)) for c in ("X", "Y", "Z", "TXY", "TYZ", "TZX")]
                        + [("DOMAIN_ID", ())],
                        [(11, [0, 101, 102, 103, 104, 105, 106, 107, 108], *[[v] + [0.0] * 8 for v in F.SOLID_STRAIN],

@@ -6,8 +6,9 @@ one-click views on the Macros toolbar. For step-by-step walkthroughs, see
 
 ## Open a deck
 
-1. Tools > Manage Plugins > Load New... and select `paraview/nastran_bdf_reader.py`. Tick
-   *Auto Load* to keep it. Setting `PV_PLUGIN_PATH` to the `paraview/` folder also works.
+1. Tools > Manage Plugins > Load New... and select `nastran_bdf_reader.py`: the path that
+   `nastran-pv setup` prints (inside the installed package), or `paraview/nastran_bdf_reader.py`
+   in a clone. Tick *Auto Load* to keep it. Setting `PV_PLUGIN_PATH` to its folder also works.
 2. Use File > Open on a run deck or bulk-data file and choose **Nastran Bulk Data (nastran-pv)**.
    ParaView also offers its VisIt NASTRAN reader for some extensions.
 3. In the Properties panel, switch blocks on or off and optionally set *OP2 File Name*, which
@@ -194,7 +195,7 @@ an `NPV ...` filter selected finds the model upstream of it.
 | NPV Bushes | CBUSH translational stiffness: K1/K2/K3 bars along the element axes (length ~ log stiffness, the clearly stiffest axis thicker, released directions grey) and thin GA–GB lines; *Show Only* keeps the grounded or zero-length ones |
 | NPV Bush Rotations | CBUSH rotational stiffness: K4/K5/K6 rings around the element axes (radius ~ log stiffness, on their own scale); says so when no CBUSH has rotational stiffness |
 | NPV Beams | CBAR/CBEAM cross sections swept along the beams, colored by PID, with the shear-center axis (black), neutral axis (orange) and, up to *Max Triads* (500) beams, x/y/z triads (*NPV beam axes*); undeformed like the ghost mesh (`nv.apply("beams", scale=10)` or the filters' *DeformationScale* deforms it; [Beam sections](beam-sections.md)) |
-| NPV Loads | Force arrows (*Nastran Load Glyphs*) for the active LOAD set, scaled by magnitude (at most 1,500 arrows a set, every Nth loaded grid, on large models); resultant force. Other sets, moments and fixed-length arrows are settings of *NPV load glyphs* |
+| NPV Loads | Force, pressure and GRAV arrows (*Nastran Load Glyphs*) for the active LOAD set, scaled by magnitude (at most 1,500 arrows a set, every Nth loaded grid, on large models); resultant force. Other sets, moments and fixed-length arrows are settings of *NPV load glyphs*; its *Source* draws the results' SPC forces, MPC forces or applied loads instead, with their resultant |
 | NPV SPC | Constrained grids (*Nastran SPC Glyphs*) colored by DOF code; *SPC Sets* and *DOFs* pick which |
 | NPV Rigid | RBE2/RBE3/... spider legs by type |
 | NPV Family / Group / PID / MID / Element Type | Mesh with an indexed color per value, with names in the legend |
@@ -274,7 +275,7 @@ again keeps what you changed; from Python an argument you pass explicitly wins
 | Masses | *NPV mass glyphs* | *SizeMode*, *RadiusLaw*, *MinimumRelativeSize*, *Minimum Mass*, *Color By* (Mass, EID, NID); *Glyph Size* group |
 | Bushes, Bush Rotations | *NPV bush glyphs*, *NPV bush rotation glyphs* | *Stiffness*, *ShowTriads*, *ShowEllipsoids*; *Show Only* and *Glyph Size* groups |
 | Beams | *NPV beam sections* (the triads are on *NPV beam axes*) | *ShowSections*, *ShowAxes*, *ShowTriads*, *TriadSize*, *Max Triads*, *DeformationScale* |
-| Loads | *NPV load glyphs* | *Load Sets*, *Show*, *Arrow Length*, *Every Nth Point*; *Glyph Size* group |
+| Loads | *NPV load glyphs* | *Source*, *Load Sets*, *Show*, *Show Pressures*, *Show Gravity*, *Arrow Length*, *Every Nth Point*; *Glyph Size* group |
 | SPC | *NPV spc glyphs* | *SPC Sets*, *DOFs*; *Glyph Size* group |
 | Results, Animate Mode | *NPV deform* | *Auto Scale*, *Scale Factor*, *Auto Scale Peak* (advanced); the undeformed outline's opacity is the Display opacity of *NPV undeformed mesh* |
 | Random RMS, Random Sweep | the reader | *Random ASD*, *Random Drive*, *Random Damping*, *Random G*, *Random Frames* (the reader computes the response) |
@@ -356,14 +357,25 @@ the selection commands make no filter of their own.
     at GB)** (GA and GB at one place). The kept bushes are drawn at the scale of all of them.
   - Cell arrays `Axis` (0 = released or ellipsoid), `Stiffness`, `Log10Stiffness`, `EID`,
     `Released` and `Dominant` are available for coloring.
-* **Nastran Load Glyphs** draws the loads of the checked *Load Sets* (the `Loads/*` blocks;
-  checked first: the Case Control `LOAD`, else the first set with loads) as arrows with their
-  tail on the grid: forces single-headed, moments double-headed. *Show* picks **Forces**,
+* **Nastran Load Glyphs** draws the loads of the checked *Load Sets* (the `Loads/*` and
+  `Pressures/*` blocks and the GRAV rows; checked first: the Case Control `LOAD`, else the first set
+  with loads) as arrows: forces single-headed and moments double-headed with their tail on the
+  grid, a pressure face's force with its head on the face centroid (*Show Pressures*, on), and a
+  GRAV acceleration with its tail on the model CG, or on the centre of the model's bounds when the
+  model has no mass (no `ModelCG`; NPV Loads says which) (*Show Gravity*, on). *Source* **Deck load sets** (the
+  default) draws the deck's sets; **SPC forces**, **MPC forces** and **Applied loads (OLOAD)**
+  draw the current result step's [SPC forces, MPC forces or applied loads](model.md#result-types)
+  instead, one arrow per grid with output (*Load Sets* is hidden then: it applies to the deck).
+  NPV Loads with a result source gives the resultant; with the reader's scope cutting the model,
+  it gives the force sum of the grids drawn and labels the resultant as the whole model's. *Show* picks **Forces**,
   **Moments** or **Forces and moments**. *Arrow Length* **By magnitude** gives the largest force
-  (and, on its own scale, the largest moment) over the checked sets *Size* × the model diagonal
-  (0.08) and the others their share; **Fixed** draws every arrow that long. *Every Nth Point*
-  draws every Nth loaded grid of each set; 0 (the default) keeps at most 1,500 arrows a set. Point
-  arrays `Magnitude`, `LoadKind` (0 force, 1 moment), `LoadSet` and `NID`; GRAV is not drawn.
+  (and, each on its own scale, the largest moment, absolute pressure and acceleration) over the
+  checked sets *Size* × the model diagonal (0.08) and the others their share; **Fixed** draws every
+  arrow that long. *Every Nth Point* draws every Nth loaded grid (and pressure face) of each set; 0
+  (the default) keeps at most 1,500 arrows a set. Point arrays `Magnitude`, `LoadKind` (0 force,
+  1 moment, 2 pressure, 3 gravity), `LoadSet` and `NID` (-1 for pressures and gravity). NPV Loads
+  gives each drawn set's loaded grids and resultant, its pressure faces and their resultant, and
+  its GRAV with the inertial force WTMASS × mass × a.
   With **Forces and moments** both kinds share one `Magnitude` color range (force and moment
   units mixed); color by `LoadKind` to tell them apart, or show one kind at a time.
 * **Nastran SPC Glyphs** puts a sphere of diameter *Size* × the model diagonal (0.006) on every

@@ -22,7 +22,25 @@ All notable changes to nastran-pv are listed here. The format follows
   (`AxialStress TorsionalStress MaxStress MinStress`) and the matching strains, from OP2 and
   MSC/NX HDF5 alike, in the frame Nastran writes them in. Every force, stress or strain table no
   type reads (composite plies, complex tables, STRCUR plate strains, CSHEAR, ...) is reported in the
-  warnings instead of dropped silently, and `convert` names the types it left out (#64).
+  warnings (and, in the reader too, the root `Warnings`) instead of dropped silently, and `convert`
+  names the types it left out (#64).
+- Pressure loads and GRAV drawn: PLOAD, PLOAD2 and PLOAD4 (shells, THRU ranges, solid faces, corner
+  pressures, N1-N3 directions) become the `Pressures/SID_n`/`LOAD_n` blocks, a polygon per loaded
+  face with `Pressure CornerPressure PressureDirection PressureForce` and the set's
+  `ResultantForce` (LOAD combinations scale and sum them). *Nastran Load Glyphs* draws an arrow per
+  face pushing on it (*Show Pressures*) and one arrow per GRAV at the model CG (*Show Gravity*);
+  the loads view gives their resultant and the GRAV inertial force (the arrow sits at the model
+  centre when the model has no mass). PLOAD/PLOAD2/PLOAD4 leave the card report, except the forms
+  nothing draws (edge loads, G1/G3 naming no face, a PLOAD2 on a solid), which are report rows. The
+  model diff compares each set's pressure resultant (`PX PY PZ` rows, `DIFFLOAD_DeltaP`) (#66).
+- SPC forces, MPC forces and applied loads (OLOAD) as the result types `SPCForce`, `MPCForce` and
+  `AppliedLoad`, from OP2 and MSC/NX HDF5: point `SPCForce SPCMoment`, `MPCForce MPCMoment` and
+  `AppliedForce AppliedMoment` on the result blocks (rotated from CD into basic, NaN without
+  output) and, per step, the root resultants `Resultant<array>` (the moment about the basic
+  origin), which `convert` prints for the attached step. A run without displacements takes its
+  steps from these tables. *Nastran Load Glyphs* gains *Source* to draw them as arrows, one per
+  grid with output, and the loads view gives their resultant (the scope's force sum when the
+  reader's scope cuts the model) (#63).
 - Card report: every card no block draws is counted per card type and reason (not drawn, scalar
   points, grounded, patch form, heat transfer, matrix input, superelement, not read), with its
   first ids. `convert` prints it, `stats` and `check` on stderr, the reader in Output Messages,
@@ -80,6 +98,18 @@ All notable changes to nastran-pv are listed here. The format follows
 - Model tools: grow, parts, path and model checks with per-card-type traversal rules (#5).
 - Project skills for using and extending nastran-pv (#4).
 - Interactive 3D gallery and docs site on GitHub Pages (#1).
+- The wheel carries the ParaView plugin, views, macros and installers (`nastran_pv/paraview/`), so
+  `pip install` of a wheel and `nastran-pv setup` work without a clone. For an installed package,
+  `install_deps.py` vendors into a per-user folder, one per ParaView Python (so ParaView 5.13 and
+  6.0 both work from one install), and `NASTRAN_PV_VENDOR_DIR` overrides it; `setup` prints the
+  plugin path, and `setup --dry-run` works without ParaView. A plugin loaded from a clone also
+  looks in the per-user folder; `setup` refuses a Microsoft Store Python, whose writes under AppData
+  ParaView cannot see. CI builds the wheel (from the sdist and from the tree) and checks it in a
+  fresh venv (#58).
+- ParaView CI: `tests/pv_smoke.py` runs in headless ParaView 6.0.1 and 5.13.1 on Linux, after
+  installing the wheel and `nastran-pv setup`, on pull requests that touch `paraview/`, `src/` or
+  `tests/`. `setup`, `view` and `render` also find a ParaView unpacked in the home folder
+  (`~/ParaView-*`), and pick the newest ParaView by version rather than by name (#59).
 
 ### Changed
 
@@ -111,11 +141,19 @@ All notable changes to nastran-pv are listed here. The format follows
   without `--parts` or `--grow` is an error instead of being ignored; the run store's `elements`
   table holds the Connectors elements (not MPC equations; `pid` NULL where there is no property)
   and `n_elements` counts elements, not rigid-element legs (#57).
+- `vtk` is a dependency (the `vtk` extra still works), since every `nastran-pv` command imports it;
+  `import nastran_pv` no longer imports pyNastran (`Deck` and `load_deck` load on first use); a
+  `NASTRAN_PV_PARAVIEW_DIR` without the plugin is an error (#58).
 
 ### Fixed
 
 - `VonMisesMax` reads MSC/NX HDF5 shell stress tables that spell the shear `TXY1`/`TXY2` (TRIA3
   and the corner layouts), which it dropped before (#64).
+- A VTKHDF series whose steps fill different numbers of arrays (stresses on shells and solids at a
+  static step, none at the modes) read the later steps wrongly (the NaN fill stayed, or garbage):
+  vtkHDFWriter mis-offsets a field array whose size changes, so every field array now has one size
+  at every step (string arrays padded or filled with `""`; a numeric one that changes size is
+  refused) (#63).
 - A random response with `--beam-sections` no longer leaves the first mode's `Displacement` on
   `BeamSections` (#60).
 - Overlays follow the scope as the reader applies it: a selection file of PIDs, MIDs, families,
@@ -144,6 +182,17 @@ All notable changes to nastran-pv are listed here. The format follows
 - Physical mass glyphs keep their disc and rod shapes and warn on impossible inertia (#29).
 - Mode GIFs are captured with SaveScreenshot, and modes whose frames never change are reported (#28).
 - Empty 3D window on categorical gallery views (#2).
+- `install_deps.py` on macOS asked for scipy wheels for macOS 11, and scipy has none for Apple
+  silicon below macOS 12, so it found no scipy; it now asks for this Mac's version. Linux on
+  aarch64 gets aarch64 wheels, and `install_deps.py` uses the CLI's pvpython search and shows
+  pvpython's own error (a missing system library, ...) when it fails to start. An empty
+  `XDG_CONFIG_HOME` put the macros in the current folder (#59).
+- ParaView 6.0 on Linux could crash after a Nastran filter was deleted (a VTK bug in how it frees a
+  deleted Python filter's state); the plugin's filters and the VTKHDF series writer now release
+  their cached data when they are deleted (#59).
+- A deleted Nastran reader, and every filter with a checklist (Load and SPC Glyphs, Nastran Files,
+  Nastran Diff and the topology filters), was never freed, so its deck, model and results stayed in
+  memory for the session; they are freed now (#59).
 
 ## [0.1.0]
 

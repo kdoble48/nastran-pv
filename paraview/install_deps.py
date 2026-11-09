@@ -1,10 +1,12 @@
-"""Install pyNastran (and the bits ParaView lacks) into ``paraview/_vendor``.
+"""Install pyNastran (and the bits ParaView lacks) into the plugin's vendor folder.
 
 ParaView ships its own Python with numpy but without pyNastran/scipy. This
 script asks ``pvpython`` for its Python version, platform and numpy version and
 for the packages it can already import, then uses *any* Python with pip to fill
-``paraview/_vendor`` (gitignored). The reader plugin puts that folder on
-``sys.path`` automatically.
+the vendor folder (``locate.vendor_dir``): ``paraview/_vendor`` (gitignored) in a checkout,
+a per-user folder per ParaView Python version for an installed nastran-pv
+(``%LOCALAPPDATA%/nastran-pv/vendor/py3.12``, ...), or ``NASTRAN_PV_VENDOR_DIR``. The reader
+plugin puts that folder on ``sys.path`` automatically.
 
 * pyNastran comes from its GitHub ``main`` branch (1.4.1, the last release, needs
   numpy < 2 and so no Python >= 3.13). It is pure Python, so the wheel built here
@@ -27,14 +29,24 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from platform import mac_ver
 
 HERE = Path(__file__).resolve().parent
+# nastran_pv.locate (standard library only): a checkout's ../src, else the installed package this
+# file ships in (nastran_pv/paraview/install_deps.py), normally importable already
+if (HERE.parent / "src" / "nastran_pv").is_dir():
+    sys.path.insert(0, str(HERE.parent / "src"))
+elif str(HERE.parent.parent) not in sys.path:
+    sys.path.append(str(HERE.parent.parent))
+from nastran_pv import locate  # noqa: E402
+
 PYNASTRAN_MAIN = "pyNastran @ git+https://github.com/SteveDoyle2/pyNastran.git@main"
 # import name -> pip requirement (pyNastran's runtime dependencies that ParaView lacks)
 DEPS = {"cpylog": "cpylog>=1.6", "docopt": "docopt-ng>=0.9", "colorama": "colorama"}
@@ -42,12 +54,18 @@ DEPS = {"cpylog": "cpylog>=1.6", "docopt": "docopt-ng>=0.9", "colorama": "colora
 # serializers are trame-vtk internals
 SITE_PACKAGES = ["trame-vtk==2.11.17", "trame-client==4.1.4"]
 
-# Runs inside pvpython: what can ParaView import *without* our _vendor folder? The
-# NASTRAN_PV_SITE_PACKAGES folders are appended the way the plugin appends them.
+# Runs inside pvpython: its Python version, which picks an installed package's vendor folder.
+VERSION = r"""
+import json, sys
+print(json.dumps({'version': f'{sys.version_info[0]}.{sys.version_info[1]}'}))
+"""
+
+# Runs inside pvpython: what can ParaView import *without* our vendor folders (argv[1], joined with
+# os.pathsep)? The NASTRAN_PV_SITE_PACKAGES folders are appended the way the plugin appends them.
 PROBE = r"""
 import importlib, json, os, sys, sysconfig
-vendor = os.path.normcase(os.path.abspath(sys.argv[1]))
-sys.path = [p for p in sys.path if os.path.normcase(os.path.abspath(p or '.')) != vendor]
+hide = {os.path.normcase(os.path.abspath(p)) for p in sys.argv[1].split(os.pathsep) if p}
+sys.path = [p for p in sys.path if os.path.normcase(os.path.abspath(p or '.')) not in hide]
 sys.path += [p for p in os.environ.get('NASTRAN_PV_SITE_PACKAGES', '').split(os.pathsep) if p]
 found, broken = {}, {}
 for name in sys.argv[2:]:
@@ -69,11 +87,11 @@ print(json.dumps({'version': f'{sys.version_info[0]}.{sys.version_info[1]}',
 """
 
 # Runs inside pvpython after installing: import what the plugin needs with sys.path built
-# the way nastran_bdf_reader._bootstrap builds it (_vendor, then NASTRAN_PV_SITE_PACKAGES,
-# both after ParaView's own paths).
+# the way nastran_bdf_reader._bootstrap builds it (the vendor folders, then
+# NASTRAN_PV_SITE_PACKAGES, all after ParaView's own paths).
 VERIFY = r"""
 import importlib, json, os, sys
-sys.path.append(sys.argv[1])
+sys.path += [p for p in sys.argv[1].split(os.pathsep) if p]
 sys.path += [p for p in os.environ.get('NASTRAN_PV_SITE_PACKAGES', '').split(os.pathsep) if p]
 bad = {}
 for name in sys.argv[2:]:
@@ -87,25 +105,42 @@ VERIFY_MODULES = ["scipy", "cpylog", "pyNastran.bdf.bdf"]
 
 
 def find_pvpython() -> str | None:
-    exe = shutil.which("pvpython")
-    if exe:
-        return exe
-    roots = [Path("C:/Program Files"), Path("/Applications"), Path("/opt")]
-    for root in roots:
-        for cand in sorted(root.glob("ParaView*/bin/pvpython*"), reverse=True):
-            return str(cand)
-        for cand in sorted(root.glob("ParaView*.app/Contents/bin/pvpython"), reverse=True):
-            return str(cand)
-    return None
+    """The pvpython that ``nastran-pv view/render/setup`` would use (``locate.find_executable``)."""
+    try:
+        return str(locate.find_executable("pvpython"))
+    except FileNotFoundError:
+        return None
 
 
-def pip_platform(sysconfig_platform: str) -> list[str]:
+def _real_mac_version() -> str:
+    """This Mac's version from ``sw_vers`` with the compatibility shim off ("" if unknown)."""
+    try:
+        return subprocess.run(["sw_vers", "-productVersion"], capture_output=True, text=True, timeout=10,
+                              env={**os.environ, "SYSTEM_VERSION_COMPAT": "0"}).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def pip_platform(sysconfig_platform: str, mac_version: str | None = None) -> list[str]:
+    """pip ``--platform`` tags for ParaView's Python (its ``sysconfig.get_platform()``).
+
+    Linux: manylinux2014 for its machine (x86_64, aarch64). macOS: this Mac's version (``mac_version``,
+    default ``platform.mac_ver()``), since pip also accepts every older one; ParaView's own deployment
+    target (the version in its platform string, 11.0) is older than any scipy wheel for arm64 (12.0),
+    so it is only the floor. An interpreter built against a pre-11 SDK (or ``SYSTEM_VERSION_COMPAT=1``)
+    is told "10.16" on macOS 11+, a tag no wheel has: then ``sw_vers`` tells the real one, else 11."""
     p = sysconfig_platform.replace("-", "_").replace(".", "_")
-    if p.startswith("linux"):
-        return ["manylinux2014_x86_64", "manylinux_2_17_x86_64"]
+    if p.startswith("linux_"):
+        arch = p[len("linux_"):]
+        return [f"manylinux2014_{arch}", f"manylinux_2_17_{arch}"]
     if p.startswith("macosx"):
-        arch = "arm64" if "arm64" in p else "x86_64"
-        return [f"macosx_11_0_{arch}", f"macosx_10_9_{arch}"]
+        arch = "arm64" if p.endswith("arm64") else "x86_64"
+        mac = version_tuple(mac_ver()[0] if mac_version is None else mac_version)
+        if mac == (10, 16):
+            mac = max(version_tuple(_real_mac_version()), (11, 0))
+        target = version_tuple(sysconfig_platform.split("-")[1] if sysconfig_platform.count("-") >= 2 else "")
+        major, minor = max(mac, target)
+        return [f"macosx_{major}_0_{arch}" if major >= 11 else f"macosx_10_{minor}_{arch}"]
     return [p]  # win_amd64
 
 
@@ -201,25 +236,31 @@ def scipy_range(numpy_major: int):
 
 
 def version_tuple(version: str | None) -> tuple[int, int]:
-    m = re.match(r"(\d+)\.(\d+)", version or "")
-    return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+    """(major, minor) of "1.14.1", "14.6" or "15"; (0, 0) when there is none."""
+    m = re.match(r"(\d+)(?:\.(\d+))?", version or "")
+    return (int(m.group(1)), int(m.group(2) or 0)) if m else (0, 0)
 
 
 def is_main_build(version: str | None) -> bool:
     """True for a pyNastran newer than the 1.4 releases (main/dev builds are 1.5+)."""
-    m = re.match(r"(\d+)\.(\d+)", version or "")
-    return bool(m) and (int(m.group(1)), int(m.group(2))) >= (1, 5)
+    return version_tuple(version) >= (1, 5)
 
 
-def probe(pvpython: str, target: Path, modules, script: str = PROBE):
-    out = subprocess.run([pvpython, "-c", script, str(target), *modules],
-                         capture_output=True, text=True, check=True).stdout
-    return json.loads(out.strip().splitlines()[-1])
+def probe(pvpython: str, dirs, modules, script: str = PROBE):
+    """Run ``script`` in pvpython with the vendor folders ``dirs`` (a path or a list) and ``modules``."""
+    dirs = dirs if isinstance(dirs, (list, tuple)) else [dirs]
+    # never an empty argument: pvpython (ParaView 6.0 on Windows) crashes on one
+    arg = os.pathsep.join(map(str, dirs)) or os.pathsep
+    proc = subprocess.run([pvpython, "-c", script, arg, *modules], capture_output=True, text=True)
+    if proc.returncode != 0:  # pvpython itself failed (a missing system library, ...): show why
+        sys.stderr.write(proc.stdout + proc.stderr)
+        raise SystemExit(f"error: {pvpython} exited with {proc.returncode}; its output is above")
+    return json.loads(proc.stdout.strip().splitlines()[-1])
 
 
 def pip_install(target: Path, extra: list[str], dry_run: bool) -> None:
     cmd = [sys.executable, "-m", "pip", "install", "--target", str(target), *extra]
-    print(" ".join(cmd))
+    print(" ".join(cmd), flush=True)  # before pip writes
     if not dry_run:
         subprocess.run(cmd, check=True)
 
@@ -239,7 +280,9 @@ def binary_reason(target: Path, name: str, dist: str, python: str, platform: str
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--pvpython", default=None, help="path to pvpython (default: search)")
-    ap.add_argument("--target", default=str(HERE / "_vendor"))
+    ap.add_argument("--target", default=None,
+                    help="vendor folder (default: paraview/_vendor in a checkout, a per-user folder per "
+                         "ParaView Python for an installed nastran-pv, or NASTRAN_PV_VENDOR_DIR)")
     ap.add_argument("--pynastran", default=None, metavar="SPEC",
                     help="pip requirement to vendor instead of pyNastran main (e.g. a local checkout); "
                          "always installed")
@@ -257,14 +300,24 @@ def main() -> int:
         ap.error("pvpython not found; pass --pvpython")
     if Path(pvpython).exists():
         pvpython = str(Path(pvpython).resolve())  # CreateProcess misses relative forward-slash paths
-    target = Path(args.target).resolve()
-    info = probe(pvpython, target, ["pyNastran", "scipy", *DEPS])
+    if args.target:
+        dirs = [Path(args.target).resolve()]
+    else:  # the plugin's folders for ParaView's Python (an installed package keeps one per version)
+        version = probe(pvpython, [], [], VERSION)["version"]
+        dirs = [d.resolve() for d in locate.vendor_dirs(HERE, python=version)]
+    target = dirs[0]
+    if locate.store_python() and locate.under_appdata(target):
+        print(f"{'warning' if args.dry_run else 'error'}: {locate.STORE_PYTHON}", file=sys.stderr)
+        if not args.dry_run:
+            return 1
+    info = probe(pvpython, dirs, ["pyNastran", "scipy", *DEPS])  # what ParaView imports without them
     found = info["found"]
     for name, b in info.get("broken", {}).items():
         print(f"warning: {name} is on ParaView's path ({b['path']}) but fails to import: {b['error']}")
     major, minor = info["version"].split(".")
     numpy_major = int(info["numpy"].split(".")[0])
     print(f"pvpython: Python {info['version']} on {info['platform']}, numpy {info['numpy']}")
+    print(f"vendor folder: {target}", flush=True)
 
     # pyNastran: pure Python, so no platform/ABI flags (and a git requirement cannot be binary-only)
     pynastran = None
@@ -303,15 +356,17 @@ def main() -> int:
 
     if pynastran is None and not binary:
         print("nothing to install")
-        return verify(pvpython, target, args.dry_run)
+        return verify(pvpython, dirs, args.dry_run)
     if binary:
         cmd = ["--upgrade", "--only-binary=:all:", "--no-deps", "--implementation", "cp",
                "--python-version", f"{major}{minor}"]
         for plat in pip_platform(info["platform"]):
             cmd += ["--platform", plat]
         pip_install(target, cmd + binary, args.dry_run)
-    if pynastran is not None:
-        # stage it next to _vendor (same drive, so the swap is a rename) and swap only on success
+    if pynastran is not None and args.dry_run:  # creates nothing, not even the vendor folder's parent
+        pip_install(target.parent / f".{target.name}-staging-XXXX", ["--no-deps", "--upgrade", pynastran], True)
+    elif pynastran is not None:
+        # stage it next to the vendor folder (same drive, so the swap is a rename); swap only on success
         target.parent.mkdir(parents=True, exist_ok=True)
         staged = Path(tempfile.mkdtemp(prefix=f".{target.name}-staging-", dir=target.parent))
         try:
@@ -327,19 +382,20 @@ def main() -> int:
             shutil.rmtree(staged, ignore_errors=True)  # only the scratch copy
     if not args.dry_run:
         print(f"installed into {target}")
-    return verify(pvpython, target, args.dry_run)
+    return verify(pvpython, dirs, args.dry_run)
 
 
-def verify(pvpython: str, target: Path, dry_run: bool) -> int:
-    """Import what the plugin needs in pvpython, with _vendor where the plugin puts it."""
+def verify(pvpython: str, dirs, dry_run: bool) -> int:
+    """Import what the plugin needs in pvpython, with the vendor folders where the plugin puts them."""
     if dry_run:
         return 0
-    bad = probe(pvpython, target, VERIFY_MODULES, VERIFY)
+    dirs = dirs if isinstance(dirs, (list, tuple)) else [dirs]
+    bad = probe(pvpython, dirs, VERIFY_MODULES, VERIFY)
     for name, error in bad.items():
         print(f"error: pvpython still cannot import {name}: {error}", file=sys.stderr)
     if bad:
         print("A broken copy on ParaView's own path (site-packages or PYTHONPATH) comes before "
-              f"{target}; repair or remove it, or vendor a working build with --pynastran.",
+              f"{dirs[0]}; repair or remove it, or vendor a working build with --pynastran.",
               file=sys.stderr)
         return 1
     return 0

@@ -47,6 +47,7 @@ import contextlib
 import math
 import os
 import re
+import sys
 
 import numpy as np
 from paraview import servermanager
@@ -66,7 +67,13 @@ SHOWCASE_DIR = (-1.0, -0.35, 0.6)  # "showcase" camera: Z up, looking from ahead
 
 def ensure_plugin():
     if not hasattr(pv, "NastranBulkDatanastranpv"):
-        pv.LoadPlugin(os.path.join(HERE, "nastran_bdf_reader.py"))
+        # ParaView compiles the plugin like an import: write no __pycache__ into an installed
+        # package's folder (pip would leave a ParaView 5.13 cpython-310.pyc behind on uninstall)
+        before, sys.dont_write_bytecode = sys.dont_write_bytecode, True
+        try:
+            pv.LoadPlugin(os.path.join(HERE, "nastran_bdf_reader.py"))
+        finally:
+            sys.dont_write_bytecode = before
 
 
 def load_reader(deck, op2=None, nsm_set=None, random=None):
@@ -1008,53 +1015,154 @@ def _block_field(blk, name):
     return vtk_to_numpy(a).reshape(-1)
 
 
-def view_loads(model, view, sets=None, show=None, size=None, stride=None):
-    """FORCE/MOMENT arrows (Nastran Load Glyphs) of the load sets checked on 'NPV load glyphs'
-    (first: the Case Control LOAD, else the first set with loads). ``sets`` (block names such as
-    LOAD_1001), ``show`` (Forces, Moments, Forces and moments), ``size`` and ``stride`` (Every Nth
-    Point) set the filter; left None they keep its settings."""
-    loads = model.scoped("Loads")
-    if loads is None:
-        info_text(model, view, _missing_text(model, "nodal loads (FORCE/MOMENT)"))
+# Nastran Load Glyphs' result Source entries: (result type, the Case Control request that writes it);
+# the types are nastran_pv.glyphs.LOAD_SOURCES[1:] (test_plugin_constants)
+_RESULT_LOADS = {"SPC forces": ("SPCForce", "SPCFORCES"), "MPC forces": ("MPCForce", "MPCFORCES"),
+                 "Applied loads (OLOAD)": ("AppliedLoad", "OLOAD")}
+
+
+def _load_source(model, source):
+    """The Source the loads view draws: ``source`` when given, else what 'NPV load glyphs' has."""
+    if source is not None:
+        return source
+    g = pv.FindSource(_name(model, "load glyphs"))
+    if g is None or "Source" not in g.ListProperties():
+        return "Deck load sets"
+    return enum_text(g, "Source")
+
+
+def _glyph_vector(src, name):
+    """A one-tuple 3-component field array of a pipeline object's output (from its data
+    information), or None."""
+    a = src.GetDataInformation().DataInformation.GetFieldDataInformation().GetArrayInformation(name)
+    if a is None or a.GetNumberOfComponents() < 3:
+        return None
+    return [a.GetComponentRange(c)[0] for c in range(3)]
+
+
+def view_loads(model, view, sets=None, show=None, size=None, stride=None, source=None):
+    """Arrows (Nastran Load Glyphs) of the load sets checked on 'NPV load glyphs' (first: the
+    Case Control LOAD, else the first set with loads): FORCE/MOMENT at their grids, PLOAD* pressures
+    on their faces and GRAV at the model CG. ``sets`` (block names such as LOAD_1001), ``show``
+    (Forces, Moments, Forces and moments), ``size`` and ``stride`` (Every Nth Point) set the filter;
+    left None they keep its settings (Show Pressures and Show Gravity are the filter's). ``source`` (Deck load sets, SPC
+    forces, MPC forces, Applied loads (OLOAD)) picks the filter's Source: a result draws the
+    current step's vectors at each grid with output and gives their resultant."""
+    kind = _load_source(model, source)
+    if kind in _RESULT_LOADS:
+        return _result_loads(model, view, kind, show, size, stride)
+    from nastran_pv.glyphs import gravity_anchor, gravity_sets_of
+
+    loads, pressures = model.scoped("Loads"), model.scoped("Pressures")
+    gravity = {name: a for name, _, a in gravity_sets_of(model.data)}
+    if loads is None and pressures is None and not gravity:
+        info_text(model, view, _missing_text(model, "loads (FORCE/MOMENT, PLOAD*, GRAV)"))
         return
     g = _overlay(model, "load glyphs", lambda src: pv.NastranLoadGlyphs(Input=src), "NastranPVLoadGlyphs")
     g.UpdatePipelineInformation()
     if sets is not None:
         g.LoadSets = list(sets)
-    _set_given(g, Show=show, Size=size, EveryNthPoint=stride)
+    _set_given(g, Source=source, Show=show, Size=size, EveryNthPoint=stride)
     g.UpdatePipeline()
     g.UpdatePipelineInformation()
-    names = block_names(loads)
+    names = block_names(loads) if loads is not None else []
+    faces = block_names(pressures) if pressures is not None else []
     listed = fetch(g).GetFieldData().GetAbstractArray("LoadSetNames")
     drawn = [listed.GetValue(i) for i in range(listed.GetNumberOfValues())] if listed is not None else []
-    drawn = [n for n in drawn if n in names]
+    drawn = [n for n in drawn if n in names or n in faces or n in gravity]
     count = int(_glyph_field(g, "ArrowCount"))
     if not count:
         available = list(g.GetProperty("LoadSetsInfo"))[0::2]
         what = {"Forces": "forces", "Moments": "moments"}.get(enum_text(g, "Show"), "forces or moments")
         if not available:
-            text = "Only GRAV load sets in this deck (GRAV is not drawn as arrows)."
+            text = "No load set with loads to draw in this deck."
         elif not list(g.LoadSets):
             text = "No load set checked: check one on 'NPV load glyphs' (Load Sets)."
         else:
             text = (f"{', '.join(drawn) or 'The checked sets'}: no {what} to draw. Show on 'NPV load glyphs' "
-                    "picks forces, moments or both; GRAV is not drawn.")
+                    "picks forces, moments or both; Show Pressures and Show Gravity draw PLOAD* and GRAV.")
         info_text(model, view, text)
         return g
     d = _show(g, view)
     continuous(d, "POINTS", "Magnitude", preset="Inferno (matplotlib)", view=view)
     lines = []
+    from nastran_pv.vtkutil import vector_text
+
+    mass, wtmass = model.field("ModelMass"), model.field("WTMASS")
+    where = gravity_anchor(model.data)[1]  # the CG, or the model centre when it has no mass
     for name in drawn[:6]:
-        blk = loads.GetBlock(names.index(name))
-        res = _block_field(blk, "ResultantForce")
-        lines.append(f"{name}: {blk.GetNumberOfPoints()} loaded grids")
-        if res is not None:
-            lines.append(f"Resultant force ({res[0]:.4g}, {res[1]:.4g}, {res[2]:.4g})")
+        blk = loads.GetBlock(names.index(name)) if name in names else None
+        if blk is not None and blk.GetNumberOfPoints():
+            res = _block_field(blk, "ResultantForce")
+            lines.append(f"{name}: {blk.GetNumberOfPoints()} loaded grids")
+            if res is not None:
+                lines.append(f"Resultant force {vector_text(res)}")
+        if name in faces and g.ShowPressures:
+            blk = pressures.GetBlock(faces.index(name))
+            res = _block_field(blk, "ResultantForce")
+            lines.append(f"{name}: {blk.GetNumberOfCells()} pressure faces"
+                         + (f", resultant force {vector_text(res)}" if res is not None else ""))
+        if name in gravity and g.ShowGravity:
+            a = gravity[name]
+            text = f"{name}: GRAV {vector_text(a)} at {where}"
+            if mass is not None and wtmass is not None and float(mass[0]):
+                text += f", WTMASS x mass x a = {vector_text(float(wtmass[0]) * float(mass[0]) * a)}"
+            lines.append(text)
     if len(drawn) > 6:
         lines.append(f"... {len(drawn) - 6} more set(s)")
     step = int(_glyph_field(g, "Stride", 1))
     if step > 1:
         lines.append(f"arrows on 1 of every {step} loaded grids ({count} arrows; Every Nth Point)")
+    info_text(model, view, "\n".join(lines))
+    return g
+
+
+def _result_loads(model, view, kind, show, size, stride):
+    """The loads view for a result Source: arrows of the step's SPC forces, MPC forces or applied
+    loads and the root resultant (the sum of F, and of M + r x F about the basic origin). With the
+    reader's scope cutting the model, the arrows and their force sum are the scope's and the
+    resultant is labelled as the whole model's."""
+    from nastran_pv.result_types import by_name
+    from nastran_pv.vtkutil import vector_text
+
+    rtype, request = _RESULT_LOADS[kind]
+    g = _overlay(model, "load glyphs", lambda src: pv.NastranLoadGlyphs(Input=src), "NastranPVLoadGlyphs")
+    g.UpdatePipelineInformation()
+    _set_given(g, Source=kind, Show=show, Size=size, EveryNthPoint=stride)
+    g.UpdatePipeline()
+    label = model.field_strings(None, "ResultLabel")
+    step = f" ({label[0]})" if label else ""
+    count = int(_glyph_field(g, "ArrowCount"))
+    if not count:
+        if not label:
+            text = (f"No results: set 'OP2 File Name' on the reader (or convert with --results), from a run "
+                    f"with {request}=ALL in its Case Control.")
+        else:
+            text = (f"No {kind} to draw at this step{step}: the run needs {request}=ALL in its Case Control, "
+                    f"and {rtype} checked in the reader's Result Types. Show on 'NPV load glyphs' picks "
+                    "forces, moments or both.")
+        info_text(model, view, text)
+        return g
+    d = _show(g, view)
+    continuous(d, "POINTS", "Magnitude", preset="Inferno (matplotlib)", view=view)
+    grids = int(_glyph_field(g, "LoadPoints"))
+    force, moment = (model.field(n) for n in by_name(rtype).resultant_names)
+    whole = ""
+    if model.scope_active():  # the arrows are the scope's; the root resultant is the whole model's
+        drawn = _glyph_vector(g, "ForceSum")
+        lines = [f"{kind}{step}: {grids} grids with output in the reader's scope"]
+        if drawn is not None:
+            lines.append(f"Force sum of these grids {vector_text(drawn)}")
+        whole = "Whole-model resultant "
+    else:
+        lines = [f"{kind}{step}: {grids} grids with output"]
+    if force is not None:
+        lines.append(f"{whole or 'Resultant '}force {vector_text(force)}")
+    if moment is not None:
+        lines.append(f"{whole or 'Resultant '}moment {vector_text(moment)} about the basic origin")
+    every = int(_glyph_field(g, "Stride", 1))
+    if every > 1:
+        lines.append(f"arrows on 1 of every {every} grids ({count} arrows; Every Nth Point)")
     info_text(model, view, "\n".join(lines))
     return g
 

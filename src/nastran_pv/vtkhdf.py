@@ -175,54 +175,140 @@ def _array_signature(mb) -> dict:
     return sig
 
 
-def _fill_missing(mb, union) -> list[str]:
-    """Add the arrays of ``union`` this step lacks, as NaN, and list them on the root as
-    ``FillArrays`` (``"<block path>|point|<name>"``, ``"|field|<name>"`` for the root) so that
-    a reader drops exactly those (``vtkutil.drop_fill_arrays``). Returns that list."""
+def _missing(sig, union) -> int:
+    """How many arrays of ``union`` a step with array signature ``sig`` lacks."""
+    return sum(name not in sig.get(key, {}) for key, arrays in union.items() for name in arrays)
+
+
+def _field_containers(mb):
+    """``(block path, field data)`` of the root (path "") and of every block."""
+    from .fields.common import iter_blocks
+
+    yield "", mb.GetFieldData()
+    for path, ds in iter_blocks(mb):
+        yield path, ds.GetFieldData()
+
+
+def _field_shapes(mb) -> dict:
+    """``{(block path, name): (is a string array, size)}`` of every field array of a step: the
+    number of values of a string array, of tuples of a numeric one."""
     from . import vtkutil
 
-    filled = []
+    shapes = {}
+    for path, fd in _field_containers(mb):
+        for i in range(fd.GetNumberOfArrays()):
+            a = fd.GetAbstractArray(i)
+            if a is None or a.GetName() in (vtkutil.FILL_ARRAYS, vtkutil.ROOT_FIELDS):
+                continue
+            if a.IsA("vtkStringArray"):
+                shapes[(path, a.GetName())] = (True, a.GetNumberOfValues())
+            elif a.IsA("vtkDataArray"):
+                shapes[(path, a.GetName())] = (False, a.GetNumberOfTuples())
+    return shapes
+
+
+def _field_widths(shapes: list) -> dict:
+    """``{(block path, name): (is a string array, size)}``, the size each field array gets at every
+    step of the series. vtkHDFWriter (VTK 9.5) records the step offset of a field array whose size
+    changes between steps wrongly (the previous offset plus this step's size), and the reader then
+    reads past it, so every step must give an array the same size: a string array is padded with
+    ``""`` (and filled where a step lacks it), a numeric one must keep its size (ValueError)."""
+    widths = {}
+    for shape in shapes:
+        for key, (is_str, n) in shape.items():
+            if key in widths and not is_str and widths[key][1] != n:
+                where = f"block {key[0]}" if key[0] else "the root"
+                raise ValueError(f"field array {key[1]} of {where} changes size between steps "
+                                 f"({widths[key][1]} and {n} tuples): a VTKHDF series cannot store it")
+            widths[key] = (is_str, max(n, widths.get(key, (is_str, 0))[1]))
+    return widths
+
+
+def _fill_missing(mb, union, width: int = 1, widths=None) -> tuple[list, list]:
+    """Add the arrays of ``union`` this step lacks, as NaN, and the string field arrays of
+    ``widths`` it lacks, as ``""``, and list them on the root as ``FillArrays``
+    (``"<block path>|point|<name>"``, ``"|field|<name>"`` for the root) so that a reader drops
+    exactly those (``vtkutil.drop_fill_arrays``). String field arrays shorter than their width are
+    padded with ``""``. Returns (that list, the padded arrays' originals for :func:`_unfill`).
+
+    Every field array has its :func:`_field_widths` size, and ``FillArrays`` is padded with ``""``
+    to ``width`` entries (the most any step of the series fills), for vtkHDFWriter."""
+    from . import vtkutil
+
+    widths = widths or {}
+    filled, padded = [], []
     for key, attr, n in _attributes(mb):
         for name, ncomp in union.get(key, {}).items():
             if attr.GetAbstractArray(name) is None:
-                shape = (n,) if ncomp == 1 else (n, ncomp)
+                rows = widths.get((key[0], name), (False, n))[1] if key[1] == "field" else n
+                shape = (rows,) if ncomp == 1 else (rows, ncomp)
                 vtkutil.add_array(attr, name, np.full(shape, np.nan))
                 filled.append(f"{key[0]}|{key[1]}|{name}")
+    containers = dict(_field_containers(mb))
+    for (path, name), (is_str, size) in widths.items():
+        fd = containers.get(path)
+        if not is_str or fd is None:
+            continue
+        a = fd.GetAbstractArray(name)
+        if a is None:
+            vtkutil.add_string_array(fd, name, [""] * size)
+            filled.append(f"{path}|field|{name}")
+        elif a.GetNumberOfValues() < size:
+            values = [a.GetValue(i) for i in range(a.GetNumberOfValues())]
+            padded.append((fd, a))
+            fd.RemoveArray(name)
+            vtkutil.add_string_array(fd, name, values + [""] * (size - len(values)))
     root = mb.GetFieldData()
     root.RemoveArray(vtkutil.FILL_ARRAYS)
-    vtkutil.add_string_array(root, vtkutil.FILL_ARRAYS, filled or [""])  # at every step, as VTKHDF needs
-    return filled
+    entries = filled + [""] * (max(int(width), 1) - len(filled))  # never empty: VTKHDF needs it at every step
+    vtkutil.add_string_array(root, vtkutil.FILL_ARRAYS, entries)
+    return filled, padded
 
 
-def _unfill(mb, filled) -> None:
-    """Remove the arrays :func:`_fill_missing` added, so the next step starts from its own results."""
+def _unfill(mb, filled, padded=()) -> None:
+    """Remove the arrays :func:`_fill_missing` added and put back the ones it padded, so the next
+    step starts from its own results."""
     from . import vtkutil
     from .fields.common import iter_blocks
 
     blocks = dict(iter_blocks(mb))
     for entry in filled:
         path, assoc, name = entry.split("|", 2)
-        ds = mb if assoc == "field" else blocks.get(path)
+        ds = mb if path == "" and assoc == "field" else blocks.get(path)
         if ds is not None:
             vtkutil.attributes(ds, assoc).RemoveArray(name)
+    for fd, original in padded:
+        fd.RemoveArray(original.GetName())
+        fd.AddArray(original)
 
 
 class _StepSource(VTKPythonAlgorithmBase):
     """Pipeline source that re-attaches the requested result step to the model."""
 
     def __init__(self, mb, results, deck, steps):
+        from . import vtkutil
+
         VTKPythonAlgorithmBase.__init__(self, nInputPorts=0, nOutputPorts=1,
                                         outputType="vtkPartitionedDataSetCollection")
+        vtkutil.drop_state_on_delete(self)  # the writer outlives `source` (ParaView 6.0 ghost crash)
         self.mb, self.results, self.deck = mb, results, deck
         self.steps = list(steps)
-        self._filled = []  # the NaN arrays added for the last step written
+        self._filled, self._padded = [], []  # the arrays added (and padded) for the last step written
         # a temporal VTKHDF file needs the same arrays at every step (e.g. VonMisesMax only
-        # exists for stress steps, Frequency only for modes): collect the union first
+        # exists for stress steps, Frequency only for modes), each field array of one size:
+        # collect the union and the sizes first
         self.union: dict = {}
+        signatures, shapes = [], []
         for step in self.steps:
             self.results.attach(self.mb, int(step), self.deck)
-            for key, arrays in _array_signature(self.mb).items():
+            signatures.append(_array_signature(self.mb))
+            shapes.append(_field_shapes(self.mb))
+            for key, arrays in signatures[-1].items():
                 self.union.setdefault(key, {}).update(arrays)
+        self.widths = _field_widths(shapes)
+        strings = [k for k, (is_str, _) in self.widths.items() if is_str]
+        self.fill_width = max([_missing(sig, self.union) + sum(k not in shape for k in strings)
+                               for sig, shape in zip(signatures, shapes)] + [1])  # FillArrays entries a step
 
     def RequestInformation(self, request, inInfo, outInfo):
         info = outInfo.GetInformationObject(0)
@@ -235,9 +321,9 @@ class _StepSource(VTKPythonAlgorithmBase):
         info = outInfo.GetInformationObject(0)
         t = info.Get(SDDP.UPDATE_TIME_STEP()) if info.Has(SDDP.UPDATE_TIME_STEP()) else float(self.steps[0])
         step = min(self.steps, key=lambda s: abs(s - t))
-        _unfill(self.mb, self._filled)
+        _unfill(self.mb, self._filled, self._padded)
         self.results.attach(self.mb, int(step), self.deck)
-        self._filled = _fill_missing(self.mb, self.union)
+        self._filled, self._padded = _fill_missing(self.mb, self.union, self.fill_width, self.widths)
         out = vtkPartitionedDataSetCollection.GetData(outInfo, 0)
         # every root table (sections, materials, NSM, ...), as in a static file: the views and
         # filters need them at every step, and compact_static_arrays stores the static ones once
@@ -265,7 +351,7 @@ def write_vtkhdf_series(mb, results, path, deck=None, steps=None, compression: i
     w.SetInputConnection(source.GetOutputPort())
     w.SetWriteAllTimeSteps(True)
     ok = w.Write()
-    _unfill(mb, source._filled)  # the caller's model gets no NaN fill or FillArrays
+    _unfill(mb, source._filled, source._padded)  # the caller's model gets no fill, padding or FillArrays
     mb.GetFieldData().RemoveArray("FillArrays")
     del source
     if not ok:

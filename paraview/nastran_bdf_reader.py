@@ -6,12 +6,18 @@ environment variable), then File > Open a deck and choose
 
 The plugin finds its dependencies in this order:
 
-1. anything already importable (e.g. PYTHONPATH),
-2. ``../src`` relative to this file (the nastran_pv package),
-3. ``./_vendor`` next to this file (filled by ``install_deps.py``),
+1. nastran_pv: ``../src`` relative to this file in a checkout (put first on ``sys.path``), or, in
+   an installed wheel (``nastran_pv/paraview/``), the package this file ships in, imported on its
+   own so the rest of that site-packages stays off ParaView's path;
+2. anything else already importable (ParaView's own packages, ``PYTHONPATH``),
+3. the vendor folders filled by ``install_deps.py`` (``locate.vendor_dirs``: ``./_vendor`` then the
+   per-user folder in a checkout, the per-user folder for an installed package, or
+   ``NASTRAN_PV_VENDOR_DIR``),
 4. folders listed in the ``NASTRAN_PV_SITE_PACKAGES`` environment variable.
 """
+import functools
 import importlib
+import importlib.machinery
 import itertools
 import os
 import sys
@@ -39,31 +45,78 @@ def _plugin_dir():
     return None
 
 
+_HELP = (
+    "nastran-pv could not import {missing}. Install pyNastran and its dependencies (cpylog,\n"
+    "docopt-ng, colorama, scipy) for ParaView's Python with\n"
+    "  nastran-pv setup --pvpython <path to pvpython>   (or python paraview/install_deps.py ...)\n"
+    "(it keeps a pyNastran that ParaView can already import and adds only what is missing),\n"
+    "or point NASTRAN_PV_SITE_PACKAGES at a site-packages folder of a CPython with the same\n"
+    "version as ParaView's Python that has pyNastran installed. Original error: {err}"
+)
+
+
+class _NoBytecodeLoader(importlib.machinery.SourceFileLoader):
+    """Reads an installed nastran_pv (and pip's .pyc where they fit) but writes no ``__pycache__``
+    into another Python's site-packages: pip did not record those files, so they would be left
+    behind on uninstall or upgrade."""
+
+    def set_data(self, path, data, *, _mode=0o666):
+        pass
+
+
+class _InstalledPackage:
+    """Meta path finder: nastran_pv and its submodules from ``root`` alone (the site-packages this
+    installed plugin ships in, often another Python's), so the rest of ``root`` stays off sys.path,
+    behind ParaView's numpy; first, because the plugin and its package must be the same version."""
+
+    def __init__(self, root):
+        self.npv_root = root
+
+    def find_spec(self, name, path=None, target=None):
+        if name != "nastran_pv" and not name.startswith("nastran_pv."):
+            return None
+        spec = importlib.machinery.PathFinder.find_spec(name, [self.npv_root] if name == "nastran_pv" else path)
+        if spec is not None and type(spec.loader) is importlib.machinery.SourceFileLoader:
+            spec.loader = _NoBytecodeLoader(spec.loader.name, spec.loader.path)
+        return spec
+
+
+def _vendor_paths(here):
+    """The vendor folders to append (``locate.vendor_dirs`` of this plugin folder). Without an
+    importable nastran_pv: ``NASTRAN_PV_VENDOR_DIR``, else ``./_vendor``."""
+    env = os.environ.get("NASTRAN_PV_VENDOR_DIR")
+    try:  # nastran_pv imports without pyNastran, which may be in the vendor folders
+        from nastran_pv.locate import vendor_dirs
+    except ImportError:  # the reader reports what is missing on first use
+        return [env] if env else [os.path.join(here, "_vendor")] if here else []
+    return [str(p) for p in vendor_dirs(here)] if here or env else []
+
+
 def _bootstrap():
     here = _plugin_dir()
-    front, back = [], []
     if here:
-        front.append(os.path.join(os.path.dirname(here), "src"))
-        back.append(os.path.join(here, "_vendor"))
+        parent = os.path.dirname(here)
+        src = os.path.join(parent, "src")
+        if os.path.isdir(src):  # a checkout: <repo>/paraview next to <repo>/src
+            if src not in sys.path:
+                sys.path.insert(0, src)
+        elif os.path.basename(parent) == "nastran_pv" and os.path.isfile(os.path.join(parent, "__init__.py")):
+            root = os.path.dirname(parent)  # an installed wheel: <site-packages>/nastran_pv/paraview
+            if not any(getattr(f, "npv_root", None) == root for f in sys.meta_path):
+                sys.meta_path.insert(0, _InstalledPackage(root))
+    try:
+        back = _vendor_paths(here)
+    except Exception as exc:  # a nastran_pv that fails to import for another reason
+        vtkOutputWindow.GetInstance().DisplayErrorText(
+            _HELP.format(missing="nastran_pv", err=f"{type(exc).__name__}: {exc}") + "\n")
+        back = []
     back += [p for p in os.environ.get("NASTRAN_PV_SITE_PACKAGES", "").split(os.pathsep) if p]
-    for p in reversed(front):
-        if os.path.isdir(p) and p not in sys.path:
-            sys.path.insert(0, p)
     for p in back:  # after ParaView's own site-packages so its numpy wins
         if os.path.isdir(p) and p not in sys.path:
             sys.path.append(p)
 
 
 _bootstrap()
-
-_HELP = (
-    "nastran-pv could not import {missing}. Install pyNastran and its dependencies (cpylog,\n"
-    "docopt-ng, colorama, scipy) for ParaView's Python with\n"
-    "  python paraview/install_deps.py --pvpython <path to pvpython>\n"
-    "(it keeps a pyNastran that ParaView can already import and adds only what is missing),\n"
-    "or point NASTRAN_PV_SITE_PACKAGES at a site-packages folder of a CPython with the same\n"
-    "version as ParaView's Python that has pyNastran installed. Original error: {err}"
-)
 
 _FLAGS = ("shells", "lines", "solids", "masses", "rigid", "connectors", "plotels", "bushes", "constraints", "loads")
 # model tree checklists (reader property -> nastran_pv.tree category)
@@ -78,6 +131,12 @@ _SELECTION_EXTENSIONS = "csv tsv txt dat lst json xlsx xlsm"
 def _message(text, error=False):
     out = vtkOutputWindow.GetInstance()
     (out.DisplayErrorText if error else out.DisplayWarningText)(text + "\n")
+
+
+def _capped(lines, cap=25):
+    """The first ``cap`` lines, and a "... N more" line for the rest."""
+    lines = list(lines)
+    return lines[:cap] + ([f"... {len(lines) - cap} more"] if len(lines) > cap else [])
 
 
 def _missing(exc):
@@ -156,9 +215,42 @@ def _whole_model(data):
     return as_multiblock(data), first is not None and first.GetFieldData().GetAbstractArray(BLOCK_PATH) is not None
 
 
+def _drop_state_on_delete(algorithm):
+    """``vtkutil.drop_state_on_delete``: empty the algorithm's ``__dict__`` when ParaView deletes it
+    (a stale dict released later crashes ParaView 6.0 on Linux)."""
+    try:
+        from nastran_pv.vtkutil import drop_state_on_delete
+    except ImportError:  # the reader reports a missing nastran_pv on first use
+        return
+    drop_state_on_delete(algorithm)
+
+
+def _reexecutes(owner):
+    """A ``ModifiedEvent`` observer for a checklist ``owner`` keeps: re-executes ``owner`` unless it is
+    filling its lists (``vtkutil.modified_callback``, which holds it weakly: a lambda capturing
+    ``owner`` kept every deleted reader and checklist filter alive, caches and all)."""
+    try:
+        from nastran_pv.vtkutil import modified_callback
+    except ImportError:  # the reader reports a missing nastran_pv on first use
+        return lambda *args: None if owner._listing else owner.Modified()
+    return modified_callback(owner)
+
+
 class _Settable:
     """Property setters that re-execute only on a change. Plain methods (no ``_pvsm`` tags), so
-    the proxies' XML is unchanged."""
+    the proxies' XML is unchanged. Every algorithm here derives from it, and each ``__init__``
+    ends with :func:`_drop_state_on_delete`."""
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        init = cls.__dict__.get("__init__")
+        if init is not None:
+            @functools.wraps(init)
+            def __init__(self, *args, **kw):
+                init(self, *args, **kw)
+                _drop_state_on_delete(self)
+
+            cls.__init__ = __init__
 
     def _set(self, attr, value):
         if getattr(self, attr) != value:
@@ -291,7 +383,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         self._results = None
         self._results_key = None
         self._result_types = vtkDataArraySelection()  # ResultTypes: what the results file has
-        self._result_types.AddObserver("ModifiedEvent", lambda *args: None if self._listing else self.Modified())
+        self._result_types.AddObserver("ModifiedEvent", _reexecutes(self))
         self._random_asd = ""
         self._random_drive = 2
         self._random_damping = 0.05
@@ -305,11 +397,11 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         self._lists = {}
         for cat in _VISIBILITY.values():
             sel = vtkDataArraySelection()
-            sel.AddObserver("ModifiedEvent", lambda *args: None if self._listing else self.Modified())
+            sel.AddObserver("ModifiedEvent", _reexecutes(self))
             self._lists[cat] = sel
         self._listed_key = None
         self._reported_key = None
-        self._reported_results = None  # the results whose skipped messages were shown
+        self._reported_results = None  # (results file key, its messages) last reported
         self._load_error = ""  # last RequestData failure, for LoadError (empty after a good read)
         self._names = {}
         self._tree = None
@@ -745,20 +837,26 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         self._sel_error = None
         return self._sel_ids
 
-    def _report_messages(self, deck, mb):
-        """The deck's warnings, then the card report (what no block draws), in one Output Messages entry."""
+    def _report_messages(self, deck, mb, results_messages=()):
+        """The deck's warnings and the results file's messages (tables no result type reads, ...),
+        then the card report (what no block draws), in one Output Messages entry."""
         from nastran_pv import cards
 
-        lines = deck.warnings[:25]
-        if len(deck.warnings) > 25:
-            lines.append(f"... {len(deck.warnings) - 25} more")
+        warnings = list(deck.warnings) + list(results_messages)
+        lines = _capped(warnings)
         skipped = cards.read(mb)
         if skipped:
             lines.append(cards.summary(skipped))
         if lines:
             shown = "\n  ".join(lines)
-            count = len(deck.warnings) + bool(skipped)
+            count = len(warnings) + bool(skipped)
             _message(f"nastran-pv: {os.path.basename(self._filename)}: {count} message(s)\n  {shown}")
+
+    def _report_results(self, messages):
+        """A new results file's (or a re-read one's) messages, when the model itself was not rebuilt."""
+        if messages:
+            shown = "\n  ".join(_capped(messages))
+            _message(f"nastran-pv: {os.path.basename(self._op2name)}: {len(messages)} message(s)\n  {shown}")
 
     def RequestData(self, request, inInfo, outInfo):
         if not self._filename:
@@ -779,6 +877,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
             self._list_categories(mb, deck)
             res = self._get_response()
             time_value = None
+            messages = []
             if res is not None and res.steps:
                 info = outInfo.GetInformationObject(0)
                 t = 0.0
@@ -788,12 +887,12 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
                 self._select_result_types(res)
                 res.attach(mb, step, deck)
                 time_value = res.times[step]
-                if rebuilt:
-                    deck.warnings += res.skipped
-                elif res.skipped and self._reported_results is not res:  # another results file, same model
-                    shown = "\n  ".join(res.skipped[:25])
-                    _message(f"nastran-pv: {os.path.basename(self._op2name)}: {len(res.skipped)} message(s)\n  {shown}")
-                self._reported_results = res
+                messages = list(res.skipped)
+            # the results file and its messages: a random response rebuilt with other settings
+            # (same file, same messages) is no new report
+            results_key = (self._results_key, tuple(messages))
+            new_results = results_key != self._reported_results
+            self._reported_results = results_key
             vis = self._visibility()
             key = (self._mb_key, vis.key())
             if key != self._tree_key:
@@ -802,6 +901,11 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
                 for w in self._tree.warnings:
                     _message(f"nastran-pv: {w}")
             pdc = self._tree.output(mb)
+            if messages:  # as convert, the root Warnings has the results' messages too: on this output
+                from nastran_pv.vtkutil import add_string_array  # only (the cached model's arrays stay as built)
+
+                pdc.GetFieldData().RemoveArray("Warnings")
+                add_string_array(pdc.GetFieldData(), "Warnings", list(deck.warnings) + messages)
         except Exception as exc:
             import traceback
 
@@ -810,7 +914,9 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
             return 0
         self._load_error = ""
         if rebuilt:
-            self._report_messages(deck, mb)
+            self._report_messages(deck, mb, messages)
+        elif new_results:
+            self._report_results(messages)
         output = vtkPartitionedDataSetCollection.GetData(outInfo, 0)
         output.ShallowCopy(pdc)
         if time_value is not None:
@@ -850,7 +956,7 @@ def _named_block(mb, name):
 def _checklist(owner):
     """A checklist property's selection: a change re-executes ``owner``, except while it is filled."""
     sel = vtkDataArraySelection()
-    sel.AddObserver("ModifiedEvent", lambda *args: None if owner._listing else owner.Modified())
+    sel.AddObserver("ModifiedEvent", _reexecutes(owner))
     return sel
 
 
@@ -915,19 +1021,25 @@ class _GlyphFilter(_Settable, VTKPythonAlgorithmBase):
         data = as_multiblock(vtkDataObject.GetData(inInfo[0], 0))
         if data.IsA("vtkMultiBlockDataSet"):
             self._list(data)
-        block = _find_block(data, self.BLOCK, self.REQUIRED)
+        block = self._block(data)
         out = vtkPolyData.GetData(outInfo, 0)
         if block is None or block.GetNumberOfPoints() == 0:
             return 1
         out.ShallowCopy(self._glyphs(block, glyph_diagonal(data), data))
         return 1
 
+    def _block(self, data):
+        """What ``_glyphs`` draws from: the filter's block of the input (None: nothing to draw)."""
+        return _find_block(data, self.BLOCK, self.REQUIRED)
 
-# copies of nastran_pv.glyphs.MASS_COLOR_ARRAYS / BUSH_SHOW / LOAD_SHOW / LOAD_SCALES (test_plugin_constants)
+
+# copies of nastran_pv.glyphs.MASS_COLOR_ARRAYS / BUSH_SHOW / LOAD_SHOW / LOAD_SCALES / LOAD_SOURCES
+# (test_plugin_constants)
 _MASS_COLORS = ("Mass", "EID", "NID")
 _BUSH_SHOW = ("all", "grounded", "coincident")
 _LOAD_SHOW = ("force", "moment", "both")
 _LOAD_SCALES = ("magnitude", "fixed")
+_LOAD_SOURCES = ("deck", "SPCForce", "MPCForce", "AppliedLoad")
 
 
 @smproxy.filter(name="NastranPVMassGlyphs", label="Nastran Mass Glyphs")
@@ -1048,23 +1160,36 @@ class NastranPVBushGlyphs(_GlyphFilter):
 @smdomain.datatype(dataTypes=["vtkDataObject"], composite_data_supported=True)
 @_with_glyph_size(0.08, 0.001, 0.5, 6, 3, 32)
 class NastranPVLoadGlyphs(_GlyphFilter):
-    """FORCE/MOMENT arrows of the checked load sets (Loads/* blocks): forces single-headed, moments
-    double-headed, tail on the grid. Size: length of the largest arrow as a fraction of the model
-    diagonal. Every Nth Point 0 keeps at most 1500 arrows per set."""
+    """Arrows of the checked load sets: FORCE/MOMENT (Loads/* blocks; forces single-headed, moments
+    double-headed, tail on the grid), pressures (Pressures/* faces, head on the face) and GRAV (at
+    the model CG). With Source, a result's SPC forces, MPC forces or applied loads (OLOAD) at each
+    grid with output instead. Size: length of the largest arrow of each kind as a fraction of the
+    model diagonal. Every Nth Point 0 keeps at most 1500 arrows per set."""
 
     BLOCK, REQUIRED = "Loads", "Force"
     LISTS = True
 
     def __init__(self):
         _GlyphFilter.__init__(self)
+        self._source = 0
         self._sets = _checklist(self)
         self._show = 0
+        self._pressures = 1
+        self._gravity = 1
         self._scale = 0
         self._stride = 0
         self._size = 0.08
         self._resolution = 6
 
+    @smproperty.intvector(name="Source", default_values=0)
+    @smdomain.xml(_enum_xml(("Deck load sets", "SPC forces", "MPC forces", "Applied loads (OLOAD)")))
+    def SetSource(self, v):
+        """What to draw: the deck's load sets, or the current step's SPC forces, MPC forces or applied
+        loads (OLOAD) from the results (one arrow per grid with output; Load Sets does not apply)."""
+        self._set("_source", int(v))
+
     @smproperty.dataarrayselection(name="LoadSets")
+    @smhint.xml('<PropertyWidgetDecorator type="GenericDecorator" mode="visibility" property="Source" value="0"/>')
     def GetLoadSets(self):
         """Load sets to draw (first shown: the Case Control LOAD, else the first set with loads)."""
         return self._sets
@@ -1072,38 +1197,86 @@ class NastranPVLoadGlyphs(_GlyphFilter):
     @smproperty.intvector(name="Show", default_values=0)
     @smdomain.xml(_enum_xml(("Forces", "Moments", "Forces and moments")))
     def SetShow(self, v):
+        """The nodal loads to draw (FORCE*, MOMENT*); pressures and gravity have their own switches."""
         self._set("_show", int(v))
+
+    @smproperty.intvector(name="ShowPressures", default_values=1)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    @smhint.xml('<PropertyWidgetDecorator type="GenericDecorator" mode="visibility" property="Source" value="0"/>')
+    def SetShowPressures(self, v):
+        """An arrow per face PLOAD/PLOAD2/PLOAD4 loads (Pressures/* blocks), pushing on the face."""
+        self._set("_pressures", int(v))
+
+    @smproperty.intvector(name="ShowGravity", default_values=1)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    @smhint.xml('<PropertyWidgetDecorator type="GenericDecorator" mode="visibility" property="Source" value="0"/>')
+    def SetShowGravity(self, v):
+        """An arrow at the model CG along the GRAV acceleration of each checked set."""
+        self._set("_gravity", int(v))
 
     @smproperty.intvector(name="ArrowLength", default_values=0)
     @smdomain.xml(_enum_xml(("By magnitude", "Fixed")))
     def SetArrowLength(self, v):
-        """By magnitude: the largest force (and moment) gets Size; Fixed: every arrow gets Size."""
+        """By magnitude: the largest force (and moment, pressure, acceleration) gets Size; Fixed:
+        every arrow gets Size."""
         self._set("_scale", int(v))
 
     @smproperty.intvector(name="EveryNthPoint", default_values=0)
     @smdomain.intrange(min=0, max=1000)
     def SetEveryNthPoint(self, v):
-        """Draw every Nth loaded grid of each set; 0 = automatic (at most 1500 arrows a set)."""
+        """Draw every Nth loaded grid (and pressure face) of each set; 0 = automatic (at most 1500
+        arrows a set)."""
         self._set("_stride", max(int(v), 0))
 
     def _list(self, data):
         try:
-            from nastran_pv.glyphs import default_load_set, load_sets_of
+            from nastran_pv.glyphs import default_load_set, load_set_names
         except ImportError:
             return
         default = default_load_set(data)
-        _fill_checklist(self, self._sets, [n for n, _ in load_sets_of(data)], {default} if default else set())
+        _fill_checklist(self, self._sets, load_set_names(data), {default} if default else set())
+
+    def _result_source(self):
+        """The result type drawn (SPCForce, MPCForce, AppliedLoad), or None for the deck's sets."""
+        source = _LOAD_SOURCES[self._source % len(_LOAD_SOURCES)]
+        return None if source == "deck" else source
+
+    def _block(self, data):
+        if self._result_source():
+            return data
+        if data.IsA("vtkMultiBlockDataSet"):  # nodal loads, pressure faces or GRAV: the whole model
+            from nastran_pv.glyphs import load_set_names
+
+            return data if load_set_names(data) else None
+        return _GlyphFilter._block(self, data)
 
     def _glyphs(self, block, diag, model):
-        from nastran_pv.glyphs import load_glyphs, load_sets_of
+        from nastran_pv.glyphs import (gravity_anchor, gravity_sets_of, load_glyphs, load_set_names, load_sets_of,
+                                       pressure_sets_of, result_load_points)
         from nastran_pv.vtkutil import add_string_array
 
-        on = set(_checked(self._sets))
-        sets = [(n, ds) for n, ds in load_sets_of(model) if n in on] if block.IsA("vtkMultiBlockDataSet") \
-            else [("Loads", block)]
+        rtype = self._result_source()
+        pressures, gravity, cg = [], [], None
+        if rtype:  # the result's arrays on the model's blocks, one arrow per grid
+            points = result_load_points(model, rtype)
+            sets = [(rtype, points)] if points.GetNumberOfPoints() else []
+            names = [n for n, _ in sets]
+        elif block.IsA("vtkMultiBlockDataSet"):
+            on = set(_checked(self._sets))
+            sets = [(n, ds) for n, ds in load_sets_of(model) if n in on]
+            if self._pressures:
+                pressures = [(n, ds) for n, ds in pressure_sets_of(model) if n in on]
+            if self._gravity:
+                gravity, cg = [g for g in gravity_sets_of(model) if g[0] in on], gravity_anchor(model)[0]
+            names = [n for n in load_set_names(model) if n in on]
+        else:
+            sets = [("Loads", block)]
+            names = ["Loads"]
         out = load_glyphs(sets, diag, _LOAD_SHOW[self._show % 3], self._size, _LOAD_SCALES[self._scale % 2],
-                          self._stride, self._resolution)
-        add_string_array(out.GetFieldData(), "LoadSetNames", [n for n, _ in sets])
+                          self._stride, self._resolution, pressures=pressures, gravity=gravity, cg=cg)
+        add_string_array(out.GetFieldData(), "LoadSetNames", names)
+        if rtype and points.GetFieldData().GetArray("ForceSum") is not None:
+            out.GetFieldData().AddArray(points.GetFieldData().GetArray("ForceSum"))  # of the grids drawn
         return out
 
 
@@ -1834,7 +2007,7 @@ class _TopologyFilter(_FieldFilter):
         _FieldFilter.__init__(self, n_out)
         self._listing = False
         self._cards = vtkDataArraySelection()
-        self._cards.AddObserver("ModifiedEvent", lambda *args: None if self._listing else self.Modified())
+        self._cards.AddObserver("ModifiedEvent", _reexecutes(self))
         self._groups = {g: 1 for g in _GROUPS}
         self._exclude_pids = ""
         self._within = 0
