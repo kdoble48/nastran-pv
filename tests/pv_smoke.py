@@ -1344,7 +1344,8 @@ def _output_differences(nv, a, b, port=0):
     if da.IsA("vtkMultiBlockDataSet") or da.IsA("vtkPartitionedDataSetCollection"):
         diffs = model_digest_differences(model_digest(as_multiblock(da)), model_digest(as_multiblock(db)))
         # ParaView 5.x: convert ran in the system Python, whose pyNastran words its warnings differently
-        return [d for d in diffs if rm.nv._paraview_major() >= 6 or not d.endswith("field Warnings: differs")]
+        # (or has some the reader's has not: differs, or only in one)
+        return [d for d in diffs if rm.nv._paraview_major() >= 6 or "field Warnings: " not in d]
     return digest_differences(digest(da), digest(db))
 
 
@@ -1401,6 +1402,37 @@ def _listed(diffs, limit=12):
     return "".join("\n  " + d for d in diffs[:limit])
 
 
+def card_report_checks(pv, nv):
+    """tests/data/cards.bdf: the Plotels block and its toggle, the biquadratic CQUAD, the card report's
+    root table, and its summary line in the reader's messages (test_cards.py has the counts)."""
+    from vtkmodules.vtkCommonCore import vtkFileOutputWindow, vtkOutputWindow
+
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        log = os.path.join(tmp, "messages.txt")
+        previous = vtkOutputWindow.GetInstance()
+        win = vtkFileOutputWindow()
+        win.SetFileName(log)
+        win.FlushOn()
+        vtkOutputWindow.SetInstance(win)
+        try:
+            reader = rm.load_reader(os.path.join(HERE, "data", "cards.bdf"))
+            model = rm.Model(reader)
+        finally:
+            vtkOutputWindow.SetInstance(previous)
+        with open(log, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    check(model.names == ["Shells", "Connectors", "Plotels", "Constraints", "Loads"], f"cards: blocks {model.names}")
+    check(model.field("SkippedCardCount").tolist() == [24] and "CTRIAX6" in model.field_strings(None, "SKIPPED_Card"),
+          "cards: the SKIPPED_ table on the reader's output")
+    check("24 card(s) of 20 type(s) not drawn: 2 CTRIAX6" in text, "cards: the card report in the reader's messages")
+    shells = model.block("Shells")
+    check(sorted(shells.GetCellType(i) for i in range(shells.GetNumberOfCells())) == [23, 28],
+          "cards: CQUAD drawn biquadratic (9 grids) and quadratic (no G9)")
+    reader.Plotels = 0
+    check("Plotels" not in rm.Model(reader).names, "Plotels toggle removes the block")
+    pv.Delete(reader)
+
+
 def parity_checks(pv, nv):
     """Deck vs converted file: the deck reader and ParaView's reader on the .vtkhdf (or .vtm) that
     `convert` wrote give the same model, the same output from every Nastran filter and the same
@@ -1420,7 +1452,8 @@ def parity_checks(pv, nv):
         with open(table, "w") as f:
             f.write("PID,Allow\n1,10\n2,20\n3,30\n")
         cases = [("tiny_run", ".vtkhdf", None), ("tiny_run", ".vtm", None), ("beams", ".vtkhdf", None),
-                 ("topology", ".vtkhdf", None), ("nsm", ".vtkhdf", None), ("tiny_run", ".vtkhdf", op2)]
+                 ("topology", ".vtkhdf", None), ("nsm", ".vtkhdf", None), ("cards", ".vtkhdf", None),
+                 ("tiny_run", ".vtkhdf", op2)]
         for name, suffix, results in cases:
             deck = os.path.join(HERE, "data", name + ".bdf")
             path = os.path.join(tmp, name + ("_series" if results else "") + suffix)
@@ -1433,7 +1466,8 @@ def parity_checks(pv, nv):
             check(times == nv.timesteps(f), f"{tag}: time steps {times} == {nv.timesteps(f)}")
             vtm = suffix == ".vtm"
             # ParaView 5.x: convert ran in the system Python, whose pyNastran words its warnings differently
-            # and ParaView's VTKHDF reader tags a series with a Time field
+            # (or has some the reader's has not: 1.4 warns about CMASS3 on cards.bdf) and ParaView's VTKHDF
+            # reader tags a series with a Time field
             ignore = ("Time",) if rm.nv._paraview_major() >= 6 else ("Time", "Warnings")
             loaded = load_deck(deck, echo=False)
             truth = build_multiblock(loaded)  # the model convert wrote
@@ -1445,7 +1479,7 @@ def parity_checks(pv, nv):
                 diffs = differences(snapshot(truth, drop_empty=vtm), snapshot(got, drop_empty=vtm), ignore)
                 check(not diffs, f"{tag} t={t}: ParaView reads the model convert wrote" + _listed(diffs))
                 diffs = [d for d in model_digest_differences(model_digest(nv.Model(r, t).data), model_digest(got))
-                         if not any(d.endswith(f"field {i}: differs") for i in ignore)]
+                         if not any(f"field {i}: " in d for i in ignore)]  # differs, or only in one
                 check(not diffs, f"{tag} t={t}: the same model as the deck reader" + _listed(diffs))
             model = nv.Model(r, times[-1] if times else None)
             mesh = next(b for b in ("Shells", "Solids", "Lines") if model.has(b))
@@ -1974,6 +2008,8 @@ def main():
     scope_deform_checks(pv, nv)
     pv.SetActiveSource(reader)
     selection_file_checks(pv, nv, reader)
+    card_report_checks(pv, nv)
+    pv.SetActiveSource(reader)
 
     from op2_fixture import make_op2  # synthesized results, written with pyNastran
 

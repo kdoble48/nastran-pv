@@ -23,7 +23,10 @@ from __future__ import annotations
 import numpy as np
 
 from .. import vtkutil
+from ..cards import SCALAR
 from ..deck import Deck
+
+MASS_TYPES = ("CONM2", "CONM1", "CMASS1", "CMASS2")  # CMASS3/4 sit on scalar points: the card report
 
 
 def conm2_inertia(I) -> np.ndarray:
@@ -63,7 +66,7 @@ def build_masses(deck: Deck):
     """Return ``(points_block, offset_lines_block)``; either may be None."""
     model = deck.model
     rows = []  # (eid, nid, cid, mass, cg, offset, inertia, card)
-    skipped: dict[str, int] = {}
+    scalar = set(model.spoints) | set(model.epoints)
     for eid, m in model.masses.items():
         if m.type == "CONM2":
             nid = m.Nid()
@@ -103,7 +106,11 @@ def build_masses(deck: Deck):
             inertia = R.T @ M[3:, 3:] @ R
             rows.append((eid, nid, cid, float(M[0, 0]), grid.copy(), np.zeros(3), inertia, m.type))
         elif m.type in ("CMASS1", "CMASS2"):
-            nodes = [n for n in m.node_ids if n]
+            # the raw ids: node_ids fails when a cross-reference left a missing grid behind
+            nodes = [int(n) for n in m.nodes if n]
+            if scalar.intersection(nodes):  # a scalar point has no location: not a missing grid
+                deck.skip(m.type, SCALAR, eid)
+                continue
             gidx = deck.lookup(nodes) if nodes else np.zeros(0, dtype=np.int64)
             if not len(gidx) or np.any(gidx < 0):
                 deck.warn(f"{m.type} {eid}: grid(s) {nodes} not found, skipped")
@@ -111,11 +118,7 @@ def build_masses(deck: Deck):
             # grounded: at the grid; between two grids: at the midpoint
             rows.append((eid, int(nodes[0]), 0, _cmass_mass(deck.model, m), deck.xyz[gidx].mean(axis=0),
                          np.zeros(3), np.zeros((3, 3)), m.type))
-        else:
-            skipped[m.type] = skipped.get(m.type, 0) + 1
 
-    for t, k in skipped.items():
-        deck.warn(f"{k} {t} card(s) not shown (scalar-point masses have no location)")
     if not rows:
         return None, None
 

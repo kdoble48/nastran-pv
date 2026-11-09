@@ -8,17 +8,18 @@ from vtkmodules.vtkCommonDataModel import vtkMultiBlockDataSet
 
 from . import vtkutil
 from .builders.bushes import build_bushes
-from .builders.connectors import build_connectors
+from .builders.connectors import build_connectors, mpcadd_sets
 from .builders.constraints import build_constraints, nodal_spc_mask, spc_enforced, spc_sets
 from .builders.lines import build_lines
 from .builders.loads import build_load_block, load_sets, nodal_load_arrays
 from .builders.masses import build_masses
+from .builders.plotels import build_plotels
 from .builders.rigid import build_rigid
 from .builders.shells import build_shells
 from .builders.solids import build_solids
 from .deck import Deck
 from .families import element_families
-from . import coords, includes, nsm
+from . import cards, coords, includes, nsm
 from .massprops import element_mass, totals
 from .progress import NULL, Progress
 from .materials import COLUMNS, material_table
@@ -36,6 +37,7 @@ class Options:
     masses: bool = True
     rigid: bool = True
     connectors: bool = True
+    plotels: bool = True
     bushes: bool = True
     constraints: bool = True
     loads: bool = True
@@ -118,6 +120,7 @@ def build_multiblock(deck: Deck, opts: Options | None = None, progress: Progress
     model = deck.model
     blocks = _Blocks()
     step = progress.stage
+    deck.skipped.clear()  # the builders record the cards they cannot draw (card report)
 
     mesh = {}
     if opts.shells:
@@ -158,6 +161,8 @@ def build_multiblock(deck: Deck, opts: Options | None = None, progress: Progress
     if opts.connectors:
         with step("Connectors"):
             blocks.add("Connectors", build_connectors(deck))
+    if opts.plotels:
+        blocks.add("Plotels", build_plotels(deck))
     if opts.bushes:
         with step("Bushes"):
             pts, lines = build_bushes(deck, opts.k_ref)
@@ -186,6 +191,9 @@ def build_multiblock(deck: Deck, opts: Options | None = None, progress: Progress
     vtkutil.add_array(fd, "WTMASS", np.array([deck.wtmass]))
     vtkutil.add_array(fd, "ActiveSPCSets", np.array(active_spc or [-1]))
     vtkutil.add_array(fd, "ActiveLoadSets", np.array(active_loads or [-1]))
+    vtkutil.add_array(fd, "ActiveMPCSets", np.array(case_control_ids(model, "MPC") or [-1]))
+    vtkutil.write_field_table(mb, "MPCADD_", [{"ID": sid, "Set": m} for sid, sets in mpcadd_sets(deck).items()
+                                              for m in sets])
     with step("element masses"):
         elem = [element_mass(ug, name) for name, ug in mesh.items() if ug is not None]
     struct_parts = [(m, c) for m, c, _ in elem]
@@ -222,5 +230,6 @@ def build_multiblock(deck: Deck, opts: Options | None = None, progress: Progress
             if opts.beam_sections:
                 add_beam_sections(mb)
     includes.write_arrays(mb, deck.includes, deck.path)
+    cards.write_table(mb, cards.report(deck))
     vtkutil.add_string_array(fd, "Warnings", deck.warnings)
     return mb

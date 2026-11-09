@@ -40,7 +40,8 @@ FILE_PARENTS = "FileParents"
 TABLE = "FILE_"
 
 
-SLOTS = {"elements": "elements", "masses": "masses", "rigid_elements": "rigid"}  # pyNastran slot -> key
+# pyNastran slot -> key; PLOTELs share the element id space (and the Plotels block takes its map)
+SLOTS = {"elements": "elements", "plotels": "elements", "masses": "masses", "rigid_elements": "rigid"}
 MASS_BLOCKS, RIGID_BLOCKS = ("Masses", "MassOffsets"), ("Rigid",)
 
 
@@ -131,7 +132,7 @@ def read_tree(model, seen: dict, main) -> IncludeTree:
         for name, by_eid in seen.items():
             if name in types:
                 ids.update({e: f for e, f in by_eid.items() if e in objs})
-        slot_file[key] = ids
+        slot_file.setdefault(key, {}).update(ids)
     return IncludeTree(files, parents, slot_file)
 
 
