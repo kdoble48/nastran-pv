@@ -6,8 +6,8 @@ you use.
 
 ## Gallery
 
-- [View gallery](gallery/index.md): every one-click view on the uCRM-9 wingbox and a demo model,
-  interactive in 3D in your browser.
+- [View gallery](gallery/index.md): every one-click view, and a scene for each static and composite
+  result, on the uCRM-9 wingbox and demo models, interactive in 3D in your browser.
 
 ## Getting started
 
@@ -27,6 +27,9 @@ you use.
   ParaView filters.
 - [Model tools](tools.md): connectivity traversal (grow), parts, shortest paths and model checks,
   with per-card-type rules, from the CLI, Python and ParaView.
+- [Results helpers](results-helpers.md): envelopes over the subcases, element results averaged
+  to the grids without crossing property boundaries, and free-body sums of the load through a cut,
+  from the CLI and as ParaView filters.
 - [Model diff](diff.md): what changed between two versions of a model (grids, elements,
   properties, materials, mass and CG), as a report, as colors on the mesh and side by side.
 - [Run store](store.md): keep runs in SQLite and compare fields across runs and meshes.
@@ -43,6 +46,8 @@ you use.
   offsets, section properties (J, shear center) and the section table.
 - [Performance](performance.md): how long each stage takes on large models (load, build,
   convert, check, diff, ParaView views), the budget it is held to, and how to benchmark.
+- [Python API](api.md): the public `nastran_pv` functions and classes (load a deck, build the
+  blocks, attach results, write files, fields, model tools, results helpers), with an example.
 
 ## Development
 
@@ -69,6 +74,7 @@ paraview-tutorials
 cli
 fields
 tools
+results-helpers
 diff
 store
 random-vibration
@@ -89,6 +95,7 @@ model
 output-formats
 beam-sections
 performance
+api
 ```
 
 ```{toctree}

@@ -36,6 +36,17 @@ property/load changes), `--grid-tol 0.5 --grid-tol-absolute` (model units), and 
 (`diff.Tolerances` in code). In ParaView, *ShowSame 0* (and *Reasons*, *ShowRemoved*) on the diff
 filter leaves only the changes in any view without re-running the comparison; *SwapInputs* flips A/B.
 
+After NPV Diff the view is a comparison (`docs/paraview.md#comparing-two-models`): every view or macro
+there draws from the diff (`nv.apply("masses")` gives B's masses by DiffStatus plus A's removed ones in
+red), the visibility macros write both readers by ID, and `nv.side_by_side()` puts A left and B right
+with every later `apply` drawn in both; `nv.single()` ends it. The model follows the view
+(`nv.subject(view)`), not the active source: roles are the Diff's (Input B, Reference A). The diff
+re-runs only when a model's content changes, so scope changes and time steps are cheap. Each view's
+text (`nv.info_of(view)`) starts with the diff summary (A's view of a pair: `A: <label>`). Steps match
+by index: A shows its own step of B's index (its deforms' *Match Steps*), or stays undeformed without
+one, and `nv.play_mode()`/`nv.animate_modes()` move both models; A's removed items move with A.
+Same-named decks (`A/run.bdf`, `B/run.bdf`) are labelled by folder.
+
 ## Store workflow
 
 ```bash

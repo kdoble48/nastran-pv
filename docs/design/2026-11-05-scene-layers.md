@@ -219,3 +219,71 @@ PR or a stack (suggested: R1+R2 single-model first, then R3/R4 comparison, then 
 Already right and to keep: rerunning NPV Diff from anything under B restores it with no new
 objects; Side by Side from the diff state (one shared color range, linked cameras); `_named`
 reuse; the camera link surviving every command.
+
+## Addendum: what PR 2 (R3, R4) decided (2026-11-08)
+
+The "Left to the builder" points for the comparison, as built:
+
+- **Registry.** `scene.Scene` gains `role`, `partner` (the other view's id; both views of a pair
+  have their own entry in `_SCENES`), `diff` and `side` (a pair without a diff: the model of that
+  side). `subject(view)` takes a comparison side's model from the Diff's sides; a single view keeps
+  its model unless the user selected another model's object since the last command (so selecting
+  another reader and clicking still switches the view, as in PR 1). One PR, not a stack.
+- **Overlays from the diff.** B's side draws from `NPV diff scope` (Nastran Scope on the Diff:
+  the Diff's whole annotated output cut by B's scope, its Removed block by A's, then the Diff's Show
+  settings) and `NPV deform diff` after it. The glyph filters take that as their input and carry
+  `DiffStatus` (rather than extracts of points), so masses stay ellipsoids, colored by change. They
+  are separate objects (`NPV diff mass glyphs [B]`): the single-model ones keep their settings.
+- **The Removed layer.** A's removed elements stay red and translucent under every coloring; each
+  overlay adds A's removed items of its kind, red and opaque; NPV Diff shows all of them.
+- **NPV Single** is a text button like every NPV macro (none has an icon). NPV Clear keeps the
+  comparison and, in a pair, clears both views.
+- **Scope.** The visibility macros write both readers; a checklist ticked by hand on one reader is
+  not copied (a macro cannot see the edit). With a converted A, B's scope cuts A's removed items by
+  ID, and A's side of a pair is not cut.
+- **Time.** B's diff layers move with B's deformation (NPV Results colors and deforms them); A's
+  removed items follow B's grids by NID. A's own held time and index-matched steps stay for PR 3.
+- **Cache.** The Diff keys a reader input on its whole multiblock object (held, so the identity is
+  safe; the reader makes a new one for a new deck or other options); other inputs keep object +
+  MTime.
+- **Texts.** In a pair each view says `A: <label>` / `B: <label>` (with the diff summary) when no
+  layer writes a text; the per-view text of R6 is PR 3. `side_by_side(array=)` for an array no view
+  shows draws an internal "array" coloring.
+
+## Addendum: what PR 3 (R5 to R7) decided (2026-11-09)
+
+- **A held time per model.** A on the left of a pair follows B's steps through its deforms' new
+  *Match Steps* (B's time steps, set by the views on every command): at B's n-th step each of A's
+  deforms reads A's n-th step, so the time controls keep both sides matched without a command, and
+  past A's last step A is not moved (rather than the reader's nearest, wrong mode). The Nastran Diff
+  matches A by index on its own and gives the Removed block A's displacement by grid, so A's removed
+  items move with A in both views (and stay without A's step). Outside a pair nothing follows.
+- **One scale for the layout.** The animation macros and the play button drive A's deforms at
+  B's amplitude. NPV Results in a pair puts A's deforms at the scale B's view applied (B's Auto Scale
+  peak at that step), which B's diff layers, and A's removed items in them, move with too: so A's mesh
+  and its removed items stay together (review of #75). Stepping the time controls keeps that scale on
+  both sides until NPV Results is clicked again.
+- **A step A lacks** shows A undeformed and without results: its deforms drop the step's arrays
+  (`results.step_arrays`) instead of passing on the reader's nearest step, and `Model` of A drops them
+  too, so its texts and colorings say "no step" rather than A's last mode.
+- **Time suppression** covers both readers while the play button loops a mode, and only then: every
+  nastran-pv model's steps are indices, so outside play the time controls already step through
+  matching steps.
+- **`_prepare_modes` never redraws.** Only a view (both views of a pair) with no layers at all still
+  gets NPV Results first: there is nothing to swap, and Animate Mode stays useful on a fresh view.
+  Save Mode Animations in a pair moves both sides and saves the active view.
+- **The per-view text.** `NPV info [<view>]` lists the layers' summaries: the layer clicked last in
+  full, the others by their first line (the spec's "one line per overlay", without losing what the
+  last click says). B's view starts with the diff summary (the "diff" coloring writes none of its own
+  there); A's view of a pair with `A: <label> (the reference)`, and that A has no step of B's index
+  when that is so. The text goes where the layer given in full put it (results: upper center),
+  upper left under a header.
+- **Labels.** The Pipeline Browser name, unless open models share one: then `labels.unique_labels` of
+  their paths (as many folders as it takes, the same number for each); the same file twice keeps
+  `#<id>`. A model's `NPV ...` objects are renamed when its label changes (opening or closing the
+  other `model.bdf`, renaming the reader), so they are still found.
+- **R7.** Highlight File sets the selection on the reader directly (`pv.SelectThresholds` shows the
+  source it selects on) and draws it as `NPV highlight [<model>]`, an ExtractSelection of `NPV deform`
+  (moved with the view, in each view of a pair); it is no layer, so a coloring change keeps it and
+  NPV Clear hides it. Index Colors uses the selected object only where the view shows it, else the
+  view's coloring layer, and never makes a representation.

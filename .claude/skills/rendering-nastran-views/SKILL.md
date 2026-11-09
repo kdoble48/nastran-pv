@@ -30,12 +30,19 @@ python -m nastran_pv render $DECK --preset loads  --views showcase     --out sho
    folder=DIR)` writes one looping GIF per mode (PIL, shipped with ParaView); both show the
    mode's label and frequency (upper right). All of them put the view back on its step and
    deformation afterwards, and raise for a mode with no displacement. A converted single-step
-   `.vtm` (`--results` without `--all-steps`) animates as one mode. `nv.play_mode(mode,
+   `.vtm` (`--results` without `--all-steps`) animates as one mode. A complex step (frequency
+   response, complex mode: `Displacement_Real/_Imag`) turns through its phase instead of a sine
+   (*Nastran Deform* *Phase*; `nv.is_complex_step(model)`). `nv.play_mode(mode,
    frames=24)` makes the time steps one cycle of phases (`nv._set_time(view, k / frames)` then
    shows phase k; don't call `scene.Play()` with Loop on from a script, it never returns);
    `nv.stop_mode_animation()` or any `nv.apply` undoes it. The GUI buttons are *NPV Animate Mode*
    (vibrates, then leaves Play looping it) / *NPV Stop Mode Animation* / *NPV Animate All Modes* /
-   *NPV Save Mode Animations*.
+   *NPV Save Mode Animations*. They never redraw the view (only an empty one gets `results`). In a
+   comparison they move both models, B's mode and A's step of the same index at B's amplitude
+   (`docs/paraview.md#comparing-two-models`).
+   Each view has one text, `NPV info [RenderView1]` (`nv.info_of(view)` reads it): its layers' summaries,
+   the one clicked last in full; after NPV Diff the diff summary comes first. Two open decks with one
+   file name are labelled by folder (`a/model.bdf`), in texts and `NPV ...` names (`nv._label(reader)`).
    A `.vtm`/`.vtkhdf` from `convert` also works (and skips the slow deck read on big models), but
    not with `--results`/`--nsm-set`: convert with those instead.
 2. **Run renders in the background** (`run_in_background`; the user asked for this) and tell the
@@ -69,13 +76,15 @@ file, not full fuel.
 
 ## Presets
 
-`masses bushes bushrotations beams loads spc rigid family group pid mid elementtype thickness nsm results forces stress random randomsweep parts check diff`
-(`random`/`randomsweep` need `--results MODES --random ASD`, see `docs/random-vibration.md`; `diff` needs
-`--against A`, and `nv.side_by_side(array=...)` puts A and B in two linked views, see `docs/diff.md`)
+`masses bushes bushrotations beams loads spc rigid family group pid mid elementtype thickness nsm results forces stress plies random randomsweep parts check diff`
+(`random`/`randomsweep` need `--results MODES --random ASD`, or a SOL 111 OP2 with `--random-output`, see
+`docs/random-vibration.md`; `diff` needs `--against A`; after it every view in that render view draws from the
+diff, and `nv.side_by_side(array=...)` puts A and B in two linked views that draw every later view, see
+`docs/diff.md#side-by-side`; `nv.single()` ends the comparison)
 (`grow` and `path` are GUI views seeded by the selection macros). `family` and `group`
 need ICEM/TACS family comments (uCRM-9 has them; Linderholt does not). `results` needs
 `--results run.op2|run.h5` and optionally `--step N`; `forces` and `stress` need element forces or stresses in
-them (`FORCE=`/`STRESS=` output; `stress` checks the stress types, off by default, and falls back to `VonMisesMax`). `bushes`/`bushrotations` need CBUSH cards (rotations: PBUSH K4–K6). An empty view
+them (`FORCE=`/`STRESS=` output; `stress` checks the stress types, off by default, and falls back to `VonMisesMax`); `plies` needs a PCOMP/PCOMPG deck (ply results from composite stress output, else the layup). `bushes`/`bushrotations` need CBUSH cards (rotations: PBUSH K4–K6). An empty view
 says so in its overlay text, so read the PNG. A deck that fails to load makes `render` exit 1
 with `cannot read DECK: <error>` and writes no PNG.
 
@@ -87,7 +96,9 @@ with `cannot read DECK: <error>` and writes no PNG.
   Views edit the view's scene: a coloring (pid, thickness, results, ...) replaces the coloring, but
   overlays (masses, bushes, beams, loads, spc, rigid) accumulate in one view, so use a fresh view
   per picture (`nv.white_view(size)`, as `render_model.render` does) or `nv.clear(view)` between
-  pictures (`docs/paraview.md#how-views-combine`). Read the pvpython quirks in
+  pictures (`docs/paraview.md#how-views-combine`). A view keeps its model whatever is selected, so
+  pass `reader=` to name the model (another one starts a new scene; a comparison view refuses a
+  third model until `nv.single(view)`). Read the pvpython quirks in
   docs/architecture.md#gotchas first (proxy-label constructor names, `block_names`, `timesteps`,
   `solid`, `nv.fetch`). The reader outputs the model tree, so use `nv.Model(reader)` (a gathered
   multiblock) or `nv.fetch` + `nastran_pv.tree.as_multiblock` instead of a bare `Fetch`, and

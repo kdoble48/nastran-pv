@@ -406,7 +406,11 @@ def element_result_checks(pv, nv):
             reader.ResultTypes = [t.name for t in REGISTRY if t.default]  # a new file: back to the defaults
             t0 = rm.timesteps(reader)[0]
             text += _messages(lambda: reader.UpdatePipeline(t0))
-            listed = [t.name for t in REGISTRY if t.name not in ("SPCForce", "MPCForce", "AppliedLoad")]
+            # not in the fixture: nodal loads, velocities, accelerations, grid point forces, ply
+            # strains and failure indices (its CQUAD4 3 ply stresses give PlyStress)
+            absent = ("SPCForce", "MPCForce", "AppliedLoad", "Velocity", "Acceleration", "GridPointForce",
+                      "PlyStrain", "PlyFailureIndex")
+            listed = [t.name for t in REGISTRY if t.name not in absent]
             check(nv._listed(reader, "ResultTypes") == listed, f"{kind}: every type the fixture has is listed")
             check(_by_eid(reader, "Lines", "AxialForce") == {21: 7.0, 22: 15.0, 23: 31.0},
                   f"{kind}: LineForce AxialForce of CBAR, CBEAM, CROD by default")
@@ -564,6 +568,113 @@ def force_stress_view_checks(pv, nv):
         _newest_first(pv, _model_sources(pv, nv, src) + _model_sources(pv, nv, reader))
 
 
+def ply_view_checks(pv, nv):
+    """Composite plies (roadmap task 13) on tests/data/composites.bdf with the synthesized OP2 (its
+    values by hand: tests/test_composites.py): the reader's Ply (critical ply, a chosen ply, a PCOMPG
+    global ply, a ply no property has), the layup it lays on the shells, NPV Plies (the array, the
+    Result Types it turns on, its arguments) and Nastran Ply Axes (count, ply, Both Axes kept on a
+    rerun), and a file converted with --ply."""
+    from op2_fixture import make_composite_op2
+
+    deck = os.path.join(HERE, "data", "composites.bdf")
+    nan = float("nan")
+
+    def same(got, want):
+        return all((np.isnan(w) and np.isnan(got[k])) or abs(got[k] - w) < 1e-4 for k, w in want.items())
+
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        op2 = os.path.join(tmp, "composites.op2")
+        make_composite_op2(failure=False).write_op2(op2)  # pyNastran writes no failure-index table
+        reader = nv.load_reader(deck, op2)
+        reader.UpdatePipeline()
+        check(int(reader.Ply) == 0, "the reader's Ply starts at 0: each element's critical ply")
+        check(_by_eid(reader, "Shells", "PlyCount") == {1: 3, 2: 3, 3: 4, 4: 3, 5: 2, 6: 0},
+              "Shells PlyCount (LAM=SYM: 4 plies)")
+        view = pv.CreateRenderView()
+        model = nv.apply("plies", reader=reader, view=view)
+        disp = pv.GetDisplayProperties(pv.FindSource(nv._name(model, "Shells")), view)
+        check(disp.ColorArrayName[1] == "PlyVonMises" and "PlyStress" in list(reader.ResultTypes),
+              f"NPV Plies turns PlyStress on and colors by PlyVonMises: {disp.ColorArrayName[1]}")
+        check(same(_by_eid(reader, "Shells", "PlyStressPly"), {1: 1, 2: 3, 3: 4, 4: 103, 5: 102, 6: nan}),
+              "the critical ply of each element (its id in PlyStressPly)")
+        axes = pv.FindSource(nv._name(model, "ply axes"))
+        text = _info(nv, model)
+        check(axes is not None and int(nv._glyph_field(axes, "AxisCount")) == 6 and "critical" in text
+              and "element material axes" in text, f"critical ply: the element material axes, 6 lines: {text!r}")
+        model = nv.apply("plies", reader=reader, view=view, ply=2)
+        check(int(reader.Ply) == 2 and same(_by_eid(reader, "Shells", "PlyVonMises"),
+                                            {1: nan, 2: nan, 3: 20.0, 4: nan, 5: nan, 6: nan}),
+              "ply=2 sets the reader's Ply: CTRIA3 3's ply 2 (PCOMP 10's ply 2 has SOUT=NO)")
+        check(same(_by_eid(reader, "Shells", "PlyAngle"), {1: 45, 2: 45, 3: 60, 4: nan, 5: nan, 6: nan}),
+              "the reader lays ply 2's layup on the shells")
+        check(int(nv._glyph_field(axes, "AxisCount")) == 3 and int(nv._glyph_field(axes, "AxesPly")) == 2
+              and "ply 2" in _info(nv, model), "the axes follow the reader's ply: 3 lines")
+        axes.BothAxes = 1  # the user turns the 2-direction on: kept by a rerun
+        model = nv.apply("plies", reader=reader, view=view, ply=102, quantity="angle")
+        disp = pv.GetDisplayProperties(pv.FindSource(nv._name(model, "Shells")), view)
+        check(disp.ColorArrayName[1] == "PlyAngle" and int(axes.BothAxes) == 1
+              and int(nv._glyph_field(axes, "AxisCount")) == 4,
+              "a PCOMPG global ply: PlyAngle, both axes of EIDs 4 and 5 (Both Axes kept on the rerun)")
+        model = nv.apply("plies", reader=reader, view=view, quantity="stress", component=1)
+        disp = pv.GetDisplayProperties(pv.FindSource(nv._name(model, "Shells")), view)
+        lut = pv.GetColorTransferFunction("PlyStress", disp, separate=True)
+        check(nv.enum_text(lut, "VectorMode") == "Component" and int(lut.VectorComponent) == 1,
+              "quantity=stress component=1: PlyStress S22")
+        # a bad argument is refused before the reader changes (its Ply, its Result Types)
+        types, ply_before = list(reader.ResultTypes), int(reader.Ply)
+        for bad in ({"ply": 3, "quantity": "tsai"}, {"ply": "first"}, {"ply": 3, "quantity": "stress", "component": 3}):
+            try:
+                nv.apply("plies", reader=reader, view=view, **bad)
+                check(False, f"plies {bad} should be refused")
+            except ValueError as exc:
+                check(int(reader.Ply) == ply_before and list(reader.ResultTypes) == types,
+                      f"plies {bad} refused before the reader changes: {exc}")
+        axes.Ply = 1  # the user's own setting on the filter: an explicit ply= wins over it
+        nv.apply("plies", reader=reader, view=view, ply=2)
+        check(int(axes.Ply) == 2 and int(reader.Ply) == 2, "an explicit ply= sets the axes filter's Ply too")
+        reader.ResultTypes = ["Displacement"]
+        model = nv.apply("plies", reader=reader, view=view, quantity="angle")
+        check(list(reader.ResultTypes) == ["Displacement"] and not nv._TURNED_ON.get("plies"),
+              "quantity=angle (the layup) turns no result type on")
+        disp = pv.GetDisplayProperties(pv.FindSource(nv._name(model, "Shells")), view)
+        own = pv.GetColorTransferFunction("PlyAngle", disp, separate=True)
+        shared = pv.GetColorTransferFunction("PlyAngle")
+        check(list(own.NanColor) == list(nv.PLY_NAN_RGB) and list(shared.NanColor) != list(nv.PLY_NAN_RGB),
+              "the grey of elements without the ply is on the display's own color map, not the shared one")
+        reader.Ply = 0
+        model = nv.apply("plies", reader=reader, view=view, quantity="Angle")
+        check("No angle to show: a ply id (the reader's Ply) lays that ply's layup" in _info(nv, model),
+              f"a layup quantity without a laid ply says how to lay one: {_info(nv, model)!r}")
+        plain = nv.load_reader(DECK)
+        no_layup = pv.NastranPlyAxes(Input=plain)
+        no_layup.Ply = 2
+        out = _messages(no_layup.UpdatePipeline)
+        check(no_layup.GetDataInformation().GetNumberOfCells() == 0 and "no composite layup" in out,
+              f"Nastran Ply Axes on a deck without PCOMP draws nothing and says why: {out.strip()[:120]!r}")
+        pv.Delete(no_layup)
+        pv.Delete(plain)
+        out = _messages(lambda: (setattr(reader, "Ply", 9), reader.UpdatePipeline()))
+        check("Ply: ply 9: no composite shell property has it (ply ids: 1-4, 101-104)" in out
+              and reader.GetDataInformation().GetNumberOfPoints() > 0,
+              f"a ply no property has is reported in Output Messages: {out.strip()[:160]!r}")
+        reader.Ply = 0
+        pv.Delete(view)
+        vtm = os.path.join(tmp, "plies.vtm")
+        convert(["convert", deck, "--results", op2, "--result-types", "PlyStress", "--ply", "3", "-o", vtm, "-q"])
+        src = nv.load_reader(vtm)
+        view = pv.CreateRenderView()
+        model = nv.apply("plies", reader=src, view=view)
+        axes = pv.FindSource(nv._name(model, "ply axes"))
+        check("as the file was converted" in _info(nv, model) and int(nv._glyph_field(axes, "AxesPly")) == 3
+              and int(nv._glyph_field(axes, "AxisCount")) == 3,
+              "a file converted with --ply 3: its ply results and its PlyAxis")
+        model = nv.apply("plies", reader=src, view=view, ply=101)
+        check(int(axes.Ply) == 101 and int(nv._glyph_field(axes, "AxisCount")) == 1,
+              "ply= on a converted file draws that ply's axes from the layup table (PCOMPG 20)")
+        pv.Delete(view)
+        _newest_first(pv, _model_sources(pv, nv, src) + _model_sources(pv, nv, reader))
+
+
 def beam_checks(pv, nv, view, tmp):
     """Nastran Beam Sections filter on tests/data/beams.bdf: sweep, tree visibility, deformation, view."""
     from vtkmodules.util.numpy_support import vtk_to_numpy
@@ -608,7 +719,7 @@ def beam_checks(pv, nv, view, tmp):
     pv.SetActiveSource(beams)
     model = nv.apply("beams", reader=beams, view=view)
     check(pv.GetActiveSource() is pv.FindSource(nv._name(model, "beam sections")), "beams view selects NPV beam sections")
-    text = pv.FindSource(nv._name(model, "info")).Text
+    text = nv.info_of(view)
     check("12 CBAR/CBEAM, 6 section PID(s)" in text and "4 PBAR/PBEAM station(s)" in text
           and "Deformation" not in text, f"beams view text: {text!r}")
     axes = pv.FindSource(nv._name(model, "beam axes"))
@@ -654,6 +765,7 @@ def converted_checks(pv, nv, reader):
             for name in nv.VIEWS:
                 model = nv.apply(name, reader=src, view=view)
             check(model.reader is src and "Shells" in model.names, f"{suffix}: every view builds")
+            nv.single(view)  # "diff" compared it with the deck; Show All below is about the file alone
             from nastran_pv.tree import as_multiblock
 
             check(nv.block_names(as_multiblock(nv.fetch(pv.NastranScope(Input=src))))
@@ -834,8 +946,8 @@ def scene_checks(pv, nv, reader):
 
 def stray_checks(pv, nv, reader):
     """What no layer holds is hidden: the reader's own surface always, and in a fresh scene every model
-    source and NPV object left by another model or a reopened state. One overlay's toggle-off hides the
-    info text only when that overlay wrote it."""
+    source and NPV object left by another model or a reopened state. The view's one info text lists
+    its layers (R6): an overlay's toggle-off drops its line, and the text goes with the last summary."""
     view = pv.CreateRenderView()
 
     def vis(src):
@@ -846,12 +958,13 @@ def stray_checks(pv, nv, reader):
     check(not vis(reader) and vis(pv.FindSource(nv._name(m, "mass glyphs"))),
           "Masses hides the reader's own surface (shown before) over the ghost")
     nv.apply("loads", reader=reader, view=view)
-    info = pv.FindSource(nv._name(m, "info"))
-    text = info.Text
+    info = pv.FindSource(nv.info_name(view))
+    both = info.Text
     nv.apply("masses", reader=reader, view=view, toggle=True)
-    check(vis(info) and info.Text == text, "Masses off keeps the Loads summary (Loads wrote the text)")
+    check(vis(info) and "Concentrated mass" in both and "Concentrated mass" not in info.Text
+          and info.Text.splitlines()[0] in both, f"Masses off keeps the Loads summary, drops the masses line: {both!r}")
     nv.apply("loads", reader=reader, view=view, toggle=True)
-    check(not vis(info), "Loads off hides the text it wrote")
+    check(not vis(info), "Loads off: no layer has anything to say, the text goes")
     nv.apply("loads", reader=reader, view=view)
     pv.Show(reader, view)                           # as Highlight File does
     nv.apply("pid", reader=reader, view=view)
@@ -860,7 +973,7 @@ def stray_checks(pv, nv, reader):
     check(vis(info) and not vis(reader), "PID over Loads keeps the Loads summary")
     nv.apply("pid", reader=twin, view=view)
     check(not vis(reader) and not vis(info) and nv.scene_of(view).model is twin,
-          "another model's PID hides A's reader and A's NPV info")
+          "another model's PID hides A's reader, and A's summaries go with A's scene")
     nv.clear(view)
     _newest_first(pv, _model_sources(pv, nv, twin))
     state = pv.CreateRenderView()                   # a reopened .pvsm: shown objects, no scene
@@ -1229,6 +1342,164 @@ def result_load_checks(pv, nv, main_reader):
     pv.Delete(src)
 
 
+def _table_row(table, source):
+    """FX FY FZ MX MY MZ of the row ``source`` of a free-body table."""
+    names = table.GetColumnByName("Source")
+    k = [names.GetValue(i) for i in range(table.GetNumberOfRows())].index(source)
+    return [table.GetColumnByName(c).GetValue(k) for c in ("FX", "FY", "FZ", "MX", "MY", "MZ")]
+
+
+def _averaged(nv, src, block="Shells"):
+    """{(NID, PID): VonMisesMax} of a Nastran Nodal Average output block."""
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    data = nv.fetch(src)
+    pd = data.GetBlock(nv.block_names(data).index(block)).GetPointData()
+    vm = pd.GetArray("VonMisesMax")
+    if vm is None:
+        return None
+    nid = vtk_to_numpy(pd.GetArray("NID")).tolist()
+    pid = vtk_to_numpy(pd.GetArray("PID")).tolist() if pd.GetArray("PID") is not None else [0] * len(nid)
+    return dict(zip(zip(nid, pid), vtk_to_numpy(vm).tolist()))
+
+
+def results_helper_checks(pv, nv):
+    """Nastran Envelope over the reader's and a converted series' time steps, Nastran Nodal Average
+    following the time, Nastran Free Body on the reader (OP2 and HDF5) and on a converted file:
+    the hand-computed values of test_envelope.py, test_average.py and test_freebody.py."""
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    from op2_fixture import make_envelope_op2, make_freebody_op2, make_op2, write_freebody_h5
+
+    tmp = tempfile.mkdtemp()  # not removed: an open VTKHDF reader keeps its file locked
+    env_op2 = os.path.join(tmp, "env.op2")
+    make_envelope_op2().write_op2(env_op2)
+    reader = rm.load_reader(DECK, env_op2)
+    env = pv.NastranEnvelope(Input=reader)
+    env.UpdatePipeline()
+    info = env.GetDataInformation().DataInformation
+    check(info.GetNumberOfTimeSteps() == 0 and rm.timesteps(reader),
+          f"Nastran Envelope: the output has no time steps ({info.GetNumberOfTimeSteps()})")
+    vmax = _by_eid(env, "Shells", "VonMisesMax_Max")
+    check(vmax[1] == 9 and vmax[2] == 7 and np.isnan(vmax[3])
+          and _by_eid(env, "Shells", "VonMisesMax_MaxStep") == {1: 2, 2: 0, 3: -1},
+          "Envelope over the reader's 3 steps: VonMisesMax max 9 (step 2) and 7 (step 0)")
+    from nastran_pv.tree import as_multiblock
+
+    blk = as_multiblock(rm.nv.fetch(env))
+    blk = blk.GetBlock(nv.block_names(blk).index("Shells"))
+    nid = list(vtk_to_numpy(blk.GetPointData().GetArray("NID")))
+    dmin = vtk_to_numpy(blk.GetPointData().GetArray("Displacement_Min"))[nid.index(3)].tolist()
+    check(np.allclose(dmin, [-0.6, 0, -6], rtol=1e-5) and blk.GetPointData().GetArray("Displacement") is None
+          and blk.GetCellData().GetArray("VonMisesMax") is None,
+          f"Displacement_Min at grid 3 {dmin}; the per-step arrays are gone")
+    env.Steps = "0 2"
+    env.MaxAbs = 0
+    env.UpdatePipeline()
+    blk = as_multiblock(rm.nv.fetch(env))
+    blk = blk.GetBlock(nv.block_names(blk).index("Shells"))
+    dmin = vtk_to_numpy(blk.GetPointData().GetArray("Displacement_Min"))[nid.index(3)].tolist()
+    check(np.allclose(dmin, [0.15, 0, 3], rtol=1e-5) and blk.GetPointData().GetArray("Displacement_AbsMax") is None,
+          f"Steps 0 2, no Max Abs: Displacement_Min at grid 3 {dmin}")
+    env.Steps = ","  # selects no step: said, and every step is used (it raised IndexError in the pipeline)
+    text = _messages(lambda: env.UpdatePipeline())
+    blk = as_multiblock(rm.nv.fetch(env))
+    blk = blk.GetBlock(nv.block_names(blk).index("Shells"))
+    dmin = vtk_to_numpy(blk.GetPointData().GetArray("Displacement_Min"))[nid.index(3)].tolist()
+    check("selects no step" in text and np.allclose(dmin, [-0.6, 0, -6], rtol=1e-5),
+          f"Steps ',': reported, every step used ({dmin})")
+    pv.Delete(env)
+    pv.Delete(reader)
+    series = os.path.join(tmp, "env.vtkhdf")
+    convert(["convert", DECK, "--results", env_op2, "--all-steps", "-o", series, "-q"])
+    src = nv.load_reader(series)
+    env = pv.NastranEnvelope(Input=src)
+    env.UpdatePipeline()
+    check(_by_eid(env, "Shells", "VonMisesMax_Max")[1] == 9.0 and _by_eid(env, "Shells", "VonMisesMax_MinStep")[2] == 2,
+          "Envelope over a converted VTKHDF series' time steps")
+    pv.Delete(env)
+    pv.Delete(src)
+
+    full = os.path.join(tmp, "full.op2")
+    make_op2().write_op2(full)
+    reader = rm.load_reader(DECK, full)
+    times = rm.timesteps(reader)
+    avg = pv.NastranNodalAverage(Input=reader)
+    avg.UpdatePipeline(times[0])
+    vm = _averaged(nv, avg)
+    check(vm is not None and vm[(5, 2)] == 7 and vm[(5, 1)] == 3 and len(vm) == 9,
+          f"Nodal Average: grid 5 gets 3 in PID 1 and 7 in PID 2, 9 points: {vm}")
+    avg.UpdatePipelineInformation()
+    listed = nv._listed(avg, "Arrays")
+    check("VonMisesMax" in listed and "Thickness" in listed, f"the Arrays checklist lists VonMisesMax: {listed}")
+    avg.AverageWithin = "Whole block"
+    avg.UpdatePipeline(times[0])
+    vm = _averaged(nv, avg)
+    check(len(vm) == 7, f"Average Within Whole block: one point per grid ({len(vm)})")
+    avg.UpdatePipeline(times[-1])
+    check(_averaged(nv, avg) is None, "a mode step has no VonMisesMax to average")
+    pv.Delete(avg)
+    pv.Delete(reader)
+
+    fb_deck = os.path.join(HERE, "data", "freebody.bdf")
+    op2 = os.path.join(tmp, "fb.op2")
+    make_freebody_op2().write_op2(op2)
+    h5 = str(write_freebody_h5(os.path.join(tmp, "fb.h5")))
+    for results in (op2, h5):
+        ext = os.path.splitext(results)[1]
+        reader = rm.load_reader(fb_deck, results)
+        t0 = (rm.timesteps(reader) or [0.0])[0]
+        fb = pv.NastranFreeBody(Input=reader, SeedIDs="PID 2")
+        fb.StayWithin = "seed properties"
+        text = _messages(lambda: fb.UpdatePipeline(t0))
+        check(np.isnan(_table_row(rm.nv.fetch(fb, 1), "Elements")).all() and "no GridPointForce" in text,
+              f"{ext}: GridPointForce is off by default: the cut load from equilibrium, and the filter says so")
+        pv.Delete(fb)
+        fb = nv.free_body("PID 2", reader=reader)  # checks GridPointForce in the reader, stays in PID 2
+        check("GridPointForce" in list(reader.ResultTypes) and nv.enum_text(fb, "StayWithin") == "seed properties",
+              f"{ext}: nv.free_body checks GridPointForce and stays within the seed property")
+        fb.UpdatePipeline(t0)
+        cut = _table_row(rm.nv.fetch(fb, 1), "Cut")
+        check(np.allclose(cut, [10, 0, 80, -15, -180, -10], atol=1e-5), f"{ext}: Free Body PID 2, cut load {cut}")
+        check(np.allclose(_table_row(rm.nv.fetch(fb, 1), "Imbalance"), 0, atol=1e-5), f"{ext}: the imbalance is zero")
+        check(_root(fb, "ArrowCount", 2) == [2], f"{ext}: the glyph has the force and moment arrows")
+        check(_by_eid(fb, "Lines", "FreeBody") == {1: 0, 2: 1, 3: 1, 4: 1, 21: 0, 22: 0, 23: 0, 24: 0, 31: 0, 32: 0},
+              f"{ext}: FreeBody marks bars 2-4")
+        fb.SumAbout = "Grid"
+        fb.Grid = 4
+        fb.UpdatePipeline(t0)
+        cut = _table_row(rm.nv.fetch(fb, 1), "Cut")
+        check(np.allclose(cut, [10, 0, 80, -15, -20, -10], atol=1e-5), f"{ext}: about GRID 4 {cut}")
+        fb.SumAbout = "Cut centroid"
+        fb.SeedIDs = "EID 3"
+        fb.StayWithin = "anything"
+        fb.LimitHops = 1
+        fb.MaxHops = 0
+        fb.UpdatePipeline(t0)
+        cut = _table_row(rm.nv.fetch(fb, 1), "Cut")
+        check(np.allclose(cut, [0, 0, 100, 5, -100, 0], atol=1e-5), f"{ext}: bar 3 alone (Max Hops 0) {cut}")
+        fb.SeedIDs = "PID 32"  # with the RBE2, not CBAR 31: its MPC force at grid 32 is the cut load
+        fb.LimitHops = 0
+        fb.ExcludePIDs = "31"
+        fb.UpdatePipeline(t0)
+        table = rm.nv.fetch(fb, 1)
+        cut, mpc = _table_row(table, "Cut"), _table_row(table, "MPC")
+        check(np.allclose(cut, [0, 0, 10, 0, -15, 0], atol=1e-5) and np.allclose(mpc, cut, atol=1e-5),
+              f"{ext}: the load through the body's RBE2 is in the cut load {cut}")
+        pv.Delete(fb)
+        pv.Delete(reader)
+    vtm = os.path.join(tmp, "fb.vtm")
+    convert(["convert", fb_deck, "--results", op2, "--result-types", "all", "-o", vtm, "-q"])
+    src = nv.load_reader(vtm)
+    fb = pv.NastranFreeBody(Input=src, SeedIDs="PID 22")
+    fb.StayWithin = "seed properties"
+    fb.UpdatePipeline()
+    cut = _table_row(rm.nv.fetch(fb, 1), "Cut")
+    check(np.allclose(cut, [0, -10, 0, 0, 0, -5], atol=1e-5), f"Free Body on a converted .vtm: the truss tip {cut}")
+    pv.Delete(fb)
+    pv.Delete(src)
+
+
 def pressure_checks(pv, nv):
     """PLOAD/PLOAD2/PLOAD4 faces and GRAV on tests/data/pressures.bdf (the hand-computed values are
     in test_pressures.py): the Pressures block, the arrows and their switches, the view's text, the
@@ -1338,6 +1609,146 @@ def random_checks(pv, nv):
     pv.Delete(view)
 
 
+def dynamic_result_checks(pv, nv):
+    """Roadmap task 11: a frequency response (op2_fixture.make_frequency_op2 on elements.bdf: T3 =
+    1e-3 NID x (3 + 4i) at 10 Hz, twice at 20 Hz) and a transient (make_transient_op2) as time
+    series in the reader and as converted VTKHDF series, the reader's Phase Angle, the complex step
+    vibrating through its phase (play_mode, animate_modes, a GIF), and the SOL 111 random output
+    (make_random_op2) in the random views."""
+    from op2_fixture import make_frequency_op2, make_modes_op2, make_random_op2, make_transient_op2
+
+    tmp = tempfile.mkdtemp()  # not removed: the open VTKHDF readers keep their files locked
+    elements = os.path.join(HERE, "data", "elements.bdf")
+    freq = os.path.join(tmp, "freq.op2")
+    make_frequency_op2().write_op2(freq)
+    reader = rm.load_reader(elements, freq)
+    steps = rm.timesteps(reader)
+    check(len(steps) == 2, f"frequency response: one time step per frequency ({len(steps)})")
+    listed = nv._listed(reader, "ResultTypes")
+    check("Velocity" in listed and "Acceleration" in listed and "ShellForce" in listed,
+          f"Result Types of a frequency response: {listed}")
+
+    def at(t, block="Shells", name="Displacement", nid=2):
+        m = rm.Model(reader, t)
+        return m.array(block, name)[m.array(block, "NID") == nid][0]
+
+    check(rm.Model(reader, steps[1]).field_strings(None, "ResultLabel") == ["Subcase 1 20 Hz"], "frequency label")
+    check(np.allclose(at(steps[1], name="Displacement_Real"), [0, 0, 0.012])
+          and np.allclose(at(steps[1], name="Displacement_Phase"), [0, 0, 53.130102], atol=1e-5),
+          "complex parts at 20 Hz: Displacement_Real, _Phase")
+    check(np.allclose(at(steps[0]), [0, 0, 0.006]), "Displacement at phase 0: the real part")
+    reader.PhaseAngle = 90.0
+    check(np.allclose(at(steps[0]), [0, 0, -0.008]), "Phase Angle 90: the response at that instant (-Imag)")
+    reader.PhaseAngle = 0.0
+
+    view = pv.CreateRenderView()
+    view.ViewSize = [400, 300]
+    nv._set_time(view, steps[0])
+    model = nv.apply("results", reader=reader, view=view)
+    deform = pv.FindSource(nv._name(model, "deform"))
+    mesh = nv._extract(model, "Shells")
+
+    def z_range():
+        mesh.UpdatePipeline(view.ViewTime)
+        return mesh.GetDataInformation().GetBounds()[4:6]
+
+    nv.play_mode(1, frames=8, reader=reader, view=view)
+    amp = deform.Amplitude
+    # paused at the largest swing: |3 cos t - 4 sin t| peaks at t = 126.87 deg, the nearest of 8 frames is 3
+    check(abs(view.ViewTime - 3 / 8) < 1e-9, f"play_mode pauses a complex step at its peak frame: {view.ViewTime}")
+    zs = {}
+    for phase in (0.0, 0.25):
+        nv._set_time(view, phase)
+        zs[phase] = z_range()
+    # grids 1-7 at z 0: 1e-3 n (3 + 4i) -> 0.003 n at 0 deg, -0.004 n at 90 deg
+    check(amp > 0 and np.allclose(zs[0.0], (0.003 * amp, 0.021 * amp), rtol=1e-4)
+          and np.allclose(zs[0.25], (-0.028 * amp, -0.004 * amp), rtol=1e-4),
+          f"play_mode on a frequency: the shape turns through its phase {zs}")
+    check(nv.stop_mode_animation(reader, view), "Stop Mode Animation after a complex step")
+    played = nv.animate_modes([2], frames=4, out=os.path.join(tmp, "frames"), reader=reader, view=view)
+    check(played == [2] and len(os.listdir(os.path.join(tmp, "frames"))) == 4 and float(deform.Phase) == 0.0,
+          "animate_modes on a frequency: 4 phase frames, Phase put back")
+    gifs = nv.save_mode_animations([1], frames=8, folder=os.path.join(tmp, "gifs"), reader=reader, view=view)
+    check(len(gifs) == 1 and os.path.getsize(gifs[0]) > 0, f"a frequency's phase cycle as a GIF: {gifs}")
+    gifs = nv.save_mode_animations([1], frames=2, folder=os.path.join(tmp, "gifs2"), reader=reader, view=view)
+    check(len(gifs) == 1, f"a 2-frame phase cycle (0 and 180 deg) is no still: {gifs}")
+
+    series = os.path.join(tmp, "freq.vtkhdf")
+    convert(["convert", elements, "--results", freq, "--all-steps", "-o", series, "-q"])
+    src = nv.load_reader(series)
+    check(len(rm.timesteps(src)) == 2, "converted frequency response: 2 time steps")
+    m = rm.Model(src, rm.timesteps(src)[1])
+    re = m.array("Shells", "Displacement_Mag")[m.array("Shells", "NID") == 2][0]
+    check(np.allclose(re, [0, 0, 0.02]), f"converted series: Displacement_Mag at 20 Hz {re}")
+    nv.apply("results", reader=src, view=view)
+    check(nv.animate_modes([2], frames=4, reader=src, view=view, fps=0) == [2],
+          "a converted frequency series animates through its phase")
+    # converted at 90 deg: Phase is relative to that (ParaView's VTKHDF reader keeps PhaseAngle on the blocks)
+    at90 = os.path.join(tmp, "freq90.vtkhdf")
+    convert(["convert", elements, "--results", freq, "--phase", "90", "--all-steps", "-o", at90, "-q"])
+    src90 = nv.load_reader(at90)
+    nv._set_time(view, 0.0)  # 10 Hz
+    model = nv.apply("results", reader=src90, view=view, scale=1.0)
+    d90 = pv.FindSource(nv._name(model, "deform"))
+    mesh90 = nv._extract(model, "Shells")
+    zmin = {}
+    for phase in (0.0, 1.0):
+        d90.Phase = phase
+        mesh90.UpdatePipeline(view.ViewTime)
+        zmin[phase] = mesh90.GetDataInformation().GetBounds()[4]
+    # 1e-3 n (3 + 4i): -0.004 n at 90 deg, n (0.003 cos 91 - 0.004 sin 91) = -0.0040518 n at 91 deg
+    check(np.allclose([zmin[0.0], zmin[1.0]], [-0.028, -0.0283626], rtol=1e-4),
+          f"converted at 90 deg: Phase 0 and 1 draw 90 and 91 deg {zmin}")
+    d90.Phase = 0.0
+
+    trans = os.path.join(tmp, "transient.op2")
+    make_transient_op2().write_op2(trans)
+    tr = rm.load_reader(DECK, trans)
+    times = rm.timesteps(tr)
+    m = rm.Model(tr, times[1])
+    vel = m.array("Shells", "Velocity")[m.array("Shells", "NID") == 4][0]
+    check(len(times) == 3 and m.field_strings(None, "ResultLabel") == ["Subcase 1 time 0.5"]
+          and np.allclose(vel, [0, 0, 0.04]), f"transient: 3 time steps, label, Velocity {vel}")
+    tseries = os.path.join(tmp, "transient.vtkhdf")
+    convert(["convert", DECK, "--results", trans, "--all-steps", "-o", tseries, "-q"])
+    tsrc = nv.load_reader(tseries)
+    m = rm.Model(tsrc, rm.timesteps(tsrc)[2])
+    d = m.array("Shells", "Displacement")[m.array("Shells", "NID") == 4][0]
+    check(len(rm.timesteps(tsrc)) == 3 and np.allclose(d, [0, 0, 0.04]),
+          f"converted transient series: 3 steps, Displacement at t = 1 {d}")
+    nv.apply("results", reader=tsrc, view=view)
+
+    rop2 = os.path.join(tmp, "random.op2")
+    both = make_random_op2()  # the SOL 111 tables and the modes they came from
+    both.eigenvectors[1] = make_modes_op2().eigenvectors[1]
+    both.write_op2(rop2)
+    rr = rm.load_reader(DECK, rop2, random={"output": True})
+    frames = rm.timesteps(rr)
+    check(len(frames) == 3, f"SOL 111 random output: one frame per PSD frequency ({len(frames)})")
+    model = nv.apply("random", reader=rr, view=view)
+    check("SOL 111 output" in _info(nv, model), f"random view names the source: {_info(nv, model)!r}")
+    model = nv.apply("randomsweep", reader=rr, view=view)
+    label = pv.FindSource(nv._name(model, "frequency label"))
+    label.UpdatePipeline(frames[1])
+    text = label.GetClientSideObject().GetOutput().GetValue(0, 0).ToString()
+    check(text == "Random (SOL 111) 50 Hz", f"randomsweep label of the solver's frames: {text!r}")
+    # the two random responses share the reader's model: switching drops what the other wrote
+    rr.RandomOutput = 0
+    rr.RandomASD = "20:0.01,2000:0.01"
+    m = rm.Model(rr, rm.timesteps(rr)[0])
+    check(not m.field_strings(None, "RandomSource") and m.field_strings(None, "RandomDrive") == ["Z"]
+          and m.block("Shells").GetPointData().GetArray("DominantMode") is not None,
+          "Random ASD after Random Output: the modal response, no SOL 111 source left")
+    rr.RandomOutput = 1
+    m = rm.Model(rr, rm.timesteps(rr)[0])
+    names = [m.data.GetFieldData().GetArrayName(i) for i in range(m.data.GetFieldData().GetNumberOfArrays())]
+    check(m.field_strings(None, "RandomSource") == ["SOL 111"] and not m.field_strings(None, "RandomDrive")
+          and m.block("Shells").GetPointData().GetArray("DominantMode") is None
+          and not [n for n in names if n.startswith("RANDOM_")],
+          "Random Output again: no DominantMode, drive or mode table of the modal response left")
+    pv.Delete(view)
+
+
 def _diff_counts(nv, diff):
     rows, masses = nv.diff_summary(diff)
     counts = {r["Item"]: (int(r["Added"]), int(r["Removed"]), int(r["Changed"])) for r in rows}
@@ -1370,7 +1781,7 @@ def diff_checks(pv, nv):
     pv.SetActiveSource(b)
     view = pv.CreateRenderView()
     nv.apply("diff", reader=b, view=view)
-    text = pv.FindSource(nv._name(nv.Model(b), "info")).Text
+    text = nv.info_of(view)
     check("elements: 2 added, 2 removed, 3 changed" in text and "10.9 -> 14.4" in text, f"diff view text {text!r}")
     check(nv.diff_of(nv.Model(b)) == d, "the diff view reuses the Nastran Diff on B")
     check(pv.GetActiveSource() is d, "the diff view selects the Nastran Diff")
@@ -1386,8 +1797,10 @@ def diff_checks(pv, nv):
     check(right in pv.GetViews() and right != left and pv.GetActiveSource() is b, "side by side: a second view, B selected")
     names = {v: k[0] for k, v in pv.GetSources().items()}
     sides = [sorted(names.get(s, "?") for s in nv.shown_sources(v)) for v in (left, right)]
-    check(sides == [["NPV info [diff_a.bdf]", "NPV mesh [diff_a.bdf]"],
-                    ["NPV diff elements [diff_b.bdf]", "NPV info [diff_b.bdf]"]], f"A left, B's diff right: {sides}")
+    of_d = lambda what: f"NPV {nv._diff_what(d, what)} [diff_b.bdf]"  # noqa: E731  (d is not B's own NPV diff)
+    check(sides == [sorted(["NPV Shells [diff_a.bdf]", of_d("removed element"), nv.info_name(left)]),
+                    sorted([of_d("Shells"), of_d("removed element"), nv.info_name(right)])],
+          f"A's shells left, B's from the diff right, A's removed elements in both: {sides}")
     rgb = list(pv.GetColorTransferFunction("Thickness").RGBPoints)
     check(abs(rgb[0] - 0.1) < 1e-9 and abs(rgb[-4] - 0.25) < 1e-9, f"shared Thickness range {rgb[0]}..{rgb[-4]}")
     again = nv.side_by_side(array="ElementMass", view=left)
@@ -1401,7 +1814,7 @@ def diff_checks(pv, nv):
     names = {v: k[0] for k, v in pv.GetSources().items()}
     shown = sorted(names.get(s, "?") for s in nv.shown_sources(left))
     check(nv._shown_array(right) == ("CELLS", "DiffStatus"), "DiffStatus on the right")
-    check(shown == ["NPV diff removed [diff_b.bdf]", "NPV info [diff_a.bdf]", "NPV mesh [diff_a.bdf]"],
+    check(shown == sorted([of_d("removed"), nv.info_name(left), "NPV mesh [diff_a.bdf]"]),
           f"side by side DiffStatus, left: {shown}")
 
     # hidden elements are still part of the model: a reader's hidden EID 6 is not "removed"
@@ -1536,10 +1949,10 @@ def diff2_checks(pv, nv):
     pv.SetActiveSource(b)
     view = pv.CreateRenderView()
     nv.apply("diff", reader=b, view=view)
-    text = pv.FindSource(nv._name(nv.Model(b), "info")).Text
+    text = nv.info_of(view)
     check("loads: 2 added, 3 removed, 2 changed" in text and "coords: 1 added" in text
           and "masses:" not in text, f"diff v2 view text {text!r}")
-    mesh = pv.FindSource(nv._name(nv.Model(b), "diff mesh"))
+    mesh = pv.FindSource(nv._name(nv._ReaderOnly(b), nv._diff_what(d, "items")))  # d: a user's Diff
     shown = nv.block_names(nv.fetch(mesh))
     check({"Rigid", "Connectors", "Bushes", "Constraints"} <= set(shown), f"diff v2 view blocks {shown}")
     pv.Delete(view)
@@ -1748,7 +2161,9 @@ def parity_checks(pv, nv):
                 pv.Delete(fr)
                 pv.Delete(ff)
             kwargs = {"grow": {"seeds": f"EID {eid}"}}
-            skip = {"random", "randomsweep"} | (set() if results else {"results"})
+            # diff compares the two (its roles are the Diff's, so the file's view shows the deck as B):
+            # a diff of a deck and a converted file is diff_checks'
+            skip = {"random", "randomsweep", "diff"} | (set() if results else {"results"})
             for view_name in [v for v in nv.VIEWS if v not in skip]:
                 shown = []
                 for src in (r, f):
@@ -1770,7 +2185,7 @@ VIEW_SELECTS = {"masses": "mass glyphs", "bushes": "bush glyphs", "bushrotations
                 "beams": None, "loads": "load glyphs", "spc": "spc glyphs", "rigid": None, "family": None,
                 "group": None, "pid": None, "mid": None, "elementtype": None, "thickness": None, "nsm": None,
                 "results": "deform", "random": None, "randomsweep": None, "parts": "parts", "grow": "grow",
-                "path": "path", "check": "check", "forces": None, "stress": None}
+                "path": "path", "check": "check", "forces": None, "stress": None, "plies": None}
 
 
 def clear_checks(pv, nv, reader):
@@ -1781,8 +2196,8 @@ def clear_checks(pv, nv, reader):
     pv.SetActiveSource(reader)
     model = nv.apply("masses", reader=reader, view=view)
     src = pv.FindSource(nv._name(model, "mesh"))
-    objs, _ = nv._recorded(lambda: nv._show(src, view))
-    check(objs == [src], "_recorded lists what _show showed")
+    objs, _, said = nv._recorded(lambda: nv._show(src, view))
+    check(objs == [src] and said is None, "_recorded lists what _show showed (no text written)")
     deform = pv.FindSource(nv._name(model, "deform"))
     deform.ScaleFactor = 1.0
     sources = set(pv.GetSources())
@@ -1904,8 +2319,9 @@ def _point_values(src, name):
     return set(vtk_to_numpy(a).tolist()) if a is not None else set()
 
 
-def _info(nv, model):
-    return nv.pv.FindSource(nv._name(model, "info")).Text
+def _info(nv, model=None):
+    """The active view's info text (one per view, rule R6; ``model`` is not needed any more)."""
+    return nv.info_of(nv.pv.GetActiveView())
 
 
 GRAV_MOMENT_DECK = """SOL 101
@@ -2008,7 +2424,7 @@ def filter_property_checks(pv, nv, reader, view):
               f"loads view on a moment-only set with Show Forces says so: {text!r}")
         nv.apply("loads", reader=gr, view=view, show="Moments")
         check("SID_6: 1 loaded grids" in _info(nv, gm), "Show Moments draws the MOMENT")
-        for what in ("load glyphs", "mesh", "deform", "info"):
+        for what in ("load glyphs", "mesh", "deform"):
             pv.Delete(pv.FindSource(nv._name(gm, what)))
         pv.Delete(gr)
 
@@ -2103,21 +2519,28 @@ def deleted_filter_checks(pv, reader):
     filters = {"reader": fresh, "NastranMassGlyphs": pv.NastranMassGlyphs(Input=fresh),
                "NastranLoadGlyphs": pv.NastranLoadGlyphs(Input=fresh),  # checklists
                "NastranGrow": pv.NastranGrow(Input=fresh, SeedIDs="EID 1"),  # card types checklist
-               "NastranDeform": pv.NastranDeform(Input=fresh, ScaleFactor=2.0)}
+               "NastranDeform": pv.NastranDeform(Input=fresh, ScaleFactor=2.0),
+               "NastranDiff": pv.NastranDiff(Input=fresh, Reference=fresh)}  # Kinds and Reasons checklists
+    filters["NastranScope"] = pv.NastranScope(Input=filters["NastranDiff"])  # a comparison's layers
     states = {}
     for name, proxy in filters.items():
         proxy.UpdatePipeline()
         states[name] = proxy.GetClientSideObject().__dict__
     del proxy  # it would keep the last filter, and so the reader, alive
     check(states["NastranDeform"].get("_deformer") is not None, "Nastran Deform caches its deformer")
+    check(states["NastranDiff"].get("_cache") is not None, "Nastran Diff caches its comparison (both models)")
+    registry = type(filters["NastranDiff"].GetClientSideObject()).__init__.__globals__["_DIFF_OUTPUTS"]
+    diff_ref = registry[states["NastranDiff"]["_tag"]]
     deck = weakref.ref(states["reader"]["_deck"])
-    for name in ("NastranMassGlyphs", "NastranLoadGlyphs", "NastranGrow", "NastranDeform", "reader"):
+    for name in ("NastranScope", "NastranDiff", "NastranMassGlyphs", "NastranLoadGlyphs", "NastranGrow",
+                 "NastranDeform", "reader"):
         pv.Delete(filters.pop(name))
     del fresh
     gc.collect()
     for name, state in states.items():
         check(not state, f"a deleted {name} is freed and drops its cached state (left: {sorted(state)})")
     check(deck() is None, "a deleted reader frees its deck")
+    check(diff_ref.Get() is None, "the Diff registry's weak reference to a deleted Nastran Diff is empty")
     pv.SetActiveSource(reader)
 
 
@@ -2201,20 +2624,20 @@ def scene_review_checks(pv, nv, reader):
     file of grids keeps the masses on them in NPV Masses."""
     view = pv.CreateRenderView()
     m = nv.apply("family", reader=reader, view=view)
-    info = pv.FindSource(nv._name(m, "info"))
-    check(info in nv.shown_sources(view), "Family writes the info text")
+    info = pv.FindSource(nv.info_name(view))
+    check(info in nv.shown_sources(view) and "element families" in info.Text, "Family writes the info text")
     nv.apply("pid", reader=reader, view=view)
-    check(info not in nv.shown_sources(view) and nv.scene_of(view).info is None,
-          "PID (no text) replacing Family hides Family's text")
+    check(info not in nv.shown_sources(view), "PID (no text) replacing Family hides Family's text")
     nv.apply("masses", reader=reader, view=view)
     nv.apply("thickness", reader=reader, view=view)
-    check(info in nv.shown_sources(view) and nv.scene_of(view).info == "masses",
+    check(info in nv.shown_sources(view) and info.Text.startswith("Concentrated mass"),
           "Thickness (no text) keeps the Masses summary")
     nv.clear(view)
 
     keep = set(pv.GetSources().values())
     twin = rm.load_reader(DECK)
-    text = pv.FindSource(nv._name(nv.apply("masses", reader=twin, view=view), "info"))
+    nv.apply("masses", reader=twin, view=view)
+    text = pv.FindSource(nv.info_name(view))
     # Delete Tree on the twin reader: its info text stays
     _newest_first(pv, [s for s in pv.GetSources().values() if any(u == twin for u in nv.upstream(s))])
     check(nv.scene_of(view).model is None and text not in nv.shown_sources(view),
@@ -2263,6 +2686,673 @@ def scene_review_checks(pv, nv, reader):
     nv.clear(view)
     pv.Delete(view)
     pv.SetActiveSource(reader)
+
+
+# ---------------------------------------------------------------- comparisons (scene layers R3, R4)
+CMP_PAIRS = {"diff": ("diff_a.bdf", "diff_b.bdf"), "diff2": ("diff2_a.bdf", "diff2_b.bdf"),
+             "same_name": (os.path.join("same_name", "a", "model.bdf"), os.path.join("same_name", "b", "model.bdf"))}
+CMP_STATES = ("single", "diff", "pair_left", "pair_right", "diff_show_only")
+CMP_SCOPE = ("show_only_selected", "hide_selected", "show_all", "show_only_property", "show_only_material",
+             "show_only_reached", "hide_reached", "show_only_file", "hide_file")  # write both models in a comparison
+
+
+class _Cmp:
+    """One pair of open models (A, B with the OP2 fixture) and the comparison states built on them."""
+
+    def __init__(self, pv, nv, pair, op2, ids, keep):
+        self.pv, self.nv, self.ids = pv, nv, ids
+        a_path, b_path = (os.path.join(HERE, "data", p) for p in CMP_PAIRS[pair])
+        self.a, self.b = nv.load_reader(a_path, op2), nv.load_reader(b_path, op2)
+        self.keep = set(keep) | {self.a, self.b}  # the earlier checks' objects stay
+        self.views = {}
+
+    def _delete_derived(self, only=None):
+        """Delete the objects made since (``only``: those it accepts), consumers first."""
+        pv = self.pv
+        for _ in range(60):
+            srcs = [s for s in pv.GetSources().values() if s not in self.keep and (only is None or only(s))]
+            if not srcs:
+                return
+            inputs = {i.GetGlobalIDAsString() for s in pv.GetSources().values() for prop in ("Input", "Reference")
+                      for i in [self.nv._input_of(s, prop)] if i is not None}
+            for s in srcs:
+                if s.GetGlobalIDAsString() not in inputs:
+                    pv.Delete(s)
+
+    def build(self, state, view):
+        """``view`` (and a partner for the pair states) in ``state``; returns the view a command runs in.
+        The NPV objects stay (they are reused, as in a session), but the one-model state has no diff."""
+        pv, nv = self.pv, self.nv
+        try:  # before the views go: a link to a deleted view crashes the next render (ParaView 6)
+            pv.RemoveCameraLink(nv.SIDE_LINK)
+        except Exception:
+            pass
+        for v in list(pv.GetViews()):
+            if v != view:
+                nv._close_view(v)  # out of its layout cell first, as NPV Single does
+        for src in nv._sources_with_selection().values():
+            pv.ClearSelection(src)
+        nv._SCENES.clear()
+        for s in nv.shown_sources(view):
+            pv.Hide(s, view)
+        for r in (self.a, self.b):
+            nv.stop_mode_animation(r, view)
+        if state == "single":
+            self._delete_derived(lambda s: any(nv._xml_name(n) == nv.DIFF_XML for n in nv.upstream(s)))
+        self.scope = ("", "")
+        self.restore_scope()
+        nv._set_time(view, 0.0)
+        pv.SetActiveView(view)
+        pv.SetActiveSource(self.b)
+        nv.apply("pid", view=view)  # what a user has before comparing: B, colored
+        self.views = {"B": view}
+        if state == "single":
+            return view
+        pv.SetActiveSource(self.b)
+        nv.apply("diff", view=view)
+        nv.apply("masses", view=view)
+        if state == "diff":
+            return view
+        if state == "diff_show_only":
+            self.select_cells(view)
+            nv.show_only_selected()
+            self.scope = (self.b.ShowOnlyElements, self.b.HiddenElements)
+            return view
+        left, right = nv.side_by_side(view=view)
+        self.views = {"A": left, "B": right}
+        run = right if state == "pair_right" else left
+        pv.SetActiveView(run)
+        return run
+
+    def restore_scope(self):
+        """Both readers back to the state's scope (a scope command changes only that): its ID lists,
+        every checklist entry checked, no Selection File, no selection."""
+        nv = self.nv
+        for src in nv._sources_with_selection().values():
+            self.pv.ClearSelection(src)
+        for r in (self.a, self.b):
+            r.ShowOnlyElements, r.HiddenElements = self.scope
+            r.SelectionMode, r.SelectionFile = "Off", ""
+            r.UpdatePipelineInformation()
+            for prop in nv.VISIBILITY_PROPS:
+                if len(list(getattr(r, prop))) != len(nv._listed(r, prop)):
+                    setattr(r, prop, nv._listed(r, prop))
+
+    def selectable(self, view):
+        """The mesh shown in ``view`` (what a user picks shells 1 and 2 on), else any shown object with EIDs."""
+        names = {s.GetGlobalIDAsString(): k[0] for k, s in self.pv.GetSources().items()}
+        found = []
+        for rep in list(getattr(view, "Representations", None) or []):
+            try:
+                vis, inp = rep.Visibility, rep.Input
+            except AttributeError:
+                continue
+            if vis and inp is not None and self.nv._xml_name(inp) != "TextSource" and "EID" in inp.CellData.keys() \
+                    and inp.GetDataInformation().GetNumberOfCells():
+                found.append(inp)
+        mesh = [s for s in found if any(w in names.get(s.GetGlobalIDAsString(), "") for w in ("mesh", "Shells"))]
+        return (mesh or found or [None])[0]
+
+    def select_cells(self, view):
+        src = self.selectable(view)
+        self.pv.SetActiveSource(src)  # the user picks in the view: ParaView makes the picked source active
+        self.pv.SelectThresholds(Thresholds=[1.0, 2.0], ArrayName="EID", FieldType="CELL", Source=src)
+
+    def select_points(self, view):
+        src = self.selectable(view)
+        self.pv.SetActiveSource(src)
+        self.pv.SelectThresholds(Thresholds=[1.0, 2.0], ArrayName="NID", FieldType="POINT", Source=src)
+
+    def commands(self, tmp):
+        nv = self.nv
+
+        def picked(fn, points=False):
+            def run():
+                (self.select_points if points else self.select_cells)(self.pv.GetActiveView())
+                return fn()
+            return run
+
+        def reached(fn):
+            def run():
+                picked(nv.grow_from_selection)()
+                return fn()
+            return run
+
+        def play_then_stop():
+            nv.play_mode(frames=4)
+            return nv.stop_mode_animation()
+
+        def index_colors():
+            view = self.pv.GetActiveView()
+            colored = nv._coloring_reps(view)[1]  # the coloring layer's object, picked in the Pipeline Browser
+            self.pv.SetActiveSource(colored[0][1] if colored else self.selectable(view))
+            return nv.index_colors()
+
+        out = {name: (lambda name=name: nv.apply(name, toggle=True)) for name in nv.VIEWS}
+        out.update({
+            "animate_mode": lambda: nv.animate_mode(cycles=1, frames=4),
+            "animate_modes": lambda: nv.animate_modes(frames=2, fps=0),
+            "play_then_stop": play_then_stop, "stop_mode_animation": nv.stop_mode_animation,
+            "save_mode_animations": lambda: nv.save_mode_animations(frames=2, folder=os.path.join(tmp, "gifs")),
+            "index_colors": index_colors, "grow_from_selection": picked(nv.grow_from_selection),
+            "path_from_selection": picked(nv.path_from_selection, points=True),
+            "show_only_selected": picked(nv.show_only_selected), "hide_selected": picked(nv.hide_selected),
+            "show_all": nv.show_all, "show_only_property": picked(nv.show_only_property),
+            "show_only_material": picked(nv.show_only_material), "show_only_reached": reached(nv.show_only_reached),
+            "hide_reached": reached(nv.hide_reached), "show_only_file": lambda: nv.show_only_file(self.ids),
+            "hide_file": lambda: nv.hide_file(self.ids), "highlight_file": lambda: nv.highlight_file(self.ids),
+            "side_by_side": nv.side_by_side, "clear": nv.clear, "single": nv.single,
+        })
+        return out
+
+    def invariants(self, state, command, problems):
+        """What every command must leave (the audit's failure patterns): no third view, one diff with
+        its roles, each view of a comparison drawing its own model, scope written to both models."""
+        pv, nv = self.pv, self.nv
+        tag = f"{state}/{command}"
+        views = list(pv.GetViews())
+        if len(views) > 2:
+            problems.append(f"{tag}: {len(views)} views (a third view)")
+        diffs = [s for s in pv.GetSources().values() if nv._xml_name(s) == nv.DIFF_XML
+                 and any(x in (self.a, self.b) for x in nv.diff_sides(s))]  # this pair's (earlier checks leave others)
+        if len(diffs) > 1 or any(nv.diff_sides(d) != (self.b, self.a) for d in diffs):
+            problems.append(f"{tag}: {len(diffs)} Nastran Diff(s), roles {[nv.diff_sides(d) == (self.b, self.a) for d in diffs]}")
+        names = {s.GetGlobalIDAsString(): k[0] for k, s in pv.GetSources().items()}
+        for v in views:
+            scene = nv.scene_of(v)
+            if scene.role is None:
+                continue
+            own = self.a if scene.role == "A" else self.b
+            for s in nv.shown_sources(v):
+                name = names.get(s.GetGlobalIDAsString(), "?")
+                if nv._xml_name(s) == "TextSource" or s in (self.a, self.b):
+                    continue
+                who = nv.owner(s)
+                if who != own and not (scene.role == "B" and " removed" in name):  # A's removed layer
+                    problems.append(f"{tag}: {name} of the other model in {scene.role}'s view")
+        comparison = not state.endswith("single") and command != "single"
+        if comparison and command in CMP_SCOPE:
+            lists = [(r.ShowOnlyElements, r.HiddenElements) for r in (self.a, self.b)]
+            if lists[0] != lists[1]:
+                problems.append(f"{tag}: scope not mirrored to both models {lists}")
+        if comparison and command in nv.VIEWS:
+            view = pv.GetActiveView()
+            scene = nv.scene_of(view)
+            if scene.diff is None:
+                problems.append(f"{tag}: the comparison ended")
+            elif scene.role == "B" and command in ("masses", "bushes", "loads", "spc", "rigid") and command in scene.overlays:
+                colors = [pv.GetDisplayProperties(o, view).ColorArrayName[1] for o in scene.overlays[command].objects
+                          if "removed" not in names.get(o.GetGlobalIDAsString(), "") and nv._xml_name(o) != "TextSource"
+                          and pv.GetDisplayProperties(o, view).ColorArrayName[1]]
+                if colors and "DiffStatus" not in colors:
+                    problems.append(f"{tag}: overlay colored by {colors}, not DiffStatus")
+
+
+def comparison_detail_checks(pv, nv):
+    """What the comparison draws, on the same-named pair (tests/data/same_name: A -> B removes shell 3,
+    CONM2 202 and CBUSH 501, adds shell 4, makes CONM2 201 heavier), and that a scope change or a time
+    step does not compare again."""
+    import nastran_pv.diff as nd
+    from op2_fixture import make_op2
+
+    keep = set(pv.GetSources().values())
+    tmp = tempfile.mkdtemp()  # not removed: ParaView keeps the OP2 open
+    op2 = os.path.join(tmp, "detail.op2")
+    make_op2().write_op2(op2)
+    cmp = _Cmp(pv, nv, "same_name", op2, None, keep)
+    a, b = cmp.a, cmp.b
+    check(nv._name(nv._ReaderOnly(a), "x") != nv._name(nv._ReaderOnly(b), "x"),
+          f"same-named decks get their own NPV objects: {nv._name(nv._ReaderOnly(b), 'x')!r}")
+    view = pv.CreateRenderView()
+    pv.SetActiveView(view)
+    pv.SetActiveSource(b)
+    nv.apply("diff", view=view)
+    d = nv.scene_of(view).diff
+    check(nv.diff_sides(d) == (b, a) and nv.scene_of(view).role == "B", "NPV Diff: a comparison of B with A")
+    m = nv.apply("masses", view=view)
+    glyphs = pv.FindSource(nv._name(m, "diff mass glyphs"))
+    check(_point_values(glyphs, "EID") == {201} and _point_values(glyphs, "DiffStatus") == {2}
+          and pv.GetDisplayProperties(glyphs, view).ColorArrayName[1] == "DiffStatus",
+          "NPV Masses in a comparison: CONM2 201 changed (orange), colored by DiffStatus")
+    gone = pv.FindSource(nv._name(m, "diff removed mass"))
+    check(gone is not None and nv._gather(nv.fetch(gone), "EID", "CELLS").tolist() == [202]
+          and "1 removed (red)" in _info(nv, m), "A's removed CONM2 202 red in the masses overlay")
+    a_deforms = len(nv.model_deforms(a))  # A is not drawn in this view: none of its own
+    nv.play_mode(1, frames=4, view=view)
+    try:
+        held = list(pv.GetTimeKeeper().SuppressedTimeSources)
+    except AttributeError:  # no such property: not checked
+        held = [a, b]
+    nv.stop_mode_animation(view=view)
+    try:
+        left_out = list(pv.GetTimeKeeper().SuppressedTimeSources)
+    except AttributeError:
+        left_out = []
+    check(a in held and b in held and a not in left_out and b not in left_out,
+          f"Animate Mode in one comparison view takes both readers out of the time controls and Stop gives "
+          f"both back (A with {a_deforms} deform(s))")
+    pv.SetActiveSource(a)  # roles are the Diff's: A selected changes nothing
+    sources = set(pv.GetSources())
+    nv.apply("diff", view=view)
+    check(set(pv.GetSources()) == sources and nv.scene_of(view).diff == d and nv.subject(view) == b,
+          "NPV Diff with A selected: the same diff, B's view")
+    calls, real = [], nd.annotate
+    nd.annotate = lambda *x, **k: calls.append(1) or real(*x, **k)
+    try:
+        for r in (a, b):
+            r.ShowOnlyElements = "1 2"
+        pv.Render(view)
+        mesh = pv.FindSource(nv._name(m, "diff mesh"))
+        removed = pv.FindSource(nv._name(m, "diff removed"))
+        nv.apply("pid", view=view)
+        check(sorted(nv._gather(nv.fetch(mesh), "EID", "CELLS").tolist()) == [1, 2]
+              and sorted(nv._gather(nv.fetch(removed), "EID", "CELLS").tolist()) == [202, 501],
+              "Show Only 1 2 on both: B's shells 1 2; A's removed bush and mass on them, not shell 3")
+        steps = rm.timesteps(b)
+        nv._set_time(view, steps[1])
+        late = nv.Model(b, steps[1], diff=d, role="B").array("Shells", "Displacement")
+        nv._set_time(view, steps[0])
+        early = nv.Model(b, steps[0], diff=d, role="B").array("Shells", "Displacement")
+        check(not calls and late is not None and not np.allclose(late, early),
+              f"scope and time step: no new comparison ({len(calls)}), each step's Displacement on the diff")
+    finally:
+        nd.annotate = real
+    for r in (a, b):
+        r.ShowOnlyElements = ""
+    nv.apply("pid", view=view)
+    removed_elements = pv.FindSource(nv._name(m, "diff removed element"))
+    pv.SetActiveSource(removed_elements)  # a pick on A's removed shell 3
+    pv.SelectThresholds(Thresholds=[3.0, 3.0], ArrayName="EID", FieldType="CELL", Source=removed_elements)
+    check(nv.selected_reader() == a, "a pick on the removed items is A's")
+    nv.grow_from_selection()
+    check("EID 3 not in B" in _info(nv, m), f"grow from A's removed shell in B's view: {_info(nv, m)!r}")
+    pv.ClearSelection(removed_elements)
+    nv.apply("masses", view=view)
+    left, right = nv.side_by_side(view=view)
+    views = len(pv.GetViews())
+    pv.SetActiveView(right)
+    again = nv.side_by_side()
+    link = nv.servermanager.ProxyManager().SMProxyManager.GetRegisteredLink(nv.SIDE_LINK)
+    check(again == (left, right) and len(pv.GetViews()) == views and link is not None,
+          "Side by Side from the right view: the same pair, no third view, linked")
+    names = {s.GetGlobalIDAsString(): k[0] for k, s in pv.GetSources().items()}
+    shown = {v: sorted(names[s.GetGlobalIDAsString()] for s in nv.shown_sources(v)) for v in (left, right)}
+    check(nv._name(nv._ReaderOnly(a), "mass glyphs") in shown[left]
+          and nv._name(nv._ReaderOnly(b), "diff mass glyphs") in shown[right]
+          and nv._name(nv._ReaderOnly(b), "diff removed mass") in shown[left],
+          "the pair: A's masses and its removed mass left, B's changed masses right")
+    nv.apply("bushes", view=right)  # every command in both views
+    names = {s.GetGlobalIDAsString(): k[0] for k, s in pv.GetSources().items()}
+    shown_left = [names.get(s.GetGlobalIDAsString(), "") for s in nv.shown_sources(left)]
+    check(nv._name(nv._ReaderOnly(a), "bush glyphs") in shown_left and "bushes" in nv.scene_of(left).overlays,
+          f"NPV Bushes in B's view draws A's bushes in A's view too ({sorted(shown_left)})")
+    nv.single(view=right)
+    check(right not in pv.GetViews() and nv.scene_of(left).role is None and nv.subject(left) == b,
+          "NPV Single in a pair: one view, B as one model")
+    pv.Delete(left)
+    nv._SCENES.clear()
+    cmp.keep -= {a, b}
+    cmp._delete_derived()
+
+
+def _diffs_drawn(nv, view):
+    """The Nastran Diffs upstream of what ``view`` shows."""
+    found = []
+    for src in nv.shown_sources(view):
+        for node in nv.upstream(src):
+            if nv._xml_name(node) == nv.DIFF_XML:
+                if node not in found:
+                    found.append(node)
+                break
+    return found
+
+
+def comparison_review_checks(pv, nv):
+    """Review of #67, on A, B (the same-named pair) and C (diff_a.bdf), opened in that order: a pair's
+    NPV Diff never takes a diff of another pair, two comparisons that share B keep their own objects,
+    Nastran Scope after a Diff and a Deform scopes what it is given, seeds parse like the grow filter
+    and the module registry holds no Diff's models."""
+    from op2_fixture import make_op2
+
+    keep = set(pv.GetSources().values())
+    tmp = tempfile.mkdtemp()  # not removed: ParaView keeps the OP2 open
+    op2 = os.path.join(tmp, "review.op2")
+    make_op2().write_op2(op2)
+    cmp = _Cmp(pv, nv, "same_name", op2, None, keep)
+    a, b = cmp.a, cmp.b
+    c = nv.load_reader(os.path.join(HERE, "data", "diff_a.bdf"), op2)
+    one = pv.CreateRenderView()
+    pv.SetActiveView(one)
+    pv.SetActiveSource(b)
+    nv.apply("diff", view=one)
+    bc = nv.scene_of(one).diff
+    check(nv.diff_sides(bc) == (b, c), "NPV Diff on B compares it with C, the newest model")
+    two = pv.CreateRenderView()
+    pv.SetActiveView(two)
+    left, right = nv.side_by_side(reference=a, view=two)
+    check(nv.scene_of(left).diff is None and nv.subject(left) == a and nv.subject(right) == b,
+          "Side by Side against A: a pair of A and B, no diff yet")
+    nv.apply("diff", view=left)
+    ba = nv.scene_of(left).diff
+    check(ba is not None and nv.diff_sides(ba) == (b, a) and nv.diff_sides(bc) == (b, c)
+          and nv.subject(left) == a and nv.scene_of(right).diff == ba,
+          "NPV Diff in the pair compares B with A; B's diff against C is left as it was")
+    nv.apply("masses", view=one)
+    nv.apply("masses", view=right)
+    nv.apply("pid", view=one)
+    check(_diffs_drawn(nv, one) == [bc] and _diffs_drawn(nv, right) == [ba],
+          "two comparisons sharing B draw from their own diffs, whichever ran last")
+    user = pv.NastranDiff(Input=b, Reference=c)  # a user's own diff of B with C: the newest one B is in
+    three = pv.CreateRenderView()
+    pv.SetActiveView(three)
+    pv.SetActiveSource(b)
+    nv.apply("diff", view=three)
+    nv.apply("masses", view=one)  # B's NPV diff against C again in view one
+    check(nv.scene_of(three).diff == user and _diffs_drawn(nv, three) == [user] and _diffs_drawn(nv, one) == [bc],
+          "the same B and C through two diffs (NPV diff, a user's): each view keeps its own objects")
+    nv.clear(three)
+    pv.Delete(three)
+    model = nv.Model(b, diff=ba, role="B")
+    check(nv._seeds_not_in(model, "EID 1; GRID 4, 9") == "grid 9 not in B",
+          f"seeds parse like the grow filter: {nv._seeds_not_in(model, 'EID 1; GRID 4, 9')!r}")
+    steps = rm.timesteps(b)
+    moved = pv.NastranDeform(Input=ba, ScaleFactor=50.0)
+    scope = pv.NastranScope(Input=moved)
+    for r in (a, b):
+        r.ShowOnlyElements = "1 2"
+    for src in (ba, moved, scope):
+        src.UpdatePipeline(steps[0])
+    top = [round(s.GetDataInformation().GetBounds()[5], 3) for s in (ba, moved, scope)]
+    cells = [s.GetDataInformation().GetNumberOfCells() for s in (moved, scope)]
+    check(top[1] > top[0] and top[2] == top[1] and cells[1] < cells[0],
+          f"Nastran Scope after Diff -> Deform cuts the moved input (top z {top}, cells {cells}), "
+          "not the diff's cached, unmoved cut")
+    for r in (a, b):
+        r.ShowOnlyElements = ""
+    import nastran_pv.glyphs as ng  # the builtin session runs the plugin in this interpreter
+
+    converted = os.path.join(tmp, "b.vtm")  # a converted B: the comparison's whole output is new every run
+    convert(["convert", os.path.join(HERE, "data", "same_name", "b", "model.bdf"), "-o", converted, "-q"])
+    fb = nv.load_reader(converted)
+    fd = pv.NastranDiff(Input=fb, Reference=a)
+    fs = pv.NastranScope(Input=fd)
+    a.ShowOnlyElements = "1 2"  # A's scope cuts the removed items: the scope's cut path
+    fs.UpdatePipeline()
+    calls, real = [], ng.model_diagonal
+    ng.model_diagonal = lambda *x, **k: calls.append(1) or real(*x, **k)
+    try:
+        for show in (0, 1, 0, 1):
+            fd.ShowSame = show
+            fs.UpdatePipeline()
+    finally:
+        ng.model_diagonal = real
+        a.ShowOnlyElements = ""
+    check(not calls, f"a converted B: Show toggles keep the model diagonal ({len(calls)} walks)")
+    for s in (fs, fd, fb):
+        pv.Delete(s)
+    from vtkmodules.vtkCommonCore import vtkWeakReference
+
+    algo = ba.GetClientSideObject()
+    registry = type(algo).__init__.__globals__.get("_DIFF_OUTPUTS")
+    tag = getattr(algo, "_tag", None)
+    check(registry is not None and isinstance(registry.get(tag), vtkWeakReference) and registry[tag].Get() is algo,
+          "the module registry only points at the Diff (a weak reference): its models go with the filter")
+    del algo
+    nv.single(view=left)
+    for v in (one, left):
+        nv.clear(v)
+    gone = lambda s: any(n == ba for n in nv.upstream(s))  # noqa: E731
+    cmp._delete_derived(lambda s: gone(s) and s != ba)
+    pv.Delete(ba)
+    for v in (one, left):
+        pv.Delete(v)
+    nv._SCENES.clear()
+    cmp.keep -= {a, b}
+    cmp._delete_derived()
+
+
+def scene_time_checks(pv, nv):
+    """Scene layers R5 to R7 on the same-named pair (tests/data/same_name: A -> B removes shell 3 on grids
+    3 8 9 6, CONM2 202 and CBUSH 501). Labels by folder, A's objects renamed when B opens; one info text
+    per view, the diff summary first; A follows B's steps by index (A has the static step only, at twice
+    B's displacement): Animate Mode in a pair vibrates both readers at one amplitude, Animate All Modes
+    moves both sides, a step A lacks leaves A (and its removed items) where they are, which otherwise
+    move with A; Highlight File and Index Colors show no reader."""
+    from op2_fixture import make_op2
+
+    keep = set(pv.GetSources().values())
+    tmp = tempfile.mkdtemp()  # not removed: ParaView keeps the OP2 files open
+    full = os.path.join(tmp, "full.op2")
+    make_op2().write_op2(full)  # the static step (T3 = 0.1 NID on grids 1-7), mode 1 (T1 = 1), mode 2 (T2 = NID)
+    short = make_op2()
+    short.eigenvectors.clear()
+    short.displacements[1].data[:] *= 2.0
+    one = os.path.join(tmp, "one.op2")
+    short.write_op2(one)
+    data = os.path.join(HERE, "data", "same_name")
+    a = nv.load_reader(os.path.join(data, "a", "model.bdf"), one)
+    view = pv.CreateRenderView()
+    view.ViewSize = [600, 400]
+    pv.SetActiveView(view)
+    m = nv.apply("pid", reader=a, view=view)
+    mesh = pv.FindSource(nv._name(m, "mesh"))
+    check(nv._name(m, "mesh") == "NPV mesh [model.bdf]" and mesh is not None, "one model.bdf: its file name is its label")
+    b = nv.load_reader(os.path.join(data, "b", "model.bdf"), full)
+    check(nv._label(a) == "a/model.bdf" and nv._label(b) == "b/model.bdf" and nv._name(m, "mesh") == "NPV mesh [a/model.bdf]"
+          and pv.FindSource("NPV mesh [a/model.bdf]") == mesh and pv.FindSource("NPV mesh [model.bdf]") is None,
+          f"two model.bdf from different folders: labels by folder ({nv._label(a)}, {nv._label(b)}), A's objects renamed")
+
+    pv.SetActiveSource(b)
+    nv.apply("pid", view=view)
+    nv.apply("diff", view=view)
+    d = nv.scene_of(view).diff
+    nv.apply("masses", view=view)
+    text = nv.info_of(view)
+    check(text.startswith("b/model.bdf vs a/model.bdf") and "elements: 1 added, 1 removed" in text
+          and "Concentrated mass: 3  (1 items)" in text, f"NPV Masses after NPV Diff: the diff summary first ({text!r})")
+    left, right = nv.side_by_side(view=view)
+    nv.apply("bushes", view=right)
+    texts = [nv.info_of(v) for v in (left, right)]
+    check(nv.info_name(left) != nv.info_name(right) and texts[0].startswith("A: a/model.bdf (the reference)")
+          and "Concentrated mass: 3  (2 items)" in texts[0] and "1 CBUSH" in texts[0]
+          and texts[1].startswith("b/model.bdf vs a/model.bdf") and "Concentrated mass: 3  (1 items)" in texts[1]
+          and "No CBUSH" in texts[1], f"each view of the pair lists its own layers, the diff summary first: {texts}")
+    nv.apply("masses", view=right)  # drawn last, though Bushes comes after it in the scene
+    nv.side_by_side(view=right)  # the pair drawn again in place
+    text = nv.info_of(left)
+    check("Model mass (structure + concentrated)" in text and "thick = clearly" not in text,
+          f"Side by Side again keeps the layer drawn last (Masses) in full, not the last one redrawn: {text!r}")
+
+    nv.apply("pid", view=right)  # A's removed elements under the coloring, red, in both views
+    steps = nv.timesteps(b)
+    a_mesh = pv.FindSource(nv._name(nv._ReaderOnly(a), "mesh"))
+    b_mesh = pv.FindSource(nv._name(nv._ReaderOnly(b), nv._diff_what(d, "mesh")))
+    gone = pv.FindSource(nv._name(nv._ReaderOnly(b), nv._diff_what(d, "removed element")))  # A's shell 3
+    a_deforms, b_deforms = nv.model_deforms(a), nv.model_deforms(b)
+    check(len(steps) == 3 and nv.timesteps(a) == steps[:1] and a_deforms and b_deforms
+          and all(f.MatchSteps == " ".join(repr(t) for t in steps) for f in a_deforms)
+          and not any(f.MatchSteps for f in b_deforms), "A's deforms follow B's steps by index, B's follow none")
+
+    def bounds(src, v):
+        src.UpdatePipeline(v.ViewTime)
+        return src.GetDataInformation().GetBounds()
+
+    nv._set_layout_time(right, steps[0])
+    rest = [bounds(s, v) for s, v in ((a_mesh, left), (b_mesh, right), (gone, left))]
+    pv.SetActiveView(left)
+    nv.play_mode(1, frames=4, view=left)  # from A's view: B leads, A follows
+    try:
+        suppressed = list(pv.GetTimeKeeper().SuppressedTimeSources)
+    except AttributeError:  # no such property: not checked
+        suppressed = [a, b]
+    peak = [bounds(s, v) for s, v in ((a_mesh, left), (b_mesh, right), (gone, left))]
+    label = pv.FindSource(nv._name(nv._ReaderOnly(a), "mode label")).Text
+    check(all(f.VibrateMode for f in list(a_deforms) + list(b_deforms)) and a in suppressed and b in suppressed,
+          "Animate Mode in a pair: every deform of both readers vibrates, both readers' steps leave the time controls")
+    check(peak[1][5] > rest[1][5] + 1e-6 and abs(peak[0][5] - 2 * peak[1][5]) < 1e-6 and abs(peak[2][5] - peak[0][5]) < 1e-6,
+          f"a mode played in a pair moves both models at one amplitude (A twice as far), A's removed shell with A: "
+          f"top z {[p[5] for p in peak]}")
+    check(nv._step_names(a) == ["Subcase 1"] and label == "A: Subcase 1",
+          f"A's mode label from the reader's StepLabels, without reading A at the step: {label!r}")
+    nv.stop_mode_animation(view=left)
+    check(not any(f.VibrateMode for f in list(a_deforms) + list(b_deforms)) and left.ViewTime == steps[0]
+          and right.ViewTime == steps[0], "Stop Mode Animation: both readers back on the step")
+    seen = {"A": set(), "B": set()}
+    real = nv.pv.Render
+
+    def render(v=None, *args, **kw):
+        out = real(v, *args, **kw)
+        seen["A"].add(round(bounds(a_mesh, left)[5], 9))
+        seen["B"].add(round(bounds(b_mesh, right)[5], 9))
+        return out
+
+    nv.pv.Render = render
+    try:
+        nv.animate_modes([1], frames=4, fps=0, view=right)
+    finally:
+        nv.pv.Render = real
+    check(len(seen["A"]) > 1 and len(seen["B"]) > 1 and right.ViewTime == steps[0],
+          f"Animate All Modes in a pair moves both models: top z of A {sorted(seen['A'])}, of B {sorted(seen['B'])}")
+    paths, real_path = [], nv._model_path
+    nv._model_path = lambda r: paths.append(r) or real_path(r)
+    try:
+        nv.save_mode_animations([1], frames=4, folder=os.path.join(tmp, "gifs"), view=left)
+    finally:
+        nv._model_path = real_path
+    check(paths and paths[0] == a, "Save Mode Animations in A's view of a pair names the GIF after A, which it shows")
+
+    nv.apply("results", view=right)
+    moved = [bounds(s, v) for s, v in ((a_mesh, left), (b_mesh, right), (gone, left))]
+    a_main = pv.FindSource(nv._name(nv._ReaderOnly(a), "deform"))
+    b_layers = pv.FindSource(nv._name(nv._ReaderOnly(b), f"deform {nv._diff_what(d, '')}"))
+    check(not a_main.AutoScale and abs(a_main.ScaleFactor - b_layers.ScaleFactor) < 1e-12
+          and abs(moved[2][5] - moved[0][5]) < 1e-6 and moved[0][5] > rest[0][5] + 1e-6,
+          f"NPV Results in a pair: one scale (A {a_main.ScaleFactor:.4g}, B's layers {b_layers.ScaleFactor:.4g}), so "
+          f"A's removed shell stays on A's mesh (top z {moved[2][5]:.4g}, {moved[0][5]:.4g})")
+    nv._set_layout_time(right, steps[2])  # the time controls on B's mode 2 (T2 = NID): A has no third step
+    later = [bounds(s, v) for s, v in ((a_mesh, left), (b_mesh, right), (gone, left))]
+    check(later[0] == rest[0] and later[2] == rest[2] and later[1][3] > rest[1][3] + 1e-6,
+          f"stepping to a step A lacks: A and its removed items stay (z {later[0][5]:.3g}, {later[2][5]:.3g}), "
+          f"B moves (y max {later[1][3]:.3g})")
+    lacks = nv.Model(a, steps[2])
+    check(not {"Displacement", "DisplacementMagnitude"} & set(a_mesh.PointData.keys()) and lacks.unmatched
+          and lacks.field_strings(None, "ResultLabel") == [] and lacks.array("Shells", "Displacement") is None,
+          f"a step A lacks shows none of A's results (not its nearest step's): {sorted(a_mesh.PointData.keys())}")
+    nv.apply("results", view=right)
+    check("no step 3 here (it has 1): not moved" in nv.info_of(left) and "Subcase" in nv.info_of(right),
+          f"NPV Results on a step A lacks: A's text says so ({nv.info_of(left)!r})")
+    nv._set_layout_time(right, steps[0])  # back to a step A has, with the time controls only
+    back = bounds(a_mesh, left)
+    color = pv.GetDisplayProperties(a_mesh, left).ColorArrayName[1]
+    check(back[5] > rest[0][5] + 1e-6 and color == "DisplacementMagnitude" and "DisplacementMagnitude" in a_mesh.PointData.keys(),
+          f"NPV Results clicked on a step A lacks: back on one it has, A is deformed and colored again (top z {back[5]:.3g})")
+
+    nv.apply("pid", view=right)
+    ids = os.path.join(tmp, "ids.csv")
+    with open(ids, "w") as f:
+        f.write("EID\n1\n2\n")
+    pv.SetActiveView(right)
+    nv.highlight_file(ids, view=right)
+    lit = [pv.FindSource(nv._name(nv._ReaderOnly(r), "highlight")) for r in (a, b)]
+    shown = [nv.shown_sources(v) for v in (left, right)]
+    check(a not in shown[0] and b not in shown[1] and lit[0] in shown[0] and lit[1] in shown[1]
+          and lit[1].GetDataInformation().GetNumberOfCells() == 2 and pv.GetActiveSource() == b
+          and nv.selected_ids() == ("EID", [1, 2]),
+          "Highlight File in a pair: each view draws its model's highlight, no reader shown, B's selection active")
+    only_b = os.path.join(tmp, "only_b.csv")
+    with open(only_b, "w") as f:
+        f.write("EID\n4\n")  # the shell B added
+    nv.highlight_file(only_b, view=right)
+    shown = [nv.shown_sources(v) for v in (left, right)]
+    check(lit[0] not in shown[0] and lit[1] in shown[1] and lit[1].GetDataInformation().GetNumberOfCells() == 1,
+          "Highlight File of an element only B has: B's view highlights it, A's highlight goes, no error")
+    nothing = os.path.join(tmp, "nothing.csv")
+    with open(nothing, "w") as f:
+        f.write("EID\n999\n")
+    try:
+        nv.highlight_file(nothing, view=right)
+        check(False, "a file neither model has should be reported")
+    except RuntimeError as exc:
+        check("match nothing in either model" in str(exc), f"Highlight File, ids in neither model: {exc}")
+    for r in (a, b):
+        pv.ClearSelection(r)
+    pv.SetActiveView(left)
+    pv.SetActiveSource(a)  # a model the view does not show, selected in the Pipeline Browser
+    lut = nv.index_colors(view=left)
+    check(a not in nv.shown_sources(left) and "PID 1" in list(lut.Annotations),
+          "Index Colors with an unshown reader selected: the view's coloring, no reader shown")
+
+    nv.single(view=right)
+    pv.Delete(left)
+    nv._SCENES.clear()
+    cleanup = _Cmp.__new__(_Cmp)
+    cleanup.pv, cleanup.nv, cleanup.keep = pv, nv, keep
+    cleanup._delete_derived()
+
+
+def comparison_checks(pv, nv):
+    """The comparison audit matrix (scene layers R3/R4): every command in each starting state (one
+    model; after NPV Diff; side by side with each view active; NPV Diff plus Show Only) on diff_a/b,
+    diff2_a/b and the same-named pair, with the invariants of :meth:`_Cmp.invariants`."""
+    import time
+    import traceback
+
+    from op2_fixture import make_op2
+
+    keep = set(pv.GetSources().values())
+    tmp = tempfile.mkdtemp()  # not removed: ParaView keeps the OP2 open
+    op2 = os.path.join(tmp, "cmp.op2")
+    make_op2().write_op2(op2)
+    ids = os.path.join(tmp, "ids.csv")
+    with open(ids, "w") as f:
+        f.write("EID\n1\n2\n")
+    view = pv.CreateRenderView()
+    view.ViewSize = [600, 400]
+    start = time.time()
+    problems, reported, runs, spent = [], {}, 0, {}
+    for pair in CMP_PAIRS:
+        cmp = _Cmp(pv, nv, pair, op2, ids, keep)
+        commands = cmp.commands(tmp)
+        for state in CMP_STATES:
+            run_view = cmp.build(state, view)
+            for name, fn in commands.items():  # the view commands in turn, a fresh state after a session change
+                if os.environ.get("NPV_CMP_VERBOSE"):
+                    print(f"   . {pair}/{state}/{name}", flush=True)
+                pv.SetActiveView(run_view)
+                runs += 1
+                t0 = time.time()
+                try:
+                    fn()
+                except (RuntimeError, ValueError) as exc:  # what the macro reports in Output Messages
+                    reported.setdefault(f"{name}: {str(exc).splitlines()[0][:90]}", []).append(f"{pair}/{state}")
+                except Exception:
+                    problems.append(f"{pair}/{state}/{name}: {traceback.format_exc()[-600:]}")
+                cmp.invariants(f"{pair}/{state}", name, problems)
+                t1 = time.time()
+                if name in ("single", "clear") or name == "diff" and state == "single" \
+                        or name == "side_by_side" and not state.startswith("pair"):
+                    run_view = cmp.build(state, view)  # the session changed
+                else:
+                    cmp.restore_scope()  # the scope commands change only that; drop the picks
+                spent[name] = spent.get(name, 0.0) + t1 - t0
+                spent["(build)"] = spent.get("(build)", 0.0) + time.time() - t1
+            print(f"   {pair}/{state}: {len(commands)} commands", flush=True)
+        cmp.build("single", view)
+        nv.clear(view)
+        cmp.keep -= {cmp.a, cmp.b}
+        cmp._delete_derived()
+    for msg, where in sorted(reported.items()):
+        print(f"   reported: {msg} ({len(where)}x, e.g. {where[0]})")
+    print("   slowest: " + ", ".join(f"{k} {v:.0f} s" for k, v in sorted(spent.items(), key=lambda kv: -kv[1])[:8]))
+    for p in problems[:30]:
+        print(f"   PROBLEM {p}")
+    check(not problems, f"comparison matrix: {runs} runs in {time.time() - start:.0f} s, {len(problems)} problem(s)")
+    pv.Delete(view)
+    nv._SCENES.clear()
+    # what is left is fed into objects of earlier checks with the same names (NPV objects are reused
+    # by name, re-fed to the new pair's Diff): deleted with them at the end
+    left = sorted(k[0] for k, s in pv.GetSources().items() if s not in keep)
+    print(f"   left for the earlier checks' objects: {left}")
 
 
 def main():
@@ -2317,6 +3407,7 @@ def main():
         result_type_checks(rm, nv, reader, full)
         element_result_checks(pv, nv)
         force_stress_view_checks(pv, nv)
+        ply_view_checks(pv, nv)
         anim = pv.CreateRenderView()
         model = nv.apply("results", reader=reader, view=anim)  # the results view: peak deflection
         deform = pv.FindSource(nv._name(model, "deform"))
@@ -2343,7 +3434,7 @@ def main():
         deform.AutoScale = 0
         deform.ScaleFactor = 0.5
         nv.apply("results", reader=reader, view=anim)
-        rtext = pv.FindSource(nv._name(model, "info")).Text
+        rtext = nv.info_of(anim)
         check(deform.ScaleFactor == 0.5 and not deform.AutoScale and "x0.5 (Auto Scale off" in rtext,
               f"results view rerun keeps a typed Scale Factor: {rtext!r}")
         nv.apply("results", reader=reader, view=anim, scale=2.0)
@@ -2458,27 +3549,29 @@ def main():
     pv.Delete(bg)
     view = pv.CreateRenderView()
     bmodel = nv.apply("bushes", reader=reader, view=view)
-    btext = pv.FindSource(nv._name(bmodel, "info")).Text
+    btext = nv.info_of(view)
     check("K1" in btext and "released" not in btext, f"bushes view text: {btext!r}")
     pv.FindSource(nv._name(bmodel, "bush glyphs")).ShowTriads = 0  # a user switched the bars off
     nv.apply("bushes", reader=reader, view=view)
-    btext = pv.FindSource(nv._name(bmodel, "info")).Text
+    btext = nv.info_of(view)
     check("No translational" not in btext and "K_ref = 1e+06" in btext,
           f"bushes view turns the bars back on: {btext!r}")
-    rmodel = nv.apply("bushrotations", reader=reader, view=view)
-    rtext = pv.FindSource(nv._name(rmodel, "info")).Text
+    nv.apply("bushrotations", reader=reader, view=view)
+    rtext = nv.info_of(view)
     check("K4" in rtext and "K_rot_ref = 10" in rtext, f"bush rotations view text: {rtext!r}")
     for name in nv.VIEWS:
         nv.apply(name, reader=reader, view=view)
     check(True, f"all views build: {', '.join(nv.VIEWS)}")
+    nv.single(view)  # "diff" made the view a comparison (another model is open): one model again
+    check(not nv.scene_of(view).comparison and nv.subject(view) == reader, "NPV Single: the view shows one model")
     filter_property_checks(pv, nv, reader, view)
     with tempfile.TemporaryDirectory() as tmp:
         load_error_checks(pv, nv, tmp)
         beam_checks(pv, nv, view, tmp)
     pv.SetActiveSource(reader)
     nsm_reader = rm.load_reader(os.path.join(HERE, "data", "nsm.bdf"))
-    nmodel = nv.apply("nsm", reader=nsm_reader, view=view)
-    ntext = pv.FindSource(nv._name(nmodel, "info")).Text
+    nv.apply("nsm", reader=nsm_reader, view=view)
+    ntext = nv.info_of(view)
     check("Nonstructural mass: 13.25" in ntext and "set 40: 8.6" in ntext, f"nsm view totals: {ntext!r}")
     nsm_reader.NSMSet = 0
     bulk = rm.Model(nsm_reader).field("BulkNSMMass")
@@ -2489,10 +3582,10 @@ def main():
     npts = max(nloads.GetBlock(i).GetNumberOfPoints() for i in range(nloads.GetNumberOfBlocks()))
     check(npts > 1, f"tiny deck load set has {npts} points")
     lmodel = nv.apply("loads", reader=reader, view=view, stride=2)
-    info = pv.FindSource(nv._name(lmodel, "info"))  # this reader's objects: "NPV <what> [<reader>]"
+    info = nv.info_of(view)  # the view's one text; the objects are this reader's: "NPV <what> [<reader>]"
     glyph = pv.FindSource(nv._name(lmodel, "load glyphs"))
-    check(glyph.EveryNthPoint == 2 and "arrows on 1 of every 2 loaded grids" in info.Text,
-          f"loads arrow stride: {glyph.EveryNthPoint}, {info.Text!r}")
+    check(glyph.EveryNthPoint == 2 and "arrows on 1 of every 2 loaded grids" in info,
+          f"loads arrow stride: {glyph.EveryNthPoint}, {info!r}")
     glyph.EveryNthPoint = 0
     nv.set_camera(view, "showcase")
     pos, foc = np.array(view.CameraPosition), np.array(view.CameraFocalPoint)
@@ -2601,11 +3694,22 @@ def main():
             single.eigenvectors.clear()  # one static step, no frequency
             static = os.path.join(tmp, "static.op2")
             single.write_op2(static)
+            from op2_fixture import make_freebody_op2, make_modes_op2
+
+            fb_op2 = os.path.join(tmp, "fb.op2")
+            make_freebody_op2().write_op2(fb_op2)
+            one_mode = os.path.join(tmp, "onemode.op2")
+            make_modes_op2(freqs=(30.0,)).write_op2(one_mode)
             models = [
                 {"id": "tiny", "title": "Tiny", "deck": DECK, "results": modes,
                  "views": ["pid", "bushes", "results"], "credit": "test"},
                 {"id": "one", "title": "One", "deck": DECK, "results": static,
                  "views": ["results"], "credit": "test"},
+                {"id": "mode", "title": "Mode", "deck": DECK, "results": one_mode,
+                 "views": ["results"], "credit": "test"},
+                # a view with fixed arguments (VARIANTS) and a filter scene (SCENES)
+                {"id": "fb", "title": "FB", "deck": os.path.join(HERE, "data", "freebody.bdf"), "results": fb_op2,
+                 "views": ["spcforces", "freebody"], "view_args": {"freebody": {"seeds": "PID 2"}}, "credit": "test"},
                 {"id": "gone", "title": "Gone", "deck": os.path.join(tmp, "missing.bdf"),
                  "results": None, "views": ["pid"], "credit": "test"},
             ]
@@ -2613,7 +3717,12 @@ def main():
             with open(mj, "w", encoding="utf-8") as f:
                 json.dump(models, f)
             out = os.path.join(tmp, "out dir")  # spaces in paths must survive
+            before = {s.GetGlobalIDAsString() for s in pv.GetSources().values()}
             check(es.main([mj, out]) == 0, "export_site runs")
+            # each model's pipeline goes before the next opens (tiny and one share a deck name, which
+            # the NPV objects are named by), and the caller's own objects stay
+            after = {s.GetGlobalIDAsString() for s in pv.GetSources().values()}
+            check(after == before, f"export_site leaves the pipeline as it found it: {len(after)} vs {len(before)}")
 
             def meta(name):
                 with open(os.path.join(out, name), encoding="utf-8") as f:
@@ -2632,8 +3741,26 @@ def main():
                   and all(os.path.exists(os.path.join(out, fr["scene"])) for fr in res["frames"]),
                   f"results: one scene per step {[fr['label'] for fr in res['frames']]}")
             one = meta("one-results.json")
-            check(len(one["frames"]) == 1 and one["frames"][0]["frequency"] is None,
-                  "single static step: one frame, frequency null")
+            check(not one["frames"] and one["scene"] == "one-results.vtksz"
+                  and os.path.exists(os.path.join(out, one["scene"])),
+                  "single static step: one scene, no per-step frames (no 'Mode 1' tab)")
+            mode = meta("mode-results.json")
+            check(len(mode["frames"]) == 1 and mode["frames"][0]["frequency"] is not None
+                  and abs(mode["frames"][0]["frequency"] - 30.0) < 1e-6,
+                  f"a file of one mode keeps its mode tab and frequency: "
+                  f"{[(fr['label'], fr['frequency']) for fr in mode['frames']]}")
+            spc = meta("fb-spcforces.json")
+            check(spc["title"] == "SPC forces" and "SPC forces" in spc["gui"]
+                  and 'nastran_views.apply("loads", source="SPC forces")' in spc["reproduce"][1]
+                  and spc["results"] == "fb.op2" and any("SPC forces" in t for t in spc["text"]),
+                  f"SPC forces entry: the loads view with Source SPC forces {spc['reproduce']}, {spc['text']}")
+            body = meta("fb-freebody.json")
+            check(any(lg["array"] == "FreeBody" and lg["kind"] == "categorical" for lg in body["legends"])
+                  and '--free-body "PID 2"' in body["reproduce"][0] and "Nastran Free Body" in body["gui"]
+                  and any("Cut: F" in t for t in body["text"]),
+                  f"free body scene: FreeBody legend, reproduce and the cut row {body['text']}")
+            check(not [s for s in pv.GetSources().values() if s.GetXMLName() == "NastranPVFreeBody"],
+                  "the free body scene deletes its filters after the export")
             check(not os.path.exists(os.path.join(out, "gone-pid.json")), "missing deck skipped")
             check(all("legends" in fr for fr in res["frames"]) and "--results modes.op2" in res["reproduce"][1],
                   f"results frames carry their own legends; render line {res['reproduce'][1]!r}")
@@ -2651,6 +3778,18 @@ def main():
         check(sm.GetRepresentation(unshown, xview) is None, "export helpers create no representations")
         pv.Delete(unshown)
         pv.Delete(xview)
+        # a display colored by an array its data lacks draws grey: no content for the gallery
+        gview = pv.CreateRenderView()
+        ball = pv.Sphere()
+        gd = pv.Show(ball, gview)
+        pv.ColorBy(gd, ("POINTS", "NoSuchArray"))
+        pv.Render(gview)  # as export_view, which asks after the view rendered
+        grey = es.has_content(gview)
+        pv.ColorBy(gd, ("POINTS", "Normals"))
+        pv.Render(gview)
+        check(not grey and es.has_content(gview), "has_content needs the color array in the shown data")
+        pv.Delete(ball)
+        pv.Delete(gview)
 
         reader.Bushes = 0
         check(es.export_view(reader, {"id": "nb", "title": "", "deck": DECK, "results": None,
@@ -2669,9 +3808,15 @@ def main():
     calc_nan_checks(pv, nv)
     random_checks(pv, nv)
     result_load_checks(pv, nv, reader)
+    results_helper_checks(pv, nv)
     pressure_checks(pv, nv)
+    dynamic_result_checks(pv, nv)
     topology_checks(pv, nv)
     diff_checks(pv, nv)
+    comparison_detail_checks(pv, nv)
+    comparison_review_checks(pv, nv)
+    scene_time_checks(pv, nv)
+    comparison_checks(pv, nv)
     clear_checks(pv, nv, reader)
     preset_checks(pv, nv)
     active_source_checks(pv, nv)

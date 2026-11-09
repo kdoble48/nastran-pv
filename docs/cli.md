@@ -5,6 +5,8 @@ nastran-pv view   DECK [--view pid] [--results run.op2|run.h5]       # opens the
 nastran-pv render DECK --preset masses loads --views iso top        # batch screenshots
 nastran-pv convert DECK|VTM -o out.vtm [field options] [--results F [--all-steps]] [--select ids.csv]
 nastran-pv convert DECK --results modes.op2 --random asd.csv [--drive Z --damping 0.05 --g 9806.65]
+nastran-pv convert DECK --results sol111.op2 --random-output --all-steps -o random.vtkhdf
+nastran-pv convert DECK --results sol108.op2 [--phase 90 | --phase-sweep 24 --step K] -o frf.vtkhdf
 nastran-pv stats  DECK|VTM --by PID|MID|FAMILY|GROUP|ELEMENTTYPE --field ElementMass [--csv t.csv]
 nastran-pv check  DECK|VTM [--strict] [--rules TEXT] [--only CHECK ...] [--tol R] [-o findings.vtm]
 nastran-pv sections DECK|VTM [--pid ID ...] [--csv t.csv]          # CBAR/CBEAM section table
@@ -12,13 +14,19 @@ nastran-pv diff   A B [--csv diff.csv] [--grid-tol R] [--rel-tol R] [--skip KIND
 nastran-pv convert B --diff-against A -o diff.vtm                   # B with the diff on its mesh
 nastran-pv store  add|list|fields|query|compare|open --db runs.sqlite ...
 nastran-pv setup  [--pvpython PATH] [--no-macros] [--dry-run]
+nastran-pv --version                                                # versions, for a bug report
 ```
 
 `python -m nastran_pv ...` works without installing; add `src` to `PYTHONPATH`. Run any command
-with `--help` for the full option list.
+with `--help` for the full option list. `nastran-pv --version` prints the version of nastran-pv,
+the folder it runs from (and the commit, when that is a source checkout), and the versions of
+Python, pyNastran, numpy, VTK and h5py, the `pvpython` it finds and the OS: the lines the
+[bug report form](https://github.com/kdoble48/nastran-pv/issues/new?template=bug_report.yml) asks
+for. It prints them even when a dependency does not import, naming the error.
 
 The field options `--derive`, `--map` and `--calc` (for `convert`, `stats` and `store add`) are
 described in [Fields](fields.md); `--parts`, `--grow` and `--rules` in [Model tools](tools.md);
+`--envelope`, `--average` and `--free-body` in [Results helpers](results-helpers.md);
 `--select` below, in [Selection from an ID file](#selection-from-an-id-file). The `store` commands are described in [Run store](store.md),
 and `diff` and `--diff-against` in [Model diff](diff.md). Wherever a command takes a deck, it also
 takes a `.vtm` or `.vtkhdf` written by `convert`, with the same result; the options that need the deck
@@ -38,9 +46,14 @@ step, `--step N` (0-based, default 0); `--all-steps` writes them all. On a conve
 chooses what the steps carry, by [result type](model.md#result-types): `--result-types VonMisesMax`
 attaches the stresses without the displacements, `--result-types ShellStress,SolidStress` the
 stress components (names are case-insensitive and may be comma-separated; `all` is every type;
-the default is `Displacement VonMisesMax SPCForce MPCForce AppliedLoad` and the element forces).
+the default is `Displacement VonMisesMax SPCForce MPCForce AppliedLoad`, the element forces and
+`Velocity Acceleration PlyFailureIndex`).
 `convert` prints the types the file has that it left out, and a type named that the results
-file lacks gives a warning. With SPC forces, MPC forces or applied loads attached, `convert`
+file lacks gives a warning. `--ply N` picks a composite ply by its id (the PCOMP ply number or a
+PCOMPG global ply id; `-N` for the mirrored copy of a symmetric PCOMPG's ply N): the ply result types (`PlyStress`, `PlyStrain`, `PlyFailureIndex`) attach
+that ply, and Shells get its layup (`PlyAngle`, `PlyAxis`, ...); `--ply max`, the default, gives
+each element's critical ply instead, with its id in `PlyStressPly` and the like (see
+[Composites](model.md#composites)); `convert` names the types that have the ply and warns about the others. Without `--results`, `--ply N` lays the layup only. With SPC forces, MPC forces or applied loads attached, `convert`
 prints their resultant at the attached step (`--step`, also with `--all-steps`), e.g.
 `SPCForce resultant (Subcase 1): force (0, -100, -50), moment (-2, 100, -200) about the
 basic origin`; `stats` and `store add` take the flag too. `--no-nodal-arrays` leaves
@@ -54,9 +67,29 @@ debugging.
 `view` and `render` take it too. An output ending in `.vtkhdf`, or
 `--format vtkhdf`, writes VTKHDF instead (see [Output formats](output-formats.md)).
 
+`--envelope [max min absmax]` adds the envelopes of every result array over the steps
+(`--envelope-steps` to choose them), with the step of each extreme; `stats` and `store add` take it
+too. `convert --average [ARRAY ...]` adds the `Averaged` block, the element results averaged to the
+grids within each PID, and `convert --free-body SEEDS` (with `--free-body-rules` and `--free-body-point`)
+prints and stores the load a free body transmits through its cut; both follow every step of an
+`--all-steps` series (see [Results helpers](results-helpers.md)).
+
 `--random ASD` turns the `--results` normal modes into a base-drive random response, with
-`--drive`, `--damping`, `--g` and `--random-frames`; `view` and `render` take the same options
+`--drive`, `--damping`, `--g` and `--random-frames`; `--random-output` shows instead the random
+response a SOL 111 run wrote (its PSD and RMS tables). `view` and `render` take the same options
 (see [Random vibration](random-vibration.md)).
+
+A frequency response, complex modes or a transient give one step per frequency, mode or time
+([Complex, frequency and transient results](model.md#complex-frequency-and-transient-results)).
+`--phase DEG` attaches the complex steps at that phase angle (the arrays are `Re(U e^(i DEG))`,
+default 0: the real part; the `_Real`, `_Imag`, `_Mag` and `_Phase` parts are the same at any
+phase). `--phase-sweep N` writes N phases (`--phase` + 360 k / N) of the complex step `--step` as
+the steps of the series (it implies `--all-steps`), every array at each phase, so a VTKHDF or
+`.pvd` file animates one cycle of that frequency:
+
+```bash
+nastran-pv convert run.bdf --results frf.op2 --step 12 --phase-sweep 24 -o out/frf_12.vtkhdf
+```
 
 ### Progress
 
@@ -183,7 +216,7 @@ and floating parts. See [Model tools](tools.md#model-check) for what each check 
 already applied (`--view`, default `pid`; `none` opens the deck without one). `--dry-run` prints
 the command and the generated script instead of launching.
 `view` and `render` also take a `.vtm`, `.vtkhdf` or `.pvd` written by `convert`, which skips the
-deck read. `--results`, `--nsm-set` and `--random` need the deck, so convert with them instead
+deck read. `--results`, `--nsm-set`, `--random` and `--random-output` need the deck, so convert with them instead
 ([Converted files](paraview.md#converted-files)). `--against A` opens a reference model A first,
 for `--view diff` and [side by side](diff.md#side-by-side).
 
@@ -198,8 +231,8 @@ nastran-pv render out/modes.vtkhdf --step 3 --preset results   # a converted ser
 
 `--preset` defaults to `family masses loads spc`, `--out` to `shots/` and `--size` to `1600 1000`.
 `--step` is 0-based. The presets are the views from the toolbar macros: `masses`, `bushes`, `bushrotations`, `beams`, `loads`, `spc`, `rigid`,
-`family`, `group`, `pid`, `mid`, `elementtype`, `thickness`, `nsm`, `results`, `forces`, `stress`, `random`,
-`randomsweep`, `parts`, `check` and `diff`. The two random views need `--random` (or a converted random series),
+`family`, `group`, `pid`, `mid`, `elementtype`, `thickness`, `nsm`, `results`, `forces`, `stress`, `plies`, `random`,
+`randomsweep`, `parts`, `check` and `diff`. The two random views need `--random` or `--random-output` (or a converted random series),
 and `diff` needs `--against A`. Rendering is offscreen, so no ParaView window opens; `--onscreen`
 renders in a visible window instead, for a ParaView build whose offscreen PNGs come out blank.
 `--dry-run` prints the pvpython command, quoted so it can be pasted into a shell.

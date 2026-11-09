@@ -50,20 +50,29 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   mesh blocks. It adds root field data: masses from `massprops.py` (numpy volumes when every solid is linear, else VTK cell sizes for the block; never
   pyNastran's slow `mass_properties`) and a `MAT_*` material table from `materials.py`. Derived
   fields therefore need no deck.
+- `plies.py`: composite layups. `build_shells` calls `add_layup` (Shells `PlyCount` and the
+  `PLY_*` field table, one row per ply of each PCOMP/PCOMPG the shells use, `LAM=SYM` mirrored
+  here: pyNastran's global-ply getter fails on a symmetric PCOMPG); `attach_ply(mb, ply)` lays one
+  ply's layup on the cells (`PlyAngle PlyAxis ...`, from the table, `MaterialAxis` and `Normal`:
+  no deck needed), for `--ply` (and the reader's *Ply*: plugin, #74). Design:
+  `docs/design/2026-11-09-composites.md`.
 - `nsm.py`: property NSM plus the NSM/NSM1/NSML/NSML1/NSMADD set selected by `--nsm-set`/`NSM=` →
   `NSMPerArea|NSMPerLength NSMMass NSMSource` and the `NSM_*` root tables. It runs in
   `build_multiblock` before the masses; its warnings use `deck.warn(..., mass=True)`, which lists
   them first.
 - `result_types.py` / `results.py` / `results_h5.py`: what is attached is declared, one
   `ResultType` per kind of result in `result_types.REGISTRY` (`Displacement`, `VonMisesMax`,
-  `SPCForce`, `MPCForce`, `AppliedLoad`, the element forces, and the stress and strain components
-  per block family): its OP2 tables and H5 datasets (one source, or one per element family),
+  `SPCForce`, `MPCForce`, `AppliedLoad`, the element forces, the stress and strain components
+  per block family, and `GridPointForce`, a root table): its OP2 tables and H5 datasets (one source, or one per element family),
   blocks, location, id key, arrays, reduction, frame and (forces and moments at grids) a root
   resultant. One row per element comes from `picks` (position and columns: a shell's two centre
   fibre rows, a beam's ends; column names through `result_types.resolve` in both readers; OP2 rows
   through a `PickPlan` made once per table, HDF5 array slots through `results_h5.pick_fields`, read
   when a step first needs the type), and principals, max shear and von Mises from
-  `ArraySpec.derive` in `_write`. Table entries are `Op2Table`/`H5Table` named tuples. A cell type
+  `ArraySpec.derive` in `_write`. Composite ply types (`reduce="ply"`) get (EID, ply id) rows from
+  both readers (OP2 `element_layer`, HDF5 `EID`/`PLY`) and `values` keeps one ply per element
+  (`result_types.reduce_plies`: the selection's `ply`, or the row where `ply_by` is largest, its id
+  in a last column); `missing` turns marker values (FB = -1) into NaN first. Table entries are `Op2Table`/`H5Table` named tuples. A cell type
   keyed by EID matches blocks through `ResultType.block_ids` (MPC legs, whose EID is a set id, get
   -1). Each reader also reports every force/stress/strain table no type reads (`_unread`, with
   the shared `result_types.unread_reason`); the deck reader keeps those messages in its root
@@ -76,6 +85,37 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   *Result Types*) holds on the results object, so the series writers honour it. `open_results`
   dispatches on the file suffix. Design and the recipe for a new type:
   `docs/design/2026-11-08-result-registry.md`.
+  Complex tables (`docs/design/2026-11-09-dynamic-results.md`): a type's `complex` parts (all but
+  `VonMisesMax`) make `values` return complex rows; `_write` writes the plain arrays at
+  `results.phase` (`result_types.at_phase`, derived arrays included) and each copying array's
+  `_Real/_Imag/_Mag/_Phase` after the type's others, dropped at every step that does not write
+  them. An OP2 source's `form` and column alternatives cover complex headers; HDF5 `_CPLX`
+  datasets are derived from each source (`FR + i FI`, `results_h5._complex_paths`). Step kinds
+  come from the table and its analysis code (`result_types.step_kind`: `frequency`,
+  `complex_eigenvector`, `transient`), labels from `results.step_label`; root `PhaseAngle` and
+  `Time` exist only on complex and transient steps. A non-step table pairs with a step by subcase,
+  time value (HDF5: domain signature) and form (`results._same_form`: complex with complex,
+  transient with transient). `results.PhaseSweep` re-attaches one complex
+  step at N phases (the results interface, `convert --phase-sweep`).
+- `post/`: the results helpers (`docs/design/2026-11-09-results-helpers.md`), on VTK data like
+  `fields/`. `envelope.py` (`Envelope.add` one model per step, `write` the `<array>_Max/_Min/_AbsMax`
+  and `...Step` arrays of every registry point/cell array), `average.py` (`nodal_average`: per mesh
+  block an unstructured grid with points duplicated per (NID, PID) and the cell arrays averaged
+  onto them; grids are matched by `NID`, since a gathered tree has a point per grid and piece) and
+  `freebody.py` (`select_body` grows the body with the topology rules, `default_rules` by the
+  seeds; `sum_free_body` takes the cut load from the root `GridPointForce*` table plus the body's
+  rigid elements' MPC forces at the cut grids, else from equilibrium). The CLI runs the
+  envelope before the field options and the averaging and free body after `--select`;
+  `post.StepHelpers` wraps the results so that the series writers re-run those two after every
+  `attach`; a VTKHDF series' signature pass calls `attach_signature`, where the averaging writes
+  zeros (`post.average.Averager` keeps each block's geometry) and the free body keeps the table it
+  sums for the writing pass (`FreeBodySteps`). The plugin's *Nastran Envelope* iterates its input's time steps with
+  `CONTINUE_EXECUTING` (its output has no time steps, so a time change does not re-execute it).
+  A `ResultType` with `location="table"` (`GridPointForce`, off by default; `results.also`
+  turns it on for the free body) writes root arrays (`table_names`), not block arrays, on the
+  union of the file's rows (`_Results.table_keys`, NaN where a step has none) so that every step
+  has one size; its OP2 source reads the rows itself (`Op2Source.rows`), on first use and once per
+  table and time (`Op2Results._table_rows`), which also normalises MYSTRAN's negated rows.
 - `fields/`: `derived.py` (material, quality, size, cg, pidmass), `tables.py` (`read_table` and
   `map_table` by EID/PID/MID/NID/FAMILY/GROUP; text columns become codes plus a `<name>Names`
   table), `db.py` (SQLite or SQLAlchemy), and `calc.py` (`calculate` with a restricted-namespace
@@ -116,7 +156,8 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   coordinate systems from the root `CORD_*`/`GRIDCS_*` tables (`coords.py`, written by `assemble`;
   `CoordSystemCount` marks files that have them, older ones skip with `ModelDiff.notes`).
   `annotate` writes `DiffStatus`/`DiffReason`/deltas, a `Removed` block (in none of the mesh-block
-  lists; `ItemType` per cell) and `DIFF_*`/`DIFFMASS_*`/`DIFFLOAD_*` tables onto B. Used
+  lists; `ItemType` per cell, point `NID` on every item) and `DIFF_*`/`DIFFMASS_*`/`DIFFLOAD_*`
+  tables onto B. Used
   by `diff`, `convert --diff-against`, the *Nastran Diff* proxy (two inputs) and the `diff` view;
   `nastran_views.side_by_side` adds a second, camera-linked view. The reader tags its output with
   `NPVWholeModel` (field string + array signature) so a Nastran Diff fed directly by it diffs the
@@ -124,17 +165,30 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   object identity cannot be used. `Tolerances` (frozen, hashable) also carries what is compared:
   `kinds` (`KINDS`; unchecked ones skip with a note), `ignore_moves`, `grid_absolute`, per-kind
   `load`/`stiffness`/`mass` and an absolute `floor`; `show_only` filters an annotated output by
-  status, reason bits and the Removed block (display only: the proxy caches the annotated B per
-  input objects + MTimes + `Tolerances`).
+  status, reason bits and the Removed block (display only). The proxy caches the annotated B per
+  model content (a reader's whole multiblock, which visibility and time steps leave as it is; else
+  the input object + MTime) + `Tolerances`; on a cache hit `reattach` puts the reader's per-step
+  arrays back on a shallow clone of it, never on the kept output that earlier outputs share
+  (`own_arrays`: what annotate wrote, by identity, stays). Its output 0 carries `NPVDiff`, naming a
+  `vtkWeakReference` to the filter (a Python weakref dies with the wrapper ParaView drops), whose `_entry` (the whole annotated B, both readers' registry tags,
+  A's whole model, the Show settings, the output's leaf signature) the comparison's *Nastran Scope*
+  uses: its cached cut only for the Diff's own output (`_leaf_signature`: ParaView hands the next
+  filter new datasets with the same points), a fresh cut for a moved copy (`_structure` matches),
+  else the input as it is.
 - `selection.py`: selection from a file of IDs. `read_ids` reads CSV/TSV/text/Excel/JSON (ranges,
   `THRU`/`BY`; the key comes from the column header) into an `IdList`; `item_masks` matches it per
   block (EID/PID/MID/FAMILY/GROUP, NID with `grids="all"|"any"`; masses, SPCs and loads on the grids
   of a selected cell join); `apply_selection` keeps the selection or marks it (`Selected`,
-  root `SelectionInfo`). Used by `--select` (applied after the field options) and, through
+  root `SelectionInfo`). `scope_masks` is the overlays' join (R2); `comparison_masks` cuts a diff
+  output with it by B's scope and its Removed block by A's (`removed_mask`: A's kept items by EID,
+  loads and SPCs by set and grid); `ScopedCopy` holds such a cut and re-slices only the arrays a new
+  time step replaced. Used by `--select` (applied after the field options) and, through
   `tree.Visibility`, by the reader's *Selection File* and the NPV Show Only/Hide/Highlight File macros.
 - `store.py`: SQLite in long format (`runs`, `elements`, `nodes`, `element_values`,
   `node_values`), plus `<db>_vtm/run_<id>.vtm`.
 - `cli.py`: the `convert`, `stats`, `check`, `sections`, `diff` and `store` commands, with shared field options.
+  The `nastran-pv` command enters at `__main__.main`, which answers `--version` from `versions.py`
+  (standard library only) before importing `cli.py` and its dependencies.
   `launch.py` provides `view`, `render` and `setup`, and `locate.py` (standard library only) finds
   the ParaView executables (one search for the CLI and `install_deps.py`: env, `PATH`, then the newest
   `ParaView*` by folder version in the install folders and the home folder), the plugin folder (`NASTRAN_PV_PARAVIEW_DIR`, then the wheel's
@@ -142,6 +196,11 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   `paraview/_vendor` in a checkout, a per-user folder per ParaView Python for an installed package).
   `nastran_pv/__init__.py` loads `Deck`/`load_deck` lazily, so `nastran_pv.locate` imports without
   pyNastran.
+- `deprecation.py`: the deprecated-alias helpers of the [deprecation policy](versioning.md#deprecation)
+  (`warn`, `renamed_keywords`, `renamed_function` for Python names; `notice` for what users type;
+  `flag_alias`, a hidden alias on one subcommand's parser, for CLI flags). The public Python names are those on [Python API](api.md),
+  rendered by autodoc from their docstrings; `tests/test_api_docs.py` keeps the page and the
+  modules' `__all__` in step.
 - `progress.py`: stderr stages and throttled counters (`Progress`, silent `NULL`). `load_deck` hooks
   pyNastran's include opener and the model's `add_card` only for the read and removes the hooks
   afterward. The CLI's `-q` disables it; the reader passes a callback that drives ParaView's
@@ -149,22 +208,47 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
 - `deform.py`: `deform(data, scale)` moves every block of a multiblock or model tree by
   `scale` x `Displacement` (blocks without one follow their grids by NID); `peak_scale` gives the
   8 %-of-the-model scale; `Deformer` gathers a model's moving points once and `apply(scale)` is
-  per frame (the plugin keeps one per input object + MTime). The views draw through the plugin's *Nastran Deform* (`NPV deform`),
-  so `nastran_views.animate_modes` vibrates whatever view is shown; analysis filters stay on the
-  undeformed model. `play_mode` (after Animate Mode) sets every Nastran Deform downstream of the
-  reader to *Vibrate Mode*: the filter holds its input at *Mode Time* (`RequestUpdateExtent`) and
-  publishes one cycle of phases as `TimestepValues`, the reader's own time is suppressed in the
-  time keeper, and the play button loops the mode; `held_time` makes `Model()`/`current_step` read
-  the held mode, and every view (`apply`) and `_prepare_modes` call `stop_mode_animation` first.
-  The undeformed ghost goes through a scale-0 deform (`NPV undeformed model`) so nothing reads the
-  reader at a phase time.
+  per frame (the plugin keeps one per input object + MTime); a complex step's
+  `Displacement_Real/_Imag` (own or by grid) let `apply(scale, phase)` draw any phase,
+  `peak_scale` sizes it by `Displacement_Mag`, `reference_phase` finds the `PhaseAngle` its arrays
+  were attached at (root, or a VTKHDF block's copy) and `peak_phase` its largest swing.
+  `matched_index`/`matched_time` match steps by index (R5: A's step of the index of B's step at a
+  time); `grid_displacements` is a whole model's NID lookup, which `diff.removed_displacement` uses
+  to give A's removed items A's displacement. The views draw through the plugin's *Nastran Deform*
+  (`NPV deform`), so `nastran_views.animate_modes` vibrates whatever view is shown; analysis
+  filters stay on the undeformed model. `play_mode` (after Animate Mode) sets every Nastran Deform
+  of the model (`model_deforms`: the model source upstream, through a Nastran Diff its B) to
+  *Vibrate Mode*: the filter holds its input at *Mode Time* (`RequestUpdateExtent`) and publishes
+  one cycle of phases as `TimestepValues`, the reader's own time is suppressed in the time keeper,
+  and the play button loops the mode; `held_time` makes `Model()`/`current_step` read the held
+  mode, and every view (`apply`) and `_prepare_modes` call `stop_mode_animation` first. In a
+  comparison B leads and A vibrates too, at its own step of B's index and B's amplitude, both
+  readers suppressed. *Match Steps* (a held time per model, R5) makes a deform follow another
+  model's steps by index: at their n-th the input is read at its own n-th step, and without one it
+  is not moved (the output is stamped with the asked time, so a time change re-executes only the
+  deform). The Nastran Diff does the same for A on its own (`RequestUpdateExtent`: A's step of B's
+  index) and gives the Removed block A's displacement then (`diff.removed_displacement`), so A's
+  removed items move with A. The undeformed ghost goes through a scale-0 deform (`NPV undeformed
+  model`) so nothing reads the reader at a phase time. On a complex step (the Deformer's
+  `complex`) *Vibrate Mode* turns the shape through its phase at full *Amplitude* (from the input's
+  root `PhaseAngle` + *Phase*) instead of a sine, and the filter writes `DeformPhase` next to
+  `DeformScale` for *Nastran Scope*.
 - `randvib.py`: base-drive random vibration from normal modes (no SOL 111 needed). `RandomResponse`
   has the results interface (`steps`/`times`/`attach`): steps are frequency frames, every frame
   carries the static `AccelRMS AccelN0 DispRMS DominantMode*` and its own `AccelASD`. Participation
   uses a lumped mass from the built blocks (`lumped_mass`), so mode normalization does not matter.
-  CLI `--random/--drive/--damping/--g`; reader `Random*` properties; views `random`/`randomsweep`
+  `SolverRandom` reads a SOL 111 run's own `psd/rms/no` acceleration and displacement tables into
+  the same arrays (`--random-output`, reader *Random Output*; root `RandomSource`, components left
+  in CD). CLI `--random/--drive/--damping/--g`; reader `Random*` properties; views `random`/`randomsweep`
   (the sweep's frequency label indexes `RandomFrameFrequencies` by `time_index`: a temporal VTKHDF
   has no root field data, and `min`/`max` are numpy reductions in PythonAnnotation).
+- `labels.py`: `unique_labels(paths)`, the models' labels (scene layers R6): the file name, with as
+  many parent folders as it takes when two open models share a file name (`a/model.bdf`,
+  `b/model.bdf`). `nastran_views._labels` uses it for texts and `NPV ...` names.
+- `scene.py`: the scene registry's bookkeeping (no VTK): `Layer` (the objects a layer showed, its
+  view arguments, and the `summary` its view wrote, with `where` it went) and `Scene` (one
+  coloring, the overlays, the comparison's role, partner, diff and side; `summary(header)` composes
+  the view's one info text, the layer drawn last, `latest`, in full and the others by their first line).
 - `glyphs.py`: mass ellipsoids, bush triads, load arrows (`load_glyphs`; forces single-, moments
   double-headed) and SPC markers (`spc_glyphs`) as real `vtkPolyData`, plus the subsets the filters
   offer (`minimum_mass`, `bush_selection`, `default_load_set`).
@@ -172,9 +256,12 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   (masses, bushes, loads, SPCs, beam sections), the deform filter (it writes the scale it applied as
   root `DeformScale`), *Nastran Scope* (after the model's deform: the overlays' copy of the model
   cut by `selection.scope_masks`, moved by `DeformScale`; both deforms look grid displacements up
-  in the whole model, `Deformer(grids=)`), *Nastran Files* (the `Files` checklist and
+  in the whole model, `Deformer(grids=)`; on a Nastran Diff's output, the comparison's layers: the
+  Diff's whole annotated B cut by `selection.comparison_masks` of both readers' current scopes, then
+  the Diff's Show filter), *Nastran Files* (the `Files` checklist and
   tree on any model, converted files included), three field filters, four topology
-  filters (grow, parts, path, model check) and the two-input *Nastran Diff*.
+  filters (grow, parts, path, model check), the results helpers (*Nastran Envelope*, *Nastran Nodal
+  Average*, *Nastran Free Body*) and the two-input *Nastran Diff*.
   - Shared settings are class decorators, one PropertyGroup each: `_with(label, setters)` copies
     `@smproperty` setters into the class (renumbered past its own lines, so the group follows the
     filter's own settings) and appends the group XML after them; `_with_glyph_size`,
@@ -195,30 +282,76 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
     model tree is cached by the visibility settings too; its checklists are filled in
     `RequestInformation`, before the first Apply.
 - `paraview/nastran_views.py`: view functions (`apply(name)`) on the deck reader or a converted
-  `.vtm`/VTKHDF (`find_reader`, `is_model_file`: root field `DeckPath` or `ModelMass`; `deck_reader` guards the
-  commands that need the deck), `index_colors`, the selection
+  `.vtm`/VTKHDF (`subject(view)`: the model follows the view; `find_reader`, `is_model_file`: root
+  field `DeckPath` or `ModelMass`; `deck_reader` guards the commands that need the deck),
+  `index_colors`, the selection
   commands (grow/path from selection, Femap-style show only/hide/show all, show only/hide/highlight
-  from an ID file), the diff view and `side_by_side`, and the macro entry point `run_macro`
+  from an ID file), the diff view, `side_by_side` and `single`, and the macro entry point `run_macro`
   (`ACTIONS` for the macros that are not views).
   - Scene layers: one `scene.Scene` per render view (`scene_of`): one coloring layer plus named
-    overlay layers, each the objects `_recorded` saw shown through `_show`. `apply` replaces the
-    coloring or adds/toggles an overlay and hides only what the dropped layer owned (`_hide`, per
-    lookup table); `clear` (NPV Clear) is the full reset.
+    overlay layers, each the objects `_recorded` saw shown through `_show` (with the view's
+    arguments, `Layer.args`, to draw it again). `apply` replaces the coloring or adds/toggles an
+    overlay and hides only what the dropped layer owned (`_hide`, per lookup table); `clear` (NPV
+    Clear) is the full reset of the layers.
+  - Which model (R4): `subject(view)` is a comparison side's model by its role (from the Diff's
+    sides, `diff_sides`, else `Scene.side` for a pair without a diff), else the scene's model unless
+    the user selected another model's object since the last command (`_FINISHED`), else the active
+    source's. `owner(src)` resolves a pick: through a Diff to B, or to A for an object that draws
+    the Removed block.
+  - Comparisons (R3): `Scene.role` ("A"/"B"), `partner` (the other view's id: `_SCENES` holds both
+    views of a pair) and `diff`. `_begin_comparison` (NPV Diff) takes the Diff a model is in
+    (`diff_with`, either side) or, for a given pair of models, `diff_for(b, a)` (one with exactly
+    those sides, else a new one). B's side is a `Model(diff=, role="B")` whose data and
+    every extract and overlay come from `compared(reader, diff)`: `NPV diff scope` (Nastran Scope on
+    the Diff) then `NPV deform diff` (a B deform, so `set_deformation` moves it); its objects are
+    named `NPV diff <what> [B]` for B's own NPV diff and `NPV diff <id> <what> [B]` for any other
+    (`_diff_what`), so comparisons sharing B keep apart, and overlays are colored by `DiffStatus`
+    (the glyph filters carry it).
+    `_draw` adds A's removed items (`removed_layer`: a Threshold on `ItemType`, `REMOVED_ITEMS`):
+    the elements under every coloring, an overlay's kind with the overlay. A pair (`side_by_side`)
+    runs every `apply` in both views (`_pair`), A's side as a single model plus the removed layer,
+    and shares the coloring's legend or range (`_share_coloring`); a session change redraws a view's
+    layers (`_redraw`). Visibility commands write both readers by ID (`_scope_readers`).
   - Overlays follow the scope (R2): every overlay's glyph filters and extracts (`NPV scoped <block>`)
     draw from `scoped(model)`, the `NPV scope` filter (*Nastran Scope*) after `NPV deform`; its counts
     and "nothing to draw" checks use `Model.scoped(name)`, and `scope_active(reader)` (the reader's
     information property `ScopeActive`: its settings as a read applies them, 0 after a failed read;
     asking does not run the reader) picks the "in the reader's scope" text. `_feed` re-feeds objects
     made before (fed by `NPV deform`).
-  - The shared `NPV info` text belongs to no layer: `Scene.info` names the layer that wrote it last,
-    and `apply` hides it when that layer goes (an overlay toggled off, a coloring replaced by one
-    that writes none). `scene_of` empties a scene whose reader was deleted and hides what is left
-    of it in the view (its objects still open, the `NPV ...` text).
+  - Annotations (R6): one text per view, `NPV info [<view>]` (`info_name`, `info_of`). A view
+    function's `info_text` inside `_recorded` is its layer's `summary`; `write_info` composes the
+    view's text from `Scene.summary` under `_header` (B's view of a comparison: the diff summary,
+    whatever the coloring; A's view of a pair: `A: <label> (the reference)` and, when A has no step
+    of B's index, that it does not move), and hides it when nothing is left to say. Labels
+    (`_labels`, `_label`): the Pipeline Browser name, or for models that share it
+    `labels.unique_labels` of their paths. Every command (`@_command`: the views, the macros,
+    `run_macro`) runs `sync_labels` once when it starts, which renames a model's `NPV ...` objects when
+    its label changed, and reads the labels from that map while it runs; outside a command `_labels`
+    works them out without renaming, and `load_reader` syncs after opening a model. `scene_of` empties a scene whose reader was deleted and hides what is left of it
+    in the view (its objects still open, the `NPV ...` texts); a deleted Diff or model ends the
+    comparison the same way, and a closed partner view ends the pair.
+  - Time (R5): `_layout_models(view)` is `(B, [A])` in a comparison, else the view's model; the
+    animation commands take B's steps and move A's deforms too (`_kept_view`, `_mode_sweeps`,
+    `_mode_labels`: A's own label, or that it has no such step). `_sync_steps` (end of every
+    `_apply_view`) puts B's time steps in the *Match Steps* of A's deforms while A is the left side
+    of a pair (`_followed`), and empties every other's; `Model` of that A reads A's step of B's index
+    (`Model.step`, `Model.unmatched`; without one its data drops the step's arrays, as A's deforms do).
+    NPV Results in a pair draws A at B's scale (`_share_scale`, after both views). `_prepare_modes`
+    never redraws: only a view with no layers gets NPV Results. A's mode label comes from the reader's
+    *StepLabels* (an information property: each step's name, without reading A at it). `play_mode`
+    records the readers it took out of the time keeper (`_SUPPRESSED`), so Stop gives back A even with
+    no deform of its own (one comparison view).
+  - Pipeline Browser (R7): no command shows a raw reader. *Highlight File* sets its selection on the
+    reader directly (`pv.SelectThresholds` would show the reader) and draws `NPV highlight`, an
+    ExtractSelection of `NPV deform` by that selection; *Index Colors* uses the active source's
+    visible representation (`_shown_rep`, which creates none), else the view's coloring layer.
   - Mode animation: `mode_times` (the reader's steps, or one step for a converted single-step
     file with a `Displacement`), `animate_modes`/`animate_mode` and `save_mode_animations`. They
-    run inside `_kept_view`, which puts back the view's time and every NPV deform scale, and
-    raise for modes whose step has no displacement. `save_mode_animations` renders each distinct
-    sine phase once, captures it with SaveScreenshot (`capture_view`; reading the render window
+    run inside `_kept_view`, which puts back the view's time and every NPV deform scale and
+    *Phase*, and raise for modes whose step has no displacement. Each frame goes through
+    `_Deflect` (a sine of the scale, or *Phase* stepped through 360 degrees on a complex step,
+    `is_complex_step`). `save_mode_animations` renders each distinct
+    sine phase (or complex frame) once, captures it with SaveScreenshot (`capture_view`; reading the render window
     directly gave stale frames on some drivers) and quantizes every frame of a mode to one
     palette; a mode whose frames never change is an error. It creates named, reused pipeline objects (`NPV <what> [<reader>]`).
   `render_model.py` is a thin batch wrapper around it.
@@ -253,8 +386,12 @@ Every gotcha found so far, by area. The few that bite on any change are also in 
     field data survive); `nastran_views.fetch` copies it back from the data information.
   - The reader outputs the model tree: select blocks with `nastran_views.selectors`
     (`/Root/Model/<b>`, `/Root/<b>` and, for VTKHDF, `/assembly/<b>`), and read data through `nastran_views.Model` (gathered).
-  - Opening the same deck twice gives two readers with one label; `_name` then adds the proxy id,
-    so they do not share `NPV ...` objects.
+  - Opening the same deck twice gives two readers with one label; `_labels` then adds the proxy id
+    to the second, so they do not share `NPV ...` objects. Two decks with one file name from
+    different folders are labelled by folder (`a/model.bdf`).
+  - `pv.SelectThresholds`, `pv.GetRepresentation` and `pv.GetDisplayProperties` *show* a source the
+    view does not show yet (`GetRepresentation` calls the controller's `Show`): to select on or ask
+    about a hidden source, set its selection input directly or walk `view.Representations`.
 - ParaView 5.x (tested 5.13.1, `out/pv513/` locally, gitignored): `servermanager.Fetch` returns an empty
   multiblock for a `vtkPartitionedDataSetCollection`, so `nastran_views.fetch` copies the
   builtin session's output instead (remote pvserver: a clear error). Setting
@@ -280,7 +417,8 @@ Every gotcha found so far, by area. The few that bite on any change are also in 
   C++ (an observer, a logger the deck keeps), because Python's garbage collector cannot see it: a
   deleted reader or checklist filter was never freed, caches and all. Checklist observers use
   `vtkutil.modified_callback` (a `vtkWeakReference`), and `load_deck` lets go of the caller's
-  progress when the read ends. pv_smoke deletes a reader and its filters and checks they are freed.
+  progress when the read ends. pv_smoke deletes a reader and its filters (a Diff and its Scope too)
+  and checks they are freed.
 - VTK reports the observers added through a wrapper to Python's garbage collector
   (`PyVTKObject_Traverse`). When the cyclic collector frees a wrapper, it clears those observers
   first, so a `DeleteEvent` observer would run cleared and crash. `vtkutil` keeps each

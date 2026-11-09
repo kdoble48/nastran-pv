@@ -66,6 +66,13 @@ The full documentation, including an interactive 3D view gallery, is at
   these docs, and the version policy
 - [Changelog](https://github.com/kdoble48/nastran-pv/blob/main/CHANGELOG.md)
 
+## Reporting a bug
+
+Open an issue with the
+[bug report form](https://github.com/kdoble48/nastran-pv/issues/new?template=bug_report.yml). It
+asks for a deck that shows the problem (a cut-down one for a confidential model), the results file
+when results are involved, and the output of `nastran-pv --version`.
+
 ## License
 
 MIT. See [LICENSE](https://github.com/kdoble48/nastran-pv/blob/main/LICENSE).

@@ -46,6 +46,22 @@ def test_view_page_tabs_iframe_and_escaped_text():
     assert "**NPV PID**" in page and "CC BY 4.0." in page
 
 
+def test_view_page_gui_step_and_results_file():
+    """An entry that is a view's setting or a filter says what to click; a result entry says to give
+    the reader the results file."""
+    meta = dict(_view("freebody"), gui="apply *Filters > Nastran > Nastran Free Body*", results="run.op2")
+    page = g.view_page(meta)
+    assert ("open the deck with the nastran-pv reader (with the results file as its *OP2 File Name*) and apply "
+            "*Filters > Nastran > Nastran Free Body*." in page)
+    assert "**NPV FREEBODY**" not in page
+    assert "OP2 File Name" not in g.view_page(_view())
+
+
+def test_index_says_which_results_have_no_scene():
+    page = g.index_page({"generated": "2026-11-09T00:00:00+00:00", "commit": "abc", "views": [_view()]})
+    assert "frequency response, transient or complex" in page and "../model.md#result-types" in page
+
+
 def test_results_page_one_tab_per_mode():
     frames = [{"label": "Mode 1", "frequency": 12.345, "scene": "demo-results-m1.vtksz",
                "png": "demo-results-m1.png", "text": []},

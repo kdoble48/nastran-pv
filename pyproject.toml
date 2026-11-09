@@ -49,7 +49,7 @@ dependencies = [
 
 [project.optional-dependencies]
 vtk = ["vtk>=9.3"]                    # kept so that `pip install ".[vtk]"` still works
-h5 = ["h5py"]                         # MSC/NX HDF5 results
+h5 = ["h5py"]                         # MSC/NX HDF5 results; VTKHDF series and reading VTKHDF back
 tables = ["pandas", "openpyxl"]       # Excel tables for --map
 sql = ["pandas", "sqlalchemy"]        # non-SQLite databases for --map
 all = ["vtk>=9.3", "h5py", "pandas", "openpyxl", "sqlalchemy"]
@@ -57,7 +57,7 @@ gallery = ["pillow"]                   # docs/build_gallery.py thumbnails
 test = ["pytest", "pyflakes", "pyyaml", "vtk>=9.3", "h5py", "pillow"]   # pyyaml: the workflow tests
 
 [project.scripts]
-nastran-pv = "nastran_pv.cli:main"
+nastran-pv = "nastran_pv.__main__:main"   # answers --version before importing the CLI (versions.py)
 
 [project.urls]
 Homepage = "https://kdoble48.github.io/nastran-pv/"

@@ -10,6 +10,81 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Added
 
+- The Python API on the docs site ([Python API](docs/api.md)): `load_deck`, `build_multiblock`
+  and `Options`, `open_results` and the results objects, the `.vtm` and VTKHDF writers, the
+  result types, fields, model tools, beam sections and results helpers, rendered by autodoc from
+  their docstrings (several written for it). Each of those modules lists its public names in
+  `__all__`, and the page defines the public Python API of the version policy. A deprecation
+  policy ([Deprecation](docs/versioning.md#deprecation)): a renamed or removed public name warns
+  (`DeprecationWarning`, or a line on stderr for a CLI flag), is listed under *Deprecated*, and
+  lives at least until the next minor release before 1.0 and the next major release after; the
+  helpers are in `nastran_pv.deprecation` (`flag_alias` for CLI flags). The docs build now
+  installs pyNastran, VTK and h5py, which autodoc imports (#76).
+- Without h5py (the `h5` extra), `write_vtkhdf` and an uncompacted series still write, and a
+  compacted VTKHDF series, reading a VTKHDF file back and `H5Results` stop with an `ImportError`
+  that names the extra, before writing anything (#76).
+- `nastran-pv --version`: the version of nastran-pv, the folder it runs from (and the commit of a
+  source checkout), the versions of Python, pyNastran, numpy, VTK and h5py, the `pvpython` it finds
+  and the OS. It answers before the CLI imports its dependencies, so a missing or broken VTK or
+  pyNastran is named, not a traceback; the `nastran-pv` command now starts in
+  `nastran_pv.__main__:main`. A bug-report
+  issue form (`.github/ISSUE_TEMPLATE/bug_report.yml`) asks for them, for a deck that shows the
+  problem (a cut-down one for a confidential model), the results file when results are involved,
+  what was expected and seen, and the card report and warnings; the README links it (#78).
+- Composite plies in ParaView: the reader's *Ply* (`convert --ply`: a ply id, or 0 for each
+  element's critical ply), the *Nastran Ply Axes* filter (a ply's fibre and 2-directions as lines
+  through each shell, from the layup table, so on converted files too; ply 0 draws the reader's ply
+  or the element material axes) and the NPV Plies view and macro (`view`/`render --preset plies`:
+  the shells by `PlyFailureIndexMax`, `PlyVonMises` or the ply's layup, grey where an element has
+  no such ply, with the ply axes; `nv.apply("plies", ply=, quantity=, component=, size=, both=)`:
+  it turns on only the result types the quantity needs, and a bad argument changes nothing).
+  Ply ids may be -N, the mirrored copy of a symmetric PCOMPG ply.
+  The views that recolor a reused block (NPV Forces, NPV Stress, NPV Plies) now hide the legend
+  of the array they replace (#74).
+- Composite layups and ply results (roadmap task 13). A deck whose shells use a PCOMP or PCOMPG
+  gets Shells `PlyCount` and the field table `PLY_PID PLY_Index PLY_ID PLY_MID PLY_Thickness
+  PLY_Angle PLY_Z PLY_SOUT PLY_FT` (one row per ply, `LAM=SYM` and `SMCORE` expanded, PCOMPG global ply ids,
+  `-GPLYID` for the mirrored copy of a symmetric PCOMPG's ply); other decks are unchanged. The result types `PlyStress` (`PlyStress PlyInterlaminarStress
+  PlyPrincipalStress PlyMaxShearStress PlyVonMises`), `PlyStrain` and `PlyFailureIndex`
+  (`PlyFailureIndex PlyBondIndex PlyFailureIndexMax`, on by default) read the OP2 composite stress,
+  strain and failure-index tables and the MSC/NX HDF5 `*_COMP` datasets, one ply per element:
+  `--ply N` (a ply id) for ply N, which also lays its layup on the shells (`PlyThickness PlyAngle
+  PlyMID PlySOUT PlyZ PlyAxis`, the ply's fibre direction), or `--ply max` (the default) for each
+  element's critical ply, with its id in `PlyStressPly` and the like; `convert` names the ply types that have
+  the ply and warns about the others. Those tables leave the "not attached" report; the ply types read
+  real tables only (a complex ply table stays reported) (#71).
+- Results helpers (roadmap task 12; docs/results-helpers.md), from the CLI and as filters:
+  - Envelopes: `--envelope [max min absmax]` (`convert`, `stats`, `store add`; `--envelope-steps`)
+    and *Nastran Envelope* (over the input's time steps) add `<array>_Max`, `_Min`, `_AbsMax` and
+    the step of each (`_MaxStep`, ...) for every result array, per component.
+  - Element-to-node averaging that does not cross PID boundaries: `convert --average [ARRAY ...]`
+    (`--average-within pid|mid|family|group|none`) adds the `Averaged` block, the mesh blocks on
+    points duplicated per (grid, PID) with the averages as point arrays; *Nastran Nodal Average*
+    outputs the same. Each step of a series gets its own.
+  - Free-body sums: `convert --free-body SEEDS` (with `--free-body-rules`, by default within the
+    seeds' properties, and `--free-body-point`) and
+    *Nastran Free Body* (table and arrows at the summation point) give the load a free body grown
+    under the traversal rules transmits through its cut grids, from the grid point force balance,
+    the body's rigid elements' MPC forces there included, with the applied and SPC forces inside
+    it as the check; without GPFORCE, from equilibrium.
+  - The `GridPointForce` result type (OP2 `grid_point_forces`, HDF5 `NODAL/GRID_FORCE`), off by
+    default and turned on by `--free-body`: the balance's element rows as a root table per step
+    (a new `table` location in the registry; every step has the file's rows, so a VTKHDF series
+    holds subcases with different GPFORCE sets), MYSTRAN's negated OP2 rows normalised (#73).
+- Complex, frequency and transient results (roadmap task 11). A frequency response (SOL 108/111),
+  complex modes (SOL 107/110) and a transient (SOL 109/112) load as time series in the reader and
+  convert to `.pvd` or temporal VTKHDF (compaction unchanged): one step per frequency, complex mode
+  or time (`Subcase 1 12.5 Hz`, `Subcase 1 complex mode 2 (10 Hz)`, `Subcase 1 time 0.01`; root
+  `Frequency`, `Time`). Every result type but `VonMisesMax` reads complex tables from OP2 and from
+  MSC/NX HDF5 `*_CPLX` datasets: each array that copies columns gets `<array>_Real`, `_Imag`,
+  `_Mag` and `_Phase` (degrees, Nastran's convention), and the plain arrays, derived ones included,
+  are the response at the phase angle `convert --phase` / the reader's *Phase Angle* (default 0,
+  the real part; root `PhaseAngle`). New default types `Velocity` and `Acceleration`. NPV Animate
+  Mode, Animate All Modes and Save Mode Animations turn a complex step through its phase
+  (*Nastran Deform* *Phase*), and `convert --phase-sweep N --step K` writes N phases of one
+  frequency as a series. `--random-output` (reader *Random Output*) shows a SOL 111 run's own PSD,
+  RMS and zero-crossing tables in the random arrays and views (`AccelRMS`, `DispRMS`, `AccelN0`,
+  `AccelASD`; root `RandomSource`). Existing outputs are unchanged (#72).
 - NPV Forces and NPV Stress views (`view`/`render --preset forces stress`): each block colored by its
   element forces (shells `MembraneForce`, lines `AxialForce`, bushes, springs) or by von Mises stress
   (shells at the top fibre, solids, lines `MaxStress`); `nv.apply("stress", quantity=, fibre=,
@@ -28,6 +103,31 @@ All notable changes to nastran-pv are listed here. The format follows
   type reads (composite plies, complex tables, STRCUR plate strains, CSHEAR, ...) is reported in the
   warnings (and, in the reader too, the root `Warnings`) instead of dropped silently, and `convert`
   names the types it left out (#64).
+- Comparisons follow the scene (scene layers PR 2, rules R3 and R4): after *NPV Diff* every macro in
+  the view draws from the diff (colorings by their array, overlays by `DiffStatus` with A's removed
+  items of their kind in red), cut by both models' scope; the visibility macros write A's and B's
+  readers by ID, picks on A's removed items are A's, and the model a macro acts on follows the view.
+  *NPV Side by Side* draws every later macro in both views and is drawn again in place from either
+  view; the new *NPV Single* macro ends a comparison. The Nastran Diff compares again only when a
+  model's content changes, not on a scope change or a time step (uCRM-9 coarse: a scope change after
+  NPV Diff 2.1 s -> 0.75 s, NPV Masses 0.9 s -> 0.14 s). The mass, bush, load and SPC glyphs and beam
+  sections carry `DiffStatus`, and the diff's Removed block knows the grid of a removed mass or bush.
+  `tests/data/same_name/` holds a same-named pair (#67).
+- Time and texts follow the scene (scene layers PR 3, rules R5 to R7). A comparison's steps match by
+  index: A shows its own step of B's index (mode 3 with mode 3), also when the time controls step,
+  and stays undeformed without one (*Nastran Deform* gains *Match Steps*, which NPV Side by Side sets
+  on A's side, and shows none of A's results there; the Nastran Diff reads A at that step and moves
+  A's removed items with A, complex steps too; NPV Results draws a pair at one scale). NPV Animate
+  Mode, Animate All Modes, Save Mode Animations and the play button move both models, at one
+  amplitude, with both readers out of the time controls while playing; they never redraw the view
+  (only an empty view still gets NPV Results). Each view has one text, `NPV info [<view>]`, listing
+  its layers (the one clicked last in full, the others by their first line), after the diff summary
+  in B's view of a comparison and `A: <label>` in A's (`nv.info_of(view)`). Two open models with one
+  file name are labelled by folder (`a/model.bdf`, `b/model.bdf`, `labels.unique_labels`) in texts
+  and `NPV ...` names, which are renamed with a label (once per command). NPV Highlight File no longer
+  shows the reader: it draws the selection as *NPV highlight* (in each view of a pair that has the
+  ids); NPV Index Colors with a hidden
+  source selected colors the view's coloring instead of showing that source (#75).
 - Pressure loads and GRAV drawn: PLOAD, PLOAD2 and PLOAD4 (shells, THRU ranges, solid faces, corner
   pressures, N1-N3 directions) become the `Pressures/SID_n`/`LOAD_n` blocks, a polygon per loaded
   face with `Pressure CornerPressure PressureDirection PressureForce` and the set's
@@ -124,6 +224,15 @@ All notable changes to nastran-pv are listed here. The format follows
   a `vX.Y.Z` tag to PyPI ([Releasing](docs/versioning.md#releasing)). The package metadata gains
   classifiers, project URLs and keywords, and test CI also runs Python 3.13 and 3.14, with
   pyNastran `main` at a pinned commit and pyNastran's own self-checks on (#69).
+- Gallery result scenes: `docs/build_gallery.py` also solves, with MYSTRAN, the uCRM-9 static
+  cruise case (a copy with CQUADR written as CQUAD4 and PSHELL MID4 blanked), the demo tray under
+  1 g and a pressure (`make_demo.py --deck static`) and a composite plate (`--deck plate`), and
+  shows displacement, element forces, stress, SPC and MPC forces, applied loads, a free body, nodal
+  averaging, the deck's pressures and GRAV, and plies. A gallery entry can be a view with fixed
+  arguments or a filter scene (`export_site.py`), a single static step is one scene (not a
+  one-mode tab), and `--out` builds elsewhere. Frequency response, transient and complex results
+  have no scene (MYSTRAN solves none); the gallery index says so. The export takes each display's
+  own color map for its legend, so the plies scene no longer shows a stray 0 to 1 scale bar (#77).
 
 ### Changed
 
@@ -139,7 +248,7 @@ All notable changes to nastran-pv are listed here. The format follows
   opts out, and `--dry-run` quotes the command it prints (#62).
 - Views combine instead of redrawing (#54): a coloring (PID, Thickness, Results, ...) replaces the
   coloring and keeps the overlays, an overlay (Masses, Loads, SPC, ...) adds itself and a second
-  toolbar click removes it, and only NPV Clear (and Side by Side) resets the view. Overlays follow
+  toolbar click removes it, and only NPV Clear resets the view. Overlays follow
   the reader's scope: with a group, a Show Only list or a selection file, NPV Masses, Bushes, Rigid,
   SPC and Loads draw what hangs off the kept elements (through RBE2/RBE3/CBUSH chains), and EIDs the
   scope names win.
@@ -174,8 +283,17 @@ All notable changes to nastran-pv are listed here. The format follows
 - The README and the Install page lead with `pip install nastran-pv`; installing from a clone
   moves to *From a clone* (#70).
 
+### Deprecated
+
+- `Rules(within_pids=True)` and the `--rules` token `within_pids`, the old spellings of
+  `within=pid`, and the model-tool filters' hidden `StayWithinSeedPIDs` property (use *Stay Within*
+  = seed properties): they keep working until 1.0.0, now with a `DeprecationWarning` or a
+  `nastran-pv:` line on stderr (ParaView's Output Messages) (#76).
+
 ### Fixed
 
+- `convert --random` no longer repeats the results file's warnings (unread tables, ...) after its
+  own: the random response warns only what it adds (#72).
 - `VonMisesMax` reads MSC/NX HDF5 shell stress tables that spell the shear `TXY1`/`TXY2` (TRIA3
   and the corner layouts), which it dropped before (#64).
 - A VTKHDF series whose steps fill different numbers of arrays (stresses on shells and solids at a

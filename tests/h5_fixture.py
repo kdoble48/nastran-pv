@@ -91,3 +91,91 @@ def write_element_h5(path):
             for name, rows in tables.items():
                 r[f"ELEMENTAL/{group}/{name}"] = rows
     return path
+
+
+def write_composite_h5(path):
+    """``op2_fixture.make_composite_op2`` in the MSC HDF5 layout: DOMAINS (subcase 1),
+    NODAL/DISPLACEMENT, the ply stresses as STRESS/QUAD4_COMP and TRIA3_COMP and the ply strains as
+    STRAIN/QUAD4_COMP (``EID PLY X1 Y1 T1 L1 L2``, one row per element and ply, element 4's rows
+    unsorted on purpose), plus a FAILURE_INDEX dataset, which no type reads (reported)."""
+    nod = [("ID", ())] + [(c, ()) for c in ("X", "Y", "Z", "RX", "RY", "RZ")] + [("DOMAIN_ID", ())]
+    comp = [(n, ()) for n in ("EID", "PLY", "X1", "Y1", "T1", "L1", "L2", "DOMAIN_ID")]
+
+    def plies(values, eids):
+        keys = [k for k in values if k[0] in eids]
+        if 4 in eids:  # element 4's plies in reverse: rows are matched by PLY, not by position
+            keys = [k for k in keys if k[0] != 4] + [k for k in reversed(keys) if k[0] == 4]
+        return _table(comp, [(*k, *values[k], 1) for k in keys])
+
+    with h5py.File(path, "w") as h5:
+        r = h5.create_group("/NASTRAN/RESULT")
+        r["DOMAINS"] = np.array([(1, 1, 0, 1, 0.0, 0.0, 0)],
+                                dtype=[("ID", INT), ("SUBCASE", INT), ("STEP", INT), ("ANALYSIS", INT),
+                                       ("TIME_FREQ_EIGR", FLOAT), ("EIGI", FLOAT), ("MODE", INT)])
+        r["NODAL/DISPLACEMENT"] = _table(nod, [(n, 0, 0, 0.001 * n, 0, 0, 0, 1) for n in F.COMPOSITE_NIDS])
+        r["ELEMENTAL/STRESS/QUAD4_COMP"] = plies(F.PLY_STRESS, (1, 2, 4, 5))
+        r["ELEMENTAL/STRESS/TRIA3_COMP"] = plies(F.PLY_STRESS, (3,))
+        r["ELEMENTAL/STRAIN/QUAD4_COMP"] = plies(F.PLY_STRAIN, (1,))
+        r["ELEMENTAL/FAILURE_INDEX/QUAD4"] = _table([(n, ()) for n in ("EID", "PLY", "FP", "FB", "DOMAIN_ID")],
+                                                    [(*k, *v, 1) for k, v in F.PLY_FAILURE.items()])
+    return path
+
+
+# ------------------------------------------------------------------ complex, frequency and transient
+DOMAIN = [("ID", INT), ("SUBCASE", INT), ("STEP", INT), ("ANALYSIS", INT), ("TIME_FREQ_EIGR", FLOAT),
+          ("EIGI", FLOAT), ("MODE", INT)]
+GRID = ("X", "Y", "Z", "RX", "RY", "RZ")
+
+
+def _complex_table(id_field, fields, rows):
+    """A ``_CPLX`` compound array: ``fields`` as ``<F>R`` then ``<F>I`` (MSC's layout), rows of
+    (id, complex values, domain)."""
+    names = [f + "R" for f in fields] + [f + "I" for f in fields]
+    dtype = np.dtype([(id_field, INT)] + [(n, FLOAT) for n in names] + [("DOMAIN_ID", INT)])
+    return np.array([(i, *np.real(v), *np.imag(v), d) for i, v, d in rows], dtype=dtype)
+
+
+def write_frequency_h5(path):
+    """``op2_fixture.make_frequency_op2`` in the MSC/NX HDF5 layout: DOMAINS 1 and 2 (ANALYSIS 5,
+    10 and 20 Hz), NODAL/DISPLACEMENT_CPLX, NODAL/SPC_FORCE_CPLX, ELEMENT_FORCE/QUAD4_CPLX and
+    STRESS/QUAD4_CPLX (fibre distances real, components ``X1R X1I ... TXY2I``)."""
+    op2 = F.make_frequency_op2()
+    domains = [1, 2]
+    disp = op2.displacements[1].data
+    spc = op2.spc_forces[1]
+    force = op2.op2_results.force.cquad4_force[1].data
+    stress = op2.op2_results.stress.cquad4_stress[1].data  # (freq, fibre, XX YY XY)
+    shell_fields = ("MX", "MY", "MXY", "BMX", "BMY", "BMXY", "TX", "TY")
+    stress_names = ["FD1"] + [f"{c}{p}" for c in ("X1", "Y1", "TXY1") for p in "RI"] + ["FD2"] \
+        + [f"{c}{p}" for c in ("X2", "Y2", "TXY2") for p in "RI"]
+    stress_rows = np.array([(1, -0.005, *[x for z in stress[k, 0] for x in (z.real, z.imag)],
+                             0.005, *[x for z in stress[k, 1] for x in (z.real, z.imag)], d)
+                            for k, d in enumerate(domains)],
+                           dtype=[("EID", INT)] + [(n, FLOAT) for n in stress_names] + [("DOMAIN_ID", INT)])
+    with h5py.File(path, "w") as h5:
+        r = h5.create_group("/NASTRAN/RESULT")
+        r["DOMAINS"] = np.array([(d, 1, 0, 5, f, 0.0, 0) for d, f in zip(domains, F.FREQS)], dtype=DOMAIN)
+        r["NODAL/DISPLACEMENT_CPLX"] = _complex_table(
+            "ID", GRID, [(n, disp[k, j], d) for k, d in enumerate(domains) for j, n in enumerate(F.ELEMENT_NIDS)])
+        r["NODAL/SPC_FORCE_CPLX"] = _complex_table(
+            "ID", GRID, [(n, spc.data[k, j], d) for k, d in enumerate(domains)
+                         for j, n in enumerate(spc.node_gridtype[:, 0])])
+        r["ELEMENTAL/ELEMENT_FORCE/QUAD4_CPLX"] = _complex_table(
+            "EID", shell_fields, [(1, force[k, 0], d) for k, d in enumerate(domains)])
+        r["ELEMENTAL/STRESS/QUAD4_CPLX"] = stress_rows
+    return path
+
+
+def write_transient_h5(path):
+    """``op2_fixture.make_transient_op2``'s displacements and velocities in the MSC/NX HDF5
+    layout: DOMAINS 1-3 (ANALYSIS 6, times 0, 0.5, 1), NODAL/DISPLACEMENT and NODAL/VELOCITY."""
+    op2 = F.make_transient_op2()
+    nod = [("ID", ())] + [(c, ()) for c in GRID] + [("DOMAIN_ID", ())]
+    with h5py.File(path, "w") as h5:
+        r = h5.create_group("/NASTRAN/RESULT")
+        r["DOMAINS"] = np.array([(k + 1, 1, 0, 6, t, 0.0, 0) for k, t in enumerate(F.TIMES)], dtype=DOMAIN)
+        for table, dataset in (("displacements", "NODAL/DISPLACEMENT"), ("velocities", "NODAL/VELOCITY")):
+            data = getattr(op2, table)[1].data
+            r[dataset] = _table(nod, [(n, *data[k, j], k + 1) for k in range(len(F.TIMES))
+                                      for j, n in enumerate(F.NIDS)])
+    return path

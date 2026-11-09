@@ -69,9 +69,9 @@ def test_graph_from_written_vtm(topo_mb, tmp_path):
 
 
 def test_rules_parse():
-    r = Rules.parse("exclude=rigid,CBUSH,rbe3 exclude_pids=7,8 within_pids max_hops=5")
+    r = Rules.parse("exclude=rigid,CBUSH,rbe3 exclude_pids=7,8 within=pid max_hops=5")
     assert r == Rules(exclude=frozenset({"rigid", "CBUSH", "RBE3"}), exclude_pids=frozenset({7, 8}),
-                      within_pids=True, max_hops=5)
+                      within="pid", max_hops=5)
     assert Rules.parse("") == Rules() == Rules.parse(None)
 
 
@@ -90,7 +90,7 @@ def test_rules_allowed(topo_mb):
     assert Rules.parse("include=shells").allowed(g).sum() == 8
     assert Rules.parse("exclude=RBE3").allowed(g).sum() == 16  # known card, absent from the model
     assert Rules.parse("exclude_pids=2,6").allowed(g).sum() == 11
-    assert Rules.parse("within_pids").allowed(g, seed_values={1}).sum() == 2
+    assert Rules.parse("within=pid").allowed(g, seed_values={1}).sum() == 2
     with pytest.raises(ValueError, match="unknown card type"):
         Rules.parse("exclude=CFOO").allowed(g)
 
@@ -152,7 +152,7 @@ def test_grow_from_grid(topo_mb):
 
 
 def test_grow_pid_rules(topo_mb):
-    grow(topo_mb, "EID 11", Rules(within_pids=True))
+    grow(topo_mb, "EID 11", Rules(within="pid"))
     hops = by_eid(topo_mb, "Shells", "Hops")
     assert (hops[11], hops[12], hops[2]) == (0, 1, -1) and by_eid(topo_mb, "Rigid", "Hops") == {100: -1}
     grow(topo_mb, "EID 1", Rules(exclude_pids=frozenset({2})))
@@ -250,8 +250,8 @@ def test_parts_without_links_writes_vtkhdf(topo_mb, tmp_path):
     assert write_vtkhdf(topo_mb, tmp_path / "p.vtkhdf").exists()
 
 
-def test_parts_warn_on_within_pids(topo_mb):
-    assert parts(topo_mb, Rules(within_pids=True)).warnings == ["within=pid needs seeds; ignored for parts"]
+def test_parts_warn_on_within_pid(topo_mb):
+    assert parts(topo_mb, Rules(within="pid")).warnings == ["within=pid needs seeds; ignored for parts"]
 
 
 def test_path_through_every_connector_kind(topo_mb):
@@ -510,7 +510,6 @@ def reached(mb, seeds, rules):
 @pytest.mark.parametrize("rules, eids", [
     ("", [1, 2, 3, 4, 5]),
     ("within=pid", [1, 2, 3, 4]),
-    ("within_pids", [1, 2, 3, 4]),
     ("within=mid", [1, 2, 3, 4]),
     ("within=family", [1, 2]),
     ("within=group", [1, 2, 3]),
@@ -544,7 +543,7 @@ def test_path_within_family(strip_mb):
 
 
 def test_rules_within_parse():
-    assert Rules.parse("within_pids") == Rules.parse("within=pid") == Rules(within="pid")
+    assert Rules.parse("within=pid") == Rules(within="pid")
     assert Rules.parse("within=Property").within == "pid"
     assert Rules.parse("within=material").within == "mid"
     with pytest.raises(ValueError, match="expected"):

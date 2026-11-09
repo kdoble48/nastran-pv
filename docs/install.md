@@ -13,10 +13,11 @@ them inside it ([Installed package or checkout](#installed-package-or-checkout))
 Install nastran-pv into a regular Python or a venv, never into ParaView's own Python: the plugin
 does not need it there, and the vtk wheel would shadow ParaView's VTK.
 
-Optional extras (`pip install "nastran-pv[h5]"`): `h5` (MSC/NX HDF5 results), `tables` (Excel
-files for `--map` and `--select`), `sql` (non-SQLite databases for `--map`), `all` (the three
-above), `gallery` (thumbnails for `docs/build_gallery.py`) and `test`. `vtk` is a dependency now;
-the `vtk` extra is kept so that older install commands still work.
+Optional extras (`pip install "nastran-pv[h5]"`): `h5` (h5py: MSC/NX HDF5 results, VTKHDF
+series of several steps and reading VTKHDF files back), `tables` (Excel files for `--map` and
+`--select`), `sql` (non-SQLite databases for `--map`), `all` (the three above), `gallery`
+(thumbnails for `docs/build_gallery.py`) and `test`. `vtk` is a dependency now; the `vtk` extra is
+kept so that older install commands still work.
 
 `pip install -U nastran-pv` upgrades in place. What changed in each release is in the
 [CHANGELOG](https://github.com/kdoble48/nastran-pv/blob/main/CHANGELOG.md).

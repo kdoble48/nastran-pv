@@ -24,8 +24,16 @@ python docs/build_gallery.py \
     --mystran tools/mystran-19.0.0-windows-x86_64.exe          # add --upload only when the user asks
 ```
 
-- Output: `build/gallery-assets.zip` plus `manifest.json`. Without `--mystran` the results view is
-  skipped, and without `--ucrm9` the uCRM-9 views are skipped. Say so when you report back.
+- Output: `build/gallery-assets.zip` plus `manifest.json` (`--out DIR`: elsewhere, the zip next to
+  it). Without `--mystran` every result scene is skipped (the demo modes, the uCRM-9 static
+  results, the tray's static run, the composite plate's plies), and without `--ucrm9` the uCRM-9
+  views are skipped. Say so when you report back. The MYSTRAN solves (`<out>/solve/`) take about a
+  minute and a half; the uCRM-9 one runs on a copy (`ucrm9_for_mystran`: CQUADR as CQUAD4, PSHELL
+  MID4 blanked).
+- Frequency response, transient and complex results have no scene: MYSTRAN does not solve them.
+- A gallery entry is a view (`VIEW_INFO` in `export_site.py`), a view with fixed arguments
+  (`VARIANTS`: the SPC/MPC force and OLOAD sources of the loads view) or a filter scene (`SCENES`:
+  free body, nodal average). A new one also goes in `VIEW_ORDER` of `build_gallery.py`.
 - `--upload` replaces a public release asset. It is outward-facing, so confirm with the user first.
 - Check a few thumbnails with the Read tool before reporting success. The script validates scenes,
   but colors and camera framing need eyes.

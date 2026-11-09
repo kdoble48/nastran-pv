@@ -14,8 +14,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import h5py
 import numpy as np
+
+try:  # the h5 extra: needed to compact a series and to read a file back, not to write a snapshot
+    import h5py
+except ImportError:
+    h5py = None
 
 from vtkmodules.util.vtkAlgorithm import VTKPythonAlgorithmBase
 from vtkmodules.vtkCommonDataModel import (
@@ -105,6 +109,13 @@ def vtk_version() -> tuple[int, int]:
     return vtkVersion.GetVTKMajorVersion(), vtkVersion.GetVTKMinorVersion()
 
 
+def require_h5py(what: str) -> None:
+    """An ImportError naming the extra when h5py is missing (``pip install nastran-pv`` alone)."""
+    if h5py is None:
+        raise ImportError(f'{what} needs h5py: pip install "nastran-pv[h5]" (or pip install h5py); a single-step '
+                          ".vtkhdf or a .vtm does not")
+
+
 def check_writer_vtk() -> None:
     """Refuse a VTK whose vtkHDFWriter writes broken nastran-pv files (no model summary, no steps)."""
     if vtk_version() < MIN_WRITER_VTK:
@@ -145,7 +156,10 @@ def _chunk_for(mb) -> int:
 
 
 def write_vtkhdf(mb, path, compression: int = 4, chunk_size: int | None = None) -> Path:
-    """Write one snapshot of a nastran-pv multiblock."""
+    """Write one snapshot of a nastran-pv multiblock as VTKHDF (a partitioned dataset collection
+    named by block; ParaView 5.13+ reads it). ``compression``: the gzip level, 0 to 9;
+    ``chunk_size``: HDF5 chunk rows (default about the largest block). Needs VTK 9.5+, not h5py.
+    Returns the path, with the ``.vtkhdf`` suffix unless it already ends in ``.vtkhdf`` or ``.hdf``."""
     w, path = _writer(path, compression, chunk_size or _chunk_for(mb))
     w.SetInputData(to_pdc(mb))
     if not w.Write():
@@ -296,11 +310,13 @@ class _StepSource(VTKPythonAlgorithmBase):
         self._filled, self._padded = [], []  # the arrays added (and padded) for the last step written
         # a temporal VTKHDF file needs the same arrays at every step (e.g. VonMisesMax only
         # exists for stress steps, Frequency only for modes), each field array of one size:
-        # collect the union and the sizes first
+        # collect the union and the sizes first (results with step helpers attach their arrays'
+        # shapes there without doing their work twice: post.StepHelpers.attach_signature)
         self.union: dict = {}
         signatures, shapes = [], []
+        attach = getattr(self.results, "attach_signature", self.results.attach)
         for step in self.steps:
-            self.results.attach(self.mb, int(step), self.deck)
+            attach(self.mb, int(step), self.deck)
             signatures.append(_array_signature(self.mb))
             shapes.append(_field_shapes(self.mb))
             for key, arrays in signatures[-1].items():
@@ -346,6 +362,8 @@ def write_vtkhdf_series(mb, results, path, deck=None, steps=None, compression: i
     # series then took about 4x as long). When compacting, write raw and compress each array once
     # in that rewrite.
     deferred = compact and len(steps) > 1
+    if deferred:  # before writing: a series left uncompacted would be several times larger
+        require_h5py("a compacted VTKHDF series (compact=False writes one without it)")
     w, path = _writer(path, 0 if deferred else compression, chunk_size or _chunk_for(mb))
     source = _StepSource(mb, results, deck, steps)  # keep a reference: VTK calls back into it
     w.SetInputConnection(source.GetOutputPort())
@@ -381,6 +399,7 @@ def _restore_field_data(pdc, path, time: float | None) -> None:
     from the file."""
     from . import vtkutil
 
+    require_h5py("reading a VTKHDF file")
     with h5py.File(path, "r") as h5:
         groups = {int(g.attrs["Index"]): g for g in h5["VTKHDF"].values()
                   if isinstance(g, h5py.Group) and "Index" in g.attrs and "FieldData" in g}
@@ -524,6 +543,7 @@ def compact_static_arrays(path, compression: int = 0) -> dict[str, list[str]]:
     dataset that is not compressed yet, once (with chunks no longer than the data): the series writer
     leaves compression to this pass. Returns ``{partition: [arrays]}`` compacted.
     """
+    require_h5py("compacting a VTKHDF series")
     path = Path(path)
     with h5py.File(path, "r") as h5:
         static = _static_arrays(h5)
@@ -553,3 +573,6 @@ def compact_static_arrays(path, compression: int = 0) -> dict[str, list[str]]:
                   compression)
     tmp.replace(path)
     return static
+
+
+__all__ = ["write_vtkhdf", "write_vtkhdf_series"]
