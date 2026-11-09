@@ -463,16 +463,15 @@ def _feed(proxy, src):
 
 
 def scope_active(reader):
-    """True when the deck reader hides anything: an EID list, an unchecked checklist entry, or a
-    Selection File in use. A converted file has no scope."""
+    """True when the deck reader's visibility hides anything: an EID list, an unchecked checklist
+    entry or a Selection File, as the reader applies them (its *ScopeActive*), so an EID list it
+    cannot parse, a file it cannot read or a read that failed is no scope. It does not run the
+    reader. A converted file has no scope."""
     if _xml_name(reader) != READER_XML:
         return False
-    if (reader.ShowOnlyElements or "").strip() or (reader.HiddenElements or "").strip():
-        return True
-    if reader.SelectionFile and enum_text(reader, "SelectionMode") != "Off":
-        return True
-    reader.UpdatePipelineInformation()
-    return any(set(_listed(reader, prop)) - set(getattr(reader, prop)) for prop in VISIBILITY_PROPS)
+    reader.UpdatePropertyInformation()
+    prop = reader.GetProperty("ScopeActive")
+    return bool(prop.GetElement(0)) if prop is not None and len(prop) else False
 
 
 def _missing_text(model, what, note=""):
@@ -530,13 +529,21 @@ _INFO_WRITES = 0  # info_text calls so far: apply tells from it which layer wrot
 
 def scene_of(view):
     """The layers shown in ``view`` (a :class:`nastran_pv.scene.Scene`, made on first use). Scenes of
-    views that were closed are dropped."""
+    views that were closed are dropped, and a scene whose reader was deleted is emptied, hiding what
+    is left of it in ``view``: its objects still open and every ``NPV ...`` object (its info text)."""
     from nastran_pv.scene import Scene
 
     alive = {v.GetGlobalIDAsString() for v in pv.GetViews()}
     for key in [k for k in _SCENES if k not in alive]:
         del _SCENES[key]
-    return _SCENES.setdefault(view.GetGlobalIDAsString(), Scene())
+    scene = _SCENES.setdefault(view.GetGlobalIDAsString(), Scene())
+    sources = pv.GetSources()
+    if scene.model is not None and scene.model not in list(sources.values()):
+        cleared = scene.clear()
+        names = {v.GetGlobalIDAsString(): k[0] for k, v in sources.items()}
+        _hide([s for s in shown_sources(view)
+               if s in cleared or names.get(s.GetGlobalIDAsString(), "").startswith("NPV ")], view)
+    return scene
 
 
 def _show(src, view):
@@ -751,27 +758,32 @@ def index_colors(source=None, view=None):
     return categorical(rep, array, values, labels_for(model, array, values), association=assoc, view=view)
 
 
-def _gather(data, array, assoc):
+def _leaves(data):
+    """The datasets of a (composite) data object."""
+    it = data.NewIterator() if data is not None and data.IsA("vtkCompositeDataSet") else None
+    if it is None:
+        return [data] if data is not None else []
+    leaves = []
+    it.InitTraversal()
+    while not it.IsDoneWithTraversal():
+        leaves.append(it.GetCurrentDataObject())
+        it.GoToNextItem()
+    return leaves
+
+
+def _gather(data, array, assoc, drop=None):
+    """The values of a one-component ``array`` over the leaves of ``data`` (unique per leaf);
+    ``drop(leaf)`` may give a mask of the cells to leave out."""
     from vtkmodules.util.numpy_support import vtk_to_numpy
 
     out = []
-
-    def visit(obj):
-        if obj is None:
-            return
-        if obj.IsA("vtkCompositeDataSet"):
-            it = obj.NewIterator()
-            it.InitTraversal()
-            while not it.IsDoneWithTraversal():
-                visit(it.GetCurrentDataObject())
-                it.GoToNextItem()
-            return
+    for obj in _leaves(data):
         attr = obj.GetCellData() if assoc == "CELLS" else obj.GetPointData()
         a = attr.GetArray(array)
         if a is not None and a.GetNumberOfComponents() == 1:
-            out.append(np.unique(vtk_to_numpy(a)))
-
-    visit(data)
+            values = vtk_to_numpy(a)
+            mask = drop(obj) if drop is not None else None
+            out.append(np.unique(values if mask is None else values[~mask]))
     return np.concatenate(out) if out else np.zeros(0)
 
 
@@ -1533,16 +1545,7 @@ def _vertex_eids(data):
     from vtkmodules.util.numpy_support import vtk_to_numpy
 
     out = set()
-    it = data.NewIterator() if data is not None and data.IsA("vtkCompositeDataSet") else None
-    leaves = []
-    if it is None:
-        leaves = [data] if data is not None else []
-    else:
-        it.InitTraversal()
-        while not it.IsDoneWithTraversal():
-            leaves.append(it.GetCurrentDataObject())
-            it.GoToNextItem()
-    for ds in leaves:
+    for ds in _leaves(data):
         eid = ds.GetPointData().GetArray("EID") if ds is not None else None
         if eid is None or ds.GetCellData().GetArray("EID") is not None or not ds.GetNumberOfCells():
             continue
@@ -1552,10 +1555,13 @@ def _vertex_eids(data):
 
 
 def selected_ids():
-    """("EID", ids) for a cell selection, ("GRID", ids) for a point selection on the active source."""
+    """("EID", ids) for a cell selection, ("GRID", ids) for a point selection on the active source.
+    MPC legs name no element, so a selection of only MPC legs gives their grids."""
     data, sel = _fetch_selection()
     if "POINT" not in _selection_kinds(sel):
-        eids = sorted({int(v) for v in _gather(data, "EID", "CELLS")} | _vertex_eids(data))
+        from nastran_pv.fields.common import mpc_legs
+
+        eids = sorted({int(v) for v in _gather(data, "EID", "CELLS", drop=mpc_legs)} | _vertex_eids(data))
         if eids:
             return "EID", eids
     return "GRID", sorted({int(v) for v in _gather(data, "NID", "POINTS")})
@@ -1659,7 +1665,7 @@ def reached_eids(reader=None):
     MPC legs are left out: their EID is the MPC set id."""
     from vtkmodules.util.numpy_support import vtk_to_numpy
 
-    from nastran_pv.fields.common import field_strings, iter_blocks
+    from nastran_pv.fields.common import iter_blocks, mpc_legs
     from nastran_pv.tree import as_multiblock
 
     model = Model(reader or find_reader())
@@ -1667,16 +1673,14 @@ def reached_eids(reader=None):
     if g is None or not (g.SeedIDs or "").strip():
         raise RuntimeError("Nothing grown yet: select a grid or elements, then click 'NPV Grow from Selection'.")
     out = set()
-    for path, ds in iter_blocks(as_multiblock(fetch(g))):
+    for _, ds in iter_blocks(as_multiblock(fetch(g))):
         for attr in (ds.GetCellData(), ds.GetPointData()):
             hops, eid = attr.GetArray("Hops"), attr.GetArray("EID")
             if hops is None or eid is None:
                 continue
             keep = vtk_to_numpy(hops) >= 0
-            if path == "Connectors" and attr is ds.GetCellData():
-                names = field_strings(ds, "ConnectorTypeNames")
-                codes = vtk_to_numpy(attr.GetArray("ConnectorType"))
-                keep &= np.array([names[c] != "MPC" if 0 <= c < len(names) else True for c in codes], bool)
+            if attr is ds.GetCellData() and (mpc := mpc_legs(ds)) is not None:
+                keep &= ~mpc
             out.update(int(e) for e in vtk_to_numpy(eid)[keep])
             break  # cell EIDs when the block has them, else point EIDs (masses, bushes)
     return model.reader, out
@@ -2157,7 +2161,7 @@ def apply(name, reader=None, view=None, model=None, reset_camera=None, toggle=Fa
         if scene.coloring is None:
             objects, _ = _recorded(lambda: ghost_mesh(model, view, GHOST_OPACITY.get(name, 0.2)))
             _hide(scene.set_coloring(Layer(GHOST, objects)), view)
-    writes = _INFO_WRITES
+    writes, writer = _INFO_WRITES, scene.info
     objects, selected = _recorded(lambda: VIEWS[name](model, view, **kwargs))
     if kind(name) == "overlay":
         _hide(scene.add_overlay(Layer(name, objects, selected)), view)
@@ -2165,6 +2169,10 @@ def apply(name, reader=None, view=None, model=None, reset_camera=None, toggle=Fa
         _hide(scene.set_coloring(Layer(name, objects, selected)), view)
     if _INFO_WRITES != writes:
         scene.info = name
+    elif writer is not None and scene.info is None:  # the replaced coloring wrote it, this one writes none
+        info = pv.FindSource(_name(model, "info"))
+        if info is not None:
+            pv.Hide(info, view)
     if reset_camera or (reset_camera is None and fresh):
         view.ResetCamera(False)
     pv.Render(view)

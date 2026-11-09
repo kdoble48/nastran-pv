@@ -9,6 +9,7 @@ from .. import vtkutil
 from ..deck import Deck
 
 GRID_PS_SET = 0  # pseudo set id for permanent constraints on GRID cards
+SPC_TYPES = ("SPC", "SPC1", "SPCADD")  # SPCAX, GMSPC, SPCOFF: the card report
 
 
 def dof_mask(components) -> np.ndarray:
@@ -40,8 +41,7 @@ def spc_sets(deck: Deck) -> dict[int, dict[int, np.ndarray]]:
                 pairs = zip(card.node_ids, card.components)
             elif card.type == "SPC1":
                 pairs = ((nid, card.components) for nid in card.node_ids)
-            else:
-                deck.warn(f"{card.type} (set {sid}) not visualized")
+            else:  # SPCAX, GMSPC: in the card report
                 continue
             for nid, comp in pairs:
                 prev = direct[sid].get(nid, np.zeros(6, dtype=np.uint8))

@@ -25,7 +25,8 @@ grep -n "INCLUDE\|^SOL\|LOAD\s*=\|SPC\s*=" DECK         # is this the run deck, 
 | `MID` = -1, no `Density`/`ElementMass`; "solid property id(s) not defined (open the run deck?)"; "model mass excludes the structural mass of N element(s)"; stats `KeyError: no mesh block has both 'PID' and 'ElementMass'` | A geometry include was opened. PSHELL/PSOLID/MAT cards live in the run deck | Open the run deck (the `.dat`/`run_*.bdf` with `INCLUDE`s), with the include beside it |
 | `PID`, `ElementMass`, … shown as "(partial)" in ParaView | The array exists on some blocks only (not on Rigid/Masses). Root field data is always partial | Expected. Use the NPV views or Extract Block |
 | `render` exits 1 / a macro says "cannot read DECK: <error>" | pyNastran rejected a card (e.g. integer fields where it wants reals), or an INCLUDE is missing. The reader produced no model | Fix the card it names; the full traceback is in ParaView's Output Messages (or stderr) |
-| Masses view empty / no `Masses` block | No CONM1/CONM2/CMASS1/2 in the deck (e.g. all Linderholt models). CMASS3/4 have no location | Expected. The mass is in `ElementMass`. Use `stats --by PID --field ElementMass` |
+| Masses view empty / no `Masses` block | No CONM1/CONM2/CMASS1/2 in the deck (e.g. all Linderholt models). CMASS3/4 sit on scalar points (no location; in the card report) | Expected. The mass is in `ElementMass`. Use `stats --by PID --field ElementMass` |
+| An element type, spring or load missing from every view; "N card(s) of M type(s) not drawn: ..." | The card report: no block draws that card type or form (axisymmetric/heat-transfer elements, PLOAD*, DMIG, superelements, scalar-point or grounded springs, CFAST patches, CWELD) | Expected. `convert` prints the table with the reason and the first ids; a missing *grid* is a separate warning (a broken deck) |
 | Loads view empty or smaller than expected | Modal deck (no `LOAD`). GRAV and PLOAD* are not drawn. Big models draw at most 1,500 arrows | Use the static run deck. State the GRAV caveat. Check `ActiveLoadSets` |
 | `family`/`group` views blank; FAMILY stats all `-1` | No `$ ... family` comments (only ICEM/TACS decks such as uCRM-9 have them) | Use the `pid`/`mid` views |
 | Model "falls apart", unexpected free-free modes, meshes that look joined but aren't | Floating parts, coincident unmerged grids, RBE/spring legs to nowhere | `nastran-pv check DECK`; `convert --parts --rules "exclude=rigid"` shows what the RBEs join (docs/tools.md) |
@@ -46,8 +47,9 @@ grep -n "INCLUDE\|^SOL\|LOAD\s*=\|SPC\s*=" DECK         # is this the run deck, 
 
 ## Not bugs (known gaps)
 
-PLOAD* pressures, CELAS/CDAMP springs, CMASS3/4 and GRAV as arrows are not visualized
-(`docs/model.md#not-visualized-yet`). Say so. Adding support is a code change: use `extending-nastran-pv`.
+The card report's cards (PLOAD* pressures, scalar-point springs and masses such as CELAS3/4 and
+CMASS3/4, grounded springs, axisymmetric and heat-transfer elements, DMIG, superelements) and GRAV
+as arrows are not visualized (`docs/model.md#cards-not-drawn`, `#not-visualized-yet`). Say so. Adding support is a code change: use `extending-nastran-pv`.
 
 ## Reporting back
 

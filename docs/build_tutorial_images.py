@@ -1,6 +1,6 @@
 """Render the screenshots of docs/paraview-tutorials.md into docs/images/ (run with pvpython).
 
-    pvpython docs/build_tutorial_images.py --ucrm9 <run_uCRM-9_static_cruise_coarse.bdf> [--demo-op2 demo.OP2]
+    pvpython --force-offscreen-rendering docs/build_tutorial_images.py --ucrm9 <run_uCRM-9_static_cruise_coarse.bdf> [--demo-op2 demo.OP2]
 
 Each image is the state a tutorial ends in, built through the same reader properties, filters and
 macro functions the tutorial uses. The demo deck is docs/models/demo.bdf; its OP2 comes from

@@ -44,17 +44,24 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   `NSMPerArea|NSMPerLength NSMMass NSMSource` and the `NSM_*` root tables. It runs in
   `build_multiblock` before the masses; its warnings use `deck.warn(..., mass=True)`, which lists
   them first.
-- `results.py` / `results_h5.py`: `Op2Results` and `H5Results` share a base (`results._Results`)
-  and its interface (`steps`, `times`, `skipped`, `step_data`, `attach`). The shared `attach_step` writes `Displacement` and
-  `VonMisesMax`, rotating vectors from CD into basic when a deck is passed. `open_results`
-  dispatches on the file suffix.
+- `result_types.py` / `results.py` / `results_h5.py`: what is attached is declared, one
+  `ResultType` per kind of result in `result_types.REGISTRY` (today `Displacement` and
+  `VonMisesMax`): its OP2 tables and H5 datasets, blocks, location, arrays, reduction and frame.
+  `Op2Results` and `H5Results` share a base (`results._Results`) and its interface (`steps`, `times`,
+  `skipped`, `available`, `select`, `values`, `attach`); each only finds a type's tables and
+  yields raw rows per step (`_rows`). `_Results.values` joins, sorts and reduces them, and the
+  shared `attach_step` rotates them from CD into basic (when a deck is passed) and writes every
+  attached type, dropping the arrays of the others. `select` (CLI `--result-types`, the reader's
+  *Result Types*) holds on the results object, so the series writers honour it. `open_results`
+  dispatches on the file suffix. Design and the recipe for a new type:
+  `docs/design/2026-11-08-result-registry.md`.
 - `fields/`: `derived.py` (material, quality, size, cg, pidmass), `tables.py` (`read_table` and
   `map_table` by EID/PID/MID/NID/FAMILY/GROUP; text columns become codes plus a `<name>Names`
   table), `db.py` (SQLite or SQLAlchemy), and `calc.py` (`calculate` with a restricted-namespace
   eval; `group_stats`). Everything works on VTK data and mutates it in place; use `shallow_clone`
   when the input must stay intact.
 - `topology/`: `graph.py` (the bipartite grid↔cell graph of any multiblock, plus `Rules` and `Seeds`),
-  `grow.py`, `parts.py`, `path.py` and `check.py`. Results are written back as arrays and `PART_*`/`LINK_*`/`CHECK_*`
+  `grow.py`, `parts.py`, `path.py` and `checks.py`. Results are written back as arrays and `PART_*`/`LINK_*`/`CHECK_*`
   tables, like `fields`.
 - `sections/`: CBAR/CBEAM cross sections. `shapes.py` (the 22 PBARL/PBEAML outlines, element y up /
   z right), `props.py` (exact polygon properties; Q4 warping FE for J, shear center, Cw; cached per
@@ -142,7 +149,8 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
 - `paraview/nastran_bdf_reader.py`: one plugin file containing the reader, five glyph filters
   (masses, bushes, loads, SPCs, beam sections), the deform filter (it writes the scale it applied as
   root `DeformScale`), *Nastran Scope* (after the model's deform: the overlays' copy of the model
-  cut by `selection.scope_masks`, moved by `DeformScale`), *Nastran Files* (the `Files` checklist and
+  cut by `selection.scope_masks`, moved by `DeformScale`; both deforms look grid displacements up
+  in the whole model, `Deformer(grids=)`), *Nastran Files* (the `Files` checklist and
   tree on any model, converted files included), three field filters, four topology
   filters (grow, parts, path, model check) and the two-input *Nastran Diff*.
   - Shared settings are class decorators, one PropertyGroup each: `_with(label, setters)` copies
@@ -175,8 +183,14 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
     lookup table); `clear` (NPV Clear) is the full reset.
   - Overlays follow the scope (R2): every overlay's glyph filters and extracts (`NPV scoped <block>`)
     draw from `scoped(model)`, the `NPV scope` filter (*Nastran Scope*) after `NPV deform`; its counts
-    and "nothing to draw" checks use `Model.scoped(name)`, and `scope_active(reader)` picks the "in
-    the reader's scope" text. `_feed` re-feeds objects made before (fed by `NPV deform`).
+    and "nothing to draw" checks use `Model.scoped(name)`, and `scope_active(reader)` (the reader's
+    information property `ScopeActive`: its settings as a read applies them, 0 after a failed read;
+    asking does not run the reader) picks the "in the reader's scope" text. `_feed` re-feeds objects
+    made before (fed by `NPV deform`).
+  - The shared `NPV info` text belongs to no layer: `Scene.info` names the layer that wrote it last,
+    and `apply` hides it when that layer goes (an overlay toggled off, a coloring replaced by one
+    that writes none). `scene_of` empties a scene whose reader was deleted and hides what is left
+    of it in the view (its objects still open, the `NPV ...` text).
   - Mode animation: `mode_times` (the reader's steps, or one step for a converted single-step
     file with a `Displacement`), `animate_modes`/`animate_mode` and `save_mode_animations`. They
     run inside `_kept_view`, which puts back the view's time and every NPV deform scale, and

@@ -95,6 +95,14 @@ def add_mid_density(cd, model, mids: np.ndarray) -> None:
     vtkutil.add_array(cd, "Density", np.array([rho[m] for m in mids], dtype=float), skip_all_nan=True)
 
 
+def warn_midside(deck: Deck, missing: dict) -> None:
+    """One warning per card type for the elements whose given midside grids do not exist
+    (``{card: [EID, ...]}``); they are drawn without them."""
+    for card, eids in missing.items():
+        shown = ", ".join(str(e) for e in eids[:5]) + (" ..." if len(eids) > 5 else "")
+        deck.warn(f"{card}: {len(eids)} element(s) with midside grid(s) not found, drawn without them (EID {shown})")
+
+
 def as_int(value) -> int:
     """``int(value)``, 0 for blanks and non-numbers (DOF strings, missing fields)."""
     try:
