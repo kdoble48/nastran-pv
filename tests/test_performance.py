@@ -23,7 +23,7 @@ SLACK = 0.05  # seconds, for the fastest stages
 REPEAT = 3
 # best time / calibration loop, the median of three runs on the reference machine (Ryzen 9 9950X3D,
 # Windows, Python 3.12, VTK 9.5.2, pyNastran 1.4.1; docs/performance.md#ci-check)
-RECORDED = {"load": 13.2, "build": 3.22, "vtm": 1.25, "vtkhdf": 5.15, "check": 0.89, "to_basic": 0.11, "diff": 3.68,
+RECORDED = {"load": 13.2, "build": 3.55, "vtm": 1.25, "vtkhdf": 5.15, "check": 0.89, "to_basic": 0.11, "diff": 3.68,
             "tree": 0.32, "tree_scope": 0.20}
 
 
