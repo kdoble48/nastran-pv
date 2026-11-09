@@ -480,7 +480,7 @@ def scope_masks(mb, vis, names=None):
         named[path] = reader & hit if hit is not None else np.zeros(n, bool)
         extra[path] = reader & file_hit if file_hit is not None and not by_eid else np.zeros(n, bool)
     uniq = lambda parts: np.unique(np.concatenate(parts)) if parts else np.zeros(0, np.int64)
-    touch, mesh = uniq(touched), uniq(mesh_grids)
+    touch, mesh, kept_eids = uniq(touched), uniq(mesh_grids), uniq(mesh_eids)
     kept_grids = touch
 
     n_elem, item_elem, elem_group, ent_e, ent_g = _connector_elements(blocks)
@@ -512,7 +512,7 @@ def scope_masks(mb, vis, names=None):
         elif named[path].any():
             masks[path] = named[path]
         elif path.startswith("Pressures/") and eid is not None:  # a face follows its element
-            masks[path] = allowed[path] & (np.isin(eid, uniq(mesh_eids))
+            masks[path] = allowed[path] & (np.isin(eid, kept_eids)
                                            | (eid < 0) & _all_grids_kept(ds, kept_grids)) | extra[path]
         elif kind == "point" and (nid := get_array(ds.GetPointData(), "NID")) is not None:
             masks[path] = allowed[path] & np.isin(np.asarray(nid).astype(np.int64), kept_grids) | extra[path]

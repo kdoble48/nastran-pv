@@ -1037,14 +1037,6 @@ def _glyph_vector(src, name):
     return [a.GetComponentRange(c)[0] for c in range(3)]
 
 
-def _gravity(model):
-    """{load set name: GRAV acceleration (3,)} from the root ``GRAV_*`` table."""
-    names, acc = model.field_strings(None, "GRAV_Name"), model.field("GRAV_Acceleration")
-    if not names or acc is None:
-        return {}
-    return dict(zip(names, np.asarray(acc, dtype=float).reshape(-1, 3)))
-
-
 def view_loads(model, view, sets=None, show=None, size=None, stride=None, source=None):
     """Arrows (Nastran Load Glyphs) of the load sets checked on 'NPV load glyphs' (first: the
     Case Control LOAD, else the first set with loads): FORCE/MOMENT at their grids, PLOAD* pressures
@@ -1056,7 +1048,10 @@ def view_loads(model, view, sets=None, show=None, size=None, stride=None, source
     kind = _load_source(model, source)
     if kind in _RESULT_LOADS:
         return _result_loads(model, view, kind, show, size, stride)
-    loads, pressures, gravity = model.scoped("Loads"), model.scoped("Pressures"), _gravity(model)
+    from nastran_pv.glyphs import gravity_anchor, gravity_sets_of
+
+    loads, pressures = model.scoped("Loads"), model.scoped("Pressures")
+    gravity = {name: a for name, _, a in gravity_sets_of(model.data)}
     if loads is None and pressures is None and not gravity:
         info_text(model, view, _missing_text(model, "loads (FORCE/MOMENT, PLOAD*, GRAV)"))
         return
@@ -1091,6 +1086,7 @@ def view_loads(model, view, sets=None, show=None, size=None, stride=None, source
     from nastran_pv.vtkutil import vector_text
 
     mass, wtmass = model.field("ModelMass"), model.field("WTMASS")
+    where = gravity_anchor(model.data)[1]  # the CG, or the model centre when it has no mass
     for name in drawn[:6]:
         blk = loads.GetBlock(names.index(name)) if name in names else None
         if blk is not None and blk.GetNumberOfPoints():
@@ -1105,8 +1101,8 @@ def view_loads(model, view, sets=None, show=None, size=None, stride=None, source
                          + (f", resultant force {vector_text(res)}" if res is not None else ""))
         if name in gravity and g.ShowGravity:
             a = gravity[name]
-            text = f"{name}: GRAV {vector_text(a)} at the CG"
-            if mass is not None and wtmass is not None:
+            text = f"{name}: GRAV {vector_text(a)} at {where}"
+            if mass is not None and wtmass is not None and float(mass[0]):
                 text += f", WTMASS x mass x a = {vector_text(float(wtmass[0]) * float(mass[0]) * a)}"
             lines.append(text)
     if len(drawn) > 6:

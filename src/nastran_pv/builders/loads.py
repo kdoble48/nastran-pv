@@ -9,7 +9,7 @@ import numpy as np
 from .. import vtkutil
 from ..deck import Deck
 from .common import unit
-from .pressures import PRESSURE_TYPES, merge, pressure_faces
+from .pressures import PRESSURE_TYPES, Unsupported, merge, pressure_faces
 
 NODAL_TYPES = ("FORCE", "FORCE1", "FORCE2", "MOMENT", "MOMENT1", "MOMENT2")
 LOAD_TYPES = NODAL_TYPES + ("GRAV",) + PRESSURE_TYPES  # the rest (PLOAD1, TEMP, SPCD, ...): the card report
@@ -32,6 +32,11 @@ class LoadSet:
         self.grav.extend(scale * g for g in other.grav)
         for face in other.pressure.values():
             merge(self.pressure, face.scaled(scale))
+
+    @property
+    def name(self) -> str:
+        """Its block name: ``SID_<sid>``, or ``LOAD_<sid>`` for a LOAD combination."""
+        return f"{'LOAD' if self.combined else 'SID'}_{self.sid}"
 
     @property
     def empty(self) -> bool:
@@ -74,6 +79,8 @@ def direct_load_set(deck: Deck, sid: int) -> LoadSet:
             elif t in PRESSURE_TYPES:
                 for face in pressure_faces(deck, card):
                     merge(ls.pressure, face)
+        except Unsupported as exc:  # a form nothing draws: the card report
+            deck.skip(t, exc.reason, sid)
         except (KeyError, ValueError, TypeError) as exc:
             deck.warn(f"{t} in load set {sid}: skipped ({exc})")
     return ls

@@ -171,9 +171,16 @@ face loaded by two kinds of card). `--no-loads` and the reader's *Loads* toggle 
   grids when the model deforms. They are not equivalent nodal forces: `F_<sid>` holds FORCE/MOMENT
   only.
 
-A PLOAD4 on an element the deck lacks, with G1 and G3/G4 that name no face, with SORL=LINE or an
-LDIR other than NORM (edge loads), a PLOAD2 on a non-shell element and a PLOAD on an unknown grid
-are skipped with a warning. PLOAD1 (beam loads) and the axisymmetric PLOADX1 stay in the card report.
+Solid faces follow the QRG's PLOAD4 rules: G3 diagonally opposite G1 names a quadrilateral face
+(CHEXA, CPENTA, the CPYRAM base); a blank G3 a CPENTA triangle holding G1; G4 the CTETRA corner off
+the face; and G1 and G3 adjacent base corners of a CPYRAM the triangle they make with the apex.
+
+A card that references an element or grid the deck lacks is a broken deck: a warning, and the card
+is skipped. In a list or THRU range of elements (PLOAD2, PLOAD4) the ids the deck lacks, or whose
+type the card cannot load, are skipped with one warning per card and the rest are drawn. A form
+nothing draws is a [card report](#cards-not-drawn) row: a PLOAD4 edge load (SORL=LINE or an LDIR
+other than NORM), G1 and G3/G4 that name no face, a PLOAD2 on an element that is not a shell. PLOAD1
+(beam loads) and the axisymmetric PLOADX1 stay in the card report too.
 
 ## Coordinate systems
 
@@ -252,6 +259,9 @@ more. The reasons:
 | `grounded, one grid` | CELAS1/2, CDAMP1/2, CGAP with one grid (or two DOFs of one grid): no line to draw |
 | `heat transfer` | CDAMP5 (a thermal capacitance), CHBDYE/G/P, QBDY1/2/3, QHBDY, QVOL, QVECT, and the thermal boundary conditions (CONV, CONVM, RADBC, RADM, TEMPBC). None is a structural link, so none joins the [model tools](tools.md)' graph |
 | `patch form, no GA/GB` | CFAST given by patches only |
+| `edge load (SORL=LINE or LDIR)` | PLOAD4 that loads an element's edge, not its face (IDs: the load set) |
+| `G1 and G3/G4 name no face` | PLOAD4 on a solid whose G1 and G3/G4 name none of its faces, such as a CPYRAM's apex (IDs: the load set) |
+| `element type it cannot load` | PLOAD2 on an element that is not a shell, PLOAD4 on one that is neither a shell nor a solid (IDs: the load set) |
 | `matrix input` | DMIG, DMI, DMIJ, DMIJI, DMIK, DMIAX |
 | `superelement` | the cards of a `BEGIN SUPER` section (data and control cards left out) and the superelement cards (SEBULK, SECONCT, SELOC, ...) |
 | `not read` | cards pyNastran rejected (unknown to it), and CWELD, which nastran-pv turns off because pyNastran 1.5 aborts the read on some of its forms |
@@ -268,6 +278,7 @@ every card is drawn or used); a file without it predates the report. The design 
 Everything in the [card report](#cards-not-drawn) (beam and axisymmetric loads PLOAD1/PLOADX1,
 axisymmetric and heat-transfer elements, CBUSH1D/2D, GENEL, DMIG, superelements, grounded springs,
 CFAST patch forms, CWELD, PLOTEL3/4/6/8 and the 3D plot elements). Scalar-point cards stay in the
-report: they have no location to draw at. GRAV is drawn as one arrow at the model CG
-([Nastran Load Glyphs](paraview.md#filter-properties)), not as nodal forces; the results' applied
+report: they have no location to draw at. GRAV is drawn as one arrow at the model CG (at the
+centre of the model's bounds when it has no mass) ([Nastran Load Glyphs](paraview.md#filter-properties)),
+not as nodal forces; the results' applied
 loads (OLOAD, [result types](#result-types)) give the nodal forces Nastran made of it.

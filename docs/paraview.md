@@ -358,7 +358,8 @@ the selection commands make no filter of their own.
   `Pressures/*` blocks and the GRAV rows; checked first: the Case Control `LOAD`, else the first set
   with loads) as arrows: forces single-headed and moments double-headed with their tail on the
   grid, a pressure face's force with its head on the face centroid (*Show Pressures*, on), and a
-  GRAV acceleration with its tail on the model CG (*Show Gravity*, on). *Source* **Deck load sets** (the
+  GRAV acceleration with its tail on the model CG, or on the centre of the model's bounds when the
+  model has no mass (no `ModelCG`; NPV Loads says which) (*Show Gravity*, on). *Source* **Deck load sets** (the
   default) draws the deck's sets; **SPC forces**, **MPC forces** and **Applied loads (OLOAD)**
   draw the current result step's [SPC forces, MPC forces or applied loads](model.md#result-types)
   instead, one arrow per grid with output (*Load Sets* is hidden then: it applies to the deck).

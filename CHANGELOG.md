@@ -13,8 +13,10 @@ All notable changes to nastran-pv are listed here. The format follows
   face with `Pressure CornerPressure PressureDirection PressureForce` and the set's
   `ResultantForce` (LOAD combinations scale and sum them). *Nastran Load Glyphs* draws an arrow per
   face pushing on it (*Show Pressures*) and one arrow per GRAV at the model CG (*Show Gravity*);
-  the loads view gives their resultant and the GRAV inertial force. PLOAD/PLOAD2/PLOAD4 leave the
-  card report (#66).
+  the loads view gives their resultant and the GRAV inertial force (the arrow sits at the model
+  centre when the model has no mass). PLOAD/PLOAD2/PLOAD4 leave the card report, except the forms
+  nothing draws (edge loads, G1/G3 naming no face, a PLOAD2 on a solid), which are report rows. The
+  model diff compares each set's pressure resultant (`PX PY PZ` rows, `DIFFLOAD_DeltaP`) (#66).
 - SPC forces, MPC forces and applied loads (OLOAD) as the result types `SPCForce`, `MPCForce` and
   `AppliedLoad`, from OP2 and MSC/NX HDF5: point `SPCForce SPCMoment`, `MPCForce MPCMoment` and
   `AppliedForce AppliedMoment` on the result blocks (rotated from CD into basic, NaN without

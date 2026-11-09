@@ -172,26 +172,20 @@ def build_multiblock(deck: Deck, opts: Options | None = None, progress: Progress
     if opts.constraints and spc:
         with step("Constraints"):
             blocks.add("Constraints", build_constraints(deck, spc, spc_enforced(deck)))
+    grav = []  # gravity per load set at the root too: a .vtm keeps no file (so no field data) for a GRAV-only set
     if opts.loads and lsets:
-        loads = _Blocks()
+        loads, pressures = _Blocks(), _Blocks()  # nodal loads; the faces PLOAD/PLOAD2/PLOAD4 load
         with step("Loads"):
-            for sid in sorted(lsets):
-                ls = lsets[sid]
-                loads.add(f"{'LOAD' if ls.combined else 'SID'}_{sid}", build_load_block(deck, ls))
+            for sid, ls in sorted(lsets.items()):
+                loads.add(ls.name, build_load_block(deck, ls))
+                if ls.pressure:
+                    pressures.add(ls.name, build_pressure_block(deck, sid, ls.pressure.values()))
+                if ls.grav:
+                    grav.append({"Set": sid, "Name": ls.name, "Acceleration": np.sum(ls.grav, axis=0)})
         if loads.mb.GetNumberOfBlocks():
             blocks.add("Loads", loads.mb)
-        pressures = _Blocks()  # the faces PLOAD/PLOAD2/PLOAD4 load, per set
-        with step("Pressures"):
-            for sid in sorted(lsets):
-                ls = lsets[sid]
-                if ls.pressure:
-                    name = f"{'LOAD' if ls.combined else 'SID'}_{sid}"
-                    pressures.add(name, build_pressure_block(deck, sid, ls.pressure.values()))
         if pressures.mb.GetNumberOfBlocks():
             blocks.add("Pressures", pressures.mb)
-    # gravity per load set at the root too: a .vtm keeps no file (so no field data) for a GRAV-only set
-    grav = [{"Set": sid, "Name": f"{'LOAD' if ls.combined else 'SID'}_{sid}", "Acceleration": np.sum(ls.grav, axis=0)}
-            for sid, ls in sorted(lsets.items()) if ls.grav] if opts.loads else []
 
     mb = blocks.mb
     vtkutil.write_field_table(mb, "GRAV_", grav)

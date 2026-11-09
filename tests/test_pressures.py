@@ -117,8 +117,25 @@ def test_pressure_cards_leave_the_card_report(deck):
     assert not [r for r in cards.report(deck) if r["Card"].startswith("PLOAD")]
 
 
-def test_bad_pressure_cards_warn_and_skip(tmp_path):
-    (tmp_path / "bad.bdf").write_text((DATA / "pressures.bdf").read_text().replace("ENDDATA", """\
+def _with(tmp_path, cards, name="extra.bdf"):
+    """pressures.bdf with ``cards`` added (a load set of their own), read and built."""
+    (tmp_path / name).write_text((DATA / "pressures.bdf").read_text().replace("ENDDATA", cards + "\nENDDATA"))
+    deck = load_deck(tmp_path / name, echo=False)
+    return deck, build_multiblock(deck)
+
+
+def _report(deck, card):
+    from nastran_pv import cards
+
+    return {(r["Reason"], r["IDs"]) for r in cards.report(deck) if r["Card"] == card}
+
+
+def test_bad_pressure_cards(tmp_path):
+    """A broken deck (an element or grid it lacks) warns; a card form nothing can draw (an edge load,
+    G1/G3 naming no face, a PLOAD2 on a solid) is a card-report row; the drawable part of a card stays."""
+    from nastran_pv import cards
+
+    deck, mb = _with(tmp_path, """\
 PLOAD4,60,999,1.
 PLOAD4,60,11,1.,,,,101,107
 PLOAD4,60,1,1.,,,,,
@@ -126,18 +143,148 @@ PLOAD4,60,1,1.,,,,,
 PLOAD2,60,1.,11
 PLOAD,60,1.,1,2,99999
 PLOAD4,60,1,7.
-PLOAD4,60,1,1.,,,,THRU,9
-ENDDATA"""))
-    deck = load_deck(tmp_path / "bad.bdf", echo=False)
-    mb = build_multiblock(deck)
+PLOAD4,60,1,1.,,,,THRU,9""")
     ds = _set(mb, "SID_60")
     # what stays: quad 1 with 7, then 1 more on quads 1, 2 and the tria 3 (THRU 1-9 holds those three)
     assert arr(ds, "EID", "cell").tolist() == [1, 2, 3]
     np.testing.assert_allclose(arr(ds, "Pressure", "cell"), [8.0, 1.0, 1.0])
     text = "\n".join(deck.warnings)
-    for reason in ("element 999 is not in the deck", "name no single face of CHEXA 11", "edge load",
-                   "element 11 is not a shell element", "99999"):
+    for reason in ("element 999 is not in the deck", "99999", "elements 4 5 6 7 8 9 are not in the deck"):
         assert reason in text, (reason, deck.warnings)
+    assert _report(deck, "PLOAD4") == {(cards.NO_FACE, "SID 60"), (cards.EDGE_LOAD, "SID 60")}
+    assert _report(deck, "PLOAD2") == {(cards.WRONG_ELEMENT, "SID 60")}
+    for gone in ("name no single face", "edge load", "element 11 is not a shell"):
+        assert gone not in text, (gone, deck.warnings)  # in the card report, not a warning
+
+
+def test_pload2_skips_the_ids_it_cannot_load(tmp_path):
+    """A PLOAD2 THRU range with a gap (4) or a solid (11) keeps its shells, with one warning per card."""
+    deck, mb = _with(tmp_path, "PLOAD2,80,5.,2,THRU,4\nPLOAD2,81,5.,3,THRU,11")
+    assert arr(_set(mb, "SID_80"), "EID", "cell").tolist() == [2, 3]
+    assert arr(_set(mb, "SID_81"), "EID", "cell").tolist() == [3]
+    msgs = [w for w in deck.warnings if w.startswith("PLOAD2")]
+    assert len(msgs) == 2, deck.warnings
+    assert "elements 4 are not in the deck" in msgs[0]
+    assert "elements 4 5 6 7 8 9 10 are not in the deck" in msgs[1] and "CHEXA 11" in msgs[1]
+    assert not _report(deck, "PLOAD2")
+
+
+PYRAMID = """\
+GRID,401,,10.,0.,0.
+GRID,402,,11.,0.,0.
+GRID,403,,11.,1.,0.
+GRID,404,,10.,1.,0.
+GRID,405,,10.5,0.5,1.
+CPYRAM,31,2,401,402,403,404,405
+PLOAD4,70,31,2.,,,,401,403
+PLOAD4,71,31,3.,4.,5.,,401,402
+PLOAD4,72,31,1.,,,,401,405
+PLOAD4,73,31,1.,,,,401,
+"""
+
+
+def test_cpyram_faces(tmp_path):
+    """The QRG rule: G1 and G3 diagonal on the base load the base; adjacent base corners load the
+    triangle with the apex. Inward: the base +Z; the triangle 401-402-405 by (405-401) x (402-401)."""
+    from nastran_pv import cards
+
+    deck, mb = _with(tmp_path, PYRAMID)
+    base, side = _set(mb, "SID_70"), _set(mb, "SID_71")
+    assert arr(base, "NID").tolist() == [401, 402, 403, 404]  # inward (+Z) from G1
+    np.testing.assert_allclose(arr(base, "PressureForce", "cell")[0], [0, 0, 2], atol=1e-12)
+    # P1-P3 on 401 402 405 (the right-hand rule on the outward normal), drawn inward from G1
+    assert arr(side, "NID").tolist() == [401, 405, 402]
+    np.testing.assert_allclose(arr(side, "CornerPressure"), [3, 5, 4])
+    np.testing.assert_allclose(arr(side, "PressureForce", "cell")[0], [0, 2, -1], atol=1e-12)  # 4 x area x n
+    assert _report(deck, "PLOAD4") == {(cards.NO_FACE, "SID 72 73")}  # the apex, a blank G3
+
+
+def test_corner_pressures_follow_the_grids_not_the_winding(tmp_path):
+    """Two unit hexes numbered with opposite windings, P1-P4 = 1 2 3 4 on their top faces: each corner
+    gets the pressure the card puts on it, whatever the element's own numbering."""
+    deck, mb = _with(tmp_path, """\
+GRID,601,,0.,0.,30.
+GRID,602,,0.,1.,30.
+GRID,603,,1.,1.,30.
+GRID,604,,1.,0.,30.
+GRID,605,,0.,0.,31.
+GRID,606,,0.,1.,31.
+GRID,607,,1.,1.,31.
+GRID,608,,1.,0.,31.
+CHEXA,12,2,601,602,603,604,605,606,
+,607,608
+PLOAD4,74,12,1.,2.,3.,4.,605,607""")
+    # CHEXA 11 (pressures.bdf): 105 106 107 108 run counter-clockwise from +Z, so P1-P4 sit on them
+    # in that order; CHEXA 12: 605 608 607 606 do. Drawn inward from G1, the order runs the other way.
+    for name, nids, cp in (("SID_20", [105, 108, 107, 106], [1, 4, 3, 2]),
+                           ("SID_74", [605, 606, 607, 608], [1, 4, 3, 2])):
+        ds = _set(mb, name)
+        assert arr(ds, "NID").tolist()[:4] == nids, name
+        np.testing.assert_allclose(arr(ds, "CornerPressure")[:4], cp)
+        np.testing.assert_allclose(arr(ds, "PressureForce", "cell")[0], [0, 0, -2.5], atol=1e-12)
+    # the centre of pressure: the bilinear pressure's moment about the face's (0, 0) corner
+    face = np.array([_set(mb, "SID_74").GetPoint(i) for i in range(4)])
+    from nastran_pv.builders.pressures import face_force
+
+    np.testing.assert_allclose(face_force(face, arr(_set(mb, "SID_74"), "CornerPressure")[:4]), [0, 0, -2.5], atol=1e-12)
+
+
+def test_gravity_without_mass_sits_at_the_model_centre(tmp_path):
+    """No mass, so no ModelCG: the GRAV arrow starts at the centre of the model's bounds, and says so."""
+    from nastran_pv.glyphs import gravity_anchor, gravity_sets_of, load_glyphs
+
+    (tmp_path / "nomass.bdf").write_text("SOL 101\nCEND\nLOAD = 5\nBEGIN BULK\n"
+                                         "GRID,1,,0.,0.,0.\nGRID,2,,2.,0.,0.\nGRID,3,,2.,4.,0.\nGRID,4,,0.,4.,0.\n"
+                                         "CQUAD4,1,1,1,2,3,4\nPSHELL,1,1,0.1\nMAT1,1,7e10,,0.3\n"
+                                         "GRAV,5,,9.81,0.,0.,-1.\nENDDATA\n")
+    mb = build_multiblock(load_deck(tmp_path / "nomass.bdf", echo=False))
+    assert mb.GetFieldData().GetArray("ModelCG") is None
+    at, where = gravity_anchor(mb)
+    np.testing.assert_allclose(at, [1, 2, 0])
+    assert where == "the model centre (no mass: no CG)"
+    out = load_glyphs([], diag=10.0, gravity=gravity_sets_of(mb), cg=at)
+    pts = np.array([out.GetPoint(i) for i in range(out.GetNumberOfPoints())])
+    along = (pts - at) @ np.array([0, 0, -1.0])
+    assert arr(out, "ArrowCount", "field")[0] == 1 and np.isclose(along.min(), 0, atol=1e-9)
+
+
+def test_one_gravity_reader():
+    """GRAV rows: from the root, else (a VTKHDF read raw) from a mesh block's copy of the root summary."""
+    from vtkmodules.vtkCommonDataModel import vtkMultiBlockDataSet
+
+    from nastran_pv import vtkutil
+    from nastran_pv.glyphs import gravity_sets_of
+
+    mb = build_multiblock(load_deck(DATA / "tiny_run.bdf", echo=False))
+    rows = gravity_sets_of(mb)
+    assert [(n, s) for n, s, _ in rows] == [("SID_3", 3), ("LOAD_1001", 1001)]
+    np.testing.assert_allclose(rows[1][2], [0, 0, -19.62])
+    raw = vtkMultiBlockDataSet()  # the table on a mesh block only
+    shells = vtkutil.shallow_copy(get_block(mb, "Shells"))
+    shells.GetFieldData().ShallowCopy(mb.GetFieldData())
+    vtkutil.add_block(raw, "Shells", shells)
+    assert [(n, s) for n, s, _ in gravity_sets_of(raw)] == [("SID_3", 3), ("LOAD_1001", 1001)]
+
+
+def test_diff_compares_the_pressure_resultant_per_set(tmp_path, mb):
+    """PLOAD2 10 -> 12 on SID 10 (so LOAD 100 too) and a new pressure-only set: per-set PX PY PZ rows and
+    DIFFLOAD_DeltaP; a diff without pressures on either side has no DeltaP column."""
+    from nastran_pv.diff import diff_models
+
+    text = (DATA / "pressures.bdf").read_text().replace("PLOAD2,10,10.,1,2", "PLOAD2,10,12.,1,2")
+    (tmp_path / "b.bdf").write_text(text.replace("ENDDATA", "PLOAD2,90,1.,3\nENDDATA"))
+    d = diff_models(mb, build_multiblock(load_deck(tmp_path / "b.bdf", echo=False)))
+    rows = {(r["Name"], r["Field"]): r for r in d.rows if r["Item"] == "load_set"}
+    ab = lambda key: (rows[key]["A"], rows[key]["B"])  # noqa: E731
+    np.testing.assert_allclose(ab(("SID_10", "PZ")), (20, 24))
+    np.testing.assert_allclose(ab(("LOAD_100", "PZ")), (44.25, 52.25))
+    assert rows[("SID_90", "PX")]["Status"] == "added" and np.isclose(rows[("SID_90", "PX")]["B"], 0.5)
+    sets = {s["Name"]: s for s in d.load_sets}
+    np.testing.assert_allclose(sets["SID_10"]["DeltaP"], [0, 0, 4])
+    np.testing.assert_allclose(sets["SID_20"]["DeltaP"], [0, 0, 0])
+    assert "pressure" not in " ".join(d.notes)
+    plain = build_multiblock(load_deck(DATA / "tiny_run.bdf", echo=False))
+    assert all("DeltaP" not in s for s in diff_models(plain, plain).load_sets)
 
 
 def test_written_files_keep_the_faces(mb, tmp_path):

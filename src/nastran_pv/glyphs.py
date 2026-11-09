@@ -571,14 +571,19 @@ def pressure_sets_of(mb) -> list:
 
 def gravity_sets_of(mb) -> list:
     """``[(name, set id, acceleration (3,))]`` of the load sets with GRAV, from the root ``GRAV_*``
-    table (which a ``.vtm`` keeps for a GRAV-only set too)."""
-    fd = mb.GetFieldData()
-    names, sids, acc = (fd.GetAbstractArray(f"GRAV_{c}") for c in ("Name", "Set", "Acceleration"))
-    if names is None or sids is None or acc is None:
-        return []
-    a = vtkutil.to_numpy(acc).reshape(-1, 3).astype(float)
-    s = vtkutil.to_numpy(sids).astype(int)
-    return [(names.GetValue(i), int(s[i]), a[i]) for i in range(min(names.GetNumberOfValues(), len(s), len(a)))]
+    table (which a ``.vtm`` keeps for a GRAV-only set too), else from a mesh block's copy of the root
+    summary (a VTKHDF file read without promoting it). The one reader of that table: the arrows,
+    the loads view and the model diff use it."""
+    from .fields.common import MESH, iter_blocks
+
+    rows = vtkutil.read_field_table(mb, "GRAV_")
+    for path, ds in iter_blocks(mb) if not rows and mb.IsA("vtkMultiBlockDataSet") else ():
+        if path in MESH:
+            rows = vtkutil.read_field_table(ds, "GRAV_")
+            if rows:
+                break
+    return [(str(r["Name"]), int(r["Set"]), np.asarray(r["Acceleration"], dtype=float).reshape(3))
+            for r in rows if {"Name", "Set", "Acceleration"} <= set(r)]
 
 
 def model_cg(mb):
@@ -588,6 +593,33 @@ def model_cg(mb):
         return None
     cg = vtkutil.to_numpy(a).reshape(-1)[:3].astype(float)
     return cg if np.all(np.isfinite(cg)) else None
+
+
+GRAVITY_AT_CG = "the CG"
+
+
+def gravity_anchor(mb) -> tuple[np.ndarray, str]:
+    """(where the GRAV arrows start, what that point is): the model CG, else, for a model without
+    mass (no ``ModelCG``), the centre of its bounds."""
+    from vtkmodules.vtkCommonDataModel import vtkBoundingBox
+
+    cg = model_cg(mb)
+    if cg is not None:
+        return cg, GRAVITY_AT_CG
+    bb = vtkBoundingBox()
+    for _, ds in _leaves(mb):
+        if ds.GetNumberOfPoints():
+            bb.AddBounds(ds.GetBounds())
+    centre = [0.0, 0.0, 0.0]
+    if bb.IsValid():
+        bb.GetCenter(centre)
+    return np.asarray(centre, dtype=float), "the model centre (no mass: no CG)"
+
+
+def _leaves(mb):
+    from .fields.common import iter_blocks
+
+    return iter_blocks(mb) if mb.IsA("vtkMultiBlockDataSet") else [("", mb)]
 
 
 def _name_id(name) -> int:

@@ -1192,7 +1192,7 @@ class NastranPVLoadGlyphs(_GlyphFilter):
         return _GlyphFilter._block(self, data)
 
     def _glyphs(self, block, diag, model):
-        from nastran_pv.glyphs import (gravity_sets_of, load_glyphs, load_set_names, load_sets_of, model_cg,
+        from nastran_pv.glyphs import (gravity_anchor, gravity_sets_of, load_glyphs, load_set_names, load_sets_of,
                                        pressure_sets_of, result_load_points)
         from nastran_pv.vtkutil import add_string_array
 
@@ -1208,7 +1208,7 @@ class NastranPVLoadGlyphs(_GlyphFilter):
             if self._pressures:
                 pressures = [(n, ds) for n, ds in pressure_sets_of(model) if n in on]
             if self._gravity:
-                gravity, cg = [g for g in gravity_sets_of(model) if g[0] in on], model_cg(model)
+                gravity, cg = [g for g in gravity_sets_of(model) if g[0] in on], gravity_anchor(model)[0]
             names = [n for n in load_set_names(model) if n in on]
         else:
             sets = [("Loads", block)]
