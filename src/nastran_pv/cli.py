@@ -20,6 +20,12 @@ Field options (convert, stats, store add):
     --parts / --grow SEEDS        PartId / Hops from "EID 1; GRID 5; PID 7",
                                   under --rules "exclude=rigid max_hops=5"
     --select FILE                 keep (or --select-mode mark) the IDs a CSV/text/Excel file lists
+    --envelope [max min absmax]   <array>_Max/_MaxStep ... of every result array over the --results steps
+
+Results helpers (convert; each step of an --all-steps series too):
+    --average [ARRAY ...]         an Averaged block: cell arrays averaged to the grids within each PID
+    --free-body SEEDS             the load the body grown from SEEDS (under --rules) transmits through
+                                  its cut, about --free-body-point (default: the cut centroid)
 """
 from __future__ import annotations
 

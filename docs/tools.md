@@ -82,6 +82,13 @@ the path) cell and point arrays and the root `PathLength` in elements (−1 when
 is available from Python and ParaView. With `max_hops=N` the far grid must be within N hops, as
 in grow from the first grid (at most N + 1 elements).
 
+## Free bodies
+
+The traversal rules also pick a free body: `convert --free-body "PID 7" --rules within=pid`
+sums the load the elements grown from the seeds transmit through their cut, about a point, from
+the grid point forces of the results (see [Results helpers](results-helpers.md#free-body-sums));
+*Nastran Free Body* has the same *Traversal* group as the filters below.
+
 ## Model check
 
 ```bash

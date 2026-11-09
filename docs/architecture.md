@@ -51,8 +51,8 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   them first.
 - `result_types.py` / `results.py` / `results_h5.py`: what is attached is declared, one
   `ResultType` per kind of result in `result_types.REGISTRY` (`Displacement`, `VonMisesMax`,
-  `SPCForce`, `MPCForce`, `AppliedLoad`, the element forces, and the stress and strain components
-  per block family): its OP2 tables and H5 datasets (one source, or one per element family),
+  `SPCForce`, `MPCForce`, `AppliedLoad`, the element forces, the stress and strain components
+  per block family, and `GridPointForce`, a root table): its OP2 tables and H5 datasets (one source, or one per element family),
   blocks, location, id key, arrays, reduction, frame and (forces and moments at grids) a root
   resultant. One row per element comes from `picks` (position and columns: a shell's two centre
   fibre rows, a beam's ends; column names through `result_types.resolve` in both readers; OP2 rows
@@ -71,6 +71,20 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   *Result Types*) holds on the results object, so the series writers honour it. `open_results`
   dispatches on the file suffix. Design and the recipe for a new type:
   `docs/design/2026-11-08-result-registry.md`.
+- `post/`: the results helpers (`docs/design/2026-11-09-results-helpers.md`), on VTK data like
+  `fields/`. `envelope.py` (`Envelope.add` one model per step, `write` the `<array>_Max/_Min/_AbsMax`
+  and `...Step` arrays of every registry point/cell array), `average.py` (`nodal_average`: per mesh
+  block an unstructured grid with points duplicated per (NID, PID) and the cell arrays averaged
+  onto them; grids are matched by `NID`, since a gathered tree has a point per grid and piece) and
+  `freebody.py` (`select_body` grows the body with the topology rules; `sum_free_body` takes the
+  cut load from the root `GridPointForce*` table, else from equilibrium). The CLI runs the
+  envelope before the field options and the averaging and free body after `--select`;
+  `post.StepHelpers` wraps the results so that the series writers re-run those two after every
+  `attach`. The plugin's *Nastran Envelope* iterates its input's time steps with
+  `CONTINUE_EXECUTING` (its output has no time steps, so a time change does not re-execute it).
+  A `ResultType` with `location="table"` (`GridPointForce`) writes root arrays
+  (`table_names`), not block arrays; its OP2 source reads the rows itself (`Op2Source.rows`),
+  which also normalises MYSTRAN's negated element rows.
 - `fields/`: `derived.py` (material, quality, size, cg, pidmass), `tables.py` (`read_table` and
   `map_table` by EID/PID/MID/NID/FAMILY/GROUP; text columns become codes plus a `<name>Names`
   table), `db.py` (SQLite or SQLAlchemy), and `calc.py` (`calculate` with a restricted-namespace
@@ -169,7 +183,8 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   cut by `selection.scope_masks`, moved by `DeformScale`; both deforms look grid displacements up
   in the whole model, `Deformer(grids=)`), *Nastran Files* (the `Files` checklist and
   tree on any model, converted files included), three field filters, four topology
-  filters (grow, parts, path, model check) and the two-input *Nastran Diff*.
+  filters (grow, parts, path, model check), the results helpers (*Nastran Envelope*, *Nastran Nodal
+  Average*, *Nastran Free Body*) and the two-input *Nastran Diff*.
   - Shared settings are class decorators, one PropertyGroup each: `_with(label, setters)` copies
     `@smproperty` setters into the class (renumbered past its own lines, so the group follows the
     filter's own settings) and appends the group XML after them; `_with_glyph_size`,

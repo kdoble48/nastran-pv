@@ -8,6 +8,21 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Added
 
+- Results helpers (roadmap task 12; docs/results-helpers.md), from the CLI and as filters:
+  - Envelopes: `--envelope [max min absmax]` (`convert`, `stats`, `store add`; `--envelope-steps`)
+    and *Nastran Envelope* (over the input's time steps) add `<array>_Max`, `_Min`, `_AbsMax` and
+    the step of each (`_MaxStep`, ...) for every result array, per component.
+  - Element-to-node averaging that does not cross PID boundaries: `convert --average [ARRAY ...]`
+    (`--average-within pid|mid|family|group|none`) adds the `Averaged` block, the mesh blocks on
+    points duplicated per (grid, PID) with the averages as point arrays; *Nastran Nodal Average*
+    outputs the same. Each step of a series gets its own.
+  - Free-body sums: `convert --free-body SEEDS` (with `--rules` and `--free-body-point`) and
+    *Nastran Free Body* (table and arrows at the summation point) give the load a free body grown
+    under the traversal rules transmits through its cut grids, from the grid point force balance,
+    with the applied, SPC and MPC forces inside it as the check; without GPFORCE, from equilibrium.
+  - The `GridPointForce` result type (OP2 `grid_point_forces`, HDF5 `NODAL/GRID_FORCE`): the
+    balance's element rows as a root table per step (a new `table` location in the registry),
+    MYSTRAN's negated OP2 rows normalised (#PR).
 - NPV Forces and NPV Stress views (`view`/`render --preset forces stress`): each block colored by its
   element forces (shells `MembraneForce`, lines `AxialForce`, bushes, springs) or by von Mises stress
   (shells at the top fibre, solids, lines `MaxStress`); `nv.apply("stress", quantity=, fibre=,

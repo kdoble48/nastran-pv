@@ -72,6 +72,19 @@ def test_no_averaging_across_pids(deck):
     assert arr(shells, "EID", "cell").tolist() == arr(src, "EID", "cell").tolist()
 
 
+def test_a_gathered_model_tree_averages_by_grid(deck):
+    """The plugin gathers the reader's tree: one point per grid and piece (pieces per element type,
+    PID, ...), so grids are matched by NID, not by point."""
+    from nastran_pv.tree import build_tree, gather
+
+    mb = _model(deck, X=X)
+    gathered, _ = gather(build_tree(mb).output(mb))
+    assert get_block(gathered, "Shells").GetNumberOfPoints() > 7  # grid 4 and 5 in the CQUADR and CTRIA3 pieces
+    shells = nodal_average(gathered, ["X"]).blocks.GetBlock(0)
+    assert shells.GetNumberOfPoints() == 9
+    assert _values(shells, "X") == _values(nodal_average(mb, ["X"]).blocks.GetBlock(0), "X")
+
+
 def test_averaging_across_the_whole_block(deck):
     shells = nodal_average(_model(deck, X=X), ["X"], within="none").blocks.GetBlock(0)
     assert shells.GetNumberOfPoints() == 7 and shells.GetPointData().GetArray("PID") is None

@@ -13,6 +13,10 @@ These options work with `convert`, `stats` and `store add`:
 | `--map SOURCE KEY [SHEET\|SQL]` | Columns of a CSV/TSV/text, JSON (`{key: {col: value}}` or a list of rows), Excel, SQLite file or SQLAlchemy URL, matched by `EID`, `PID`, `MID`, `NID`, `FAMILY` or `GROUP`. Text columns become indexed codes with a `<name>Names` table. Repeatable; `--map-prefix` names the arrays. |
 | `--calc "Name = expression"` | A numpy expression over existing arrays and root scalars, e.g. `"SpecificMass = ElementMass / Area"` or `"Fz = Force[:, 2]"`. Repeatable. |
 
+With results attached, `--envelope` (the envelopes over the steps) runs before these options, so
+`--calc` can use `VonMisesMax_Max`; `convert --average` and `--free-body` run after them (see
+[Results helpers](results-helpers.md)).
+
 Excel needs the `tables` extra and non-SQLite databases need the `sql` extra (see
 [Install](install.md)).
 

@@ -19,6 +19,7 @@ with `--help` for the full option list.
 
 The field options `--derive`, `--map` and `--calc` (for `convert`, `stats` and `store add`) are
 described in [Fields](fields.md); `--parts`, `--grow` and `--rules` in [Model tools](tools.md);
+`--envelope`, `--average` and `--free-body` in [Results helpers](results-helpers.md);
 `--select` below, in [Selection from an ID file](#selection-from-an-id-file). The `store` commands are described in [Run store](store.md),
 and `diff` and `--diff-against` in [Model diff](diff.md). Wherever a command takes a deck, it also
 takes a `.vtm` or `.vtkhdf` written by `convert`, with the same result; the options that need the deck
@@ -38,7 +39,7 @@ step, `--step N` (0-based, default 0); `--all-steps` writes them all. On a conve
 chooses what the steps carry, by [result type](model.md#result-types): `--result-types VonMisesMax`
 attaches the stresses without the displacements, `--result-types ShellStress,SolidStress` the
 stress components (names are case-insensitive and may be comma-separated; `all` is every type;
-the default is `Displacement VonMisesMax SPCForce MPCForce AppliedLoad` and the element forces).
+the default is `Displacement VonMisesMax SPCForce MPCForce AppliedLoad`, the element forces and `GridPointForce`).
 `convert` prints the types the file has that it left out, and a type named that the results
 file lacks gives a warning. With SPC forces, MPC forces or applied loads attached, `convert`
 prints their resultant at the attached step (`--step`, also with `--all-steps`), e.g.
@@ -53,6 +54,13 @@ debugging.
 (default: Case Control `NSM=`; `0` = none; see [Nonstructural mass](model.md#nonstructural-mass));
 `view` and `render` take it too. An output ending in `.vtkhdf`, or
 `--format vtkhdf`, writes VTKHDF instead (see [Output formats](output-formats.md)).
+
+`--envelope [max min absmax]` adds the envelopes of every result array over the steps
+(`--envelope-steps` to choose them), with the step of each extreme; `stats` and `store add` take it
+too. `convert --average [ARRAY ...]` adds the `Averaged` block, the element results averaged to the
+grids within each PID, and `convert --free-body SEEDS` (with `--rules` and `--free-body-point`)
+prints and stores the load a free body transmits through its cut; both follow every step of an
+`--all-steps` series (see [Results helpers](results-helpers.md)).
 
 `--random ASD` turns the `--results` normal modes into a base-drive random response, with
 `--drive`, `--damping`, `--g` and `--random-frames`; `view` and `render` take the same options

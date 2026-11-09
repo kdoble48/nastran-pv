@@ -91,9 +91,13 @@ def average_block(ds, names, key: str | None = "PID") -> tuple[vtkUnstructuredGr
         np.full(n_cells, -1, np.int64) if dom is None else np.asarray(dom, dtype=np.int64).reshape(-1))
     values, dcode = np.unique(dom, return_inverse=True)
     width = len(values)
-    uniq, inv = np.unique(conn * width + dcode.reshape(-1)[cell_of], return_inverse=True)
+    nid = get_array(pd, "NID")
+    # a grid is its NID: a gathered model tree has one point per grid and piece
+    grid = conn if nid is None else np.asarray(nid, dtype=np.int64)[conn]
+    uniq, first, inv = np.unique(grid * width + dcode.reshape(-1)[cell_of], return_index=True,
+                                 return_inverse=True)
     inv = inv.reshape(-1)
-    point, domain = uniq // width, values[uniq % width]
+    point, domain = conn[first], values[uniq % width]
 
     out = vtkUnstructuredGrid()
     xyz = vtkutil.to_numpy(ug.GetPoints().GetData()).reshape(-1, 3)
@@ -101,7 +105,6 @@ def average_block(ds, names, key: str | None = "PID") -> tuple[vtkUnstructuredGr
     out.SetCells(vtkutil.cell_types(ug), vtkutil.make_cell_array(np.diff(offsets), inv))
     out.GetFieldData().ShallowCopy(ds.GetFieldData())
     opd, ocd = out.GetPointData(), out.GetCellData()
-    nid = get_array(pd, "NID")
     if nid is not None:
         vtkutil.add_array(opd, "NID", np.asarray(nid)[point])
     if key is not None:
