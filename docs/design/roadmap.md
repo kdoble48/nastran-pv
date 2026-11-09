@@ -45,7 +45,7 @@ and CI proves all of this on every push.
 | 12. Results helpers as filters | Done | #73 |
 | 13. Composites | Done | #71, #74 |
 | 14. Performance budget | Done | #68 |
-| 15. 1.0 release | In progress: the Python API page and the deprecation policy (#76), the bug-report form, `--version` and this status (#GALLERY_NEXT), the gallery's result scenes (#GALLERY) | |
+| 15. 1.0 release | In progress: the Python API page and the deprecation policy (#76), the bug-report form, `--version` and this status (#GALLERY_NEXT), the gallery's result scenes (#77) | |
 
 ### Left for the 1.0.0 tag
 
@@ -54,7 +54,7 @@ and CI proves all of this on every push.
 2. Task 5 merged (#75).
 3. Task 15's pull requests merged, then the gallery assets uploaded with the user's go-ahead
    (`python docs/build_gallery.py --ucrm9 ... --mystran ... --upload`, the exact command is in
-   #GALLERY), so the site shows the result scenes. Frequency response, transient and complex
+   #77), so the site shows the result scenes. Frequency response, transient and complex
    results have no gallery scene: MYSTRAN solves none of them.
 4. The betas: the 0.3 to 0.6 milestones are all merged, so decide whether to tag them one by one
    (each with a CHANGELOG section of its own) or to go from 0.2.0 straight to `1.0.0rc1`.
