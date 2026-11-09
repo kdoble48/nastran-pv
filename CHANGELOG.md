@@ -17,7 +17,7 @@ All notable changes to nastran-pv are listed here. The format follows
   (`DeprecationWarning`, or a line on stderr for a CLI flag), is listed under *Deprecated*, and
   lives at least until the next minor release before 1.0 and the next major release after; the
   helpers are in `nastran_pv.deprecation` (`cli.DEPRECATED_FLAGS` for flags). The docs build now
-  installs pyNastran, VTK and h5py, which autodoc imports (#TBD).
+  installs pyNastran, VTK and h5py, which autodoc imports (#76).
 
 - Composite plies in ParaView: the reader's *Ply* (`convert --ply`: a ply id, or 0 for each
   element's critical ply), the *Nastran Ply Axes* filter (a ply's fibre and 2-directions as lines
