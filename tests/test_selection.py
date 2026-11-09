@@ -461,6 +461,76 @@ def test_scope_named_connector_keeps_what_hangs_on_it(run_mb, vis):
             assert list(m[path]) == list(reader_keeps(run_mb, vis, path)), path
 
 
+MPC_DECK = """SOL 101
+CEND
+BEGIN BULK
+GRID,1,,0.,0.,0.
+GRID,2,,1.,0.,0.
+GRID,3,,1.,1.,0.
+GRID,4,,0.,1.,0.
+GRID,9,,2.,0.,0.
+CQUAD4,1,1,1,2,3,4
+PSHELL,1,1,0.01
+MAT1,1,7.0e10,,0.3,2700.
+MPC,100,9,1,1.,2,1,-1.
+CONM2,50,9,,5.
+ENDDATA
+"""
+
+
+def deck_mb(tmp_path, text, name="deck.bdf"):
+    p = tmp_path / name
+    p.write_text(text)
+    deck = load_deck(p, echo=False)
+    return build_multiblock(deck), tree.names_from_deck(deck)
+
+
+@pytest.mark.parametrize("vis, legs, masses", [
+    (tree.Visibility(hidden_eids=frozenset({100})), [], []),      # the reader hides set 100's leg
+    (tree.Visibility(show_only=frozenset({100})), [100], [50]),   # and shows it alone
+], ids=["hidden", "show-only"])
+def test_scope_mpc_legs_follow_the_readers_eid_lists(tmp_path, vis, legs, masses):
+    """The reader matches Show Only / Hidden Elements against an MPC leg's EID (its set id), so the
+    overlays do too: hidden, MPC 100 (2 -> free grid 9) carries no chain to CONM2 50; shown alone, it
+    is named, so CONM2 50 on its grid 9 stays."""
+    mb, names = deck_mb(tmp_path, MPC_DECK)
+    m = selection.scope_masks(mb, vis, names)
+    assert kept(mb, m, "Connectors") == legs
+    assert list(m["Connectors"]) == list(reader_keeps(mb, vis, "Connectors", names))
+    assert kept(mb, m, "Masses", "point") == masses
+
+
+SPIDER = """SOL 101
+CEND
+BEGIN BULK
+GRID,1,,0.,0.,0.
+GRID,2,,1.,0.,0.
+GRID,3,,1.,1.,0.
+GRID,4,,0.,1.,0.
+GRID,9,,0.5,0.5,1.
+CQUAD4,1,1,1,2,3,4
+PSHELL,1,1,0.01
+MAT1,1,7.0e10,,0.3,2700.
+RBE3,20,,9,123,1.0,123,1,2,3,4
+RBE2,30,1,123456,2
+CONM2,103,9,,3.
+{wing_mass}ENDDATA
+"""
+
+
+@pytest.mark.parametrize("wing_mass", ["CONM2,101,1,,1.\n", ""], ids=["with-wing-mass", "without"])
+def test_scope_grid_file_adds_to_the_join(tmp_path, wing_mass):
+    """A Show only GRID file of the wing grids 1-4 keeps the wing, RBE2 30 (all its grids listed) and
+    CONM2 101 on grid 1. Those items are listed, not named by EID, so the join still runs: the RBE3
+    spider 20 hangs off the wing and keeps the engine CONM2 103 on its unlisted centre grid 9."""
+    mb, names = deck_mb(tmp_path, SPIDER.format(wing_mass=wing_mass))
+    vis = tree.Visibility(select=selection.IdList("NID", frozenset({1, 2, 3, 4})))
+    m = selection.scope_masks(mb, vis, names)
+    assert kept(mb, m, "Shells") == [1]
+    assert sorted(set(kept(mb, m, "Rigid"))) == [20, 30]
+    assert kept(mb, m, "Masses", "point") == ([101, 103] if wing_mass else [103])
+
+
 @pytest.fixture(scope="module")
 def beams_mb():
     from nastran_pv.assemble import Options

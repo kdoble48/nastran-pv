@@ -1683,6 +1683,17 @@ def scope_deform_checks(pv, nv):
             bush, spring = _x_by_nid(src, "BushLines", mode1), _x_by_nid(src, "Connectors", mode1)
             check(bush == {2: 1.5, 5: 3.5} and spring == {3: 1.5, 6: 3.5},
                   f"{what}: connector ends on grids of hidden shells move too: {bush} {spring}")
+        from vtkmodules.vtkCommonDataModel import vtkDataObject
+
+        def data_time():
+            return r.GetClientSideObject().GetOutputDataObject(0).GetInformation().Get(vtkDataObject.DATA_TIME_STEP())
+
+        other = pv.CreateRenderView()               # a view at mode 2 is active; the reader is at mode 1
+        other.ViewTime = rm.timesteps(r)[2]
+        pv.SetActiveView(other)
+        check(nv.scope_active(r) and data_time() == mode1,
+              f"scope_active does not run the reader at the active view's time (reader at {data_time()})")
+        pv.Delete(other)
         for src in sorted((s for s in pv.GetSources().values() if s not in keep),
                           key=lambda v: -int(v.GetGlobalIDAsString())):
             pv.Delete(src)
@@ -1708,14 +1719,31 @@ def scene_review_checks(pv, nv, reader):
 
     keep = set(pv.GetSources().values())
     twin = rm.load_reader(DECK)
-    nv.apply("masses", reader=twin, view=view)
-    for src in sorted((s for s in pv.GetSources().values() if s not in keep),
+    text = pv.FindSource(nv._name(nv.apply("masses", reader=twin, view=view), "info"))
+    for src in sorted((s for s in pv.GetSources().values() if any(u == twin for u in nv.upstream(s))),
                       key=lambda v: -int(v.GetGlobalIDAsString())):
-        pv.Delete(src)                              # Delete Tree on the twin reader
+        pv.Delete(src)                              # Delete Tree on the twin reader: its info text stays
+    check(nv.scene_of(view).model is None and text not in nv.shown_sources(view),
+          "a scene whose reader was deleted is emptied, and what is left of it (its info text) hidden")
     pv.SetActiveSource(None)
     nv.clear(view)
-    check(nv.scene_of(view).model is None and pv.GetActiveSource() is reader,
+    check(pv.GetActiveSource() is reader,
           "NPV Clear after the scene's reader was deleted selects an open reader, not the deleted one")
+    for src in [s for s in pv.GetSources().values() if s not in keep]:
+        pv.Delete(src)
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        good, bad = os.path.join(tmp, "groups.bdf"), os.path.join(tmp, "bad.bdf")
+        for path, text in ((good, GROUP_DECK), (bad, BAD_DECK)):
+            with open(path, "w") as f:
+                f.write(text)
+        r = rm.load_reader(good)
+        r.HiddenElements = "2"
+        r.UpdatePipeline()
+        check(nv.scope_active(r), "Hidden Elements 2 is a scope")
+        r.FileName = bad
+        r.UpdatePipeline()
+        check(not nv.scope_active(r), "after a read that failed there is no scope (the reader hid nothing)")
+        pv.Delete(r)
 
     for prop, text in (("ShowOnlyElements", "1 x 3"), ("HiddenElements", "2 THRU")):
         setattr(reader, prop, text)

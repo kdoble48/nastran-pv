@@ -266,22 +266,17 @@ def raise_load_error(reader):
         raise RuntimeError(f"cannot read {name}: {error} (full traceback in Output Messages)")
 
 
-def _model_time(reader, time=None):
-    """``time``, else the vibrating mode's (the view time is a phase then), else the active view's."""
-    if time is None:
-        time = held_time(reader)
-    if time is None:
-        view = pv.GetActiveView()
-        time = getattr(view, "ViewTime", 0.0) if view is not None else 0.0
-    return time
-
-
 class Model:
     """Reader plus a client-side copy of its output (block names, arrays, size)."""
 
     def __init__(self, reader, time=None):
         self.reader = reader
-        self.time = time = _model_time(reader, time)
+        if time is None:
+            time = held_time(reader)  # the vibrating mode: the view time is a phase then
+        if time is None:
+            view = pv.GetActiveView()
+            time = getattr(view, "ViewTime", 0.0) if view is not None else 0.0
+        self.time = time
         reader.UpdatePipeline(time)
         raise_load_error(reader)
         from nastran_pv.tree import as_multiblock
@@ -319,7 +314,7 @@ class Model:
     def scope_active(self):
         """:func:`scope_active` of the reader, asked once per Model."""
         if self._scope_active is None:
-            self._scope_active = scope_active(self.reader, self.time)
+            self._scope_active = scope_active(self.reader)
         return self._scope_active
 
     def _holder(self, block_name, name):
@@ -467,14 +462,13 @@ def _feed(proxy, src):
     return proxy
 
 
-def scope_active(reader, time=None):
-    """True when the deck reader's read (at ``time``, default as :class:`Model`) hid anything: an EID
-    list, an unchecked checklist entry or a Selection File, as the reader applied them (its
-    *ScopeActive*), so an EID list it could not parse or a file it could not read is no scope. A
-    converted file has no scope."""
+def scope_active(reader):
+    """True when the deck reader's visibility hides anything: an EID list, an unchecked checklist
+    entry or a Selection File, as the reader applies them (its *ScopeActive*), so an EID list it
+    cannot parse, a file it cannot read or a read that failed is no scope. It does not run the
+    reader. A converted file has no scope."""
     if _xml_name(reader) != READER_XML:
         return False
-    reader.UpdatePipeline(_model_time(reader, time))
     reader.UpdatePropertyInformation()
     prop = reader.GetProperty("ScopeActive")
     return bool(prop.GetElement(0)) if prop is not None and len(prop) else False
@@ -535,16 +529,20 @@ _INFO_WRITES = 0  # info_text calls so far: apply tells from it which layer wrot
 
 def scene_of(view):
     """The layers shown in ``view`` (a :class:`nastran_pv.scene.Scene`, made on first use). Scenes of
-    views that were closed are dropped, and a scene whose reader was deleted is emptied (its objects
-    went with the reader, or are hidden as strays by the next command)."""
+    views that were closed are dropped, and a scene whose reader was deleted is emptied, hiding what
+    is left of it in ``view``: its objects still open and every ``NPV ...`` object (its info text)."""
     from nastran_pv.scene import Scene
 
     alive = {v.GetGlobalIDAsString() for v in pv.GetViews()}
     for key in [k for k in _SCENES if k not in alive]:
         del _SCENES[key]
     scene = _SCENES.setdefault(view.GetGlobalIDAsString(), Scene())
-    if scene.model is not None and scene.model not in list(pv.GetSources().values()):
-        scene.clear()
+    sources = pv.GetSources()
+    if scene.model is not None and scene.model not in list(sources.values()):
+        cleared = scene.clear()
+        names = {v.GetGlobalIDAsString(): k[0] for k, v in sources.items()}
+        _hide([s for s in shown_sources(view)
+               if s in cleared or names.get(s.GetGlobalIDAsString(), "").startswith("NPV ")], view)
     return scene
 
 

@@ -77,12 +77,14 @@ All notable changes to nastran-pv are listed here. The format follows
 ### Fixed
 
 - Overlays follow the scope as the reader applies it: a selection file of PIDs, MIDs, families,
-  groups or grids now applies to masses, bushes, SPCs and loads too; a hidden or unticked rigid
-  element or bush no longer carries the grid chain; one kept by Show Only keeps the masses on its
-  grids; beam sections follow their beams; connector and bush lines to grids of hidden elements
-  deform with them. A coloring that writes no text no longer leaves the previous coloring's text,
-  NPV Clear no longer acts on a deleted reader, and an EID list the reader cannot parse or a
-  selection file it cannot read no longer counts as a scope (#56).
+  groups or grids now applies to masses, bushes, SPCs and loads too (adding what it lists to the
+  grid join); a hidden or unticked rigid element or bush no longer carries the grid chain; one kept
+  by Show Only keeps the masses on its grids; MPC legs match the EID lists by their set id, as in
+  the reader; beam sections follow their beams; connector and bush lines to grids of hidden
+  elements deform with them. A coloring that writes no text no longer leaves the previous
+  coloring's text, NPV Clear no longer acts on a deleted reader (nor leaves its text shown), and an
+  EID list the reader cannot parse, a selection file it cannot read or a failed read no longer
+  counts as a scope, which is worked out without running the reader (#56).
 - Deck vs converted file parity: a `.vtkhdf` gives the same model, tables, CLI output, filters and views as its deck. Root and block field data no longer mix on read, options that need the deck are refused instead of ignored, `--step` picks the step of a converted series, and the warnings and `store add` deck carry over.
 - Model Check on the deck reader reported every model-tree piece seam as a free edge or face; Parts numbering and Path no longer depend on cell order.
 - Decks with latin-1 characters (`$ Kräfte`) failed to load on Linux and macOS, because pyNastran reads the file header with the locale's encoding (#42).

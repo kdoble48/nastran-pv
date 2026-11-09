@@ -308,7 +308,6 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         self._listed_key = None
         self._reported_key = None
         self._load_error = ""  # last RequestData failure, for LoadError (empty after a good read)
-        self._scope_active = 0  # the last read hid something, for ScopeActive
         self._names = {}
         self._tree = None
         self._tree_key = None
@@ -513,9 +512,15 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
 
     @smproperty.intvector(name="ScopeActive", information_only="1")
     def GetScopeActive(self):
-        """1 when the last read hid anything: the visibility it applied, so an EID list it could not
-        parse or a Selection File it could not read (both ignored) is no scope. The views read it."""
-        return self._scope_active
+        """1 when the visibility settings hide anything, as a read applies them: an EID list it cannot
+        parse or a Selection File it cannot read is ignored, so it is no scope; 0 after a failed read.
+        Worked out from the settings, so asking does not run the reader. The views read it."""
+        if not self._filename or self._load_error:
+            return 0
+        try:
+            return int(not self._visibility(quiet=True).everything)
+        except ImportError:  # RequestData reports it
+            return 0
 
     @smproperty.doublevector(name="TimestepValues", information_only="1", si_class="vtkSITimeStepsProperty")
     def GetTimestepValues(self):
@@ -653,7 +658,8 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
             self._listing = False
         self._listed_key = self._mb_key
 
-    def _visibility(self):
+    def _visibility(self, quiet=False):
+        """The Visibility of the settings; ``quiet``: report no unparseable list or unreadable file."""
         from nastran_pv.tree import Visibility, parse_ids
 
         hidden = {}
@@ -666,13 +672,14 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
             try:
                 ids[what] = parse_ids(text)
             except ValueError as exc:
-                _message(f"nastran-pv: {what}: {exc}; ignored", error=True)
+                if not quiet:
+                    _message(f"nastran-pv: {what}: {exc}; ignored", error=True)
                 ids[what] = set()
         show = frozenset(ids["ShowOnlyElements"]) if ids["ShowOnlyElements"] else None
-        return Visibility(hidden, show, frozenset(ids["HiddenElements"]), select=self._selection(),
+        return Visibility(hidden, show, frozenset(ids["HiddenElements"]), select=self._selection(quiet),
                           select_hide=self._sel_mode == 1, select_grids=("all", "any")[self._sel_grids % 2])
 
-    def _selection(self):
+    def _selection(self, quiet=False):
         """The SelectionFile's IdList (re-read when the file or the key changes), None when off."""
         if not self._sel_file or self._sel_mode == 2:
             return None
@@ -687,7 +694,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
                 self._sel_read = key
         except Exception as exc:
             problem = (key, str(exc))
-            if problem != self._sel_error:  # once per change of file, key or error
+            if problem != self._sel_error and not quiet:  # once per change of file, key or error
                 self._sel_error = problem
                 _message(f"nastran-pv: SelectionFile {self._sel_file}: {exc}; ignored", error=True)
             return None
@@ -724,7 +731,6 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
                 if rebuilt:
                     deck.warnings += res.skipped
             vis = self._visibility()
-            self._scope_active = int(not vis.everything)
             key = (self._mb_key, vis.key())
             if key != self._tree_key:
                 self._tree = build_tree(mb, vis, self._names)
@@ -1305,7 +1311,9 @@ def _double_array(name, value):
 @smdomain.datatype(dataTypes=["vtkDataObject"], composite_data_supported=True)
 class NastranPVScope(_Settable, VTKPythonAlgorithmBase):
     """The overlays' copy of the reader's model: mesh blocks keep what the reader keeps, and masses,
-    connectors, SPCs and loads stay when they hang off a kept element (named EIDs win, hidden EIDs go).
+    connectors, SPCs and loads stay when they hang off a kept element or a kept rigid element or bush.
+    What Show Only names by EID wins in its block, what a Show only Selection File of grids, properties
+    or groups lists is added, and what the checklists, Hidden Elements or a Hide file hide always goes.
     It goes after Nastran Deform on the reader and moves by its scale; any other input passes through."""
 
     def __init__(self):

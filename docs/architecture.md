@@ -171,11 +171,13 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   - Overlays follow the scope (R2): every overlay's glyph filters and extracts (`NPV scoped <block>`)
     draw from `scoped(model)`, the `NPV scope` filter (*Nastran Scope*) after `NPV deform`; its counts
     and "nothing to draw" checks use `Model.scoped(name)`, and `scope_active(reader)` (the reader's
-    information property `ScopeActive`: the visibility its last read applied) picks the "in the
-    reader's scope" text. `_feed` re-feeds objects made before (fed by `NPV deform`).
+    information property `ScopeActive`: its settings as a read applies them, 0 after a failed read;
+    asking does not run the reader) picks the "in the reader's scope" text. `_feed` re-feeds objects
+    made before (fed by `NPV deform`).
   - The shared `NPV info` text belongs to no layer: `Scene.info` names the layer that wrote it last,
     and `apply` hides it when that layer goes (an overlay toggled off, a coloring replaced by one
-    that writes none). `scene_of` empties a scene whose reader was deleted.
+    that writes none). `scene_of` empties a scene whose reader was deleted and hides what is left
+    of it in the view (its objects still open, the `NPV ...` text).
   - Mode animation: `mode_times` (the reader's steps, or one step for a converted single-step
     file with a `Displacement`), `animate_modes`/`animate_mode` and `save_mode_animations`. They
     run inside `_kept_view`, which puts back the view's time and every NPV deform scale, and

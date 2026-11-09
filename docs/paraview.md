@@ -88,10 +88,14 @@ of that group. The rules, in Nastran terms:
 * A CONM2/CONM1/CMASS, an SPC grid or a FORCE/MOMENT grid is kept when its grid is kept.
 * CBAR/CBEAM sections are elements: their own EID, PID and group decide, and a swept section
   follows its beam.
-* **What the scope names wins.** Show Only `1 201` keeps shell 1 and only CONM2 201 of the masses
-  on it. A Show only Selection File names what it lists itself: a GRID file keeps the masses and
-  SPCs on its grids, a PID file of PBUSH ids keeps those bushes. A named RBE2 or CBUSH keeps what
-  hangs on its grids too: Show Only of an engine's RBE2 shows its CONM2.
+* **An item's own EID wins** when Show Only (or a Show only Selection File of EIDs) names it.
+  Show Only `1 201` keeps shell 1 and only CONM2 201 of the masses on it. A named RBE2 or CBUSH
+  keeps what hangs on its grids too: Show Only of an engine's RBE2 shows its CONM2. An MPC's legs
+  carry its set id as their EID, as in the reader's lists.
+* A Show only Selection File of grids, properties, materials, families or groups **adds** what it
+  lists to the rules above: a GRID file keeps the masses and SPCs on its grids, a PID file of PBUSH
+  ids keeps those bushes and what hangs on them, and the RBE3 spider off the listed wing still
+  keeps the engine mass on its unlisted centre grid.
 * **What is hidden always goes**: an unticked checklist entry, Hidden Elements `201` (CONM2 201
   wherever its grid is) or a Hide Selection File (PBUSH 51's bushes). A hidden RBE2 or CBUSH carries
   no chain either, so the masses beyond it go too.
@@ -298,7 +302,7 @@ the selection commands make no filter of their own.
 * **Nastran Scope** is the overlays' copy of the model. Its mesh blocks keep what the reader
   keeps (checklists, Show Only/Hide, the selection file). Masses, rigid elements, bushes, SPCs
   and loads stay when they hang off a kept element, also when the reader's own output drops them;
-  what Show Only or a Show only file names wins, and what is hidden always goes
+  EIDs named in Show Only win, a Show only file adds what it lists, and what is hidden always goes
   ([the rules](#overlays-follow-the-scope)). With nothing hidden, or on a converted
   file, it passes its input through. It goes after *Nastran Deform* on the reader and moves by the
   scale that filter applied, so the NPV overlays draw through it (*NPV scope*) and follow the mode;
