@@ -30,7 +30,9 @@ python -m nastran_pv render $DECK --preset loads  --views showcase     --out sho
    folder=DIR)` writes one looping GIF per mode (PIL, shipped with ParaView); both show the
    mode's label and frequency (upper right). All of them put the view back on its step and
    deformation afterwards, and raise for a mode with no displacement. A converted single-step
-   `.vtm` (`--results` without `--all-steps`) animates as one mode. `nv.play_mode(mode,
+   `.vtm` (`--results` without `--all-steps`) animates as one mode. A complex step (frequency
+   response, complex mode: `Displacement_Real/_Imag`) turns through its phase instead of a sine
+   (*Nastran Deform* *Phase*; `nv.is_complex_step(model)`). `nv.play_mode(mode,
    frames=24)` makes the time steps one cycle of phases (`nv._set_time(view, k / frames)` then
    shows phase k; don't call `scene.Play()` with Loop on from a script, it never returns);
    `nv.stop_mode_animation()` or any `nv.apply` undoes it. The GUI buttons are *NPV Animate Mode*
@@ -70,7 +72,7 @@ file, not full fuel.
 ## Presets
 
 `masses bushes bushrotations beams loads spc rigid family group pid mid elementtype thickness nsm results forces stress random randomsweep parts check diff`
-(`random`/`randomsweep` need `--results MODES --random ASD`, see `docs/random-vibration.md`; `diff` needs
+(`random`/`randomsweep` need `--results MODES --random ASD`, or a SOL 111 OP2 with `--random-output`, see `docs/random-vibration.md`; `diff` needs
 `--against A`, and `nv.side_by_side(array=...)` puts A and B in two linked views, see `docs/diff.md`)
 (`grow` and `path` are GUI views seeded by the selection macros). `family` and `group`
 need ICEM/TACS family comments (uCRM-9 has them; Linderholt does not). `results` needs

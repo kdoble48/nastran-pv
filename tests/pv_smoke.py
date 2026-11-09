@@ -406,7 +406,8 @@ def element_result_checks(pv, nv):
             reader.ResultTypes = [t.name for t in REGISTRY if t.default]  # a new file: back to the defaults
             t0 = rm.timesteps(reader)[0]
             text += _messages(lambda: reader.UpdatePipeline(t0))
-            listed = [t.name for t in REGISTRY if t.name not in ("SPCForce", "MPCForce", "AppliedLoad")]
+            absent = ("SPCForce", "MPCForce", "AppliedLoad", "Velocity", "Acceleration")  # not in the fixture
+            listed = [t.name for t in REGISTRY if t.name not in absent]
             check(nv._listed(reader, "ResultTypes") == listed, f"{kind}: every type the fixture has is listed")
             check(_by_eid(reader, "Lines", "AxialForce") == {21: 7.0, 22: 15.0, 23: 31.0},
                   f"{kind}: LineForce AxialForce of CBAR, CBEAM, CROD by default")
@@ -1335,6 +1336,109 @@ def random_checks(pv, nv):
     else:  # ParaView 5.x: its VTKHDF reader stamps the previous time on the output (known, documented)
         check(text.startswith("Random Z "), f"converted series (ParaView 5.x): frequency label {text!r}")
     nv.apply("random", reader=src, view=view)
+    pv.Delete(view)
+
+
+def dynamic_result_checks(pv, nv):
+    """Roadmap task 11: a frequency response (op2_fixture.make_frequency_op2 on elements.bdf: T3 =
+    1e-3 NID x (3 + 4i) at 10 Hz, twice at 20 Hz) and a transient (make_transient_op2) as time
+    series in the reader and as converted VTKHDF series, the reader's Phase Angle, the complex step
+    vibrating through its phase (play_mode, animate_modes, a GIF), and the SOL 111 random output
+    (make_random_op2) in the random views."""
+    from op2_fixture import make_frequency_op2, make_random_op2, make_transient_op2
+
+    tmp = tempfile.mkdtemp()  # not removed: the open VTKHDF readers keep their files locked
+    elements = os.path.join(HERE, "data", "elements.bdf")
+    freq = os.path.join(tmp, "freq.op2")
+    make_frequency_op2().write_op2(freq)
+    reader = rm.load_reader(elements, freq)
+    steps = rm.timesteps(reader)
+    check(len(steps) == 2, f"frequency response: one time step per frequency ({len(steps)})")
+    listed = nv._listed(reader, "ResultTypes")
+    check("Velocity" in listed and "Acceleration" in listed and "ShellForce" in listed,
+          f"Result Types of a frequency response: {listed}")
+
+    def at(t, block="Shells", name="Displacement", nid=2):
+        m = rm.Model(reader, t)
+        return m.array(block, name)[m.array(block, "NID") == nid][0]
+
+    check(rm.Model(reader, steps[1]).field_strings(None, "ResultLabel") == ["Subcase 1 20 Hz"], "frequency label")
+    check(np.allclose(at(steps[1], name="Displacement_Real"), [0, 0, 0.012])
+          and np.allclose(at(steps[1], name="Displacement_Phase"), [0, 0, 53.130102], atol=1e-5),
+          "complex parts at 20 Hz: Displacement_Real, _Phase")
+    check(np.allclose(at(steps[0]), [0, 0, 0.006]), "Displacement at phase 0: the real part")
+    reader.PhaseAngle = 90.0
+    check(np.allclose(at(steps[0]), [0, 0, -0.008]), "Phase Angle 90: the response at that instant (-Imag)")
+    reader.PhaseAngle = 0.0
+
+    view = pv.CreateRenderView()
+    view.ViewSize = [400, 300]
+    nv._set_time(view, steps[0])
+    model = nv.apply("results", reader=reader, view=view)
+    deform = pv.FindSource(nv._name(model, "deform"))
+    mesh = nv._extract(model, "Shells")
+
+    def z_range():
+        mesh.UpdatePipeline(view.ViewTime)
+        return mesh.GetDataInformation().GetBounds()[4:6]
+
+    nv.play_mode(1, frames=8, reader=reader, view=view)
+    amp = deform.Amplitude
+    zs = {}
+    for phase in (0.0, 0.25):
+        nv._set_time(view, phase)
+        zs[phase] = z_range()
+    # grids 1-7 at z 0: 1e-3 n (3 + 4i) -> 0.003 n at 0 deg, -0.004 n at 90 deg
+    check(amp > 0 and np.allclose(zs[0.0], (0.003 * amp, 0.021 * amp), rtol=1e-4)
+          and np.allclose(zs[0.25], (-0.028 * amp, -0.004 * amp), rtol=1e-4),
+          f"play_mode on a frequency: the shape turns through its phase {zs}")
+    check(nv.stop_mode_animation(reader, view), "Stop Mode Animation after a complex step")
+    played = nv.animate_modes([2], frames=4, out=os.path.join(tmp, "frames"), reader=reader, view=view)
+    check(played == [2] and len(os.listdir(os.path.join(tmp, "frames"))) == 4 and float(deform.Phase) == 0.0,
+          "animate_modes on a frequency: 4 phase frames, Phase put back")
+    gifs = nv.save_mode_animations([1], frames=8, folder=os.path.join(tmp, "gifs"), reader=reader, view=view)
+    check(len(gifs) == 1 and os.path.getsize(gifs[0]) > 0, f"a frequency's phase cycle as a GIF: {gifs}")
+
+    series = os.path.join(tmp, "freq.vtkhdf")
+    convert(["convert", elements, "--results", freq, "--all-steps", "-o", series, "-q"])
+    src = nv.load_reader(series)
+    check(len(rm.timesteps(src)) == 2, "converted frequency response: 2 time steps")
+    m = rm.Model(src, rm.timesteps(src)[1])
+    re = m.array("Shells", "Displacement_Mag")[m.array("Shells", "NID") == 2][0]
+    check(np.allclose(re, [0, 0, 0.02]), f"converted series: Displacement_Mag at 20 Hz {re}")
+    nv.apply("results", reader=src, view=view)
+    check(nv.animate_modes([2], frames=4, reader=src, view=view, fps=0) == [2],
+          "a converted frequency series animates through its phase")
+
+    trans = os.path.join(tmp, "transient.op2")
+    make_transient_op2().write_op2(trans)
+    tr = rm.load_reader(DECK, trans)
+    times = rm.timesteps(tr)
+    m = rm.Model(tr, times[1])
+    vel = m.array("Shells", "Velocity")[m.array("Shells", "NID") == 4][0]
+    check(len(times) == 3 and m.field_strings(None, "ResultLabel") == ["Subcase 1 time 0.5"]
+          and np.allclose(vel, [0, 0, 0.04]), f"transient: 3 time steps, label, Velocity {vel}")
+    tseries = os.path.join(tmp, "transient.vtkhdf")
+    convert(["convert", DECK, "--results", trans, "--all-steps", "-o", tseries, "-q"])
+    tsrc = nv.load_reader(tseries)
+    m = rm.Model(tsrc, rm.timesteps(tsrc)[2])
+    d = m.array("Shells", "Displacement")[m.array("Shells", "NID") == 4][0]
+    check(len(rm.timesteps(tsrc)) == 3 and np.allclose(d, [0, 0, 0.04]),
+          f"converted transient series: 3 steps, Displacement at t = 1 {d}")
+    nv.apply("results", reader=tsrc, view=view)
+
+    rop2 = os.path.join(tmp, "random.op2")
+    make_random_op2().write_op2(rop2)
+    rr = rm.load_reader(DECK, rop2, random={"output": True})
+    frames = rm.timesteps(rr)
+    check(len(frames) == 3, f"SOL 111 random output: one frame per PSD frequency ({len(frames)})")
+    model = nv.apply("random", reader=rr, view=view)
+    check("SOL 111 output" in _info(nv, model), f"random view names the source: {_info(nv, model)!r}")
+    model = nv.apply("randomsweep", reader=rr, view=view)
+    label = pv.FindSource(nv._name(model, "frequency label"))
+    label.UpdatePipeline(frames[1])
+    text = label.GetClientSideObject().GetOutput().GetValue(0, 0).ToString()
+    check(text == "Random (SOL 111) 50 Hz", f"randomsweep label of the solver's frames: {text!r}")
     pv.Delete(view)
 
 
@@ -2670,6 +2774,7 @@ def main():
     random_checks(pv, nv)
     result_load_checks(pv, nv, reader)
     pressure_checks(pv, nv)
+    dynamic_result_checks(pv, nv)
     topology_checks(pv, nv)
     diff_checks(pv, nv)
     clear_checks(pv, nv, reader)

@@ -44,7 +44,7 @@ and the SOL 111 PSD and RMS tables were not read at all. This change reads them:
 | Random frames of reference | Components as written (each grid's CD system), not rotated: an RMS or PSD of a component is not a vector | Rotating them would be wrong; the modal random response computes in basic |
 | Random from HDF5 | Not read (reported) | No MSC HDF5 random file or schema to check against |
 | Element random tables | Reported, not attached (`rms.cquad4_stress`, ...) | The registry gains them later as types; out of this task |
-| Test data | Synthesized with pyNastran: `tests/op2_fixture.py` writes complex point and force tables, complex plate and bar stresses, transient tables and PSD/RMS/NO tables through `write_op2` and reads them back (both versions); complex solid stress and complex rod stress are tested in memory (pyNastran cannot build the first, and its writer and reader disagree on the second's word order); MSC-layout HDF5 with `_CPLX` datasets and `ANALYSIS` 5 and 6 | MYSTRAN cannot solve these sequences and pyNastran's wheel ships no example models |
+| Test data | Synthesized with pyNastran: `tests/op2_fixture.py` writes complex point and force tables, complex plate stresses, transient tables and PSD/RMS/NO tables through `write_op2` and reads them back (both versions); complex solid, rod and bar stresses are tested in memory (pyNastran cannot build the first for its writer, and its writer and reader disagree on the word order of the other two); MSC-layout HDF5 with `_CPLX` datasets and `ANALYSIS` 5 and 6 | MYSTRAN cannot solve these sequences and pyNastran's wheel ships no example models |
 
 ## Registry vocabulary added
 
