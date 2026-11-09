@@ -2117,8 +2117,8 @@ def view_plies(model, view, ply=None, quantity=None, component=None, axes=True, 
     text = header + "\n" + "\n".join(lines)
     if _TURNED_ON.get("plies"):
         text += f"\nTurned on in the reader's Result Types: {', '.join(_TURNED_ON['plies'])}"
-    text += ("\nThe ply: the reader's Ply (0: each element's critical ply)" if deck
-             else "\nThe ply: as converted (convert --ply); ply= picks the axes' ply")
+    # the same line on a deck and on a file converted from it (the views show the same on both)
+    text += "\nThe ply: the reader's Ply, or convert --ply for a converted file (0: each element's critical ply)"
     t = info_text(model, view, text)
     pv.GetDisplayProperties(t, view).Justification = "Left"
     return obj
