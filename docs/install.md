@@ -79,6 +79,34 @@ redirects what a Store Python writes under AppData (the vendored packages, the t
 into the app's private folder, where ParaView does not look, so `nastran-pv setup` refuses to run
 with one.
 
+## Finding ParaView
+
+`setup`, `view` and `render` (and `install_deps.py`) use the first of:
+
+1. `pvpython` or `paraview` in `NASTRAN_PV_PARAVIEW_BIN`;
+2. the one on `PATH`;
+3. the newest ParaView, by the version right after "ParaView" in its folder name (a release before
+   its release candidates, equal versions by name), among `C:\Program Files\ParaView*`,
+   `/Applications/ParaView*.app`, `/opt/ParaView*`, `~/Applications/ParaView*.app` and
+   `~/ParaView*`. The last one is a Linux tarball unpacked in the home folder, such as
+   `~/ParaView-6.0.1-MPI-Linux-Python3.12-x86_64`. In an `.app`, `paraview` is the GUI binary in
+   `Contents/MacOS` and `pvpython` is in `Contents/bin`.
+
+`--pvpython` (and `view --paraview`) overrides the search.
+
+The toolbar macros go where ParaView reads user macros: `%APPDATA%\ParaView\Macros` on Windows,
+and `~/.config/ParaView/Macros` (or `$XDG_CONFIG_HOME/ParaView/Macros`) on Linux **and** macOS.
+ParaView keeps its settings in an INI file, which Qt puts under `~/.config` on macOS too, not
+under `~/Library`.
+
+### Headless Linux
+
+ParaView 6.0 has one Linux build. It chooses X, EGL or its bundled OSMesa at run time, so on a
+machine without a display set `VTK_DEFAULT_OPENGL_WINDOW=vtkOSOpenGLRenderWindow` and put its
+`lib/mesa` on `LD_LIBRARY_PATH`. ParaView 5.13 has separate `osmesa` and `egl` builds. Its
+osmesa build needs the system's `libglapi.so.0` (`apt install libglapi-mesa` on Ubuntu). CI runs
+`tests/pv_smoke.py` this way on both (`.github/workflows/paraview.yml`).
+
 ## ParaView-side dependencies
 
 `setup` runs two scripts, which can also be run on their own (from a clone, or from the
@@ -109,7 +137,7 @@ installed `nastran_pv/paraview/` folder):
 | Variable | Use |
 |---|---|
 | `NASTRAN_PV_SITE_PACKAGES` | Instead of `install_deps.py`: the site-packages folder of a CPython with ParaView's Python version that has pyNastran installed. |
-| `NASTRAN_PV_PARAVIEW_BIN` | ParaView's `bin` folder, when it is not on `PATH` or in a standard install folder. |
+| `NASTRAN_PV_PARAVIEW_BIN` | ParaView's `bin` folder, ahead of `PATH` and the folders searched ([Finding ParaView](#finding-paraview)). |
 | `NASTRAN_PV_PARAVIEW_DIR` | A `paraview/` folder to use instead of the installed copy or the clone's (it must hold `nastran_bdf_reader.py`). |
 | `NASTRAN_PV_VENDOR_DIR` | The vendor folder, used as is by `install_deps.py` and the plugin, instead of the per-user folder or `paraview/_vendor`. Set it for both. |
 | `PV_PLUGIN_PATH` | ParaView's own variable; set it to the plugin folder that `nastran-pv setup` prints, to load the plugin at startup. |

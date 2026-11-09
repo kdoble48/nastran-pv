@@ -267,6 +267,9 @@ def load_deck(path, punch: bool | None = None, encoding: str = "latin-1", echo: 
     """
     path = Path(path).resolve()
     messages: list[str] = []
+    # the model keeps its logger, so the logger reaches the caller's progress only during the read:
+    # the ParaView reader's progress callback captures the reader, which keeps the deck
+    reporting = {"progress": progress}
 
     def log_func(typ, filename, lineno, msg):
         if "skipping directly to bulk data" in msg:  # pyNastran 1.4 on a bulk-only file: expected
@@ -275,8 +278,8 @@ def load_deck(path, punch: bool | None = None, encoding: str = "latin-1", echo: 
         if len(text) > MAX_MESSAGE:  # pyNastran may list every element id
             text = text[:MAX_MESSAGE] + f" ... [{len(text) - MAX_MESSAGE} more characters]"
         messages.append(text)
-        if echo and progress.enabled:
-            progress.note(text)
+        if echo and reporting["progress"].enabled:
+            reporting["progress"].note(text)
         elif echo:
             print(text, file=sys.stderr)
 
@@ -307,6 +310,7 @@ def load_deck(path, punch: bool | None = None, encoding: str = "latin-1", echo: 
 
     with progress.stage(f"grid coordinates ({len(model.nodes):,} grids)"):
         nids, xyz, cd = _grid_arrays(model)
+    reporting["progress"] = NULL
     return Deck(path=path, model=model, nids=nids, xyz=xyz, cd=cd, warnings=messages, includes=includes,
                 _n_mass=pinned, _n_pinned=pinned)
 

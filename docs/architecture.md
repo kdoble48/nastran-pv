@@ -133,7 +133,8 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   `node_values`), plus `<db>_vtm/run_<id>.vtm`.
 - `cli.py`: the `convert`, `stats`, `check`, `sections`, `diff` and `store` commands, with shared field options.
   `launch.py` provides `view`, `render` and `setup`, and `locate.py` (standard library only) finds
-  the ParaView executables, the plugin folder (`NASTRAN_PV_PARAVIEW_DIR`, then the wheel's
+  the ParaView executables (one search for the CLI and `install_deps.py`: env, `PATH`, then the newest
+  `ParaView*` by folder version in the install folders and the home folder), the plugin folder (`NASTRAN_PV_PARAVIEW_DIR`, then the wheel's
   `nastran_pv/paraview`, then the checkout's `paraview/`) and the vendor folder (`vendor_dir`:
   `paraview/_vendor` in a checkout, a per-user folder per ParaView Python for an installed package).
   `nastran_pv/__init__.py` loads `Deck`/`load_deck` lazily, so `nastran_pv.locate` imports without
@@ -289,7 +290,27 @@ Every gotcha found so far, by area. The few that bite on any change are also in 
   `vtkMultiBlockDataSet` serializer is also registered for it (`_init_serializers` does this).
   trame-vtk is vendored only with `install_deps.py --site`. An open ParaView GUI locks the `.pyd`
   files in `paraview/_vendor`, so re-vendoring then fails partway and can leave scipy broken.
+- ParaView 6.0 (VTK 9.4/9.5) on Linux: a deleted Python algorithm keeps its `__dict__` in a stale
+  "ghost" that `vtkPythonUtil::FindObject` releases when a new object takes its address. Releasing
+  cached data objects there (they are `data_model` subclasses, so they leave ghosts too) makes it
+  erase its ghost-map entry twice and corrupts the heap; pv_smoke crashed in the parity checks.
+  Every Python algorithm calls `vtkutil.drop_state_on_delete` in its `__init__` (the plugin's
+  through `_Settable.__init_subclass__`; `vtkhdf._StepSource` itself): a `DeleteEvent` observer that
+  empties the dict during the deletion. VTK master releases the ghost only after erasing it.
+- A Python object that holds its algorithm keeps it alive for good when the reference runs through
+  C++ (an observer, a logger the deck keeps), because Python's garbage collector cannot see it: a
+  deleted reader or checklist filter was never freed, caches and all. Checklist observers use
+  `vtkutil.modified_callback` (a `vtkWeakReference`), and `load_deck` lets go of the caller's
+  progress when the read ends. pv_smoke deletes a reader and its filters and checks they are freed.
+- VTK reports the observers added through a wrapper to Python's garbage collector
+  (`PyVTKObject_Traverse`). When the cyclic collector frees a wrapper, it clears those observers
+  first, so a `DeleteEvent` observer would run cleared and crash. `vtkutil` keeps each
+  `DeleteEvent` observer in a module registry until it runs, and uses callable objects rather than
+  closures (`tests/test_vtk_lifetime.py` reproduces the crash in plain Python).
 - pyNastran quirks:
+  - pyNastran main turns on its developer self-checks when `GITHUB_ACTOR` (or `TRAVIS`, `APPVEYOR`)
+    is set (`pyNastran.IS_CI`). One of them, `_check_result_slice`, fails on the synthetic OP2
+    from `op2_fixture`, so the ParaView CI job runs pvpython with `GITHUB_ACTOR` unset.
   - `Subcase.has_parameter` returns a list.
   - Stress tables expose `get_headers()`; von Mises exists only when `stress_bits[4]` is set.
   - Composite tables use `element_layer`.
