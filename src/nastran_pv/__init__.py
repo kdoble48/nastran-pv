@@ -7,7 +7,7 @@ and inside ParaView's ``pvpython``. Importing the package itself needs none of t
 ``nastran_pv.locate`` before pyNastran is on its path.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0rc1"
 
 __all__ = ["Deck", "load_deck", "__version__"]
 

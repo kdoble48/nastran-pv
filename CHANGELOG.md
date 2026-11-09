@@ -6,6 +6,8 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - YYYY-MM-DD
+
 ### Added
 
 - Pressure loads and GRAV drawn: PLOAD, PLOAD2 and PLOAD4 (shells, THRU ranges, solid faces, corner
@@ -198,4 +200,6 @@ All notable changes to nastran-pv are listed here. The format follows
 - First version: deck to VTK conversion, derived and mapped fields, the run store and the ParaView
   plugin with views and toolbar macros.
 
-[Unreleased]: https://github.com/kdoble48/nastran-pv/compare/5932d5e...HEAD
+[Unreleased]: https://github.com/kdoble48/nastran-pv/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/kdoble48/nastran-pv/compare/5932d5e...v0.2.0
+[0.1.0]: https://github.com/kdoble48/nastran-pv/tree/5932d5e
