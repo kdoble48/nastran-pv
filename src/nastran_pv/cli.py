@@ -234,18 +234,23 @@ def _fmt(v):
     return f"{v:.6g}" if isinstance(v, float) else ("" if v is None else str(v))
 
 
+def _table_lines(rows: list[dict], limit=None, indent="") -> list[str]:
+    """``rows`` as aligned text lines: a header, at most ``limit`` rows, then "... N more rows"."""
+    cols = list(rows[0])
+    shown = rows if limit is None else rows[:limit]
+    widths = [max([len(c)] + [len(_fmt(r.get(c))) for r in shown]) for c in cols]
+    out = [indent + "  ".join(c.ljust(w) for c, w in zip(cols, widths))]
+    out += [indent + "  ".join(_fmt(r.get(c)).ljust(w) for c, w in zip(cols, widths)) for r in shown]
+    if limit is not None and len(rows) > limit:
+        out.append(f"{indent}... {len(rows) - limit} more rows")
+    return out
+
+
 def _print_rows(rows: list[dict], limit=None):
     if not rows:
         print("(no rows)")
         return
-    cols = list(rows[0])
-    shown = rows if limit is None else rows[:limit]
-    widths = [max([len(c)] + [len(_fmt(r.get(c))) for r in shown]) for c in cols]
-    print("  ".join(c.ljust(w) for c, w in zip(cols, widths)))
-    for r in shown:
-        print("  ".join(_fmt(r.get(c)).ljust(w) for c, w in zip(cols, widths)))
-    if limit is not None and len(rows) > limit:
-        print(f"... {len(rows) - limit} more rows")
+    print("\n".join(_table_lines(rows, limit)))
 
 
 # ----------------------------------------------------------------- commands
@@ -407,12 +412,22 @@ def model_warnings(mb, deck) -> list[str]:
     return list(deck.warnings) if deck is not None else field_strings(mb, "Warnings")
 
 
+SKIPPED_ROWS = 25  # card report rows printed; the root SKIPPED_* table keeps them all
+
+
 def print_skipped(mb, file=None) -> None:
-    """The card report: the cards no block draws (root ``SKIPPED_*``, so a converted file prints it too)."""
+    """The card report: the cards no block draws (root ``SKIPPED_*``, so a converted file prints it
+    too; nothing for a file written before the report)."""
     from . import cards
 
-    for line in cards.lines(cards.read(mb)):
-        print(line, file=file)
+    rows = cards.read(mb)
+    if rows is None:
+        return
+    if not rows:
+        print("card report: every card is drawn or used", file=file)
+        return
+    print(f"{cards.header(rows)}:", file=file)
+    print("\n".join(_table_lines(rows, SKIPPED_ROWS, indent="  ")), file=file)
 
 
 def print_warnings(warnings, file=None, limit=10) -> None:
@@ -448,6 +463,7 @@ def cmd_check(args) -> int:
     from .topology import CHECKS, Rules, check
 
     mb, deck, _ = load_model(args, args.verbose)
+    print_skipped(mb, file=sys.stderr)  # what the graph lacks: CWELD, CFAST patches, ... join nothing
     print_warnings(model_warnings(mb, deck), file=sys.stderr)
     try:
         res = check(mb, Rules.parse(args.rules), tol=args.tol, checks=args.only or CHECKS)

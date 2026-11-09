@@ -13,7 +13,8 @@ from vtkmodules.vtkCommonDataModel import (
 from .. import vtkutil
 from ..deck import RECTANGULAR, Deck
 from ..families import Families
-from .common import CellTable, add_mid_density, compact_mesh, property_info, shell_mass_per_area, unit
+from .common import (CellTable, add_mid_density, compact_mesh, property_info, shell_mass_per_area, unit,
+                     warn_midside)
 
 # etype -> (corner count, linear vtk type, full node count, quadratic vtk type). A cell is
 # quadratic when all its grids are given, else linear; a CQUAD without its centre grid G9 is an
@@ -38,6 +39,7 @@ def build_shells(deck: Deck, families: Families):
     corners: list[list[int]] = []
     ncorners: list[int] = []
     theta_mcid: list = []
+    midside: dict[str, list[int]] = {}  # given midside grids that do not exist
     for eid, elem in model.elements.items():
         spec = SHELLS.get(elem.type)
         if spec is None:
@@ -49,6 +51,8 @@ def build_shells(deck: Deck, families: Families):
             deck.warn(f"{elem.type} {eid}: missing grid(s), skipped")
             continue
         full = nids[:nfull]
+        if any(n and n not in grids for n in full[ncorner:]):
+            midside.setdefault(elem.type, []).append(eid)
         part = PARTIAL.get(elem.type)
         if quad_type is not None and len(full) == nfull and all(n in grids for n in full):
             table.add(eid, elem.Pid(), elem.type, quad_type, full)
@@ -59,6 +63,7 @@ def build_shells(deck: Deck, families: Families):
         corners.append(corner + [corner[0]] * (4 - ncorner))
         ncorners.append(ncorner)
         theta_mcid.append(getattr(elem, "theta_mcid", 0.0))
+    warn_midside(deck, midside)
 
     if not len(table):
         return None

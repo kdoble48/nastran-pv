@@ -1,6 +1,6 @@
 $ Card report deck (tests/test_cards.py): the cards nastran-pv draws since the report (9-node
-$ CQUAD, PLOTEL, MPCADD, CDAMP5) and one of each kind of skipped card, with the counts worked
-$ out by hand in test_cards.REPORT.
+$ CQUAD, PLOTEL, MPCADD) and one of each kind of skipped card, with the counts worked out by
+$ hand in test_cards.REPORT.
 SOL 101
 CEND
 SUBCASE 1
@@ -32,13 +32,14 @@ CQUAD,10,1,1,3,13,11,2,8
 ,12,6,7
 CQUAD,11,1,3,5,15,13,4,10
 ,14,8
-$ drawn: PLOTEL lines, MPC legs, MPCADD 60 = sets 50 + 51, CDAMP5 between two grids
+$ drawn: PLOTEL lines, MPC legs, MPCADD 60 = sets 50 + 51
 PLOTEL,20,1,5
 PLOTEL,21,11,15
 MPC,50,1,1,1.,15,1,-1.
 MPC,51,5,2,1.,11,2,-1.
 MPC,52,2,3,1.,14,3,-1.
 MPCADD,60,50,51
+$ heat transfer: a thermal damper between two grids, a CHBDYP below
 MAT4,2,1.
 PDAMP5,5,2,1.
 CDAMP5,30,5,1,2
@@ -71,6 +72,7 @@ CHBDYP,45,9,POINT,,,1
 DMIG,KAAX,0,6,2
 DMIG,KAAX,1,1,,1,1,1.
 SUPORT,3,3
+SPCOFF,1,123
 FORCE,9,3,0,1.,0.,0.,1.
 PLOAD4,9,10,1.
 PLOAD4,9,11,2.

@@ -1,4 +1,4 @@
-"""The card report (cards.py) and the cards drawn since: 9-node CQUAD, PLOTEL, MPCADD, CDAMP5.
+"""The card report (cards.py) and the cards drawn since: 9-node CQUAD, PLOTEL, MPCADD.
 
 Every expected value is worked out by hand from tests/data/cards.bdf.
 """
@@ -23,18 +23,20 @@ REPORT = [
     ("CBUSH1D", 1, ND, "EID 43"),
     ("CDAMP3", 1, S, "EID 35"),
     ("CDAMP4", 1, S, "EID 36"),
+    ("CDAMP5", 1, cards.HEAT, "EID 30"),  # thermal capacitance: not a structural link
     ("CELAS2", 1, cards.GROUNDED, "EID 31"),
     ("CELAS2", 1, S, "EID 32"),  # grid 1 to scalar point 101
     ("CELAS3", 1, S, "EID 33"),
     ("CELAS4", 1, S, "EID 34"),
     ("CFAST", 1, cards.PATCH, "EID 39"),
-    ("CHBDYP", 1, ND, "EID 45"),
+    ("CHBDYP", 1, cards.HEAT, "EID 45"),
     ("CMASS3", 1, S, "EID 37"),
     ("CMASS4", 1, S, "EID 38"),
     ("CWELD", 1, cards.NOT_READ, ""),
     ("DMIG", 1, cards.MATRIX, "ID KAAX"),  # one matrix (a header and one column card)
     ("FOOBAR", 1, cards.NOT_READ, ""),
     ("GENEL", 1, ND, "EID 44"),
+    ("SPCOFF", 1, ND, ""),  # pyNastran keys SPCOFF by its type: no id to show
     ("SUPORT", 1, ND, ""),
 ]
 
@@ -50,13 +52,13 @@ def _rows(rows):
 
 def test_report_counts_every_skipped_card(mb):
     assert _rows(cards.read(mb)) == REPORT
-    assert arr(mb, cards.COUNT, "field").tolist() == [22]
+    assert arr(mb, cards.COUNT, "field").tolist() == [24]
 
 
 def test_report_leaves_out_drawn_data_and_control_cards(mb):
     reported = {r[0] for r in REPORT}
     # drawn, resolved, or data the blocks use (properties, materials: also those of skipped elements)
-    for card in ("GRID", "CQUAD", "PLOTEL", "MPC", "MPCADD", "CDAMP5", "FORCE", "SPC1", "PSHELL", "MAT1",
+    for card in ("GRID", "CQUAD", "PLOTEL", "MPC", "MPCADD", "FORCE", "SPC1", "PSHELL", "MAT1",
                  "MAT4", "PELAS", "PMASS", "PBUSH1D", "PHBDY", "PFAST", "PDAMP5", "ENDDATA"):
         assert card not in reported
 
@@ -67,9 +69,17 @@ def test_report_is_empty_on_a_fully_drawn_deck(run_mb):
     assert run_mb.GetFieldData().GetAbstractArray("SKIPPED_Card") is None
 
 
-def test_cli_lines_for_an_empty_and_an_old_report():
-    assert cards.lines([]) == ["card report: every card is drawn or used"]
-    assert cards.lines(None) == []  # a file written before the report: nothing to say
+def test_cli_lines_for_an_empty_and_an_old_report(capsys):
+    from vtkmodules.vtkCommonDataModel import vtkMultiBlockDataSet
+
+    from nastran_pv.cli import print_skipped
+
+    mb = vtkMultiBlockDataSet()
+    print_skipped(mb)  # a file written before the report: nothing to say
+    assert capsys.readouterr().out == ""
+    cards.write_table(mb, [])
+    print_skipped(mb)
+    assert capsys.readouterr().out == "card report: every card is drawn or used\n"
 
 
 def test_report_of_rejected_cards_only_round_trips(tmp_path):
@@ -98,8 +108,8 @@ def test_report_does_not_grow_on_a_rebuild():
 def test_summary_line():
     rows = [{"Card": c, "Count": n, "Reason": r, "IDs": i} for c, n, r, i in REPORT]
     text = cards.summary(rows, limit=3)
-    assert text == ("22 card(s) of 18 type(s) not drawn: 2 CTRIAX6, 2 PLOAD4, "
-                    "2 SPOINT (scalar points, no location), +16 more")
+    assert text == ("24 card(s) of 20 type(s) not drawn: 2 CTRIAX6, 2 PLOAD4, "
+                    "2 SPOINT (scalar points, no location), +18 more")
 
 
 def test_biquadratic_and_quadratic_cquad(mb):
@@ -117,7 +127,8 @@ def test_plotels_block(mb):
     assert arr(plotels, "EID", "cell").tolist() == [20, 21]
     assert sorted(arr(plotels, "NID").tolist()) == [1, 5, 11, 15]
     assert plotels.GetNumberOfLines() == 2
-    assert [ELEMENT_TYPES[c] for c in arr(plotels, "ElementType", "cell")] == ["PLOTEL", "PLOTEL"]
+    # no ElementType: a PLOTEL is no element of the topology graph (rules cannot name it)
+    assert plotels.GetCellData().GetArray("ElementType") is None and "PLOTEL" not in ELEMENT_TYPES
     assert block_names(mb) == ["Shells", "Connectors", "Plotels", "Constraints", "Loads"]
     deck = load_deck(DATA / "cards.bdf", echo=False)
     assert "Plotels" not in block_names(build_multiblock(deck, Options(plotels=False)))
@@ -132,12 +143,10 @@ def test_plotels_carry_their_include_file(tmp_path):
     assert arr(get_block(mb, "Lines"), "FileId", "cell").tolist() == [0]
 
 
-def test_mpcadd_and_cdamp5(mb):
+def test_mpcadd(mb):
     con = get_block(mb, "Connectors")
-    eid = arr(con, "EID", "cell").tolist()
-    assert sorted(eid) == [30, 50, 51, 52]  # MPC legs carry their set id; CDAMP5 30 is grid 1 - grid 2
-    ctype = arr(con, "ConnectorType", "cell")
-    assert CONNECTOR_TYPES[ctype[eid.index(30)]] == "CDAMP5"
+    assert sorted(arr(con, "EID", "cell").tolist()) == [50, 51, 52]  # MPC legs carry their set id
+    assert "CDAMP5" not in CONNECTOR_TYPES  # heat transfer: reported, never a structural link
     assert arr(mb, "ActiveMPCSets", "field").tolist() == [60]
     assert arr(mb, "MPCADD_ID", "field").tolist() == [60, 60]
     assert arr(mb, "MPCADD_Set", "field").tolist() == [50, 51]
@@ -204,15 +213,98 @@ def test_convert_and_stats_print_the_report(tmp_path, capsys):
     out = tmp_path / "cards.vtm"
     assert main(["convert", str(DATA / "cards.bdf"), "-o", str(out), "-q"]) == 0
     text = capsys.readouterr().out
-    assert "22 card(s) of 18 type(s) not drawn:" in text
+    assert "24 card(s) of 20 type(s) not drawn:" in text
     assert "  CTRIAX6  2      not drawn" in text
     assert "  Plotels: 4 points, 2 cells" in text
     # a converted file prints the report it was written with
     assert main(["stats", str(out), "--by", "PID", "--field", "ElementMass", "-q"]) == 0
     err = capsys.readouterr().err
-    assert "22 card(s) of 18 type(s) not drawn:" in err and "FOOBAR" in err
+    assert "24 card(s) of 20 type(s) not drawn:" in err and "FOOBAR" in err
 
 
 def test_convert_says_when_every_card_is_drawn(tmp_path, capsys):
     assert main(["convert", str(DATA / "tiny_run.bdf"), "-o", str(tmp_path / "t.vtm"), "-q"]) == 0
     assert "card report: every card is drawn or used" in capsys.readouterr().out
+
+
+def test_check_prints_the_report(capsys):
+    """A deck joined only by CWELD or CFAST patches has floating parts: check says why."""
+    assert main(["check", str(DATA / "cards.bdf"), "-q"]) == 0
+    err = capsys.readouterr().err
+    assert "24 card(s) of 20 type(s) not drawn:" in err and "CWELD" in err and "patch form" in err
+
+
+SCALAR_REFS = """\
+GRID,1,,0.,0.,0.
+GRID,2,,1.,0.,0.
+SPOINT,101
+CMASS2,70,2.,1,1,101
+CMASS2,71,2.,101
+CMASS2,72,2.,777
+MPC,80,1,1,1.,101,0,-1.
+MPC,81,1,2,1.,2,2,-1.
+PLOTEL,82,1,101
+PLOTEL,83,1,2
+"""
+
+
+def test_scalar_point_references_are_reported_not_missing_grids(tmp_path):
+    p = tmp_path / "scalar.bdf"
+    p.write_text(SCALAR_REFS)
+    deck = load_deck(p, echo=False)
+    mb = build_multiblock(deck)
+    rows = {(r["Card"], r["Reason"]): (r["Count"], r["IDs"]) for r in cards.read(mb)}
+    assert rows[("CMASS2", cards.SCALAR)] == (2, "EID 70 71")
+    assert rows[("MPC", cards.SCALAR)] == (1, "SID 80")
+    assert rows[("PLOTEL", cards.SCALAR)] == (1, "EID 82")
+    text = "\n".join(deck.warnings)
+    assert "101" not in text  # a scalar point is not a missing grid
+    assert "CMASS2 72: grid(s) [777] not found" in text  # a grid that does not exist still warns
+    assert arr(get_block(mb, "Connectors"), "EID", "cell").tolist() == [81]
+    assert arr(get_block(mb, "Plotels"), "EID", "cell").tolist() == [83]
+
+
+class _NoWalk(dict):
+    def _refuse(self, *args):
+        raise AssertionError("the report walked the element container")
+
+    __iter__ = items = values = keys = _refuse
+
+
+def test_report_does_not_walk_the_element_container():
+    """A million drawn elements and one CTRIAX6: the ids come from pyNastran's type -> id map."""
+    deck = load_deck(DATA / "cards.bdf", echo=False)
+    build_multiblock(deck)
+    deck.model.elements = _NoWalk(deck.model.elements)
+    assert _rows(cards.report(deck)) == REPORT
+
+
+def test_drawn_types_come_from_the_builders(monkeypatch):
+    from nastran_pv.builders import loads
+
+    assert "PLOAD4" not in cards.drawn_types()
+    monkeypatch.setattr(loads, "LOAD_TYPES", loads.LOAD_TYPES + ("PLOAD4",))
+    assert "PLOAD4" in cards.drawn_types()  # a builder that learns a card takes it off the report
+
+
+def test_printed_report_is_capped(capsys):
+    from vtkmodules.vtkCommonDataModel import vtkMultiBlockDataSet
+
+    from nastran_pv.cli import SKIPPED_ROWS, print_skipped
+
+    mb = vtkMultiBlockDataSet()
+    rows = [{"Card": f"CAERO{i:02d}", "Count": 1, "Reason": cards.NOT_DRAWN, "IDs": f"ID {i}"}
+            for i in range(SKIPPED_ROWS + 5)]
+    cards.write_table(mb, rows)
+    print_skipped(mb)
+    out = capsys.readouterr().out.splitlines()
+    assert out[0] == f"{SKIPPED_ROWS + 5} card(s) of {SKIPPED_ROWS + 5} type(s) not drawn:"
+    assert len(out) == 1 + 1 + SKIPPED_ROWS + 1 and out[-1] == "  ... 5 more rows"
+    assert len(cards.read(mb)) == SKIPPED_ROWS + 5  # the root table keeps every row
+
+
+def test_rules_cannot_name_plotel(mb):
+    from nastran_pv.topology import Rules, check
+
+    with pytest.raises(ValueError, match="PLOTEL"):
+        check(mb, Rules.parse("exclude=PLOTEL"))

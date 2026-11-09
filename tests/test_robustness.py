@@ -166,6 +166,7 @@ GRID,5,,0.5,0.,0.
 MAT1,1,7.e10,,0.3,2.
 PSHELL,1,1,0.1
 CQUAD,10,1,1,2,3,4,5,777
+CQUAD8,11,1,1,2,3,4,5,888
 PLOTEL,20,1,777
 PLOTEL,21,1,3
 """
@@ -181,7 +182,10 @@ def test_plotel_and_cquad_on_missing_grids_warn_and_fall_back(tmp_path):
     assert arr(get_block(mb, "Plotels"), "EID", "cell").tolist() == [21]
     assert "PLOTEL: 1 leg(s) reference unknown grids" in "\n".join(deck.warnings)
     shells = get_block(mb, "Shells")  # G6 is not a grid and G7-G9 are blank: the linear quad
-    assert vtkutil.to_numpy(vtkutil.cell_types(shells)).tolist() == [VTK_QUAD]
+    assert vtkutil.to_numpy(vtkutil.cell_types(shells)).tolist() == [VTK_QUAD, VTK_QUAD]
+    text = "\n".join(deck.warnings)
+    assert "CQUAD: 1 element(s) with midside grid(s) not found, drawn without them (EID 10)" in text
+    assert "CQUAD8: 1 element(s) with midside grid(s) not found, drawn without them (EID 11)" in text
 
 
 NSM_EDGE_CASES = BULK + """\

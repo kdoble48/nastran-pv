@@ -9,6 +9,10 @@ from .. import vtkutil
 from ..deck import Deck
 from .common import unit
 
+NODAL_TYPES = ("FORCE", "FORCE1", "FORCE2", "MOMENT", "MOMENT1", "MOMENT2")
+LOAD_TYPES = NODAL_TYPES + ("GRAV",)  # the rest (PLOAD*, TEMP, SPCD, ...): the card report
+COMBINATION_TYPES = ("LOAD",)  # LSEQ, CLOAD: the card report
+
 
 @dataclass
 class LoadSet:
@@ -53,7 +57,7 @@ def direct_load_set(deck: Deck, sid: int) -> LoadSet:
     for card in deck.model.loads.get(sid, []):
         t = card.type
         try:
-            if t in ("FORCE", "FORCE1", "FORCE2", "MOMENT", "MOMENT1", "MOMENT2"):
+            if t in NODAL_TYPES:
                 vec = float(card.mag) * _direction(deck, card)
                 target = ls.force if t.startswith("FORCE") else ls.moment
                 nid = card.node_id
@@ -74,7 +78,7 @@ def load_sets(deck: Deck) -> dict[int, LoadSet]:
     for sid, cards in model.load_combinations.items():
         combo = LoadSet(sid, combined=True)
         for card in cards:
-            if card.type != "LOAD":  # LSEQ, CLOAD: in the card report
+            if card.type not in COMBINATION_TYPES:
                 continue
             for si, lid in zip(card.scale_factors, card.load_ids):
                 lid = int(lid) if not hasattr(lid, "sid") else lid.sid

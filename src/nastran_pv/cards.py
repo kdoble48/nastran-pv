@@ -14,7 +14,7 @@ card type nastran-pv has never heard of is reported, not lost: ``not read`` when
 rejected it, ``not drawn`` otherwise. A card of a drawn type in a form no block can draw (a CFAST
 patch, a grounded spring, a spring on a scalar point) is recorded by its builder with
 ``Deck.skip``. Cards whose grids are missing stay warnings: that is a broken deck, not an
-unsupported card.
+unsupported card. A reference to a scalar point is not a missing grid: it is reported.
 
 ``build_multiblock`` writes the rows as the root table ``SKIPPED_Card SKIPPED_Count
 SKIPPED_Reason SKIPPED_IDs`` and always writes ``SkippedCardCount`` (0: every card is drawn or
@@ -40,13 +40,14 @@ SUPERELEMENT = "superelement"
 MATRIX = "matrix input"
 PATCH = "patch form, no GA/GB"
 GROUNDED = "grounded, one grid"
+HEAT = "heat transfer"
 
-# drawn by a builder outside the mesh and connector tables (see drawn_types), or resolved into it
-DRAWN_OTHER = frozenset({"GRID", "PLOTEL", "CBUSH", "CONM1", "CONM2", "CMASS1", "CMASS2", "MPCADD", "SPC", "SPC1",
-                         "SPCADD", "FORCE", "FORCE1", "FORCE2", "MOMENT", "MOMENT1", "MOMENT2", "LOAD", "GRAV"})
 DRAWN_SLOTS = frozenset({"rigid_elements"})  # build_rigid draws every card in it
 # connect (or are) scalar points only: SPOINT/EPOINT have no coordinates, so nothing to place
 SCALAR_CARDS = frozenset({"SPOINT", "EPOINT", "CELAS3", "CELAS4", "CDAMP3", "CDAMP4", "CMASS3", "CMASS4"})
+# heat-transfer elements and loads (CDAMP5 is a thermal capacitance; its PDAMP5 takes a MAT4/MAT5):
+# none is a structural link, so none joins the topology graph
+HEAT_CARDS = frozenset({"CDAMP5", "CHBDYE", "CHBDYG", "CHBDYP", "QBDY1", "QBDY2", "QBDY3", "QHBDY", "QVOL", "QVECT"})
 
 QUIET_SLOTS = frozenset({
     # data the blocks and root tables use
@@ -72,6 +73,7 @@ QUIET_SLOTS = frozenset({
     "bcparas", "bctparas", "bcrparas", "bctparms", "bfric", "bctadds", "bgadds", "bgparm", "boltseq",
 })
 SLOT_REASONS = {
+    "bcs": HEAT,  # CONV, CONVM, RADBC, RADM, TEMPBC
     **{s: MATRIX for s in ("dmig", "dmi", "dmiax", "dmij", "dmiji", "dmik")},
     **{s: SUPERELEMENT for s in ("se_suport", "setree", "senqset", "sebulk", "sebndry", "release", "seloc",
                                  "sempln", "seconct", "selabel", "seexcld", "seelt", "seload", "csuper",
@@ -82,13 +84,15 @@ SCALAR_POINT_SLOTS = {"SPOINT": "spoints", "EPOINT": "epoints"}  # pyNastran kee
 
 
 def drawn_types() -> frozenset:
-    """Card types some builder draws (imported here: the builders import the reasons above)."""
-    from .builders.connectors import DRAWN_CONNECTORS
-    from .builders.lines import LINE_TYPES
-    from .builders.shells import SHELLS
-    from .builders.solids import SOLIDS
+    """Card types some builder draws or resolves, from the builders' own type tables (imported here:
+    the builders import the reasons above). A builder that learns a card takes it off the report."""
+    from .builders import bushes, connectors, constraints, lines, loads, masses, plotels, shells, solids
+    from .categories import CONNECTOR_TYPES
 
-    return frozenset(SHELLS) | frozenset(SOLIDS) | frozenset(LINE_TYPES) | frozenset(DRAWN_CONNECTORS) | DRAWN_OTHER
+    tables = (shells.SHELLS, solids.SOLIDS, lines.LINE_TYPES, CONNECTOR_TYPES, connectors.RESOLVED_TYPES,
+              masses.MASS_TYPES, bushes.BUSH_TYPES, plotels.PLOTEL_TYPES, constraints.SPC_TYPES,
+              loads.LOAD_TYPES, loads.COMBINATION_TYPES, ("GRID",))
+    return frozenset(t for table in tables for t in table)
 
 
 def _type_slots(model) -> dict[str, str]:
@@ -110,17 +114,31 @@ def _ids_text(label: str, ids) -> str:
     return f"{label} {shown}" + (" ..." if len(uniq) > MAX_IDS else "")
 
 
+def _key_id(key, card_type: str):
+    """The id a container key gives a card: a number, or a name (DMIG), but not the card type
+    itself (pyNastran keys SPCOFF by ``"SPCOFF"``) or a tuple."""
+    if isinstance(key, (int, np.integer)):
+        return int(key)
+    return key if isinstance(key, str) and key.upper() != card_type else None
+
+
 def _instances(model, slot: str, types: set[str]) -> dict[str, list]:
     """{card type: [id, ...]} of the ``types`` stored in pyNastran's ``slot`` container (an id per
-    stored card: EID, set id or name; None for a container without ids)."""
+    stored card: EID, set id or name; None when the card has none). The element-like slots take
+    pyNastran's own type -> id map, so a reported CTRIAX6 never walks a million drawn elements."""
     out: dict[str, list] = defaultdict(list)
+    by_type = getattr(model, "_type_to_id_map", None)
+    if slot in EID_SLOTS and by_type is not None:
+        for t in types:
+            out[t] = [int(e) for e in by_type.get(t, ())]
+        return out
     obj = getattr(model, slot, None)
     if isinstance(obj, dict):
         for key, val in obj.items():
             for card in (val if isinstance(val, list) else [val]):
                 t = getattr(card, "type", None)
                 if t in types:
-                    out[t].append(key)
+                    out[t].append(_key_id(key, t))
     elif isinstance(obj, list):
         for card in obj:
             t = getattr(card, "type", None)
@@ -170,10 +188,11 @@ def report(deck) -> list[dict]:
         found = _instances(model, slot, types) if slot else {}
         for t in sorted(types):
             ids = found.get(t)
-            reason = SCALAR if t in SCALAR_CARDS else SLOT_REASONS.get(slot, NOT_DRAWN)
+            reason = (SCALAR if t in SCALAR_CARDS else HEAT if t in HEAT_CARDS
+                      else SLOT_REASONS.get(slot, NOT_DRAWN))
             add(t, reason, len(ids) if ids else model.card_count[t], _ids_text(_label(slot, model), ids or ()))
     for (card, reason), ids in sorted(getattr(deck, "skipped", {}).items()):
-        add(card, reason, len(ids), _ids_text("EID", ids))
+        add(card, reason, len(ids), _ids_text("SID" if card == "MPC" else "EID", ids))  # MPC: set ids
     _superelements(model, type_slot, add)
     return sorted(rows.values(), key=lambda r: (-r["Count"], r["Card"], r["Reason"]))
 
@@ -207,22 +226,10 @@ def read(mb) -> list[dict] | None:
             for r in vtkutil.read_field_table(mb, TABLE)]
 
 
-def _header(rows: list[dict]) -> str:
+def header(rows: list[dict]) -> str:
+    """``"24 card(s) of 20 type(s) not drawn"``."""
     total = sum(r["Count"] for r in rows)
     return f"{total:,} card(s) of {len({r['Card'] for r in rows})} type(s) not drawn"
-
-
-def lines(rows: list[dict] | None) -> list[str]:
-    """The report as the CLI prints it: a header and one aligned line per row (one line when nothing
-    is skipped; none for a file written before the report)."""
-    if rows is None:
-        return []
-    if not rows:
-        return ["card report: every card is drawn or used"]
-    cols = ("Card", "Count", "Reason", "IDs")
-    cells = [cols] + [tuple(str(r[c]) for c in cols) for r in rows]
-    widths = [max(len(c[i]) for c in cells) for i in range(len(cols))]
-    return [f"{_header(rows)}:"] + ["  " + "  ".join(v.ljust(w) for v, w in zip(c, widths)).rstrip() for c in cells]
 
 
 def summary(rows: list[dict], limit: int = 8) -> str:
@@ -230,4 +237,4 @@ def summary(rows: list[dict], limit: int = 8) -> str:
     parts = [f"{r['Count']:,} {r['Card']}" + ("" if r["Reason"] == NOT_DRAWN else f" ({r['Reason']})")
              for r in rows[:limit]]
     more = f", +{len(rows) - limit} more" if len(rows) > limit else ""
-    return f"{_header(rows)}: {', '.join(parts)}{more}"
+    return f"{header(rows)}: {', '.join(parts)}{more}"

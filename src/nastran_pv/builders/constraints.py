@@ -9,6 +9,7 @@ from .. import vtkutil
 from ..deck import Deck
 
 GRID_PS_SET = 0  # pseudo set id for permanent constraints on GRID cards
+SPC_TYPES = ("SPC", "SPC1", "SPCADD")  # SPCAX, GMSPC, SPCOFF: the card report
 
 
 def dof_mask(components) -> np.ndarray:

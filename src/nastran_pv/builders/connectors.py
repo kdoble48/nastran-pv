@@ -1,10 +1,11 @@
 """Connections without a block of their own -> line legs (``Connectors``): MPC equations, scalar
-springs and dampers (CELAS1/2, CDAMP1/2/5), gaps (CGAP) and point-to-point fasteners (CFAST).
+springs and dampers (CELAS1/2, CDAMP1/2), gaps (CGAP) and point-to-point fasteners (CFAST).
 
 The legs make these connections visible and let the topology tools traverse them. An MPC has no
 element id, so its legs carry the MPC set id in ``EID``; :func:`mpcadd_sets` resolves MPCADD into
-those set ids. Springs and dampers with an end on a scalar point or on ground, and CFAST patch
-forms, have no leg to draw: they go to the card report (``Deck.skip``).
+those set ids. Legs to a scalar point, grounded springs and dampers, and CFAST patch forms have no
+line to draw: they go to the card report (``Deck.skip``). CDAMP5 is a heat-transfer element, not a
+structural link, so it is reported (``cards.HEAT_CARDS``) and never joins the topology graph.
 """
 from __future__ import annotations
 
@@ -16,8 +17,8 @@ from ..categories import CONNECTOR_TYPES, code_of
 from ..deck import Deck
 from .common import as_int as _int, grid_legs
 
-TWO_GRID = ("CELAS1", "CELAS2", "CDAMP1", "CDAMP2", "CDAMP5", "CGAP", "CFAST")
-DRAWN_CONNECTORS = ("MPC",) + TWO_GRID
+TWO_GRID = ("CELAS1", "CELAS2", "CDAMP1", "CDAMP2", "CGAP", "CFAST")  # with MPC: categories.CONNECTOR_TYPES
+RESOLVED_TYPES = ("MPCADD",)  # no legs of its own: mpcadd_sets
 
 
 def mpc_legs(mpc) -> tuple[list[tuple[int, int]], int]:
@@ -78,7 +79,10 @@ def build_connectors(deck: Deck):
         for mpc in model.mpcs[sid]:
             if mpc.type == "MPC":
                 legs, dof = mpc_legs(mpc)
-                add(legs, int(sid), "MPC", dof, 0)
+                kept = [leg for leg in legs if not scalar.intersection(leg)]
+                if len(kept) < len(legs):  # terms on scalar points: the rest of the equation is drawn
+                    deck.skip("MPC", SCALAR, int(sid))
+                add(kept, int(sid), "MPC", dof, 0)
     for eid, elem in model.elements.items():
         if elem.type not in TWO_GRID:
             continue
@@ -92,7 +96,7 @@ def build_connectors(deck: Deck):
 
     if not pairs:
         return None
-    pd, ok = grid_legs(deck, pairs, "connectors", "unknown grids (or scalar points)")
+    pd, ok = grid_legs(deck, pairs, "connectors")
     if not ok.any():
         return None
     cd = pd.GetCellData()
