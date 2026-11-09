@@ -249,3 +249,36 @@ The "Left to the builder" points for the comparison, as built:
 - **Texts.** In a pair each view says `A: <label>` / `B: <label>` (with the diff summary) when no
   layer writes a text; the per-view text of R6 is PR 3. `side_by_side(array=)` for an array no view
   shows draws an internal "array" coloring.
+
+## Addendum: what PR 3 (R5 to R7) decided (2026-11-09)
+
+- **A held time per model.** A on the left of a pair follows B's steps through its deforms' new
+  *Match Steps* (B's time steps, set by the views on every command): at B's n-th step each of A's
+  deforms reads A's n-th step, so the time controls keep both sides matched without a command, and
+  past A's last step A is not moved (rather than the reader's nearest, wrong mode). The Nastran Diff
+  matches A by index on its own and gives the Removed block A's displacement by grid, so A's removed
+  items move with A in both views (and stay without A's step). Outside a pair nothing follows.
+- **One amplitude while animating.** The animation macros and the play button drive A's deforms at
+  B's amplitude (one scale for the layout). NPV Results keeps each side's own Auto Scale: a fixed
+  scale on A could not follow B's per-step Auto Scale when the time controls step without a command.
+- **Time suppression** covers both readers while the play button loops a mode, and only then: every
+  nastran-pv model's steps are indices, so outside play the time controls already step through
+  matching steps.
+- **`_prepare_modes` never redraws.** Only a view (both views of a pair) with no layers at all still
+  gets NPV Results first: there is nothing to swap, and Animate Mode stays useful on a fresh view.
+  Save Mode Animations in a pair moves both sides and saves the active view.
+- **The per-view text.** `NPV info [<view>]` lists the layers' summaries: the layer clicked last in
+  full, the others by their first line (the spec's "one line per overlay", without losing what the
+  last click says). B's view starts with the diff summary (the "diff" coloring writes none of its own
+  there); A's view of a pair with `A: <label> (the reference)`, and that A has no step of B's index
+  when that is so. The text goes where the layer given in full put it (results: upper center),
+  upper left under a header.
+- **Labels.** The Pipeline Browser name, unless open models share one: then `labels.unique_labels` of
+  their paths (as many folders as it takes, the same number for each); the same file twice keeps
+  `#<id>`. A model's `NPV ...` objects are renamed when its label changes (opening or closing the
+  other `model.bdf`, renaming the reader), so they are still found.
+- **R7.** Highlight File sets the selection on the reader directly (`pv.SelectThresholds` shows the
+  source it selects on) and draws it as `NPV highlight [<model>]`, an ExtractSelection of `NPV deform`
+  (moved with the view, in each view of a pair); it is no layer, so a coloring change keeps it and
+  NPV Clear hides it. Index Colors uses the selected object only where the view shows it, else the
+  view's coloring layer, and never makes a representation.

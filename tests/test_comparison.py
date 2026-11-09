@@ -80,6 +80,31 @@ def test_reattach_puts_the_new_step_on_the_cached_output(pair):
     assert shells.GetCellData().GetArray("DiffStatus") is not None and out.GetFieldData().GetArray("DIFF_Added")
 
 
+def test_removed_items_move_with_a(pair):
+    """R5: A's removed items take A's displacement by NID (shell 3, CONM2 202 on grid 9, CBUSH 501
+    6-9), so they move with A's side, not with B's grids; zeros when A has no step of B's index."""
+    from nastran_pv.diff import removed_displacement
+
+    a, _, out = pair
+    moved_a = shallow_clone(a)
+    for block in ("Shells",):
+        ds = get_block(moved_a, block)
+        nid = arr(ds, "NID").astype(float)
+        add_array(ds.GetPointData(), "Displacement", np.c_[nid, np.zeros_like(nid), np.zeros_like(nid)])
+    now = shallow_clone(out)
+    removed_displacement(now, moved_a)
+    removed = get_block(now, "Removed")
+    assert np.array_equal(arr(removed, "Displacement")[:, 0], arr(removed, "NID").astype(float))
+    assert get_block(out, "Removed").GetPointData().GetArray("Displacement") is None  # the kept one stays
+    removed_displacement(now, a)  # neither model has a displacement: nothing to move by
+    assert get_block(now, "Removed").GetPointData().GetArray("Displacement") is None
+    shells = get_block(now, "Shells")  # B moves: A's removed items stay where A has nothing to show
+    add_array(shells.GetPointData(), "Displacement", np.ones((shells.GetNumberOfPoints(), 3)))
+    for a_model, moved in ((moved_a, False), (a, True)):
+        removed_displacement(now, a_model, moved=moved)
+        assert not arr(get_block(now, "Removed"), "Displacement").any()
+
+
 def test_own_arrays_include_what_annotate_overwrote(pair):
     """A diff output used as B again (a converted or saved diff) already has DiffStatus: annotate
     writes its own, and a cache hit keeps that one, not the source's stale copy."""

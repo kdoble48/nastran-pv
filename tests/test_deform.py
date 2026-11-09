@@ -146,3 +146,15 @@ def test_deformer_reused_across_scales_matches_deform(model):
         np.testing.assert_array_equal(_xyz(get_block(d.apply(s), "Shells")),
                                       _xyz(get_block(deform(mb, s), "Shells")))
     np.testing.assert_array_equal(_xyz(get_block(mb, "Shells")), ref)
+
+
+def test_steps_match_by_index():
+    """R5: A follows B's steps by index (mode 3 with mode 3, whatever their frequencies); past A's
+    last step there is no step to show."""
+    from nastran_pv.deform import matched_index, matched_time
+
+    b_steps, a_times = [0.0, 1.0, 2.0, 3.0], [10.0, 20.0]
+    assert matched_index(b_steps, 1.2) == 1 and matched_index([], 1.0) is None
+    assert matched_time(a_times, b_steps, 0.0) == 10.0 and matched_time(a_times, b_steps, 0.9) == 20.0
+    assert matched_time(a_times, b_steps, 2.0) is None  # A has no third step
+    assert matched_time(a_times, [], 1.0) is None and matched_time([], b_steps, 0.0) is None

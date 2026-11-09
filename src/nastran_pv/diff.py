@@ -874,6 +874,34 @@ def reattach(annotated, source, own) -> None:
                     a_attr.AddArray(arr)
 
 
+def removed_displacement(annotated, a, moved: bool = True) -> None:
+    """Move A's removed items with A (scene layers rule R5): the ``Removed`` block of ``annotated``
+    (an annotated B with attribute containers of its own) gets a point ``Displacement`` looked up by
+    NID in ``a``, A's model at the step that goes with B's, so a deform moves the items by A's
+    displacement, not by B's grids of the same id. Zeros when ``moved`` is False (A has no step of
+    that index) or A has no displacement while B has one; nothing when neither model has one."""
+    from .deform import grid_displacements
+
+    removed = next((ds for path, ds in iter_blocks(annotated) if path == "Removed"), None)
+    if removed is None or not removed.GetNumberOfPoints():
+        return
+    pd = removed.GetPointData()
+    nids, disp = grid_displacements(a) if moved else (np.zeros(0, np.int64), None)
+    b_moves = any(path != "Removed" and ds.GetPointData().GetArray("Displacement") is not None
+                  for path, ds in iter_blocks(annotated))
+    if not len(nids) and not b_moves:
+        pd.RemoveArray("Displacement")
+        return
+    out = np.zeros((removed.GetNumberOfPoints(), 3))
+    nid = pd.GetArray("NID")
+    if len(nids) and nid is not None:
+        idx = vtkutil.match_ids(nids, vtkutil.to_numpy(nid).astype(np.int64))
+        hit = idx >= 0
+        out[hit] = disp[idx[hit]]
+    pd.RemoveArray("Displacement")
+    vtkutil.add_array(pd, "Displacement", out)
+
+
 # ------------------------------------------------------------------- report
 def table_rows(d: ModelDiff) -> list[dict]:
     """:attr:`ModelDiff.rows` with one type per column (for a vtkTable): ``A B Delta Rel`` as floats

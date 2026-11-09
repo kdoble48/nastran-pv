@@ -8,6 +8,9 @@ proxies are not reliably hashable.
 A scene is about one model, or about one side of a comparison: ``role`` "A" (the
 reference) or "B" (the changed model), the Nastran Diff that joins them (``diff``)
 and, in a side-by-side pair, the other view (``partner``).
+
+Each layer keeps the summary its view wrote; :meth:`Scene.summary` lists them as the view's one
+info text (rule R6).
 """
 from __future__ import annotations
 
@@ -36,6 +39,8 @@ class Layer:
     objects: list
     selected: object = None
     args: dict = field(default_factory=dict)  # the view's arguments, to draw it again (a pair, NPV Single)
+    summary: str | None = None  # what the view says about this layer (its info text), or None
+    where: str = "Upper Left Corner"  # where it put that text: the view's info text goes there when it leads
 
 
 def _orphans(dropped, held) -> list:
@@ -52,7 +57,7 @@ class Scene:
     model: object = None
     coloring: Layer | None = None
     overlays: dict = field(default_factory=dict)
-    info: str | None = None   # the layer that last wrote the shared info text
+    latest: str | None = None  # the layer drawn last: its summary is listed in full, the others' first line
     role: str | None = None   # "A" or "B" in a comparison, None for one model
     partner: str | None = None  # the other view of a side-by-side pair (its id), else None
     diff: object = None       # the Nastran Diff the comparison follows (None: one model, or a pair without one)
@@ -75,14 +80,10 @@ class Scene:
         return coloring, [(name, dict(layer.args)) for name, layer in self.overlays.items()]
 
     def set_coloring(self, layer: Layer) -> list:
-        """Make ``layer`` the coloring; the objects of the old one that no layer shows now. The info
-        writer is forgotten when it was the old coloring (the view hides its text unless the new one
-        writes its own)."""
+        """Make ``layer`` the coloring; the objects of the old one that no layer shows now."""
         old, self.coloring = self.coloring, layer
         if old is None:
             return []
-        if self.info == old.name:
-            self.info = None
         return _orphans(old.objects, self._layers())
 
     def add_overlay(self, layer: Layer) -> list:
@@ -96,8 +97,6 @@ class Scene:
         old = self.overlays.pop(name, None)
         if old is None:
             return []
-        if self.info == name:
-            self.info = None
         return _orphans(old.objects, self._layers())
 
     def clear(self) -> list:
@@ -105,8 +104,23 @@ class Scene:
         out = []
         for layer in self._layers():
             out += [o for o in layer.objects if o not in out]
-        self.model, self.coloring, self.overlays, self.info = None, None, {}, None
+        self.model, self.coloring, self.overlays, self.latest = None, None, {}, None
         return out
+
+    def summary(self, header: str | None = None) -> tuple[str, str]:
+        """``(text, where)`` of the view's info text (rule R6): ``header`` first (in a comparison the
+        diff summary, whatever the coloring), then one entry per layer with a summary, the coloring
+        first and the overlays in the order they were added. The layer drawn last (:attr:`latest`,
+        else the last one listed) is given in full, the others by their first line. ``where`` is the
+        place of the layer given in full; ``("", ...)`` when there is nothing to say."""
+        layers = [layer for layer in self._layers() if layer.summary and layer.summary.strip()]
+        full = next((layer for layer in layers if layer.name == self.latest), layers[-1] if layers else None)
+        lines = [header] if header else []
+        for layer in layers:
+            first = next(line for line in layer.summary.splitlines() if line.strip())
+            lines.append(layer.summary.strip("\n") if layer is full else first)
+        where = full.where if full is not None and not header else "Upper Left Corner"
+        return "\n".join(lines), where
 
     def end_comparison(self) -> None:
         """Back to one model: no role, partner, diff or side (the layers stay until they are drawn again)."""

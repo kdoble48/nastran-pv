@@ -1451,7 +1451,10 @@ class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
 
     Vibrate Mode makes the play button vibrate one mode: the input is held at Mode Time (the
     reader's time step of that mode), the output's time steps become one cycle of Frames Per Cycle
-    phases 0, 1/n, ... (n-1)/n, and the model moves by Amplitude x sin(2 pi phase) x Displacement."""
+    phases 0, 1/n, ... (n-1)/n, and the model moves by Amplitude x sin(2 pi phase) x Displacement.
+
+    Match Steps (A's side of a comparison) follows another model's time steps by index: at its n-th
+    step the input is read at its own n-th step, and with no n-th step it is not moved."""
 
     def __init__(self):
         VTKPythonAlgorithmBase.__init__(self, nInputPorts=1, nOutputPorts=1, outputType="vtkDataObject")
@@ -1462,6 +1465,9 @@ class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
         self._frames = 24
         self._auto = 0
         self._peak = 0.08
+        self._match = ()  # Match Steps: the time steps followed by index (empty: the time passes through)
+        self._asked = None  # the time asked for while following them (the output is stamped with it)
+        self._unmatched = False  # following them, and the input has no step of that index: not moved
         self._deformer = None  # (input object, its MTime, Deformer): rebuilt when the input changes
         self._auto_scale = None  # (input object, its MTime, peak fraction, scale)
 
@@ -1517,6 +1523,17 @@ class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
     def SetFramesPerCycle(self, value):
         self._set("_frames", max(int(value), 4))
 
+    @smproperty.stringvector(name="MatchSteps", default_values="", panel_visibility="advanced")
+    def SetMatchSteps(self, value):
+        """Time steps of the model this one is compared with (B's), space separated: at its n-th step
+        the input is read at its own n-th step (mode 3 with mode 3), and with no n-th step the model
+        is not moved. NPV Side by Side sets it on A's side; empty: the time passes through."""
+        try:
+            steps = tuple(float(x) for x in str(value or "").split())
+        except ValueError:
+            steps = ()
+        self._set("_match", steps)
+
     @smproperty.doublevector(name="TimestepValues", information_only="1", si_class="vtkSITimeStepsProperty")
     def GetTimestepValues(self):
         return self.phases() if self._vibrate else None
@@ -1538,8 +1555,24 @@ class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
         return 1
 
     def RequestUpdateExtent(self, request, inInfo, outInfo):
+        sddp = vtkStreamingDemandDrivenPipeline
+        inp = inInfo[0].GetInformationObject(0)
+        self._asked, self._unmatched = None, False
         if self._vibrate:  # every phase reads the same mode: upstream executes once
-            inInfo[0].GetInformationObject(0).Set(vtkStreamingDemandDrivenPipeline.UPDATE_TIME_STEP(), self._mode_time)
+            inp.Set(sddp.UPDATE_TIME_STEP(), self._mode_time)
+        elif self._match:
+            out = outInfo.GetInformationObject(0)
+            times = inp.Get(sddp.TIME_STEPS()) if inp.Has(sddp.TIME_STEPS()) else None
+            if out.Has(sddp.UPDATE_TIME_STEP()) and times:
+                try:
+                    from nastran_pv.deform import matched_time
+                except ImportError:
+                    return 1
+                self._asked = out.Get(sddp.UPDATE_TIME_STEP())
+                held = matched_time(times, self._match, self._asked)
+                self._unmatched = held is None
+                if held is not None:
+                    inp.Set(sddp.UPDATE_TIME_STEP(), held)
         return 1
 
     def RequestData(self, request, inInfo, outInfo):
@@ -1565,14 +1598,16 @@ class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
             key_t = vtkStreamingDemandDrivenPipeline.UPDATE_TIME_STEP()
             phase = info.Get(key_t) if info.Has(key_t) else 0.0
             scale = self._amplitude * round(math.sin(2 * math.pi * phase), 9)
+        elif self._unmatched:  # no step of that index: stay as built
+            scale = 0.0
         out.ShallowCopy(self._deformer[2].apply(scale))
         fd = vtkFieldData()  # a copy: the input's field data is the reader's (or the cached model's)
         fd.ShallowCopy(inp.GetFieldData())
         fd.RemoveArray(DEFORM_SCALE)
         fd.AddArray(_double_array(DEFORM_SCALE, scale))
         out.SetFieldData(fd)
-        if phase is not None:
-            out.GetInformation().Set(vtkDataObject.DATA_TIME_STEP(), phase)
+        if phase is not None or self._asked is not None:  # the time asked for, not the input's held step
+            out.GetInformation().Set(vtkDataObject.DATA_TIME_STEP(), phase if phase is not None else self._asked)
         return 1
 
 
@@ -2476,6 +2511,7 @@ class NastranPVDiff(_Settable, VTKPythonAlgorithmBase):
         self._show = {s: 1 for s in _DIFF_STATUSES}
         self._cache = None  # (key, annotated B, table rows, A, B's source, what annotate wrote)
         self._entry = None  # what Nastran Scope after it needs (see DIFF_TAG)
+        self._a_moved = True  # False: A (the Reference) has no step of B's index, so its removed items stay
         self._tag = f"{id(self)}-{next(_GENERATION)}"  # unique, even when an id comes again
         for gone in [k for k, ref in _DIFF_OUTPUTS.items() if ref.Get() is None]:
             del _DIFF_OUTPUTS[gone]
@@ -2513,7 +2549,7 @@ class NastranPVDiff(_Settable, VTKPythonAlgorithmBase):
         a model's content or ``tol`` changed. B now is the kept one with this time step's arrays (results,
         random response) put back, on new attribute containers: the kept one is never changed, since the
         outputs made from it before (and the views drawing them) share its datasets."""
-        from nastran_pv.diff import annotate, own_arrays, reattach, table_rows
+        from nastran_pv.diff import annotate, own_arrays, reattach, removed_displacement, table_rows
         from nastran_pv.fields import shallow_clone
 
         key = (self._content(b_in), self._content(a_in), tol)
@@ -2521,6 +2557,7 @@ class NastranPVDiff(_Settable, VTKPythonAlgorithmBase):
             _, b, rows, a, source, own = self._cache
             now = shallow_clone(b)
             reattach(now, source, own)  # the reader may have moved to another time step
+            removed_displacement(now, a, self._a_moved)  # A's removed items move with A's step
             return b, now, rows, a
         (source, b_cut), (a, a_cut) = _whole_model(b_in), _whole_model(a_in)
         b = shallow_clone(source)  # never add arrays to the reader's cached model
@@ -2537,7 +2574,33 @@ class NastranPVDiff(_Settable, VTKPythonAlgorithmBase):
         except Exception as exc:  # report, pass B through unchanged
             _message(f"nastran-pv Diff: {exc}", error=True)
         self._cache = (key, b, rows, a, source, own_arrays(b, source))
-        return b, b, rows, a
+        now = shallow_clone(b)  # the kept output stays as annotate left it
+        removed_displacement(now, a, self._a_moved)
+        return b, now, rows, a
+
+    def RequestUpdateExtent(self, request, inInfo, outInfo):
+        """A (the Reference, or the Input with Swap Inputs) is read at its own step of the index of B's
+        step (scene layers rule R5: mode 3 with mode 3); with no such step its removed items stay."""
+        sddp = vtkStreamingDemandDrivenPipeline
+        key = sddp.UPDATE_TIME_STEP()
+        self._a_moved = True
+        outs = [outInfo.GetInformationObject(i) for i in range(outInfo.GetNumberOfInformationObjects())]
+        asked = next((o.Get(key) for o in outs if o is not None and o.Has(key)), None)
+        b_info, a_info = (inInfo[p].GetInformationObject(0) for p in ((1, 0) if self._swap else (0, 1)))
+        if asked is None or b_info is None or a_info is None:
+            return 1
+        steps = [i.Get(sddp.TIME_STEPS()) if i.Has(sddp.TIME_STEPS()) else None for i in (b_info, a_info)]
+        if not (steps[0] and steps[1]):
+            return 1
+        try:
+            from nastran_pv.deform import matched_time
+        except ImportError:
+            return 1
+        held = matched_time(steps[1], steps[0], asked)
+        self._a_moved = held is not None
+        if held is not None:
+            a_info.Set(key, held)
+        return 1
 
     def RequestData(self, request, inInfo, outInfo):
         from vtkmodules.vtkCommonDataModel import vtkTable

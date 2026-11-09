@@ -46,6 +46,13 @@ def _grid_displacements(leaves):
     return nids, disp[first]
 
 
+def grid_displacements(data):
+    """(sorted NIDs, their displacement rows) of a whole model (multiblock or tree); empty arrays
+    when it has no ``Displacement``."""
+    return _grid_displacements(list(_leaves(data))) if isinstance(data, vtkDataObjectTree) else \
+        (np.zeros(0, np.int64), np.zeros((0, 3)))
+
+
 def displacement_of(ds, grid_nids, grid_disp) -> np.ndarray | None:
     """(n, 3) displacement of a leaf's points: its own array, else looked up by NID; None if neither."""
     pd = ds.GetPointData()
@@ -117,6 +124,25 @@ def deform(data, scale: float):
     if not scale:
         return vtkutil.shallow_copy(data)
     return Deformer(data).apply(scale)
+
+
+def matched_index(steps, t) -> int | None:
+    """Index of the step of ``steps`` (time values) nearest ``t``, as a reader picks its step; None
+    when there are no steps."""
+    if steps is None or not len(steps):
+        return None
+    return int(np.argmin(np.abs(np.asarray(steps, dtype=float) - float(t))))
+
+
+def matched_time(times, steps, t) -> float | None:
+    """Time of this model's step (of ``times``) that goes with the step of ``steps`` (the layout's,
+    another model's) at ``t``: steps match by index, so mode 3 goes with mode 3 whatever their
+    frequencies (scene layers rule R5). None when this model has no step of that index, or the layout
+    has no steps."""
+    i = matched_index(steps, t)
+    if i is None or times is None or i >= len(times):
+        return None
+    return float(times[i])
 
 
 def peak_scale(data, fraction: float = 0.08) -> float:
