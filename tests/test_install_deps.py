@@ -122,6 +122,16 @@ def test_verify_reports_imports_that_still_fail(monkeypatch, capsys, tmp_path):
     assert install_deps.verify("pvpython", tmp_path, dry_run=False) == 0
 
 
+def test_a_failing_pvpython_shows_its_output(monkeypatch, capsys):
+    def run(cmd, capture_output, text):
+        return subprocess.CompletedProcess(cmd, 127, "", "pvpython-real: libfoo.so.1: cannot open shared object\n")
+
+    monkeypatch.setattr(install_deps.subprocess, "run", run)
+    with pytest.raises(SystemExit, match="exited with 127"):
+        install_deps.probe("pvpython", Path("v"), ["scipy"])
+    assert "libfoo.so.1" in capsys.readouterr().err
+
+
 def test_pvpython_search_is_the_shared_one(monkeypatch):
     monkeypatch.setattr(install_deps.locate, "find_executable", lambda name: Path("pv") / "bin" / name)
     assert install_deps.find_pvpython() == str(Path("pv") / "bin" / "pvpython")

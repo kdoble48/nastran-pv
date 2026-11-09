@@ -61,6 +61,17 @@ jobs:
           python -m build --wheel --outdir dist
           python -m venv ~/venv
           ~/venv/bin/python -m pip install "$(ls dist/*.whl)[h5]"
+      - name: Diagnostics (temporary)
+        env:
+          VTK_DEFAULT_OPENGL_WINDOW: vtkOSOpenGLRenderWindow
+        run: |
+          pv=$(ls -d ~/ParaView-*/)
+          ls -la "${pv}bin" | head -30
+          file "${pv}bin/pvpython" || true
+          head -c 300 "${pv}bin/pvpython" | strings | head -5 || true
+          "${pv}bin/pvpython" -c "import sys; print(sys.version)" || echo "pvpython exit $?"
+          for f in "${pv}bin/pvpython-real" "${pv}bin/pvpython"; do [ -f "$f" ] && ldd "$f" | grep -i "not found" || true; done
+          ldd "${pv}"lib/*.so* 2>/dev/null | grep "not found" | sort -u | head -20 || true
       - name: nastran-pv setup
         run: |
           cd ~
@@ -76,4 +87,21 @@ jobs:
           export LD_LIBRARY_PATH="${pv}lib/mesa${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           # the checkout's plugin (../src), with the packages setup vendored for this ParaView
           export NASTRAN_PV_SITE_PACKAGES="$vendor" NASTRAN_PV_PYTHON=~/venv/bin/python
+          cat > ~/op2_check.py <<'EOF'
+          import os, sys, tempfile, traceback
+          sys.path[:0] = [os.path.abspath("src"), os.path.abspath("tests")]
+          sys.path += [p for p in os.environ["NASTRAN_PV_SITE_PACKAGES"].split(os.pathsep) if p]
+          import pyNastran
+          print("pyNastran", pyNastran.__version__)
+          from op2_fixture import make_op2
+          path = os.path.join(tempfile.mkdtemp(), "sel.op2")
+          make_op2().write_op2(path)
+          print("wrote", path, os.path.getsize(path))
+          from nastran_pv.results import open_results
+          try:
+              print("steps", len(open_results(path).steps))
+          except Exception:
+              traceback.print_exc()
+          EOF
+          "${pv}bin/pvpython" ~/op2_check.py || true
           "${pv}bin/pvpython" tests/pv_smoke.py

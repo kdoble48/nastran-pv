@@ -227,9 +227,11 @@ def is_main_build(version: str | None) -> bool:
 
 
 def probe(pvpython: str, target: Path, modules, script: str = PROBE):
-    out = subprocess.run([pvpython, "-c", script, str(target), *modules],
-                         capture_output=True, text=True, check=True).stdout
-    return json.loads(out.strip().splitlines()[-1])
+    proc = subprocess.run([pvpython, "-c", script, str(target), *modules], capture_output=True, text=True)
+    if proc.returncode != 0:  # pvpython itself failed (a missing system library, ...): show why
+        sys.stderr.write(proc.stdout + proc.stderr)
+        raise SystemExit(f"error: {pvpython} exited with {proc.returncode}; its output is above")
+    return json.loads(proc.stdout.strip().splitlines()[-1])
 
 
 def pip_install(target: Path, extra: list[str], dry_run: bool) -> None:
