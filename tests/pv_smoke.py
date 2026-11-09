@@ -1022,6 +1022,7 @@ def result_load_checks(pv, nv, main_reader):
                   and f"Force sum of these grids {vector_text(want)}" in text
                   and "Whole-model resultant force (0, -100, -50)" in text, f"scoped: the arrows' sum, labelled: {text!r}")
             reader.HiddenElements = ""
+            nv.apply("loads", reader=reader, view=view, source="Applied loads (OLOAD)")
             reader.ResultTypes = ["Displacement"]
             nv.apply("loads", reader=reader, view=view)
             check(_root(lg, "ArrowCount") == [0] and "No Applied loads (OLOAD) to draw" in _info(nv, model),
