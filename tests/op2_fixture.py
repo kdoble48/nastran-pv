@@ -429,3 +429,188 @@ def make_element_op2() -> OP2:
     stress.celas1_stress[1] = _oes(RealSpringStressArray, "CELAS1", 2, set_element_case, np.array([41]),
                                    _f32([[SPRING_STRESS]]))
     return op2
+
+
+# ------------------------------------------------------------------ complex, frequency and transient
+# Roadmap task 11 (docs/design/2026-11-09-dynamic-results.md). MYSTRAN solves none of these
+# sequences, so the tables are synthesized; write_op2 round-trips every table below in pyNastran
+# 1.4.1 and main once its table code is set (the add_*_case helpers name most tables OUGV1).
+FREQS = (10.0, 20.0)
+UNIT = 3 + 4j  # complex values are real values x UNIT (x 2 UNIT at 20 Hz): |UNIT| 5, phase 53.130102 deg
+TIMES = (0.0, 0.5, 1.0)
+COMPLEX_MODE_HZ = (10.0, 25.0)
+# SPC forces and OLOAD of the frequency response, per grid {component: value} x UNIT: at phase 0
+# the SPC resultant is F (0, 0, -30), M 0; at phase 90 degrees F (0, 0, 40), M (0, -2, 0)
+FREQ_SPC = {1: {2: -10.0}, 4: {4: 2j / UNIT}}
+FREQ_OLOAD = {3: {2: 10.0}}
+
+
+def _coded(obj, table_name, table_code):
+    obj.table_name = obj.data_code["table_name"] = table_name
+    obj.table_code = obj.data_code["table_code"] = table_code
+    return obj
+
+
+def _per_freq(rows) -> np.ndarray:
+    """(2, n, k) complex64: ``rows`` x UNIT at 10 Hz and x 2 UNIT at 20 Hz."""
+    a = np.asarray(rows, dtype=complex) * UNIT
+    return np.stack([a, 2 * a]).astype("complex64")
+
+
+def _grids(nids) -> np.ndarray:
+    return np.column_stack([nids, np.ones(len(nids), dtype=int)]).astype(np.int32)
+
+
+def make_frequency_op2() -> OP2:
+    """Subcase 1 of tests/data/elements.bdf as a frequency response at 10 and 20 Hz (SOL 108):
+    displacements T3 = 1e-3 NID and R1 = 1e-4 i NID / UNIT, velocities and accelerations (10 and
+    100 times the displacements), SPC forces and OLOAD (``FREQ_SPC``, ``FREQ_OLOAD``), the forces of
+    CQUAD4 1, CBAR 21, CROD 23, CBUSH 31 and CELAS1 41 and the stresses of CQUAD4 1 (both fibres):
+    the real element fixture's values x UNIT (x 2 UNIT at 20 Hz). (pyNastran's writer and reader
+    disagree on the word order of complex bar and rod stresses, and it cannot build a complex solid
+    stress for write_op2: tests/test_dynamic_results.py adds those to the tables in memory.)"""
+    from pyNastran.op2.tables.oef_forces import oef_complex_force_objects as coef
+    from pyNastran.op2.tables.oes_stressStrain.complex.oes_plates import ComplexPlateStressArray
+    from pyNastran.op2.tables.oes_stressStrain.real.oes_plates import set_element_node_fiber_case
+    from pyNastran.op2.tables.opg_appliedLoads.opg_load_vector import ComplexLoadVectorArray
+    from pyNastran.op2.tables.oqg_constraintForces.oqg_spc_forces import ComplexSPCForcesArray
+    from pyNastran.op2.tables.oug.oug_accelerations import ComplexAccelerationArray
+    from pyNastran.op2.tables.oug.oug_displacements import ComplexDisplacementArray
+    from pyNastran.op2.tables.oug.oug_velocities import ComplexVelocityArray
+
+    op2 = OP2(debug=None)
+    op2.set_mode("msc")
+    nids, freqs = ELEMENT_NIDS, list(FREQS)
+    rows = np.zeros((len(nids), 6), dtype=complex)
+    rows[:, 2], rows[:, 3] = 1e-3 * nids, 1e-4j * nids / UNIT
+    disp = _per_freq(rows)
+    op2.displacements[1] = _coded(ComplexDisplacementArray.add_freq_case("OUGV1", _grids(nids), disp, 1, freqs),
+                                  "OUGV1", 1)
+    op2.velocities[1] = _coded(ComplexVelocityArray.add_freq_case("OUGV1", _grids(nids), disp * 10, 1, freqs),
+                               "OUGV1", 10)
+    op2.accelerations[1] = _coded(ComplexAccelerationArray.add_freq_case("OUGV1", _grids(nids), disp * 100, 1, freqs),
+                                  "OUGV1", 11)
+    for table, cls, name, code, loads in (("spc_forces", ComplexSPCForcesArray, "OQG1", 3, FREQ_SPC),
+                                          ("load_vectors", ComplexLoadVectorArray, "OPG1", 2, FREQ_OLOAD)):
+        grids = np.array(sorted(loads))
+        data = _per_freq([[loads[n].get(c, 0.0) for c in range(6)] for n in grids])
+        getattr(op2, table)[1] = _coded(cls.add_freq_case(name, _grids(grids), data, 1, freqs), name, code)
+
+    force, stress = op2.op2_results.force, op2.op2_results.stress
+    for card, etype, wide, cls, eid, values in (
+            ("CQUAD4", 33, 17, coef.ComplexPlateForceArray, 1, [SHELL_FORCE[1]]),
+            ("CBAR", 34, 17, coef.ComplexCBarForceArray, 21, [BAR_FORCE]),
+            ("CROD", 1, 5, coef.ComplexRodForceArray, 23, [ROD_FORCE]),
+            ("CBUSH", 102, 13, coef.ComplexCBushForceArray, 31, [BUSH_FORCE[31]]),
+            ("CELAS1", 11, 3, coef.ComplexSpringForceArray, 41, [[SPRING_FORCE[41]]])):
+        getattr(force, f"{card.lower()}_force")[1] = _complex_oef(cls, card, etype, wide, np.array([eid]),
+                                                                  _per_freq(values))
+    stress.cquad4_stress[1] = _complex_oes(  # the centre's two fibre rows (bottom, top)
+        ComplexPlateStressArray, "CQUAD4", 33, 15,
+        lambda cls, dc, sort1, sc, *args: set_element_node_fiber_case(cls, dc, sort1, sc, 1, *args),
+        np.array([[1, 0], [1, 0]]), np.array([-0.005, 0.005], "float32"), _per_freq(list(PLATE_STRESS[1])))
+    return op2
+
+
+def _complex_oef(cls, element_name, element_type, num_wide, *args):
+    """A complex force table (OEF1X, real/imaginary) at ``FREQS``."""
+    from pyNastran.op2.tables.oef_forces.oef_force_objects import oef_data_code
+    from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import set_element_case, set_freq_case
+
+    dc = oef_data_code("OEF1X", is_sort1=True, is_random=False, random_code=0, title="", subtitle="", label="",
+                       is_msc=True)
+    dc.update(loadIDs=[0], data_names=[], element_name=element_name, element_type=element_type, num_wide=num_wide,
+              format_code=2)
+    return set_freq_case(cls, True, 1, dc, set_element_case, _int32(args), list(FREQS))
+
+
+def _complex_oes(cls, element_name, element_type, num_wide, case, *args):
+    """A complex stress table (OES1X1, real/imaginary, von Mises stress bits) at ``FREQS``."""
+    from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import oes_complex_data_code, set_freq_case
+
+    dc = oes_complex_data_code("OES1X1", element_name, num_wide)
+    dc.update(num_wide=num_wide, element_type=element_type, format_code=2, s_code=1, stress_bits=[0, 0, 0, 0, 1])
+    return set_freq_case(cls, True, 1, dc, case, _int32(args), list(FREQS))
+
+
+def make_transient_op2() -> OP2:
+    """Subcase 1 of tests/data/tiny_run.bdf as a transient (SOL 109) at ``TIMES`` (0, 0.5, 1):
+    displacements T3 = 0.01 t NID, velocities T3 = 0.01 NID, accelerations T1 = -t, and the von
+    Mises stress of CQUAD4 2 (1 + t at both fibres), paired with each time."""
+    from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import set_transient_case
+    from pyNastran.op2.tables.oes_stressStrain.real.oes_plates import set_element_node_fiber_case
+    from pyNastran.op2.tables.oug.oug_accelerations import RealAccelerationArray
+    from pyNastran.op2.tables.oug.oug_velocities import RealVelocityArray
+
+    op2 = OP2(debug=None)
+    op2.set_mode("msc")
+    t, times = np.asarray(TIMES), list(TIMES)
+    d = np.zeros((len(t), len(NIDS), 6), dtype="float32")
+    v, a = d.copy(), d.copy()
+    d[:, :, 2] = 0.01 * np.outer(t, NIDS)
+    v[:, :, 2] = 0.01 * NIDS
+    a[:, :, 0] = -t[:, None]
+    op2.displacements[1] = RealDisplacementArray.add_transient_case("OUGV1", _grids(NIDS), d, 1, times)
+    op2.velocities[1] = _coded(RealVelocityArray.add_transient_case("OUGV1", _grids(NIDS), v, 1, times), "OUGV1", 10)
+    op2.accelerations[1] = _coded(RealAccelerationArray.add_transient_case("OUGV1", _grids(NIDS), a, 1, times),
+                                  "OUGV1", 11)
+    rows = np.zeros((len(t), 2, 8), dtype="float32")
+    rows[:, :, 0] = [-0.01, 0.01]
+    rows[:, :, 7] = (1 + t)[:, None]
+    dc = RealPlateStressArray._add_case("OES1X1", "CQUAD4", 1, True, False, True, 0, "", "", "")
+    dc.update(s_code=1, stress_bits=[0, 0, 0, 0, 1])
+    plate = set_transient_case(
+        RealPlateStressArray, True, 1, dc,
+        lambda cls, c, sort1, sc, *args: set_element_node_fiber_case(cls, c, sort1, sc, 1, *args),
+        (np.array([[2, 0], [2, 0]], dtype=np.int32), np.array([-0.01, 0.01], "float32"), rows), times)
+    plate.s_code, plate.stress_bits = 1, [0, 0, 0, 0, 1]
+    op2.op2_results.stress.cquad4_stress[1] = plate
+    return op2
+
+
+def make_complex_modes_op2() -> OP2:
+    """Complex modes (SOL 107) of tests/data/tiny_run.bdf: mode 1 at 10 Hz (T3 = 1 on every grid,
+    in phase), mode 2 at 25 Hz (T3 = i NID / 7, 90 degrees out of phase); eigenvalues
+    -1 + i 2 pi f."""
+    from pyNastran.op2.tables.oug.oug_eigenvectors import ComplexEigenvectorArray
+
+    op2 = OP2(debug=None)
+    op2.set_mode("msc")
+    shapes = np.zeros((2, len(NIDS), 6), dtype="complex64")
+    shapes[0, :, 2] = 1.0
+    shapes[1, :, 2] = 1j * NIDS / 7
+    eigis = [2 * np.pi * f for f in COMPLEX_MODE_HZ]
+    op2.eigenvectors[1] = _coded(ComplexEigenvectorArray.add_complex_modes_case(
+        "BOUGV1", _grids(NIDS), shapes, 1, [1, 2], [-1.0, -1.0], eigis), "BOUGV1", 7)
+    return op2
+
+
+# SOL 111 random output of tests/data/tiny_run.bdf (grids 1-7), subcase 1, per grid n:
+#   acceleration PSD at 20, 50, 100 Hz: T1 = 1e-3, T3 = (1, 4, 1) x 1e-2 n
+#   acceleration RMS: T1 = 0.1, T3 = 0.5 n; zero crossings: T1 30 Hz, T3 60 Hz
+#   displacement RMS: T3 = 1e-3 n
+RANDOM_FREQS = (20.0, 50.0, 100.0)
+
+
+def make_random_op2() -> OP2:
+    """The SOL 111 tables OAGPSD1, OAGRMS1, OAGNO1 and OUGRMS1, which pyNastran reads into
+    ``psd.accelerations``, ``rms.accelerations``, ``no.accelerations`` and ``rms.displacements``."""
+    from pyNastran.op2.tables.oug.oug_accelerations import RealAccelerationArray
+
+    op2 = OP2(debug=None)
+    op2.set_mode("msc")
+    psd = np.zeros((len(RANDOM_FREQS), len(NIDS), 6), dtype="float32")
+    psd[:, :, 0] = 1e-3
+    psd[:, :, 2] = 1e-2 * np.outer([1.0, 4.0, 1.0], NIDS)
+    one = np.zeros((1, len(NIDS), 6), dtype="float32")
+    rms, n0, drms = one.copy(), one.copy(), one.copy()
+    rms[0, :, 0], rms[0, :, 2] = 0.1, 0.5 * NIDS
+    n0[0, :, 0], n0[0, :, 2] = 30.0, 60.0
+    drms[0, :, 2] = 1e-3 * NIDS
+    grids, res = _grids(NIDS), op2.op2_results
+    res.psd.accelerations[1] = _coded(RealAccelerationArray.add_transient_case("OUGV1", grids, psd, 1,
+                                                                               list(RANDOM_FREQS)), "OAGPSD1", 11)
+    res.rms.accelerations[1] = _coded(RealAccelerationArray.add_static_case("OUGV1", grids, rms, 1), "OAGRMS1", 11)
+    res.no.accelerations[1] = _coded(RealAccelerationArray.add_static_case("OUGV1", grids, n0, 1), "OAGNO1", 11)
+    res.rms.displacements[1] = _coded(RealDisplacementArray.add_static_case("OUGV1", grids, drms, 1), "OUGRMS1", 1)
+    return op2

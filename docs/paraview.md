@@ -12,13 +12,15 @@ one-click views on the Macros toolbar. For step-by-step walkthroughs, see
 2. Use File > Open on a run deck or bulk-data file and choose **Nastran Bulk Data (nastran-pv)**.
    ParaView also offers its VisIt NASTRAN reader for some extensions.
 3. In the Properties panel, switch blocks on or off and optionally set *OP2 File Name*, which
-   takes an `.op2` or MSC/NX `.h5` file. Each result step (subcase, load step or mode) becomes a
-   time step, and *Result Types* lists the [result types](model.md#result-types) the file has
+   takes an `.op2` or MSC/NX `.h5` file. Each result step (subcase, load step, mode, frequency of
+   a frequency response or time of a transient) becomes a time step, and *Result Types* lists the [result types](model.md#result-types) the file has
    (each at its default: displacements, `VonMisesMax` and forces checked, the stress and strain
    components not; check or uncheck one to add or leave off its arrays). *NSMSet* picks the bulk nonstructural mass set
    ([Nonstructural mass](model.md#nonstructural-mass)), *BushStiffnessReference* is `convert --k-ref`
    (0 = the softest stiffness), and *Random ASD* turns the modes into a random response
-   ([Random vibration](random-vibration.md)).
+   ([Random vibration](random-vibration.md)); *Random Output* shows a SOL 111 run's own PSD/RMS
+   tables instead. *Phase Angle* (degrees) is the instant a complex step's arrays show
+   ([complex results](model.md#complex-frequency-and-transient-results); `convert --phase`).
 
 `nastran-pv view DECK --view masses` does all of this in one command.
 
@@ -203,9 +205,9 @@ an `NPV ...` filter selected finds the model upstream of it.
 | NPV Results | Deformed shape colored by displacement over the undeformed outline, for the current time step; each step's largest displacement is drawn at 8 % of the model size (*NPV deform* > *Auto Scale*; uncheck it to type a *Scale Factor*, which rerunning NPV Results keeps; the overlays and colorings clicked afterwards keep the deformation, NPV Clear sets it back to 0, and NPV Results then turns Auto Scale back on) |
 | NPV Forces | Element forces of the current step ([result types](model.md#result-types)), each block by its own array over a ghost of the model: shells by `MembraneForce` (magnitude), lines by `AxialForce`, bushes by `BushForce` and springs by `SpringForce`, in the element frame; the lines and springs draw only their elements with a force (an MPC leg stays the thin ghost). Another array or component: the *Color By* menu, or `nv.apply("forces", shell="bending", line="BendingMomentA", component=0)` (`shell`: membrane, bending, shear; `component` is checked against each array's size). It turns on the force types in the reader's *Result Types* when they are unchecked |
 | NPV Stress | Von Mises stress of the current step: shells at the top fibre (`VonMisesTop`), solids at the centre (`VonMises`), bars, beams and rods by `MaxStress`. It turns on the stress types in the reader's *Result Types* (off by default), and the strain types instead with `strain=True`: the info text names the types it turned on. A type the view turned on stays on (uncheck it in *Result Types* to drop its arrays) until the other stress-or-strain choice of the view turns it off again; a type you checked yourself stays, and other views leave them alone. A file without stress components shows `VonMisesMax`, the envelope. From Python: `nv.apply("stress", quantity="principal", fibre="bottom")` (`quantity`: vonmises, principal (the major one, or `component=1`), maxshear, components), `strain=True` for the strains (principal by default) |
-| NPV Random RMS | Random response (reader *Random ASD* set, see [Random vibration](random-vibration.md)): the mesh colored by acceleration RMS on a log scale, with the drive, input RMS and captured mass. Drive, damping and g are the reader's *Random* properties, since the reader computes the response |
+| NPV Random RMS | Random response (reader *Random ASD* set, see [Random vibration](random-vibration.md)): the mesh colored by acceleration RMS on a log scale, with the drive, input RMS and captured mass. Drive, damping and g are the reader's *Random* properties, since the reader computes the response; with *Random Output* it shows the SOL 111 run's own RMS and names that source |
 | NPV Random Sweep | The response ASD at the current frequency frame on one fixed log range, with the frame's frequency: press play to sweep |
-| NPV Animate Mode | Vibrates the mode the time controls are on, in the view as it is (masses, PID, loads, results, a show-only subset, anything you switched on): two cycles at 24 frames/s. It then leaves the **play button** looping that mode: the time steps become the 24 phases of one cycle (the time widget reads *Phase*), and the mode and its frequency stay in the upper right corner. A converted single-step file (`convert --results` without `--all-steps`) has one mode. From Python: `nv.play_mode(3, frames=36)` |
+| NPV Animate Mode | Vibrates the mode the time controls are on, in the view as it is (masses, PID, loads, results, a show-only subset, anything you switched on): two cycles at 24 frames/s. It then leaves the **play button** looping that mode: the time steps become the 24 phases of one cycle (the time widget reads *Phase*), and the mode and its frequency stay in the upper right corner. A converted single-step file (`convert --results` without `--all-steps`) has one mode. A complex step (a frequency of a frequency response, a complex mode) turns through one cycle of its phase at full amplitude instead of swinging by a sine; Animate All Modes and Save Mode Animations do the same. From Python: `nv.play_mode(3, frames=36)` |
 | NPV Stop Mode Animation | Gives the time controls back to the modes, on the mode that vibrated. Any NPV view, Animate All Modes and Save Mode Animations do this too. Step to another mode and click NPV Animate Mode again |
 | NPV Animate All Modes | Plays every mode in turn, one cycle each, in the view as it is, with each mode's frequency shown, then returns to the step it was on. A view with nothing drawn through *NPV deform* gets NPV Results first. Modes whose step has no displacement are listed in Output Messages |
 | NPV Save Mode Animations | Saves every mode's vibration, in the view as it is, as a looping GIF `<model>_mode01.gif`, `<model>_mode02.gif`, ... next to the model file (24 frames each, at the view's size, with the mode's frequency); Output Messages lists them, and any mode with no displacement or whose frames never change. The view keeps its step and deformation. From Python: `nv.save_mode_animations([1, 2], folder=..., frames=36)` |
@@ -315,8 +317,8 @@ again keeps what you changed; from Python an argument you pass explicitly wins
 | Beams | *NPV beam sections* (the triads are on *NPV beam axes*) | *ShowSections*, *ShowAxes*, *ShowTriads*, *TriadSize*, *Max Triads*, *DeformationScale* |
 | Loads | *NPV load glyphs* | *Source*, *Load Sets*, *Show*, *Show Pressures*, *Show Gravity*, *Arrow Length*, *Every Nth Point*; *Glyph Size* group |
 | SPC | *NPV spc glyphs* | *SPC Sets*, *DOFs*; *Glyph Size* group |
-| Results, Animate Mode | *NPV deform* | *Auto Scale*, *Scale Factor*, *Auto Scale Peak* (advanced); the undeformed outline's opacity is the Display opacity of *NPV undeformed mesh* |
-| Random RMS, Random Sweep | the reader | *Random ASD*, *Random Drive*, *Random Damping*, *Random G*, *Random Frames* (the reader computes the response) |
+| Results, Animate Mode | *NPV deform* | *Auto Scale*, *Scale Factor*, *Auto Scale Peak* (advanced), *Phase* (complex steps); the undeformed outline's opacity is the Display opacity of *NPV undeformed mesh* |
+| Random RMS, Random Sweep | the reader | *Random ASD*, *Random Drive*, *Random Damping*, *Random G*, *Random Frames* (the reader computes the response), or *Random Output* (the SOL 111 tables) |
 | Grow, Path, Model Check, Parts | *NPV grow*, *NPV path*, *NPV check*, *NPV parts* | the *Traversal* group; Path and Model Check also *Show Only* ([Model tools](tools.md#paraview)) |
 | Diff | the Nastran Diff | *Compare*, *Show* and *Tolerances* groups ([Model diff](diff.md#paraview)) |
 
@@ -344,7 +346,14 @@ the selection commands make no filter of their own.
   other views and the animation macros turn it off while they set their own scale.
   *Vibrate Mode* (set by NPV Animate Mode) holds the input at *Mode Time* and
   makes its own time steps one cycle of *Frames Per Cycle* phases, drawing *Amplitude* ×
-  sin(2π phase) × `Displacement`, so the play button vibrates the mode.
+  sin(2π phase) × `Displacement`, so the play button vibrates the mode. A complex step (it
+  carries `Displacement_Real` and `_Imag`) turns through its phase instead: *Amplitude* ×
+  Re(U e^(i(θ + *Phase* + 360° phase))), θ the step's `PhaseAngle` (the reader's *Phase Angle*, or
+  the `convert --phase` of a VTKHDF series). *Phase* (degrees) draws a complex step at θ + *Phase*
+  without vibrating; real steps ignore it. A `.pvd` series opened with ParaView's own reader has no
+  root fields, so there θ counts as 0. NPV Animate Mode leaves a complex step at the frame of its
+  largest displacement. Auto Scale sizes a
+  complex step by its amplitude (`Displacement_Mag`).
 
 * **Nastran Scope** is the overlays' copy of the model. Its mesh blocks keep what the reader
   keeps (checklists, Show Only/Hide, the selection file). Masses, rigid elements, bushes, SPCs

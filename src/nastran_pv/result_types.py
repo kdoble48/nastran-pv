@@ -14,6 +14,11 @@ Forces, stresses and strains (``docs/design/2026-11-08-forces-stress.md``) take 
 element through ``picks`` (the centre of a shell or solid, both fibres of a shell, the two ends of
 a beam), compute principals, maximum shear and von Mises from the components (``ArraySpec.derive``)
 and keep the components in the frame Nastran writes them in.
+
+Complex tables (frequency response, complex modes: ``docs/design/2026-11-09-dynamic-results.md``)
+are read by every type that declares ``complex`` parts: its plain arrays are the instantaneous
+response at the results' phase angle (:func:`at_phase`), and each copying array also gets
+``<name>_Real``, ``_Imag``, ``_Mag`` and ``_Phase`` (:func:`part_names`).
 """
 from __future__ import annotations
 
@@ -34,6 +39,15 @@ KEYS = ("", "NID", "EID")  # the id the rows are keyed by ("": NID for point, EI
 REDUCTIONS = ("none", "max")
 FRAMES = ("none", "grid_cd")
 DERIVES = ("", "principal", "max_shear", "von_mises", "max", "min")
+FORMS = ("", "real", "complex")  # the OP2 tables a source reads: any, real only, complex only
+
+# complex parts: what a type writes from a complex table, and the array name suffix of each
+COMPLEX_PARTS = ("real", "imag", "mag", "phase")
+PART_SUFFIX = {"real": "_Real", "imag": "_Imag", "mag": "_Mag", "phase": "_Phase"}
+# step kinds of complex tables (a frequency of a frequency response, a complex mode); a real table
+# solved in time is a "transient" step
+COMPLEX_KINDS = ("frequency", "complex_eigenvector")
+TRANSIENT = "transient"
 
 # A column of a pick: a header/field name, a tuple of alternative names, or None (a NaN column)
 Column = Union[str, tuple, None]
@@ -63,6 +77,17 @@ class ArraySpec:
             raise ValueError(f"array {self.name}: derive {self.derive!r} is not one of {DERIVES}")
         if self.derive in ("principal", "max_shear", "von_mises") and len(self.columns) not in (3, 6):
             raise ValueError(f"array {self.name}: {self.derive} needs 3 (shell) or 6 (solid) component columns")
+
+    @property
+    def copies(self) -> bool:
+        """The array copies its columns (no magnitude, nothing derived): on a complex step it also
+        gets the complex parts (:func:`part_names`)."""
+        return not self.magnitude and not self.derive
+
+
+def reads(form: str, is_complex: bool) -> bool:
+    """A source of ``form`` (``FORMS``) reads a real (or complex) table."""
+    return form != ("real" if is_complex else "complex")
 
 
 def _check_picks(owner, picks, columns) -> int:
@@ -94,7 +119,13 @@ class Op2Source:
 
     ``rows`` (instead of ids and columns): ``rows(table, itime)`` gives ``(ids, values, note)`` of a
     table whose rows are not one per id (the grid point force balance: :func:`gpforce_op2_rows`),
-    or None when it cannot read the table; ``note`` (or None) is reported once when the file opens.
+    or None when it cannot read the table; ``note`` (or None) is reported once, when a step first
+    reads the table (the rows are read on first use).
+
+    ``form``: the tables it reads, ``""`` real and complex ones (complex only for a type with
+    ``complex`` parts), ``"real"`` or ``"complex"`` only: a complex table whose headers differ from
+    the real one gets its own source. ``accept(table)``: false leaves a table out (:func:`fibre_table`:
+    a complex plate strain written as curvature, which its headers do not say).
     """
 
     tables: tuple[str, ...]
@@ -103,9 +134,17 @@ class Op2Source:
     picks: tuple = ()
     requires: tuple[str, ...] = ()
     rows: Callable | None = None
+    form: str = ""
+    accept: Callable | None = None
 
     def __post_init__(self):
         _check_picks(f"OP2 source {self.tables}", self.picks, self.columns)
+        if self.form not in FORMS:
+            raise ValueError(f"OP2 source {self.tables}: form {self.form!r} is not one of {FORMS}")
+
+    def reads(self, is_complex: bool) -> bool:
+        """The source reads a real (or complex) table."""
+        return reads(self.form, is_complex)
 
     def kind(self, entry: str) -> str:
         """The step kind of the ``tables`` entry (name or pattern) a table came from."""
@@ -128,6 +167,11 @@ class H5Source:
     A dataset without every picked field (one of each tuple of alternatives) is left out, and so is
     one ``accept(dataset)`` is false for (:func:`fibre_rows`: a STRCUR plate strain table). Picked
     values are read when a step first needs them.
+
+    Complex datasets are not declared: a source also reads ``<dataset>_CPLX`` (and the ``_CPLX``
+    members of a ``GROUP/*``) for a type with ``complex`` parts, every field ``F`` as
+    ``FR + i FI`` (:func:`complex_datasets`, :func:`complex_column`). ``form`` (as for
+    :class:`Op2Source`) gives a complex dataset whose fields differ its own source.
     """
 
     datasets: tuple[str, ...]
@@ -137,9 +181,15 @@ class H5Source:
     picks: tuple = ()
     slots: str = ""
     accept: Callable | None = None
+    form: str = ""
 
     def __post_init__(self):
         _check_picks(f"H5 source {self.datasets}", self.picks, self.fields)
+        if self.form not in FORMS:
+            raise ValueError(f"H5 source {self.datasets}: form {self.form!r} is not one of {FORMS}")
+
+    def reads(self, is_complex: bool) -> bool:
+        return reads(self.form, is_complex)
 
     def kind(self, entry: str) -> str:
         return self.kinds[self.datasets.index(entry)]
@@ -179,6 +229,10 @@ class ResultType:
     * ``key``: the id the rows are keyed by and the blocks' id array, ``NID`` or ``EID``; by default
       ``NID`` for point and ``EID`` for cell types (``EID`` on the points of ``Bushes``). A cell
       type keyed by ``EID`` never matches an MPC leg, whose ``EID`` is its set id (:meth:`block_ids`).
+    * ``complex``: the parts (``COMPLEX_PARTS``: ``real imag mag phase``) its copying arrays get
+      from a complex table, next to their instantaneous values; ``()`` reads no complex table. By
+      default every part, and none for a ``max`` reduction (a largest value has no phase), which
+      cannot declare any.
     """
 
     name: str
@@ -194,12 +248,19 @@ class ResultType:
     default: bool = True
     resultant: bool = False
     key: str = ""
+    complex: tuple[str, ...] | None = None  # None: COMPLEX_PARTS, () for a max reduction
 
     def __post_init__(self):
         for value, allowed in ((self.location, LOCATIONS), (self.reduce, REDUCTIONS), (self.frame, FRAMES),
                                (self.key, KEYS)):
             if value not in allowed:
                 raise ValueError(f"result type {self.name}: {value!r} is not one of {allowed}")
+        if self.complex is None:  # frozen: set the default once
+            object.__setattr__(self, "complex", COMPLEX_PARTS if self.reduce == "none" else ())
+        if any(p not in COMPLEX_PARTS for p in self.complex):
+            raise ValueError(f"result type {self.name}: complex parts {self.complex} are not among {COMPLEX_PARTS}")
+        if self.complex and self.reduce != "none":
+            raise ValueError(f"result type {self.name}: a {self.reduce} reduction has no complex parts (complex=())")
         sources = self.op2_sources + self.h5_sources
         if (self.steps or any(s.kinds for s in sources)) and (
                 any(len(s.kinds) != len(s.tables) for s in self.op2_sources)
@@ -357,11 +418,12 @@ def pick_plan(row_ids, positions) -> PickPlan:
 def pick_values(data, plan: PickPlan, columns) -> np.ndarray:
     """(n elements, k) values of one step's ``data`` (rows x columns): per pick of ``plan``, the
     column indices ``columns[i]`` (None: NaN) at that pick's rows, concatenated; NaN where an
-    element has no such row."""
+    element has no such row. Complex data gives complex values (NaN + NaN i where none)."""
     data = np.asarray(data)
+    fill = complex(np.nan, np.nan) if np.iscomplexobj(data) else np.nan
     out = []
     for rows, ok, cols in zip(plan.rows, plan.ok, columns):
-        block = np.full((len(plan.ids), len(cols)), np.nan)
+        block = np.full((len(plan.ids), len(cols)), fill)
         for j, c in enumerate(cols):
             if c is not None:
                 block[ok, j] = data[rows[ok], c]
@@ -426,6 +488,86 @@ def derive(spec: ArraySpec, v) -> np.ndarray:
     raise ValueError(f"array {spec.name}: nothing to derive")
 
 
+# ------------------------------------------------------------------ complex values
+def part_names(spec: ArraySpec, parts=COMPLEX_PARTS) -> tuple[str, ...]:
+    """The arrays of ``spec``'s complex ``parts`` (``Displacement_Real``, ...); none for a
+    magnitude or derived array."""
+    return tuple(spec.name + PART_SUFFIX[p] for p in parts) if spec.copies else ()
+
+
+def at_phase(values, degrees: float) -> np.ndarray:
+    """``Re(values e^(i degrees))``: the instantaneous response of complex amplitudes at a phase
+    angle (Nastran's ``u(t) = Re(U e^(i w t))``); real values come back as they are."""
+    v = np.asarray(values)
+    if not np.iscomplexobj(v):
+        return v
+    t = np.radians(float(degrees))
+    return v.real * np.cos(t) - v.imag * np.sin(t)
+
+
+def complex_part(values, part: str) -> np.ndarray:
+    """One part of complex values: ``real``, ``imag``, ``mag``, or ``phase`` in degrees in
+    [0, 360), as Nastran prints it (0 where the magnitude is 0; NaN stays NaN)."""
+    v = np.asarray(values)
+    if part == "real":
+        return np.real(v).astype(float)
+    if part == "imag":
+        return np.imag(v).astype(float)
+    mag = np.abs(v).astype(float)
+    if part == "mag":
+        return mag
+    if part == "phase":
+        with np.errstate(invalid="ignore"):
+            phase = np.degrees(np.angle(v)) % 360.0
+            return np.where(mag > 0, phase, np.where(np.isnan(mag), np.nan, 0.0))
+    raise ValueError(f"complex part {part!r} is not one of {COMPLEX_PARTS}")
+
+
+def step_kind(kind: str | None, is_complex: bool, analysis_code=None) -> str | None:
+    """The kind of the steps a table gives, from its declared kind (``displacement``,
+    ``eigenvector``) and how Nastran solved it: a complex table is a ``frequency`` (SOL 108/111)
+    or a ``complex_eigenvector`` (SOL 107/110, analysis code 9), a real one with analysis code 6 a
+    ``transient`` (SOL 109/112)."""
+    if kind is None:
+        return None
+    if is_complex:
+        return "complex_eigenvector" if kind == "eigenvector" or analysis_code == 9 else "frequency"
+    return TRANSIENT if analysis_code == 6 else kind
+
+
+def fibre_table(table) -> bool:
+    """False for a pyNastran plate strain table written as mid-plane strain and curvature
+    (``STRAIN(STRCUR)``); a complex table's headers do not say it, its stress bits do."""
+    try:
+        return not table.is_curvature
+    except Exception:  # not a plate strain table, or no stress bits
+        return True
+
+
+CPLX = "_CPLX"  # the suffix of MSC/NX HDF5 complex datasets
+
+
+def complex_datasets(datasets) -> tuple[str, ...]:
+    """The HDF5 complex datasets of a source's ``datasets``: ``NODAL/DISPLACEMENT_CPLX``; a
+    ``GROUP/*`` pattern stays (its ``_CPLX`` members are the complex ones)."""
+    return tuple(d if d.endswith("/*") else d + CPLX for d in datasets)
+
+
+def complex_column(column, part: str):
+    """The HDF5 field of a column's real (``"R"``) or imaginary (``"I"``) part: ``X`` -> ``XR``,
+    each of a tuple of alternatives, None (NaN) stays None."""
+    if column is None:
+        return None
+    if isinstance(column, str):
+        return column + part
+    return tuple(c + part for c in column)
+
+
+def complex_picks(picks, part: str) -> tuple:
+    """``picks`` (or plain ``fields``, position 0) with every column :func:`complex_column`-ed."""
+    return tuple((pos, tuple(complex_column(c, part) for c in cols)) for pos, cols in picks)
+
+
 # ------------------------------------------------------------------ the registry
 _GRID_VECTOR = ("X", "Y", "Z", "RX", "RY", "RZ")  # MSC/NX HDF5 fields of a nodal table
 
@@ -442,7 +584,7 @@ VON_MISES_MAX = ResultType(
     "VonMisesMax", "cell", MESH_BLOCKS, (ArraySpec("VonMisesMax", (0,)),),
     op2=Op2Source(("stress.*",), columns=("von_mises",)),
     h5=H5Source(("ELEMENTAL/STRESS/*",), compute=von_mises_table),
-    reduce="max")
+    reduce="max")  # no complex parts: an envelope has no phase
 
 def _grid_loads(name, force, moment, op2_table, h5_dataset) -> ResultType:
     """A force and moment per grid (T1-T3, R1-R3), rotated from CD like displacements, NaN where
@@ -487,12 +629,17 @@ LINE_FORCE = ResultType(
     "LineForce", "cell", ("Lines",),
     (ArraySpec("AxialForce", (0,)), ArraySpec("Torque", (1,)), ArraySpec("ShearForce", (2, 3)),
      ArraySpec("BendingMomentA", (4, 5)), ArraySpec("BendingMomentB", (6, 7))),
-    op2=(Op2Source(("force.cbar_force",), picks=((0, ("axial", "torque", "shear1", "shear2", "bending_moment_a1",
-                                                        "bending_moment_a2", "bending_moment_b1", "bending_moment_b2")),)),
+    # the second name of a tuple is pyNastran's header of the complex table
+    op2=(Op2Source(("force.cbar_force",), picks=((0, ("axial", "torque", "shear1", "shear2",
+                                                        ("bending_moment_a1", "bending_moment_1a"),
+                                                        ("bending_moment_a2", "bending_moment_2a"),
+                                                        ("bending_moment_b1", "bending_moment_1b"),
+                                                        ("bending_moment_b2", "bending_moment_2b"))),)),
          Op2Source(("force.cbeam_force",),  # shear, axial force and torque at end A
                    picks=((0, ("axial_force", "total_torque", "shear1", "shear2", "bending_moment1", "bending_moment2")),
                           (-1, ("bending_moment1", "bending_moment2")))),
-         Op2Source(_tables("force", ROD_CARDS + ("cvisc",)), picks=((0, ("axial", "torsion") + (None,) * 6),))),
+         Op2Source(_tables("force", ROD_CARDS + ("cvisc",)),
+                   picks=((0, (("axial", "axial_force"), ("torsion", "torque")) + (None,) * 6),))),
     h5=(H5Source(_h5(FORCES, "BAR"), picks=((0, ("AF", "TRQ", "TS1", "TS2", "BM1A", "BM2A", "BM1B", "BM2B")),)),
         H5Source(_h5(FORCES, "BEAM"), picks=((0, ("AF", "TTRQ", "TS1", "TS2", "BM1", "BM2")), (-1, ("BM1", "BM2"))),
                  slots="GRID"),
@@ -537,10 +684,15 @@ def _line_arrays(kind: str) -> tuple[ArraySpec, ...]:
 
 
 def _shell(kind: str, shear: float, comps: tuple) -> ResultType:
+    """A complex plate table has no fibre header (its two rows per node are the fibres all the
+    same), so it has its own source; a curvature table is left out by its stress bits."""
     word = kind.lower()
     return ResultType(
         f"Shell{kind}", "cell", ("Shells",), _shell_arrays(kind, shear),
-        op2=Op2Source(_tables(word, SHELL_CARDS), picks=((0, comps), (1, comps)), requires=("fiber_distance",)),
+        op2=(Op2Source(_tables(word, SHELL_CARDS), picks=((0, comps), (1, comps)), requires=("fiber_distance",),
+                       form="real"),
+             Op2Source(_tables(word, SHELL_CARDS), picks=((0, comps), (1, comps)), form="complex",
+                       accept=fibre_table)),
         h5=H5Source((f"ELEMENTAL/{kind.upper()}/*",),
                     picks=((0, ("X1", "Y1", ("XY1", "TXY1"), "X2", "Y2", ("XY2", "TXY2"))),), accept=fibre_rows),
         default=False)
@@ -562,11 +714,14 @@ def _line(kind: str, e: str) -> ResultType:
     a, t = ("A", "AS"), ("T", "TS")
     return ResultType(
         f"Line{kind}", "cell", ("Lines",), _line_arrays(kind),
-        op2=(Op2Source((f"{word}.cbar_{word}",), picks=((0, ("axial", None, f"{e}maxa", f"{e}maxb", f"{e}mina", f"{e}minb")),)),
+        op2=(Op2Source((f"{word}.cbar_{word}",), picks=((0, ("axial", None, f"{e}maxa", f"{e}maxb", f"{e}mina", f"{e}minb")),),
+                       form="real"),
+             Op2Source((f"{word}.cbar_{word}",), picks=((0, ("axial",) + (None,) * 5),), form="complex"),  # no S-MAX
              Op2Source((f"{word}.cbeam_{word}",),
                        picks=((0, (None, None, "smax")), (-1, ("smax",)), (0, ("smin",)), (-1, ("smin",)))),
              Op2Source(_tables(word, ROD_CARDS), picks=((0, ("axial", "torsion", "axial", "axial", "axial", "axial")),))),
-        h5=(H5Source(_h5(group, "BAR"), picks=((0, ("AX", None, "MAXA", "MAXB", "MINA", "MINB")),)),
+        h5=(H5Source(_h5(group, "BAR"), picks=((0, ("AX", None, "MAXA", "MAXB", "MINA", "MINB")),), form="real"),
+            H5Source(_h5(group, "BAR"), picks=((0, ("AX",) + (None,) * 5),), form="complex"),
             H5Source(_h5(group, "BEAM"), picks=((0, (None, None, "MAX")), (-1, ("MAX",)), (0, ("MIN",)), (-1, ("MIN",))),
                      slots="GRID"),
             H5Source(_h5(group, "ROD", "CONROD", "TUBE"), picks=((0, (a, t, a, a, a, a)),))),
@@ -580,6 +735,21 @@ SHELL_STRAIN = _shell("Strain", 0.5, ("exx", "eyy", "exy"))  # engineering shear
 SOLID_STRAIN = _solid("Strain", 0.5, ("exx", "eyy", "ezz", "exy", "eyz", "exz"))
 LINE_STRAIN = _line("Strain", "e")
 
+# ------------------------------------------------------------------ transient and frequency response
+def _grid_motion(name, linear, angular, op2_table, h5_dataset) -> ResultType:
+    """Velocities or accelerations at the grids (T1-T3, R1-R3), rotated from CD like displacements,
+    NaN where a grid has no output; only dynamic runs write them (SOL 108/109/111/112). Their tables
+    give the steps of a run without displacement output."""
+    return ResultType(
+        name, "point", RESULT_BLOCKS, (ArraySpec(linear, (0, 1, 2)), ArraySpec(angular, (3, 4, 5))),
+        op2=Op2Source((op2_table,), kinds=("displacement",)),
+        h5=H5Source((h5_dataset,), fields=_GRID_VECTOR, kinds=("displacement",)),
+        frame="grid_cd")
+
+
+VELOCITY = _grid_motion("Velocity", "Velocity", "AngularVelocity", "velocities", "NODAL/VELOCITY")
+ACCELERATION = _grid_motion("Acceleration", "Acceleration", "AngularAcceleration", "accelerations",
+                            "NODAL/ACCELERATION")
 # ------------------------------------------------------------------ grid point force balance (GPFORCE)
 # Not elastic-element rows: the applied load, SPC and MPC forces (AppliedLoad, SPCForce and MPCForce
 # carry them), the totals, and rigid elements (NX lists them by name; MSC as F-OF-MPC: in MPCForce
@@ -670,6 +840,7 @@ REGISTRY: tuple[ResultType, ...] = (
     DISPLACEMENT, VON_MISES_MAX, SPC_FORCE, MPC_FORCE, APPLIED_LOAD,
     SHELL_FORCE, LINE_FORCE, BUSH_FORCE, SPRING_FORCE,
     SHELL_STRESS, SOLID_STRESS, LINE_STRESS, SHELL_STRAIN, SOLID_STRAIN, LINE_STRAIN,
+    VELOCITY, ACCELERATION,
     GRID_POINT_FORCE,
 )
 
@@ -687,12 +858,22 @@ CURVATURE = ("plate strains as mid-plane strain and curvature (STRAIN(STRCUR)) a
              "STRAIN(FIBER) writes them per fibre")
 
 
+def op2_curvature(name: str, table, headers) -> bool:
+    """An OP2 plate strain table written as mid-plane strain and curvature (STRAIN(STRCUR)): a real
+    table's first header says ``fiber_curvature``; a complex plate strain table's stress bits say
+    it (:func:`fibre_table`), its headers do not."""
+    if (headers or [""])[0] == "fiber_curvature":
+        return True
+    return bool(getattr(table, "is_complex", False)) and name in _tables("strain", SHELL_CARDS)         and not fibre_table(table)
+
+
 def unread_reason(name: str, read: bool, complex_: bool = False, curvature: bool = False) -> str | None:
     """Why the force, stress or strain table ``name`` (an OP2 result name or HDF5 dataset name) is
-    reported, or None when it is not: complex, composite plies (also when ``read``: VonMisesMax
-    takes their von Mises), plate curvature, or no type reading it. Both readers' ``_unread``."""
+    reported, or None when it is not: complex and read by no type (plate curvature, or complex),
+    composite plies (also when ``read``: VonMisesMax takes their von Mises), plate curvature, or
+    no type reading it. Both readers' ``_unread``."""
     if complex_:
-        return COMPLEX
+        return None if read else CURVATURE if curvature else COMPLEX
     if any(fnmatch.fnmatchcase(name, p) for p in PLY_TABLES):
         return PLIES_READ if read else PLIES
     if read:

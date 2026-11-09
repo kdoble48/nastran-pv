@@ -65,6 +65,7 @@ def progress_for(args) -> Progress:
 
 DECK_ONLY = (("results", "--results"), ("result_types", "--result-types"), ("random", "--random"),
              ("envelope", "--envelope"), ("envelope_steps", "--envelope-steps"),
+             ("random_output", "--random-output"), ("phase", "--phase"), ("phase_sweep", "--phase-sweep"),
              ("nsm_set", "--nsm-set"), ("k_ref", "--k-ref"), ("no_nodal_arrays", "--no-nodal-arrays"))
 
 
@@ -111,24 +112,44 @@ def load_model(args, verbose=False):
             setattr(opts, flag, False)
     mb = build_multiblock(deck, opts, progress=progress)
     results = None
+    random, random_output = getattr(args, "random", None), getattr(args, "random_output", False)
+    sweep = getattr(args, "phase_sweep", None)
+    if random and random_output:
+        raise SystemExit("nastran-pv: --random and --random-output exclude each other")
+    if sweep is not None and (random or random_output):
+        raise SystemExit("nastran-pv: --phase-sweep animates a complex step; it takes no random response")
     if getattr(args, "results", None):
         from .results import attach_op2
 
         with progress.stage(f"results {Path(args.results).name}"):
             also = ("GridPointForce",) if getattr(args, "free_body", None) else ()  # the free body's source
-            results = attach_op2(mb, deck, args.results, args.step, types, also)
-        if getattr(args, "random", None):
-            from .randvib import random_response
+            results = attach_op2(mb, deck, args.results, args.step, types, phase=getattr(args, "phase", None) or 0.0,
+                                 also=also)
+        if random or random_output:
+            from .randvib import random_response, solver_random
 
             with progress.stage("random response"):
                 try:
-                    results = random_response(results, mb, args.random, args.drive, args.damping, args.g,
-                                              args.random_frames, deck)
+                    results = solver_random(results, deck) if random_output else \
+                        random_response(results, mb, random, args.drive, args.damping, args.g, args.random_frames,
+                                        deck)
                 except ValueError as exc:
                     raise SystemExit(f"nastran-pv: {exc}") from None
                 results.attach(mb, args.step, deck)
-    elif getattr(args, "random", None):
+        elif sweep is not None:
+            from .results import PhaseSweep
+
+            try:
+                results = PhaseSweep(results, args.step, sweep, getattr(args, "phase", None) or 0.0)
+            except ValueError as exc:
+                raise SystemExit(f"nastran-pv: {exc}") from None
+            results.attach(mb, 0, deck)
+    elif random:
         raise SystemExit("--random needs --results with normal modes (SOL 103)")
+    elif random_output:
+        raise SystemExit("nastran-pv: --random-output needs --results with SOL 111 random output")
+    elif sweep is not None:
+        raise SystemExit("nastran-pv: --phase-sweep needs --results with a complex step (SOL 107-111)")
     progress.done()
     return mb, deck, results
 
@@ -163,7 +184,7 @@ def envelope_given(args):
 
     if not getattr(args, "results", None):
         raise SystemExit("nastran-pv: --envelope needs --results")
-    if getattr(args, "random", None):
+    if getattr(args, "random", None) or getattr(args, "random_output", None):
         raise SystemExit("nastran-pv: --envelope and --random cannot be combined (the random response replaces "
                          "the result arrays)")
     try:
@@ -333,6 +354,12 @@ def add_model_arguments(p, results=True):
                          help="max min absmax (none given = all): <array>_Max, <array>_MaxStep, ... of every "
                               "result array over the steps")
         env.add_argument("--envelope-steps", metavar="IDS", help='the steps to cover, e.g. "0-2 5" (default: all)')
+        p.add_argument("--phase", type=float, default=None, metavar="DEG",
+                       help="complex steps (frequency response, complex modes): the arrays are the response at "
+                            "this phase angle, Re(U e^(i DEG)); default 0, the real part")
+        p.add_argument("--phase-sweep", type=_frames, default=None, metavar="N",
+                       help="write N phases (--phase + 360 k/N) of the complex step --step as the steps of the "
+                            "series (implies --all-steps)")
         add_random_arguments(p.add_argument_group("random vibration (from the --results modes)"))
     p.add_argument("--k-ref", type=float, default=None, help="bush stiffness reference for log scaling")
     p.add_argument("--nsm-set", type=nsm_set_id, default=None, metavar="ID",
@@ -352,6 +379,17 @@ def add_model_arguments(p, results=True):
     p.add_argument("--rules", metavar="TEXT", help='traversal rules, e.g. "exclude=rigid,CBUSH max_hops=5"')
     add_select_arguments(p.add_argument_group("selection from an ID file"))
     add_common_arguments(p)
+
+
+def _frames(text):
+    """--phase-sweep: at least two phases."""
+    try:
+        n = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a whole number of phases") from None
+    if n < 2:
+        raise argparse.ArgumentTypeError("a phase sweep needs at least 2 phases")
+    return n
 
 
 def _select_key(text):
@@ -417,7 +455,7 @@ def write_output(mb, args, deck, results) -> Path:
     fmt = output_format(args)
     default = Path(args.input).with_suffix(".vtkhdf" if fmt == "vtkhdf" else ".vtm").name
     out = Path(args.output or default)
-    series = results is not None and args.all_steps and results.steps
+    series = results is not None and (args.all_steps or getattr(args, "phase_sweep", None)) and results.steps
     if fmt == "vtkhdf":
         from .vtkhdf import write_vtkhdf, write_vtkhdf_series
 
@@ -461,7 +499,8 @@ def cmd_convert(args) -> int:
     print(f"{Path(args.input).name}: load+build {t1 - t0:.1f}s, fields+write {t2 - t1:.1f}s -> {path}")
     if hasattr(results, "summary"):
         print("\n".join(results.summary()))
-        _print_rows(results.modes)
+        if results.modes:  # the modal random response's mode table (none for the solver's own)
+            _print_rows(results.modes)
     elif results is not None:
         print(f"{len(results.steps)} result step(s): " + "; ".join(s.label for s in results.steps[:5])
               + (" ..." if len(results.steps) > 5 else ""))
@@ -483,8 +522,8 @@ def _load_other(path, args):
     """The other model of a diff (deck, .vtm or VTKHDF), built with the same block/NSM options.
     Options that do not change what a diff compares (results, display scaling, nodal arrays) are
     not passed on, so a deck can be compared with a converted reference."""
-    unused = ("results", "result_types", "random", "step", "all_steps", "k_ref", "no_nodal_arrays", "envelope",
-              "envelope_steps")
+    unused = ("results", "result_types", "random", "random_output", "phase", "phase_sweep", "step", "all_steps",
+              "k_ref", "no_nodal_arrays", "envelope", "envelope_steps")
     other = argparse.Namespace(**{k: v for k, v in vars(args).items() if k not in unused})
     other.input = path
     if Path(path).suffix.lower() in MODEL_SUFFIXES:
