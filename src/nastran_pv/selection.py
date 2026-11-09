@@ -432,7 +432,8 @@ def scope_masks(mb, vis, names=None):
        kept element's grids count as kept, and those no mesh element uses carry the chain on (rigid -> free
        grid -> bush -> ...).
     4. Masses, SPCs and loads stay when their grid belongs to a kept mesh cell or a kept element; a mass
-       offset line follows its mass, a beam section its beam.
+       offset line follows its mass, a beam section its beam, a pressure face its element (a PLOAD face,
+       which has none, stays when its grids are kept).
     5. A Show only selection file of grids, properties, materials, families or groups adds what it lists
        (and the reader keeps) to rules 3 and 4: a listed item stays, a listed element counts as kept.
     6. The item's own checklists (property, type, ...), the Hide EIDs and a Hide selection file always
@@ -453,7 +454,7 @@ def scope_masks(mb, vis, names=None):
     hides = type(vis)(hidden=vis.hidden, hidden_eids=vis.hidden_eids)  # checklists and Hide, not Show Only
 
     masks, allowed, named, extra = {}, {}, {}, {}
-    touched, mesh_grids = [], []  # grids of the kept mesh cells; of every mesh cell
+    touched, mesh_grids, mesh_eids = [], [], []  # grids of the kept mesh cells; of every mesh cell; kept EIDs
     for path, ds, kind, n, eid, labels in blocks:
         raw = get_array(_attr(ds, kind), "EID")  # what the reader's EID lists match: an MPC leg's set id too
         raw = None if raw is None else np.asarray(raw).astype(np.int64)
@@ -462,6 +463,8 @@ def scope_masks(mb, vis, names=None):
         reader = kept & (True if shown is None else shown) & selected.get(path, True)  # = vis.mask & selected
         if path in MESH:
             masks[path] = reader
+            if raw is not None:
+                mesh_eids.append(raw[reader])
             nid = get_array(ds.GetPointData(), "NID")
             sizes, conn = _cell_points(ds)
             if nid is not None and len(conn):
@@ -477,7 +480,7 @@ def scope_masks(mb, vis, names=None):
         named[path] = reader & hit if hit is not None else np.zeros(n, bool)
         extra[path] = reader & file_hit if file_hit is not None and not by_eid else np.zeros(n, bool)
     uniq = lambda parts: np.unique(np.concatenate(parts)) if parts else np.zeros(0, np.int64)
-    touch, mesh = uniq(touched), uniq(mesh_grids)
+    touch, mesh, kept_eids = uniq(touched), uniq(mesh_grids), uniq(mesh_eids)
     kept_grids = touch
 
     n_elem, item_elem, elem_group, ent_e, ent_g = _connector_elements(blocks)
@@ -508,6 +511,9 @@ def scope_masks(mb, vis, names=None):
             masks[path] = allowed[path] & elem_kept[item_elem[path]]
         elif named[path].any():
             masks[path] = named[path]
+        elif path.startswith("Pressures/") and eid is not None:  # a face follows its element
+            masks[path] = allowed[path] & (np.isin(eid, kept_eids)
+                                           | (eid < 0) & _all_grids_kept(ds, kept_grids)) | extra[path]
         elif kind == "point" and (nid := get_array(ds.GetPointData(), "NID")) is not None:
             masks[path] = allowed[path] & np.isin(np.asarray(nid).astype(np.int64), kept_grids) | extra[path]
         else:
@@ -520,6 +526,16 @@ def scope_masks(mb, vis, names=None):
         follows = np.isin(eid, of[masks[source]]) if eid is not None and of is not None else True
         masks[path] = allowed[path] & follows
     return masks
+
+
+def _all_grids_kept(ds, grids) -> np.ndarray:
+    """Per cell of ``ds``: every grid (point NID) of the cell is in ``grids``."""
+    nid = get_array(ds.GetPointData(), "NID")
+    sizes, conn = _cell_points(ds)
+    if nid is None or not len(sizes):
+        return np.zeros(len(sizes), bool)
+    hit = np.isin(np.asarray(nid)[conn].astype(np.int64), grids).astype(np.int64)
+    return np.add.reduceat(hit, np.concatenate([[0], np.cumsum(sizes)[:-1]])) == sizes
 
 
 # ------------------------------------------------------------------ keep / mark

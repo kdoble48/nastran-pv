@@ -18,7 +18,6 @@ S, ND = cards.SCALAR, cards.NOT_DRAWN
 # (card, count, reason, ids): largest count first, then by card name and reason
 REPORT = [
     ("CTRIAX6", 2, ND, "EID 40 41"),
-    ("PLOAD4", 2, ND, "SID 9"),
     ("SPOINT", 2, S, "ID 101 102"),  # one card, two scalar points
     ("CBUSH1D", 1, ND, "EID 43"),
     ("CDAMP3", 1, S, "EID 35"),
@@ -52,7 +51,7 @@ def _rows(rows):
 
 def test_report_counts_every_skipped_card(mb):
     assert _rows(cards.read(mb)) == REPORT
-    assert arr(mb, cards.COUNT, "field").tolist() == [24]
+    assert arr(mb, cards.COUNT, "field").tolist() == [22]
 
 
 def test_report_leaves_out_drawn_data_and_control_cards(mb):
@@ -108,8 +107,8 @@ def test_report_does_not_grow_on_a_rebuild():
 def test_summary_line():
     rows = [{"Card": c, "Count": n, "Reason": r, "IDs": i} for c, n, r, i in REPORT]
     text = cards.summary(rows, limit=3)
-    assert text == ("24 card(s) of 20 type(s) not drawn: 2 CTRIAX6, 2 PLOAD4, "
-                    "2 SPOINT (scalar points, no location), +18 more")
+    assert text == ("22 card(s) of 19 type(s) not drawn: 2 CTRIAX6, "
+                    "2 SPOINT (scalar points, no location), 1 CBUSH1D, +17 more")
 
 
 def test_biquadratic_and_quadratic_cquad(mb):
@@ -129,7 +128,7 @@ def test_plotels_block(mb):
     assert plotels.GetNumberOfLines() == 2
     # no ElementType: a PLOTEL is no element of the topology graph (rules cannot name it)
     assert plotels.GetCellData().GetArray("ElementType") is None and "PLOTEL" not in ELEMENT_TYPES
-    assert block_names(mb) == ["Shells", "Connectors", "Plotels", "Constraints", "Loads"]
+    assert block_names(mb) == ["Shells", "Connectors", "Plotels", "Constraints", "Loads", "Pressures"]
     deck = load_deck(DATA / "cards.bdf", echo=False)
     assert "Plotels" not in block_names(build_multiblock(deck, Options(plotels=False)))
 
@@ -213,13 +212,13 @@ def test_convert_and_stats_print_the_report(tmp_path, capsys):
     out = tmp_path / "cards.vtm"
     assert main(["convert", str(DATA / "cards.bdf"), "-o", str(out), "-q"]) == 0
     text = capsys.readouterr().out
-    assert "24 card(s) of 20 type(s) not drawn:" in text
+    assert "22 card(s) of 19 type(s) not drawn:" in text
     assert "  CTRIAX6  2      not drawn" in text
     assert "  Plotels: 4 points, 2 cells" in text
     # a converted file prints the report it was written with
     assert main(["stats", str(out), "--by", "PID", "--field", "ElementMass", "-q"]) == 0
     err = capsys.readouterr().err
-    assert "24 card(s) of 20 type(s) not drawn:" in err and "FOOBAR" in err
+    assert "22 card(s) of 19 type(s) not drawn:" in err and "FOOBAR" in err
 
 
 def test_convert_says_when_every_card_is_drawn(tmp_path, capsys):
@@ -231,7 +230,7 @@ def test_check_prints_the_report(capsys):
     """A deck joined only by CWELD or CFAST patches has floating parts: check says why."""
     assert main(["check", str(DATA / "cards.bdf"), "-q"]) == 0
     err = capsys.readouterr().err
-    assert "24 card(s) of 20 type(s) not drawn:" in err and "CWELD" in err and "patch form" in err
+    assert "22 card(s) of 19 type(s) not drawn:" in err and "CWELD" in err and "patch form" in err
 
 
 SCALAR_REFS = """\
@@ -282,9 +281,10 @@ def test_report_does_not_walk_the_element_container():
 def test_drawn_types_come_from_the_builders(monkeypatch):
     from nastran_pv.builders import loads
 
-    assert "PLOAD4" not in cards.drawn_types()
-    monkeypatch.setattr(loads, "LOAD_TYPES", loads.LOAD_TYPES + ("PLOAD4",))
-    assert "PLOAD4" in cards.drawn_types()  # a builder that learns a card takes it off the report
+    assert "PLOAD4" in cards.drawn_types()  # drawn since the Pressures block
+    assert "PLOAD1" not in cards.drawn_types()
+    monkeypatch.setattr(loads, "LOAD_TYPES", loads.LOAD_TYPES + ("PLOAD1",))
+    assert "PLOAD1" in cards.drawn_types()  # a builder that learns a card takes it off the report
 
 
 def test_printed_report_is_capped(capsys):

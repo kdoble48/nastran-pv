@@ -562,40 +562,134 @@ def load_sets_of(mb) -> list:
     return [(path.split("/", 1)[1], ds) for path, ds in iter_blocks(mb) if path.startswith("Loads/")]
 
 
+def pressure_sets_of(mb) -> list:
+    """``[(name, block)]`` of the ``Pressures/*`` blocks (the faces PLOAD* load), in block order."""
+    from .fields.common import iter_blocks
+
+    return [(path.split("/", 1)[1], ds) for path, ds in iter_blocks(mb) if path.startswith("Pressures/")]
+
+
+def gravity_sets_of(mb) -> list:
+    """``[(name, set id, acceleration (3,))]`` of the load sets with GRAV, from the root ``GRAV_*``
+    table (which a ``.vtm`` keeps for a GRAV-only set too), else from a mesh block's copy of the root
+    summary (a VTKHDF file read without promoting it). The one reader of that table: the arrows,
+    the loads view and the model diff use it."""
+    from .fields.common import MESH, iter_blocks
+
+    rows = vtkutil.read_field_table(mb, "GRAV_")
+    for path, ds in iter_blocks(mb) if not rows and mb.IsA("vtkMultiBlockDataSet") else ():
+        if path in MESH:
+            rows = vtkutil.read_field_table(ds, "GRAV_")
+            if rows:
+                break
+    return [(str(r["Name"]), int(r["Set"]), np.asarray(r["Acceleration"], dtype=float).reshape(3))
+            for r in rows if {"Name", "Set", "Acceleration"} <= set(r)]
+
+
+def model_cg(mb):
+    """The model's centre of gravity (root ``ModelCG``), or None when the model has no mass."""
+    a = mb.GetFieldData().GetArray("ModelCG")
+    if a is None or not a.GetNumberOfTuples():
+        return None
+    cg = vtkutil.to_numpy(a).reshape(-1)[:3].astype(float)
+    return cg if np.all(np.isfinite(cg)) else None
+
+
+GRAVITY_AT_CG = "the CG"
+
+
+def gravity_anchor(mb) -> tuple[np.ndarray, str]:
+    """(where the GRAV arrows start, what that point is): the model CG, else, for a model without
+    mass (no ``ModelCG``), the centre of its bounds."""
+    from vtkmodules.vtkCommonDataModel import vtkBoundingBox
+
+    cg = model_cg(mb)
+    if cg is not None:
+        return cg, GRAVITY_AT_CG
+    bb = vtkBoundingBox()
+    for _, ds in _leaves(mb):
+        if ds.GetNumberOfPoints():
+            bb.AddBounds(ds.GetBounds())
+    centre = [0.0, 0.0, 0.0]
+    if bb.IsValid():
+        bb.GetCenter(centre)
+    return np.asarray(centre, dtype=float), "the model centre (no mass: no CG)"
+
+
+def _leaves(mb):
+    from .fields.common import iter_blocks
+
+    return iter_blocks(mb) if mb.IsA("vtkMultiBlockDataSet") else [("", mb)]
+
+
+def _name_id(name) -> int:
+    try:
+        return int(str(name).rsplit("_", 1)[1])
+    except (IndexError, ValueError):
+        return -1
+
+
+def load_set_names(mb) -> list[str]:
+    """The load sets of a model, by set id: those with a ``Loads`` block (nodal loads, or GRAV
+    only), a ``Pressures`` block or a GRAV row."""
+    names = [n for n, _ in load_sets_of(mb)] + [n for n, _ in pressure_sets_of(mb)] + [g[0] for g in gravity_sets_of(mb)]
+    return sorted(dict.fromkeys(names), key=_name_id)
+
+
 def default_load_set(mb) -> str | None:
     """The load set the loads view shows by default: the first Case Control set (``ActiveLoadSets``)
-    with load points, else the first set with load points; None when no set has any."""
-    sets = {n: ds for n, ds in load_sets_of(mb) if ds.GetNumberOfPoints()}
+    with something to draw (load points, pressure faces or GRAV), else the first such set; None when
+    no set has any."""
+    drawable = ({n for n, ds in load_sets_of(mb) if ds.GetNumberOfPoints()}
+                | {n for n, ds in pressure_sets_of(mb) if ds.GetNumberOfCells()}
+                | {n for n, _, a in gravity_sets_of(mb) if np.linalg.norm(a) > 0})
     active = mb.GetFieldData().GetArray("ActiveLoadSets")
     for sid in (vtkutil.to_numpy(active).astype(int).tolist() if active is not None else []):
         for name in (f"LOAD_{sid}", f"SID_{sid}"):
-            if name in sets:
+            if name in drawable:
                 return name
-    return next(iter(sets), None)
+    return next((n for n in load_set_names(mb) if n in drawable), None)
 
 
 def _set_id(ds, name) -> int:
     a = ds.GetFieldData().GetArray("LoadSet")
     if a is not None and a.GetNumberOfTuples():
         return int(a.GetTuple1(0))
-    try:
-        return int(name.rsplit("_", 1)[1])
-    except (IndexError, ValueError):
-        return -1
+    return _name_id(name)
+
+
+def _face_centroids(ds) -> np.ndarray:
+    """The mean of each cell's points."""
+    from .selection import _cell_points
+
+    sizes, conn = _cell_points(ds)
+    xyz = vtkutil.to_numpy(ds.GetPoints().GetData()).reshape(-1, 3).astype(float)
+    sums = np.zeros((len(sizes), 3))
+    np.add.at(sums, np.repeat(np.arange(len(sizes)), sizes), xyz[conn])
+    return sums / np.maximum(sizes, 1)[:, None]
+
+
+LOAD_KINDS = ("force", "moment", "pressure", "gravity")  # LoadKind codes of the arrows
 
 
 def load_glyphs(sets, diag: float, show: str = "force", size: float = 0.08, scale: str = "magnitude",
-                stride: int = 0, resolution: int = 6) -> vtkPolyData:
-    """Arrows for the load points of ``sets`` (``[(name, Loads/* block)]``, :func:`load_sets_of`).
+                stride: int = 0, resolution: int = 6, pressures=(), gravity=(), cg=None) -> vtkPolyData:
+    """Arrows for the load points of ``sets`` (``[(name, Loads/* block)]``, :func:`load_sets_of`),
+    the faces of ``pressures`` (``[(name, Pressures/* block)]``) and the ``gravity`` rows
+    (:func:`gravity_sets_of`) at ``cg``.
 
     Forces get single-headed arrows, moments double-headed ones (``show``: force, moment or both),
-    the tail on the grid. With ``scale`` magnitude the largest force (and, separately, the largest
-    moment) over all the sets is ``size`` x ``diag`` long and the others in proportion; ``fixed``
-    makes every arrow that long. ``stride`` keeps every Nth point of each set; 0 picks N so that a
-    set gets at most :data:`MAX_LOAD_ARROWS` arrows. Zero vectors get no arrow.
+    the tail on the grid. A pressure face gets one arrow along its force with the head on the face
+    centroid (pushing), a gravity row one arrow along the acceleration with the tail on ``cg``
+    (None: none). With ``scale`` magnitude the largest force over all the sets is ``size`` x
+    ``diag`` long and the others in proportion, and so on separately for the moments, the
+    pressures (by the absolute Pressure) and the accelerations; ``fixed`` makes every arrow that long.
+    ``stride`` keeps every Nth point (face) of each set; 0 picks N so that a set gets at most
+    :data:`MAX_LOAD_ARROWS` arrows. Zero vectors get no arrow.
 
-    Point arrays: ``Magnitude``, ``LoadKind`` (0 force, 1 moment), ``LoadSet`` (set id), ``NID``.
-    Field data: ``LoadPoints`` (points of the sets), ``ArrowCount``, ``Stride`` (the largest used).
+    Point arrays: ``Magnitude``, ``LoadKind`` (:data:`LOAD_KINDS`), ``LoadSet`` (set id), ``NID``
+    (-1 for pressures and gravity). Field data: ``LoadPoints`` (points of the sets),
+    ``PressureFaces`` (faces of the pressure sets), ``ArrowCount``, ``Stride`` (the largest used).
     """
     from .fields.common import get_array
 
@@ -604,15 +698,20 @@ def load_glyphs(sets, diag: float, show: str = "force", size: float = 0.08, scal
     if scale not in LOAD_SCALES:
         raise ValueError(f"scale must be one of {LOAD_SCALES}")
     kinds = [(k, name) for k, name in enumerate(("Force", "Moment")) if show in ("both", name.lower())]
-    rows, n_points, used_stride, peak = [], 0, 1, {}  # rows: (kind, xyz, vectors, nid, sid)
+    rows, n_points, n_faces, used_stride, peak = [], 0, 0, 1, {}  # rows: (kind, xyz, vectors, nid, sid)
+
+    def every(n):
+        nonlocal used_stride
+        step = int(stride) if stride and stride > 0 else -(-n // MAX_LOAD_ARROWS)
+        used_stride = max(used_stride, step)
+        return np.arange(0, n, step)
+
     for name, ds in sets:
         n = ds.GetNumberOfPoints()
         if not n:
             continue
         n_points += n
-        step = int(stride) if stride and stride > 0 else -(-n // MAX_LOAD_ARROWS)
-        used_stride = max(used_stride, step)
-        idx = np.arange(0, n, step)
+        idx = every(n)
         pd = ds.GetPointData()
         xyz = vtkutil.to_numpy(ds.GetPoints().GetData()).reshape(-1, 3).astype(float)[idx]
         nid = get_array(pd, "NID", np.full(n, -1)).astype(np.int64)[idx]
@@ -622,20 +721,39 @@ def load_glyphs(sets, diag: float, show: str = "force", size: float = 0.08, scal
                 vec = np.nan_to_num(vec.reshape(-1, 3).astype(float))
                 peak[k] = max(peak.get(k, 0.0), float(np.linalg.norm(vec, axis=1).max()))  # over every point
                 rows.append((k, xyz, vec[idx], nid, _set_id(ds, name)))
-    peak = {k: peak.get(k, 0.0) for k, _ in kinds}
+    for name, ds in pressures:
+        n = ds.GetNumberOfCells()
+        cd = ds.GetCellData()
+        force, p = get_array(cd, "PressureForce"), get_array(cd, "Pressure")
+        if not n or force is None or p is None:
+            continue
+        n_faces += n
+        idx = every(n)
+        force = np.nan_to_num(force.reshape(-1, 3).astype(float))
+        p = np.abs(np.nan_to_num(p.astype(float)))
+        f = np.linalg.norm(force, axis=1)
+        vec = force / np.where(f > 0, f, 1.0)[:, None] * p[:, None]  # |pressure| along the face force
+        peak[2] = max(peak.get(2, 0.0), float(p.max()))  # over every face
+        rows.append((2, _face_centroids(ds)[idx], vec[idx], np.full(len(idx), -1), _set_id(ds, name)))
+    for name, sid, accel in (gravity if cg is not None else ()):
+        a = np.asarray(accel, dtype=float).reshape(1, 3)
+        peak[3] = max(peak.get(3, 0.0), float(np.linalg.norm(a)))
+        rows.append((3, np.asarray(cg, dtype=float).reshape(1, 3), a, np.array([-1]), sid))
     pieces = []
     for k, xyz, vec, nid, sid in rows:
         mag = np.linalg.norm(vec, axis=1)
         on = mag > 0
-        if not on.any() or peak[k] <= 0:
+        if not on.any() or peak.get(k, 0.0) <= 0:
             continue
         length = size * diag * (mag[on] / peak[k] if scale == "magnitude" else np.ones(int(on.sum())))
-        frames = _frames(vec[on] / mag[on, None])
+        unit_vec = vec[on] / mag[on, None]
+        frames = _frames(unit_vec)
         mats = frames * length[:, None, None]
-        pieces.append((k, mats, frames, xyz[on], mag[on], nid[on], np.full(int(on.sum()), sid)))
+        origin = xyz[on] - length[:, None] * unit_vec if k == 2 else xyz[on]  # a pressure pushes on the face
+        pieces.append((k, mats, frames, origin, mag[on], nid[on], np.full(int(on.sum()), sid)))
     out = vtkPolyData()
     if pieces:
-        templates = {k: load_arrow(resolution, heads=k + 1) for k in {p[0] for p in pieces}}
+        templates = {k: load_arrow(resolution, heads=2 if k == 1 else 1) for k in {p[0] for p in pieces}}
         xyz_all, conn_all, nrm_all, cols, offset, count = [], [], [], {}, 0, 0
         for k, mats, frames, origin, mag, nid, sid in pieces:
             xyz, conn, ntri, normals = instance(templates[k], mats, origin, rotations=frames)
@@ -659,9 +777,10 @@ def load_glyphs(sets, diag: float, show: str = "force", size: float = 0.08, scal
         count = 0
     fd = out.GetFieldData()
     vtkutil.add_array(fd, "LoadPoints", np.array([n_points]))
+    vtkutil.add_array(fd, "PressureFaces", np.array([n_faces]))
     vtkutil.add_array(fd, "ArrowCount", np.array([count]))
     vtkutil.add_array(fd, "Stride", np.array([used_stride]))
-    vtkutil.add_string_array(fd, "LoadKindNames", ["force", "moment"])
+    vtkutil.add_string_array(fd, "LoadKindNames", list(LOAD_KINDS))
     return out
 
 

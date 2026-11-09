@@ -41,6 +41,10 @@ MATRIX = "matrix input"
 PATCH = "patch form, no GA/GB"
 GROUNDED = "grounded, one grid"
 HEAT = "heat transfer"
+EDGE_LOAD = "edge load (SORL=LINE or LDIR)"  # PLOAD4 forms that load an edge, not a face
+NO_FACE = "G1 and G3/G4 name no face"  # PLOAD4 on a solid
+WRONG_ELEMENT = "element type it cannot load"  # PLOAD2 on a non-shell, PLOAD4 on a non-shell non-solid
+SID_CARDS = frozenset({"MPC", "PLOAD", "PLOAD2", "PLOAD4"})  # Deck.skip rows identified by their set id
 
 DRAWN_SLOTS = frozenset({"rigid_elements"})  # build_rigid draws every card in it
 # connect (or are) scalar points only: SPOINT/EPOINT have no coordinates, so nothing to place
@@ -192,7 +196,7 @@ def report(deck) -> list[dict]:
                       else SLOT_REASONS.get(slot, NOT_DRAWN))
             add(t, reason, len(ids) if ids else model.card_count[t], _ids_text(_label(slot, model), ids or ()))
     for (card, reason), ids in sorted(getattr(deck, "skipped", {}).items()):
-        add(card, reason, len(ids), _ids_text("SID" if card == "MPC" else "EID", ids))  # MPC: set ids
+        add(card, reason, len(ids), _ids_text("SID" if card in SID_CARDS else "EID", ids))  # MPC, loads: set ids
     _superelements(model, type_slot, add)
     return sorted(rows.values(), key=lambda r: (-r["Count"], r["Card"], r["Reason"]))
 
