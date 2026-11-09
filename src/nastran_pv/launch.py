@@ -19,6 +19,20 @@ def nsm_set_id(text: str) -> int:
         raise argparse.ArgumentTypeError("give a set id, or 0 for none (leave it out for Case Control NSM=)")
     return value
 
+# Batch pvpython needs no window on screen. pvpython reads its own options only before the script.
+# Verified on Windows (ParaView 5.13.1 and 6.0); `render --onscreen` is the way back where a build
+# cannot render offscreen.
+OFFSCREEN = "--force-offscreen-rendering"
+
+
+def shell_join(cmd) -> str:
+    """A command line that can be pasted into this platform's shell (paths with spaces quoted)."""
+    if sys.platform.startswith("win"):
+        return subprocess.list2cmdline([str(c) for c in cmd])
+    import shlex
+
+    return shlex.join(str(c) for c in cmd)
+
 VIEW_NAMES = ("masses", "bushes", "bushrotations", "beams", "loads", "spc", "rigid", "family", "group", "pid", "mid",
               "elementtype", "thickness", "nsm", "results", "random", "randomsweep", "parts", "check", "diff", "none")
 
@@ -98,7 +112,7 @@ def cmd_view(args) -> int:
                            against=args.against))
     cmd = [str(exe), f"--script={script}"]
     if args.dry_run:
-        print(" ".join(cmd))
+        print(shell_join(cmd))
         print(Path(script).read_text())
         return 0
     kwargs = {"creationflags": 0x00000008} if sys.platform.startswith("win") else {"start_new_session": True}
@@ -111,8 +125,8 @@ def cmd_render(args) -> int:
     """Batch screenshots through pvpython + render_model.py."""
     _check_inputs(args)
     exe = Path(args.pvpython) if args.pvpython else find_executable("pvpython")
-    cmd = [str(exe), str(paraview_scripts_dir() / "render_model.py"), str(Path(args.deck).resolve()),
-           "--out", args.out, "--size", *map(str, args.size), "--preset", *args.preset, "--views", *args.views]
+    cmd = [str(exe), *([] if args.onscreen else [OFFSCREEN]), str(paraview_scripts_dir() / "render_model.py"),
+           str(Path(args.deck).resolve()), "--out", args.out, "--size", *map(str, args.size), "--preset", *args.preset, "--views", *args.views]
     if args.results:
         cmd += ["--op2", str(Path(args.results).resolve())]
     cmd += ["--step", str(args.step)]  # also picks the step of a converted series
@@ -125,7 +139,7 @@ def cmd_render(args) -> int:
         cmd += ["--random", rnd["asd"], "--drive", rnd["drive"], "--damping", str(rnd["damping"]),
                 "--random-frames", str(rnd["frames"])] + (["--g", str(rnd["g"])] if rnd["g"] else [])
     if args.dry_run:
-        print(" ".join(cmd))
+        print(shell_join(cmd))
         return 0
     return subprocess.call(cmd)
 
@@ -138,7 +152,7 @@ def cmd_setup(args) -> int:
     if not args.no_macros:
         steps.append([sys.executable, str(scripts / "install_macros.py")])
     for cmd in steps:
-        print("+", " ".join(cmd))
+        print("+", shell_join(cmd))
         if not args.dry_run and subprocess.call(cmd) != 0:
             return 1
     print("Done. Start ParaView, load the plugin once (Tools > Manage Plugins, Auto Load) or use `nastran-pv view`.")
@@ -171,6 +185,8 @@ def add_parsers(sub) -> None:
     add_random_arguments(r)
     r.add_argument("--against", metavar="A", help="reference model A (for --preset diff)")
     r.add_argument("--pvpython", help="path to pvpython")
+    r.add_argument("--onscreen", action="store_true",
+                   help="render in a visible window (default: offscreen; use this if offscreen PNGs come out blank)")
     r.add_argument("--dry-run", action="store_true")
     r.set_defaults(func=cmd_render)
 

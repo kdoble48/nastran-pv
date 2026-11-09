@@ -90,7 +90,8 @@ def test_pvpython_command_keeps_spaces():
     cmd = bg.pvpython_command(Path("C:/Program Files/ParaView 6.0.0/bin/pvpython.exe"),
                               Path("C:/my builds/models.json"), Path("C:/my builds/out dir"))
     assert cmd[0].endswith("pvpython.exe") and cmd[-1] == str(Path("C:/my builds/out dir"))
-    assert cmd[1].endswith("export_site.py") and len(cmd) == 4
+    assert cmd[1] == "--force-offscreen-rendering"
+    assert cmd[2].endswith("export_site.py") and len(cmd) == 5
 
 
 def test_build_models_drops_missing_parts(tmp_path):

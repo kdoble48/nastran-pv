@@ -185,14 +185,16 @@ for `--view diff` and [side by side](diff.md#side-by-side).
 nastran-pv render run_deck.bdf --preset family masses loads spc --views iso top --out shots/
 nastran-pv render run.dat --results run.op2 --step 3 --preset results
 nastran-pv render out/modes.vtkhdf --step 3 --preset results   # a converted series: no --results
-# same as: pvpython paraview/render_model.py run_deck.bdf --preset ...
+# same as: pvpython --force-offscreen-rendering paraview/render_model.py run_deck.bdf --preset ...
 ```
 
 `--preset` defaults to `family masses loads spc`, `--out` to `shots/` and `--size` to `1600 1000`.
 `--step` is 0-based. The presets are the views from the toolbar macros: `masses`, `bushes`, `bushrotations`, `beams`, `loads`, `spc`, `rigid`,
 `family`, `group`, `pid`, `mid`, `elementtype`, `thickness`, `nsm`, `results`, `random`, `randomsweep`,
 `parts`, `check` and `diff`. The two random views need `--random` (or a converted random series),
-and `diff` needs `--against A`.
+and `diff` needs `--against A`. Rendering is offscreen, so no ParaView window opens; `--onscreen`
+renders in a visible window instead, for a ParaView build whose offscreen PNGs come out blank.
+`--dry-run` prints the pvpython command, quoted so it can be pasted into a shell.
 
 If the deck cannot be read, `render` writes no screenshots and exits with status 1 after printing
 `cannot read DECK: <error>`. The toolbar macros show the same message in Output Messages.

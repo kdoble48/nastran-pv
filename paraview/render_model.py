@@ -1,6 +1,6 @@
 """Batch screenshots of a Nastran deck through the nastran-pv reader plugin.
 
-    pvpython paraview/render_model.py DECK [--op2 F.op2] [--step N] [--random ASD --drive Z --damping 0.05] [--against A]
+    pvpython --force-offscreen-rendering paraview/render_model.py DECK [--op2 F.op2] [--step N] [--random ASD --drive Z --damping 0.05] [--against A]
         [--preset masses bushes bushrotations beams loads spc rigid family group pid mid thickness elementtype results
                   random randomsweep diff]
         [--views iso top front side showcase] [--out shots/] [--size 1600 1000]
