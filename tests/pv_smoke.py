@@ -1915,6 +1915,37 @@ def scope_filter_checks(pv, nv, reader, view, deform, full):
     pv.Delete(s)
 
 
+def deleted_filter_checks(pv, reader):
+    """A deleted reader or filter is freed and lets go of its caches at once. Two things kept them:
+    ParaView 6.0's VTK released a deleted Python algorithm's dict late, inside FindObject, and
+    corrupted its ghost map (a crash on Linux; vtkutil.drop_state_on_delete), and the checklists'
+    observers and the deck's logger held their algorithm, so it was never freed at all
+    (vtkutil.modified_callback, load_deck)."""
+    import gc
+    import weakref
+
+    fresh = rm.load_reader(DECK)  # not `reader`: the other checks keep using it
+    filters = {"reader": fresh, "NastranMassGlyphs": pv.NastranMassGlyphs(Input=fresh),
+               "NastranLoadGlyphs": pv.NastranLoadGlyphs(Input=fresh),  # checklists
+               "NastranGrow": pv.NastranGrow(Input=fresh, SeedIDs="EID 1"),  # card types checklist
+               "NastranDeform": pv.NastranDeform(Input=fresh, ScaleFactor=2.0)}
+    states = {}
+    for name, proxy in filters.items():
+        proxy.UpdatePipeline()
+        states[name] = proxy.GetClientSideObject().__dict__
+    del proxy  # it would keep the last filter, and so the reader, alive
+    check(states["NastranDeform"].get("_deformer") is not None, "Nastran Deform caches its deformer")
+    deck = weakref.ref(states["reader"]["_deck"])
+    for name in ("NastranMassGlyphs", "NastranLoadGlyphs", "NastranGrow", "NastranDeform", "reader"):
+        pv.Delete(filters.pop(name))
+    del fresh
+    gc.collect()
+    for name, state in states.items():
+        check(not state, f"a deleted {name} is freed and drops its cached state (left: {sorted(state)})")
+    check(deck() is None, "a deleted reader frees its deck")
+    pv.SetActiveSource(reader)
+
+
 LEGS_DECK = """$ shell 1 (grids 1-4) and shell 2 (5-8), joined by CBUSH 11 (2-5) and CELAS2 12 (3-6): with shell 2
 $ hidden, both stay in the scope (they touch shell 1), and their ends on 5 and 6 are on hidden shells only
 GRID,1,,0.,0.,0.
@@ -2459,6 +2490,7 @@ def main():
     pv.Delete(twin)
     converted_checks(pv, nv, reader)
     file_group_checks(pv, nv)
+    deleted_filter_checks(pv, reader)
     parity_checks(pv, nv)
     calc_nan_checks(pv, nv)
     random_checks(pv, nv)

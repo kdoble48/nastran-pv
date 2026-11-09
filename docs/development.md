@@ -15,7 +15,10 @@ derives its expected values by hand from the layout's parameters.
 Every push to `main` and every pull request runs the tests and lint on Linux, Windows and macOS
 with Python 3.10 to 3.12 (`.github/workflows/tests.yml`), and builds this site
 (`.github/workflows/docs.yml`). Tests that need ParaView, MYSTRAN or the real datasets skip there.
-The *wheel* job builds the sdist and the wheel from it, checks that the wheel carries the plugin
+The *paraview* workflow (`.github/workflows/paraview.yml`, on pull requests that touch
+`paraview/`, `src/` or `tests/`, or by hand) installs the wheel on Linux, runs `nastran-pv setup`
+against a headless ParaView 6.0.1 and 5.13.1 unpacked in the home folder, and runs
+`tests/pv_smoke.py` on both; the downloads are cached. The *wheel* job builds the sdist and the wheel from it, checks that the wheel carries the plugin
 and no `_vendor`, installs it into a fresh venv outside the checkout, and checks that
 `nastran-pv setup --dry-run` finds the plugin there.
 A separate job holds the [performance budget](performance.md#ci-check) (`python -m pytest -m perf`;

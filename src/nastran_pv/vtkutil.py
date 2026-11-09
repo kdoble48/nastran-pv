@@ -5,7 +5,7 @@ from typing import Iterable, Sequence
 
 import numpy as np
 from vtkmodules.util.numpy_support import numpy_to_vtk, numpy_to_vtkIdTypeArray, vtk_to_numpy
-from vtkmodules.vtkCommonCore import vtkPoints, vtkStringArray
+from vtkmodules.vtkCommonCore import vtkPoints, vtkStringArray, vtkWeakReference
 from vtkmodules.vtkCommonDataModel import (
     vtkCellArray,
     vtkDataObject,
@@ -316,12 +316,74 @@ def set_field_strings(obj: vtkDataObject, name: str, values: Sequence[str]) -> N
     add_string_array(obj.GetFieldData(), name, values)
 
 
+# Each algorithm's DeleteEvent observer until it runs (drop_state_on_delete): VTK reports a wrapper's
+# observers to Python's garbage collector (PyVTKObject_Traverse), so when the cyclic collector frees a
+# wrapper it would clear the observer too, before the deletion it waits for calls it (a crash).
+_DELETE_OBSERVERS: dict = {}
+
+
+class _DropState:
+    """The DeleteEvent observer of :func:`drop_state_on_delete`."""
+
+    def __init__(self, state: dict):
+        self.state = state
+
+    def __call__(self, obj, event):
+        _DELETE_OBSERVERS.pop(id(self.state), None)
+        self.state.clear()
+
+
+def drop_state_on_delete(algorithm) -> None:
+    """Empty a Python algorithm's ``__dict__`` (its cached models, results, ...) when VTK deletes it.
+
+    VTK 9.4/9.5 (ParaView 6.0) keeps a deleted Python object's dict in a stale "ghost" and releases
+    it later, inside ``vtkPythonUtil::FindObject`` when a new object takes the address. The data
+    objects released then are ``data_model`` subclasses that leave ghosts of their own, and adding
+    a ghost sweeps the stale ones, so FindObject erases its map entry twice and corrupts the heap
+    (a crash on Linux; VTK master erases before the release). Released here, during the deletion,
+    the dict is empty by the time the ghost goes stale. Call it from every
+    ``VTKPythonAlgorithmBase`` subclass's ``__init__``."""
+    state = algorithm.__dict__
+    if "_npv_on_delete" not in state:
+        observer = _DELETE_OBSERVERS[id(state)] = _DropState(state)
+        state["_npv_on_delete"] = algorithm.AddObserver("DeleteEvent", observer)
+
+
+class _Reexecute:
+    """The ModifiedEvent observer of :func:`modified_callback`. A callable object, not a closure:
+    if the garbage collector clears it with its selection, a late call fails softly."""
+
+    def __init__(self, owner, skip: str):
+        self.ref = vtkWeakReference()
+        self.ref.Set(owner)
+        self.skip = skip
+
+    def __call__(self, obj, event):
+        ref = getattr(self, "ref", None)
+        alive = ref.Get() if ref is not None else None
+        if alive is not None and not getattr(alive, getattr(self, "skip", "_listing"), False):
+            alive.Modified()
+
+
+def modified_callback(owner, skip: str = "_listing"):
+    """A ``ModifiedEvent`` observer (for a ``vtkDataArraySelection`` that ``owner`` keeps) that calls
+    ``owner.Modified()`` unless ``owner.<skip>`` is true (it is filling the list itself).
+
+    It holds ``owner`` through a ``vtkWeakReference``: a callback that captured ``owner`` would keep
+    its wrapper, and so the C++ algorithm, alive for good (the C++ observer is invisible to Python's
+    garbage collector), so a deleted reader or filter would never be freed. Not a Python weakref
+    either: ParaView drops the wrapper while the algorithm lives on, and ``Get()`` brings it back."""
+    return _Reexecute(owner, skip)
+
+
 __all__ = [
     "add_array",
     "add_string_array",
+    "drop_state_on_delete",
     "make_cell_array",
     "make_points",
     "match_ids",
+    "modified_callback",
     "shallow_copy",
     "write_field_table",
     "read_field_table",
