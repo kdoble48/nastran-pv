@@ -32,8 +32,7 @@ from pathlib import Path
 import numpy as np
 
 from . import vtkutil
-from .categories import CONNECTOR_TYPES
-from .fields.common import field_strings, get_array, iter_blocks
+from .fields.common import field_strings, get_array, iter_blocks, mpc_legs
 
 FILE_ID = "FileId"
 FILE_NAMES = "FileNames"
@@ -41,7 +40,8 @@ FILE_PARENTS = "FileParents"
 TABLE = "FILE_"
 
 
-SLOTS = {"elements": "elements", "masses": "masses", "rigid_elements": "rigid"}  # pyNastran slot -> key
+# pyNastran slot -> key; PLOTELs share the element id space (and the Plotels block takes its map)
+SLOTS = {"elements": "elements", "plotels": "elements", "masses": "masses", "rigid_elements": "rigid"}
 MASS_BLOCKS, RIGID_BLOCKS = ("Masses", "MassOffsets"), ("Rigid",)
 
 
@@ -132,7 +132,7 @@ def read_tree(model, seen: dict, main) -> IncludeTree:
         for name, by_eid in seen.items():
             if name in types:
                 ids.update({e: f for e, f in by_eid.items() if e in objs})
-        slot_file[key] = ids
+        slot_file.setdefault(key, {}).update(ids)
     return IncludeTree(files, parents, slot_file)
 
 
@@ -184,9 +184,9 @@ def write_arrays(mb, tree: IncludeTree | None, main) -> None:
         eids, fids = sorted_maps[id(ids)]
         idx = vtkutil.match_ids(eids, np.asarray(eid, dtype=np.int64)) if len(eids) else np.full(len(eid), -1)
         values = np.where(idx >= 0, fids[np.maximum(idx, 0)] if len(fids) else -1, -1).astype(np.int32)
-        ctype = get_array(attr, "ConnectorType")
-        if ctype is not None:  # MPC legs carry the MPC set id as EID: not an element id
-            values[np.asarray(ctype) == CONNECTOR_TYPES.index("MPC")] = -1
+        mpc = mpc_legs(ds)
+        if mpc is not None:  # MPC legs carry the MPC set id as EID: not an element id
+            values[mpc] = -1
         attr.RemoveArray(FILE_ID)
         vtkutil.add_array(attr, FILE_ID, values)
         fd = ds.GetFieldData()

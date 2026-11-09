@@ -1,8 +1,8 @@
 """Serialize a ParaView render view into a vtk.js scene (.vtksz) for a static web viewer.
 
 Uses trame-vtk's serializers directly (no trame server): the same format PyVista's docs embed with
-trame-vtk's ``static_viewer.html``. Run inside pvpython; trame-vtk is vendored into
-``paraview/_vendor`` by ``install_deps.py --site``.
+trame-vtk's ``static_viewer.html``. Run inside pvpython; trame-vtk is vendored into the plugin's
+vendor folder (``paraview/_vendor`` in a checkout) by ``install_deps.py --site``.
 
 2D overlays (text, scalar bars, the axes triad) are not part of the scene, so :func:`overlays`
 returns them as data for the web page to draw.
@@ -13,9 +13,24 @@ import sys
 import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-_VENDOR = os.path.join(HERE, "_vendor")
-if os.path.isdir(_VENDOR) and _VENDOR not in sys.path:
-    sys.path.append(_VENDOR)  # after ParaView's own site-packages, as the plugin does
+
+
+def _add_vendor():
+    """Append the plugin's vendor folders, where ``install_deps.py --site`` puts trame-vtk
+    (``locate.vendor_dirs``: the per-user folder for an installed package). nastran_pv is importable
+    once the plugin is loaded; before that, ``NASTRAN_PV_VENDOR_DIR`` or ``./_vendor``."""
+    try:
+        from nastran_pv.locate import vendor_dirs
+
+        dirs = [str(p) for p in vendor_dirs(HERE)]
+    except ImportError:
+        dirs = [os.environ.get("NASTRAN_PV_VENDOR_DIR") or os.path.join(HERE, "_vendor")]
+    for d in dirs:
+        if os.path.isdir(d) and d not in sys.path:
+            sys.path.append(d)  # after ParaView's own site-packages, as the plugin does
+
+
+_add_vendor()
 
 from paraview import servermanager as sm  # noqa: E402
 from paraview import simple as pv  # noqa: E402
@@ -27,6 +42,7 @@ def _init_serializers():
     global _READY
     if _READY:
         return
+    _add_vendor()  # again: the plugin, loaded since, makes the installed package's folder known
     from trame_vtk.modules.vtk.serializers import initialize_serializers
     from trame_vtk.modules.vtk.serializers.registry import SERIALIZERS
 

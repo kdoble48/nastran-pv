@@ -10,13 +10,13 @@ The plugin finds its dependencies in this order:
    an installed wheel (``nastran_pv/paraview/``), the package this file ships in, imported on its
    own so the rest of that site-packages stays off ParaView's path;
 2. anything else already importable (ParaView's own packages, ``PYTHONPATH``),
-3. the vendor folder filled by ``install_deps.py`` (``locate.vendor_dir``: ``./_vendor`` in a
-   checkout, a per-user folder for an installed package, or ``NASTRAN_PV_VENDOR_DIR``),
+3. the vendor folders filled by ``install_deps.py`` (``locate.vendor_dirs``: ``./_vendor`` then the
+   per-user folder in a checkout, the per-user folder for an installed package, or
+   ``NASTRAN_PV_VENDOR_DIR``),
 4. folders listed in the ``NASTRAN_PV_SITE_PACKAGES`` environment variable.
 """
 import importlib
 import importlib.machinery
-import importlib.util
 import itertools
 import os
 import sys
@@ -44,21 +44,51 @@ def _plugin_dir():
     return None
 
 
-def _import_package(root):
-    """Import nastran_pv from ``root`` alone (the site-packages this installed plugin ships in, often
-    another Python's), without putting all of ``root`` on sys.path ahead of ParaView's numpy."""
-    if "nastran_pv" in sys.modules:
-        return
-    spec = importlib.machinery.PathFinder.find_spec("nastran_pv", [root])
-    if spec is None:
-        return
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["nastran_pv"] = module
-    try:
-        spec.loader.exec_module(module)
-    except BaseException:
-        del sys.modules["nastran_pv"]
-        raise
+_HELP = (
+    "nastran-pv could not import {missing}. Install pyNastran and its dependencies (cpylog,\n"
+    "docopt-ng, colorama, scipy) for ParaView's Python with\n"
+    "  nastran-pv setup --pvpython <path to pvpython>   (or python paraview/install_deps.py ...)\n"
+    "(it keeps a pyNastran that ParaView can already import and adds only what is missing),\n"
+    "or point NASTRAN_PV_SITE_PACKAGES at a site-packages folder of a CPython with the same\n"
+    "version as ParaView's Python that has pyNastran installed. Original error: {err}"
+)
+
+
+class _NoBytecodeLoader(importlib.machinery.SourceFileLoader):
+    """Reads an installed nastran_pv (and pip's .pyc where they fit) but writes no ``__pycache__``
+    into another Python's site-packages: pip did not record those files, so they would be left
+    behind on uninstall or upgrade."""
+
+    def set_data(self, path, data, *, _mode=0o666):
+        pass
+
+
+class _InstalledPackage:
+    """Meta path finder: nastran_pv and its submodules from ``root`` alone (the site-packages this
+    installed plugin ships in, often another Python's), so the rest of ``root`` stays off sys.path,
+    behind ParaView's numpy; first, because the plugin and its package must be the same version."""
+
+    def __init__(self, root):
+        self.npv_root = root
+
+    def find_spec(self, name, path=None, target=None):
+        if name != "nastran_pv" and not name.startswith("nastran_pv."):
+            return None
+        spec = importlib.machinery.PathFinder.find_spec(name, [self.npv_root] if name == "nastran_pv" else path)
+        if spec is not None and type(spec.loader) is importlib.machinery.SourceFileLoader:
+            spec.loader = _NoBytecodeLoader(spec.loader.name, spec.loader.path)
+        return spec
+
+
+def _vendor_paths(here):
+    """The vendor folders to append (``locate.vendor_dirs`` of this plugin folder). Without an
+    importable nastran_pv: ``NASTRAN_PV_VENDOR_DIR``, else ``./_vendor``."""
+    env = os.environ.get("NASTRAN_PV_VENDOR_DIR")
+    try:  # nastran_pv imports without pyNastran, which may be in the vendor folders
+        from nastran_pv.locate import vendor_dirs
+    except ImportError:  # the reader reports what is missing on first use
+        return [env] if env else [os.path.join(here, "_vendor")] if here else []
+    return [str(p) for p in vendor_dirs(here)] if here or env else []
 
 
 def _bootstrap():
@@ -70,14 +100,15 @@ def _bootstrap():
             if src not in sys.path:
                 sys.path.insert(0, src)
         elif os.path.basename(parent) == "nastran_pv" and os.path.isfile(os.path.join(parent, "__init__.py")):
-            _import_package(os.path.dirname(parent))  # an installed wheel: .../nastran_pv/paraview
-    try:  # nastran_pv imports without pyNastran, which may be in the vendor folder
-        from nastran_pv.locate import vendor_dir
-
-        vendor = str(vendor_dir(here)) if here else os.environ.get("NASTRAN_PV_VENDOR_DIR")
-    except ImportError:  # no nastran_pv: the reader reports what is missing on first use
-        vendor = os.path.join(here, "_vendor") if here else None
-    back = [vendor] if vendor else []
+            root = os.path.dirname(parent)  # an installed wheel: <site-packages>/nastran_pv/paraview
+            if not any(getattr(f, "npv_root", None) == root for f in sys.meta_path):
+                sys.meta_path.insert(0, _InstalledPackage(root))
+    try:
+        back = _vendor_paths(here)
+    except Exception as exc:  # a nastran_pv that fails to import for another reason
+        vtkOutputWindow.GetInstance().DisplayErrorText(
+            _HELP.format(missing="nastran_pv", err=f"{type(exc).__name__}: {exc}") + "\n")
+        back = []
     back += [p for p in os.environ.get("NASTRAN_PV_SITE_PACKAGES", "").split(os.pathsep) if p]
     for p in back:  # after ParaView's own site-packages so its numpy wins
         if os.path.isdir(p) and p not in sys.path:
@@ -86,16 +117,7 @@ def _bootstrap():
 
 _bootstrap()
 
-_HELP = (
-    "nastran-pv could not import {missing}. Install pyNastran and its dependencies (cpylog,\n"
-    "docopt-ng, colorama, scipy) for ParaView's Python with\n"
-    "  nastran-pv setup --pvpython <path to pvpython>   (or python paraview/install_deps.py ...)\n"
-    "(it keeps a pyNastran that ParaView can already import and adds only what is missing),\n"
-    "or point NASTRAN_PV_SITE_PACKAGES at a site-packages folder of a CPython with the same\n"
-    "version as ParaView's Python that has pyNastran installed. Original error: {err}"
-)
-
-_FLAGS = ("shells", "lines", "solids", "masses", "rigid", "connectors", "bushes", "constraints", "loads")
+_FLAGS = ("shells", "lines", "solids", "masses", "rigid", "connectors", "plotels", "bushes", "constraints", "loads")
 # model tree checklists (reader property -> nastran_pv.tree category)
 _VISIBILITY = {"VisibleProperties": "Properties", "VisibleMaterials": "Materials",
                "VisibleElementTypes": "ElementTypes", "VisibleFamilies": "Families", "VisibleGroups": "Groups",
@@ -346,6 +368,8 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         self._mb_key = None
         self._results = None
         self._results_key = None
+        self._result_types = vtkDataArraySelection()  # ResultTypes: what the results file has
+        self._result_types.AddObserver("ModifiedEvent", lambda *args: None if self._listing else self.Modified())
         self._random_asd = ""
         self._random_drive = 2
         self._random_damping = 0.05
@@ -388,6 +412,12 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
     @smhint.filechooser(extensions="op2 OP2 h5 hdf5", file_description="Nastran results (OP2, MSC/NX HDF5)")
     def SetOP2FileName(self, name):
         self._set("_op2name", name or "")
+
+    @smproperty.dataarrayselection(name="ResultTypes")
+    def GetResultTypes(self):
+        """The result types the OP2/HDF5 file has (Displacement, VonMisesMax, ...): only the
+        checked ones are attached at each time step (convert --result-types)."""
+        return self._result_types
 
     # ----------------------------------------------- random vibration
     def _set_random(self, attr, value):
@@ -454,6 +484,11 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
     @smdomain.xml('<BooleanDomain name="bool"/>')
     def SetConnectors(self, v):
         self._set_flag("connectors", v)
+
+    @smproperty.intvector(name="Plotels", default_values=1)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetPlotels(self, v):
+        self._set_flag("plotels", v)
 
     @smproperty.intvector(name="Bushes", default_values=1)
     @smdomain.xml('<BooleanDomain name="bool"/>')
@@ -566,6 +601,18 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         treating the empty output as a model without masses, bushes, ..."""
         return self._load_error
 
+    @smproperty.intvector(name="ScopeActive", information_only="1")
+    def GetScopeActive(self):
+        """1 when the visibility settings hide anything, as a read applies them: an EID list it cannot
+        parse or a Selection File it cannot read is ignored, so it is no scope; 0 after a failed read.
+        Worked out from the settings, so asking does not run the reader. The views read it."""
+        if not self._filename or self._load_error:
+            return 0
+        try:
+            return int(not self._visibility(quiet=True).everything)
+        except ImportError:  # RequestData reports it
+            return 0
+
     @smproperty.doublevector(name="TimestepValues", information_only="1", si_class="vtkSITimeStepsProperty")
     def GetTimestepValues(self):
         res = self._get_response(quiet=True)
@@ -666,6 +713,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         info.Remove(key_steps)
         info.Remove(key_range)
         res = self._get_response(quiet=True)
+        self._list_result_types()
         if res is not None and res.steps:
             times = res.times
             for t in times:
@@ -679,6 +727,35 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
             except Exception:
                 pass  # RequestData reports it
         return 1
+
+    def _list_result_types(self):
+        """ResultTypes entries: the types of the results file; a type that stays keeps its setting,
+        a new one starts at its registry default."""
+        res = self._get_results(quiet=True)
+        names = list(getattr(res, "available", ()))
+        sel = self._result_types
+        if names == [sel.GetArrayName(i) for i in range(sel.GetNumberOfArrays())]:
+            return
+        from nastran_pv.result_types import by_name
+
+        self._listing = True
+        try:
+            for name in [sel.GetArrayName(i) for i in range(sel.GetNumberOfArrays())]:
+                if name not in names:
+                    sel.RemoveArrayByName(name)
+            for name in names:
+                if not sel.ArrayExists(name):
+                    sel.AddArray(name, by_name(name, res.registry).default)
+        finally:
+            self._listing = False
+
+    def _select_result_types(self, res):
+        """Attach the checked ResultTypes (the OP2/HDF5 results; a random response has its own
+        arrays). Listed again first: a time step can re-read a results file that changed on disk
+        without a RequestInformation, and then its new types must be listed (at their default)."""
+        if hasattr(res, "select"):
+            self._list_result_types()
+            res.select([n for n in res.available if self._result_types.ArrayIsEnabled(n)])
 
     def _list_categories(self, mb, deck):
         """Checklist entries for the current multiblock; settings of labels that stay are kept."""
@@ -702,7 +779,8 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
             self._listing = False
         self._listed_key = self._mb_key
 
-    def _visibility(self):
+    def _visibility(self, quiet=False):
+        """The Visibility of the settings; ``quiet``: report no unparseable list or unreadable file."""
         from nastran_pv.tree import Visibility, parse_ids
 
         hidden = {}
@@ -715,13 +793,14 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
             try:
                 ids[what] = parse_ids(text)
             except ValueError as exc:
-                _message(f"nastran-pv: {what}: {exc}; ignored", error=True)
+                if not quiet:
+                    _message(f"nastran-pv: {what}: {exc}; ignored", error=True)
                 ids[what] = set()
         show = frozenset(ids["ShowOnlyElements"]) if ids["ShowOnlyElements"] else None
-        return Visibility(hidden, show, frozenset(ids["HiddenElements"]), select=self._selection(),
+        return Visibility(hidden, show, frozenset(ids["HiddenElements"]), select=self._selection(quiet),
                           select_hide=self._sel_mode == 1, select_grids=("all", "any")[self._sel_grids % 2])
 
-    def _selection(self):
+    def _selection(self, quiet=False):
         """The SelectionFile's IdList (re-read when the file or the key changes), None when off."""
         if not self._sel_file or self._sel_mode == 2:
             return None
@@ -736,12 +815,27 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
                 self._sel_read = key
         except Exception as exc:
             problem = (key, str(exc))
-            if problem != self._sel_error:  # once per change of file, key or error
+            if problem != self._sel_error and not quiet:  # once per change of file, key or error
                 self._sel_error = problem
                 _message(f"nastran-pv: SelectionFile {self._sel_file}: {exc}; ignored", error=True)
             return None
         self._sel_error = None
         return self._sel_ids
+
+    def _report_messages(self, deck, mb):
+        """The deck's warnings, then the card report (what no block draws), in one Output Messages entry."""
+        from nastran_pv import cards
+
+        lines = deck.warnings[:25]
+        if len(deck.warnings) > 25:
+            lines.append(f"... {len(deck.warnings) - 25} more")
+        skipped = cards.read(mb)
+        if skipped:
+            lines.append(cards.summary(skipped))
+        if lines:
+            shown = "\n  ".join(lines)
+            count = len(deck.warnings) + bool(skipped)
+            _message(f"nastran-pv: {os.path.basename(self._filename)}: {count} message(s)\n  {shown}")
 
     def RequestData(self, request, inInfo, outInfo):
         if not self._filename:
@@ -768,6 +862,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
                 if info.Has(vtkStreamingDemandDrivenPipeline.UPDATE_TIME_STEP()):
                     t = info.Get(vtkStreamingDemandDrivenPipeline.UPDATE_TIME_STEP())
                 step = int(min(range(len(res.times)), key=lambda i: abs(res.times[i] - t)))
+                self._select_result_types(res)
                 res.attach(mb, step, deck)
                 time_value = res.times[step]
                 if rebuilt:
@@ -787,10 +882,8 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
             _message(f"nastran-pv: failed to read {self._filename}:\n{traceback.format_exc()}", error=True)
             return 0
         self._load_error = ""
-        if rebuilt and deck.warnings:
-            shown = "\n  ".join(deck.warnings[:25])
-            more = f"\n  ... {len(deck.warnings) - 25} more" if len(deck.warnings) > 25 else ""
-            _message(f"nastran-pv: {os.path.basename(self._filename)}: {len(deck.warnings)} message(s)\n  {shown}{more}")
+        if rebuilt:
+            self._report_messages(deck, mb)
         output = vtkPartitionedDataSetCollection.GetData(outInfo, 0)
         output.ShallowCopy(pdc)
         if time_value is not None:
@@ -1315,7 +1408,8 @@ class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
         out = vtkDataObject.GetData(outInfo, 0)
         key = (inp, inp.GetMTime())
         if self._deformer is None or self._deformer[:2] != key:  # new input or new time step
-            self._deformer = key + (Deformer(inp),)
+            whole = _registry_entry(inp)  # the reader's output: legs to grids of hidden elements move too
+            self._deformer = key + (Deformer(inp, grids=whole[0] if whole is not None else None),)
         scale, phase = self._scale, None
         if self._auto:
             if self._auto_scale is None or self._auto_scale[:3] != key + (self._peak,):
@@ -1352,7 +1446,9 @@ def _double_array(name, value):
 @smdomain.datatype(dataTypes=["vtkDataObject"], composite_data_supported=True)
 class NastranPVScope(_Settable, VTKPythonAlgorithmBase):
     """The overlays' copy of the reader's model: mesh blocks keep what the reader keeps, and masses,
-    connectors, SPCs and loads stay when they hang off a kept element (named EIDs win, hidden EIDs go).
+    connectors, SPCs and loads stay when they hang off a kept element or a kept rigid element or bush.
+    What Show Only names by EID wins in its block, what a Show only Selection File of grids, properties
+    or groups lists is added, and what the checklists, Hidden Elements or a Hide file hide always goes.
     It goes after Nastran Deform on the reader and moves by its scale; any other input passes through."""
 
     def __init__(self):
@@ -1399,8 +1495,8 @@ class NastranPVScope(_Settable, VTKPythonAlgorithmBase):
             if found is not None:
                 self._mark_diagonal(out, mb)
             return 1
-        if self._deformer is None or self._deformer[:3] != (mb, key, generation):
-            self._deformer = (mb, key, generation, Deformer(self._tree[2].output(mb)))
+        if self._deformer is None or self._deformer[:3] != (mb, key, generation):  # grids of hidden cells too
+            self._deformer = (mb, key, generation, Deformer(self._tree[2].output(mb), grids=mb))
         scale = inp.GetFieldData().GetArray(DEFORM_SCALE)
         out.ShallowCopy(self._deformer[3].apply(scale.GetValue(0) if scale is not None else 0.0))
         self._mark_diagonal(out, mb)
@@ -1721,7 +1817,7 @@ class NastranPVGroupStats(_FieldFilter):
 
 
 # ---------------------------------------------------- topology filters
-# copies of topology.graph.GROUPS / topology.check.CHECKS: the proxies are built before nastran_pv
+# copies of topology.graph.GROUPS / topology.checks.CHECKS: the proxies are built before nastran_pv
 # (and scipy) can be imported; tests/test_plugin_constants.py keeps them in sync
 _GROUPS = ("shells", "solids", "lines", "rigid", "bushes", "connectors")
 _WITHIN = ("", "pid", "mid", "family", "group")  # StayWithin entries -> Rules.within
@@ -1846,11 +1942,17 @@ class _TopologyFilter(_FieldFilter):
 
     def _rules(self):
         from nastran_pv.topology import Rules
+        from nastran_pv.topology.graph import parse_pids
 
         off = {self._cards.GetArrayName(i) for i in range(self._cards.GetNumberOfArrays())
                if not self._cards.GetArraySetting(i)}
+        if self._graph is not None:  # the checklist keeps the cards of an earlier input: not an error
+            off &= set(self._graph.card_names)
         off |= {g for g, on in self._groups.items() if not on}
-        pids = frozenset(int(p) for p in self._exclude_pids.replace(",", " ").split())
+        try:
+            pids = parse_pids(self._exclude_pids)
+        except ValueError as exc:
+            raise ValueError(f"Exclude PIDs {self._exclude_pids!r}: {exc}") from None
         return Rules(exclude=frozenset(off), exclude_pids=pids, within=_WITHIN[self._within],
                      max_hops=self._max_hops if self._limit else None)
 
@@ -1859,12 +1961,17 @@ class _TopologyFilter(_FieldFilter):
             _message(f"nastran-pv {self.LABEL}: {w}")
 
     def _apply(self, mb, outInfo):
-        from nastran_pv.topology import Graph
+        from nastran_pv.topology import Graph, NoElementsError
 
         self._list_cards(mb)
         mtime = self.GetInputDataObject(0, 0).GetMTime()
         if self._graph_key != mtime:  # a gathered tree comes out the same every time
-            self._graph, self._graph_key = Graph.from_multiblock(mb), mtime
+            try:
+                self._graph = Graph.from_multiblock(mb)
+            except NoElementsError:  # Model Check counts zeros; the others report it
+                self._graph = None
+            self._graph_key = mtime
+            self._report(self._graph.warnings if self._graph is not None else [])  # once per graph
         return self._run(mb, self._graph, outInfo)
 
 

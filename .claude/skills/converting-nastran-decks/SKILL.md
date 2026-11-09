@@ -17,7 +17,7 @@ calling pyNastran's slow `mass_properties`. The user-facing pages are `docs/cli.
 
 ```bash
 export PYTHONPATH=src            # or the installed `nastran-pv`
-python -m nastran_pv convert DECK -o out/m.vtm                         # prints blocks, cell counts, warnings
+python -m nastran_pv convert DECK -o out/m.vtm                         # prints blocks, cell counts, card report, warnings
 python .claude/skills/converting-nastran-decks/summary.py out/m.vtm    # ModelMass, ModelCG, ActiveLoadSets, MAT_*, Warnings
 python .claude/skills/converting-nastran-decks/summary.py out/m.vtm --arrays   # arrays per block
 python -m nastran_pv stats out/m.vtm --by PID --field ElementMass      # --by PID|MID|FAMILY|GROUP|ELEMENTTYPE (both required)
@@ -35,6 +35,7 @@ the file skips deck parsing, which is much faster on large models. `summary.py` 
 | One snapshot for ParaView or VTK | `.vtm` (default) |
 | All result steps, or a large model | `.vtkhdf` with `--all-steps` (1/5 the size of a `.pvd` series on uCRM-9) |
 | One result step | `--results F --step N` |
+| Only some result types (e.g. stresses without displacements) | `--results F --result-types VonMisesMax` (names: `Displacement VonMisesMax`, or `all`; docs/model.md#result-types) |
 | Random vibration (base drive) from SOL 103 modes: RMS, N0, dominant mode, response ASD per frequency frame | `--results modes.op2 --random "20:0.01,2000:0.01" [--drive Z --damping 0.05 --g 9806.65] --all-steps` (docs/random-vibration.md); check the printed captured-mass fraction |
 | Per-part mass breakdown | `--derive pidmass`, or `stats --by PID --field ElementMass` |
 | Mesh quality | `--derive quality` → `EdgeRatio ScaledJacobian Skew Warpage` |
@@ -56,6 +57,10 @@ the file skips deck parsing, which is much faster on large models. `summary.py` 
 - **Progress** goes to stderr (files, a card count, timed stages); `-q` silences it. A big deck
   is not hung while the card count is still rising. Run it in the background and read stdout for
   the summary.
+- **Card report** ("N card(s) of M type(s) not drawn:", root `SKIPPED_*`): every card no block
+  draws, per card type and reason (not drawn, scalar points, grounded, patch form, heat transfer,
+  matrix input, superelement, not read), with up to five ids. Quote it when the user asks what is
+  missing from a view; `stats` and `check` print it on stderr (docs/model.md#cards-not-drawn).
 - **Warnings** print on stdout and are kept in `Warnings`. Read them. "solid property id(s) not
   defined (open the run deck?)" and "model mass excludes the structural mass of N element(s)" mean the numbers are
   incomplete (`troubleshooting-nastran-models`). "reordered N solid element(s)" is info only.

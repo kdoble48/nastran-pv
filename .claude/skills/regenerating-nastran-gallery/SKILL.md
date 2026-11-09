@@ -36,7 +36,7 @@ python docs/build_gallery.py \
 view, a macro or the reader's tree changes, regenerate them (about a minute) and look at each one:
 
 ```bash
-pvpython docs/build_tutorial_images.py \
+pvpython --force-offscreen-rendering docs/build_tutorial_images.py \
     --ucrm9 gpk4zn73xn-1/uCRM9/uCRM9/Mesh/Coarse/FEM/run_uCRM-9_static_cruise_coarse.bdf \
     --demo-op2 docs/models/demo.OP2          # the MYSTRAN OP2 written by build_gallery.py
 ```

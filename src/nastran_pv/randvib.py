@@ -25,11 +25,10 @@ import numpy as np
 
 from . import vtkutil
 from .assemble import MESH_BLOCKS, block_names, get_block
-from .results import Step, to_basic
+from .result_types import DISPLACEMENT, REGISTRY, RESULT_BLOCKS
+from .results import Step, remove_result_arrays, to_basic
 
 DRIVES = ("X", "Y", "Z")
-RESULT_BLOCKS = MESH_BLOCKS + ("Masses", "Rigid", "Constraints")
-MODE_ARRAYS = ("Displacement", "Rotation", "DisplacementMagnitude")
 PER_DECADE = 200
 MODE_POINTS = 81  # integration points over f_k (1 +- 10 zeta)
 CHUNK = 4_000_000  # complex values per (frequency x grid-component) block
@@ -162,6 +161,7 @@ class RandomResponse:
         self.drive, self.damping, self.g = drive, float(damping), (float(g) if g else None)
         self.d = np.eye(3)[DRIVES.index(drive)]
         self.skipped: list[str] = list(getattr(results, "skipped", []))
+        self._replaces = getattr(results, "registry", REGISTRY)  # the result types whose arrays it replaces
         self._modes_from(results, deck)
         self._participation(mb)
         self._solve(int(frames))
@@ -178,7 +178,7 @@ class RandomResponse:
         nids = None
         cols, freqs, numbers = [], [], []
         for s in eig:
-            n, data, *_ = results.step_data(s)
+            n, data = results.values(DISPLACEMENT, s)  # whatever the selection: the modes are the input
             data = np.array(data[:, :6], dtype=float)
             if deck is not None:
                 data = to_basic(deck, n, data)
@@ -324,6 +324,7 @@ class RandomResponse:
     def attach(self, mb, step_index: int = 0, deck=None) -> None:
         i = int(np.clip(step_index, 0, len(self.steps) - 1))
         names = block_names(mb)
+        remove_result_arrays(mb, self._replaces)
         for name in RESULT_BLOCKS:
             if name not in names:
                 continue
@@ -341,9 +342,6 @@ class RandomResponse:
                 v[~ok] = fill
                 return v
 
-            for arr in MODE_ARRAYS:
-                pd.RemoveArray(arr)
-            block.GetCellData().RemoveArray("VonMisesMax")
             vtkutil.add_array(pd, "AccelRMS", pick(self.accel_rms), skip_all_nan=True)
             vtkutil.add_array(pd, "AccelN0", pick(self.accel_n0), skip_all_nan=True)
             if self.disp_rms is not None:

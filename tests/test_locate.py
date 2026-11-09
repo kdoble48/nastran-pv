@@ -177,6 +177,56 @@ def test_macos_app_bundles(search):
     assert locate.find_executable("paraview") == gui
 
 
+def test_vendor_dirs_the_plugin_searches(tmp_path, no_env):
+    """A checkout's plugin also looks where `setup` from a pip-installed nastran-pv vendored (the
+    per-user folder), so a plugin loaded from a clone keeps working after that setup."""
+    checkout = _checkout(tmp_path).parents[2] / "paraview"
+    _installed(tmp_path)
+    installed = tmp_path / "site-packages" / "nastran_pv" / "paraview"
+    no_env.setattr(locate, "user_data_dir", lambda: tmp_path / "data")
+    user = tmp_path / "data" / "vendor" / "py3.10"
+    assert locate.vendor_dirs(checkout, python="3.10") == [checkout / "_vendor", user]
+    assert locate.vendor_dirs(installed, python="3.10") == [user]
+    assert locate.vendor_dir(checkout, python="3.10") == checkout / "_vendor"  # where install_deps puts them
+    no_env.setenv("NASTRAN_PV_VENDOR_DIR", str(tmp_path / "v"))
+    assert locate.vendor_dirs(checkout) == locate.vendor_dirs(installed) == [tmp_path / "v"]
+
+
+def test_store_python(monkeypatch, tmp_path):
+    def python(platform, executable, base):
+        monkeypatch.setattr(locate, "sys", types.SimpleNamespace(
+            platform=platform, executable=executable, prefix=str(Path(executable).parent),
+            base_prefix=base, base_exec_prefix=base))
+
+    store = r"C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.10_x64__qbz5n2kfra8p0"
+    python("win32", store + r"\python3.12.exe", store)
+    assert locate.store_python()
+    python("win32", r"C:\work\venv\Scripts\python.exe", store)  # a venv made from it
+    assert locate.store_python()
+    python("win32", r"C:\Python312\python.exe", r"C:\Python312")
+    assert not locate.store_python()
+    python("linux", "/usr/bin/python3", "/usr")
+    assert not locate.store_python()
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "Roaming"))
+    assert locate.under_appdata(tmp_path / "Local" / "nastran-pv" / "vendor")
+    assert locate.under_appdata(tmp_path / "Roaming" / "ParaView" / "Macros")
+    assert not locate.under_appdata(tmp_path / "LocalOther")
+    assert not locate.under_appdata(tmp_path / "work")
+
+
+def test_setup_refuses_a_store_python(no_env, monkeypatch, capsys):
+    from nastran_pv import launch
+    from nastran_pv.cli import main
+
+    monkeypatch.setattr(launch, "store_python", lambda: True)
+    monkeypatch.setattr(launch, "find_executable", lambda name: Path("pvpython"))
+    with pytest.raises(SystemExit, match="Microsoft Store"):
+        main(["setup"])
+    assert main(["setup", "--dry-run"]) == 0  # a dry run says so and shows the commands
+    assert "Microsoft Store" in capsys.readouterr().out
+
+
 def test_setup_dry_run_without_paraview(no_env, capsys):
     """`nastran-pv setup --dry-run` shows the plugin and the commands even with no pvpython found
     (the CI wheel check); a real run still needs pvpython."""
@@ -190,7 +240,7 @@ def test_setup_dry_run_without_paraview(no_env, capsys):
     assert main(["setup", "--dry-run"]) == 0
     out = capsys.readouterr().out
     assert f"plugin: {ROOT / 'paraview' / PLUGIN}" in out
-    assert "install_deps.py --pvpython <pvpython>" in out and "install_macros.py" in out
+    assert "install_deps.py --pvpython" in out and "<pvpython>" in out and "install_macros.py" in out
     with pytest.raises(FileNotFoundError):
         main(["setup"])
 

@@ -1,6 +1,6 @@
 """Batch screenshots of a Nastran deck through the nastran-pv reader plugin.
 
-    pvpython paraview/render_model.py DECK [--op2 F.op2] [--step N] [--random ASD --drive Z --damping 0.05] [--against A]
+    pvpython --force-offscreen-rendering paraview/render_model.py DECK [--op2 F.op2] [--step N] [--random ASD --drive Z --damping 0.05] [--against A]
         [--preset masses bushes bushrotations beams loads spc rigid family group pid mid thickness elementtype results
                   random randomsweep diff]
         [--views iso top front side showcase] [--out shots/] [--size 1600 1000]
@@ -15,6 +15,7 @@ import sys
 from paraview import simple as pv
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.dont_write_bytecode = True  # a batch run: no __pycache__ in an installed package's folder
 import nastran_views as nv  # noqa: E402
 
 # re-exported for scripts and tests

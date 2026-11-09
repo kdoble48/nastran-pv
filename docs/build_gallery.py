@@ -72,7 +72,10 @@ def build_models(ucrm9, demo_bdf, demo_op2) -> list[dict]:
 
 
 def pvpython_command(pvpython, models_json, out_dir) -> list[str]:
-    return [str(pvpython), str(ROOT / "paraview" / "export_site.py"), str(models_json), str(out_dir)]
+    """Export every view offscreen: no ParaView window opens on the desktop."""
+    from nastran_pv.launch import OFFSCREEN
+
+    return [str(pvpython), OFFSCREEN, str(ROOT / "paraview" / "export_site.py"), str(models_json), str(out_dir)]
 
 
 def crop_thumbnail(src, dst, size=(800, 500), margin=0.06, threshold=8) -> None:

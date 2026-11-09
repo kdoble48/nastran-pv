@@ -3,7 +3,7 @@
 ```bash
 pip install -e ".[test]"
 python -m pytest -q                       # core, against synthetic decks in tests/data
-pvpython tests/pv_smoke.py                # the plugin, views and filters, inside ParaView
+pvpython --force-offscreen-rendering tests/pv_smoke.py   # the plugin, views and filters, no window
 python -m pyflakes src paraview/*.py tests  # lint (skip paraview/_vendor)
 ```
 
@@ -86,9 +86,9 @@ The docs describe behavior that lives in code. Update them in the same change wh
 | Code | Doc |
 |---|---|
 | CLI parsers in `cli.py` / `launch.py` | [cli.md](cli.md), [fields.md](fields.md), [store.md](store.md) |
-| `launch.VIEW_NAMES`, `nastran_views.py`, `install_macros.py`, `deform.py` (mode animation) | [paraview.md](paraview.md), [cli.md](cli.md#batch-screenshots), [paraview-tutorials.md](paraview-tutorials.md) (images: `pvpython docs/build_tutorial_images.py --ucrm9 <coarse run deck> --demo-op2 <demo.OP2>`) |
+| `launch.VIEW_NAMES`, `nastran_views.py`, `install_macros.py`, `deform.py` (mode animation) | [paraview.md](paraview.md), [cli.md](cli.md#batch-screenshots), [paraview-tutorials.md](paraview-tutorials.md) (images: `pvpython --force-offscreen-rendering docs/build_tutorial_images.py --ucrm9 <coarse run deck> --demo-op2 <demo.OP2>`) |
 | Plugin proxies in `nastran_bdf_reader.py`, `tree.py` | [paraview.md](paraview.md), [fields.md](fields.md#paraview-filters) |
-| Builders, `assemble.py`, `results*.py` | [model.md](model.md) |
+| Builders, `assemble.py`, `results*.py`, `result_types.py` | [model.md](model.md) (`result_types.py` also [cli.md](cli.md) `--result-types`) |
 | `randvib.py`, the reader's *Random* properties, the `random`/`randomsweep` views | [random-vibration.md](random-vibration.md), [model.md](model.md), [cli.md](cli.md) |
 | `sections/` (shapes, properties, frames, sweep) | [beam-sections.md](beam-sections.md), [model.md](model.md) (figure: `python docs/build_section_figure.py`) |
 | `topology/`, the topology proxies, selection macros | [tools.md](tools.md), [model.md](model.md) |

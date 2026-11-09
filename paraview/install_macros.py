@@ -36,7 +36,9 @@ import sys
 _p = r"{path}"
 if _p not in sys.path:
     sys.path.insert(0, _p)
+_b, sys.dont_write_bytecode = sys.dont_write_bytecode, True  # no __pycache__ in an installed package
 import nastran_views
+sys.dont_write_bytecode = _b
 nastran_views.run_macro("{view}")
 '''
 

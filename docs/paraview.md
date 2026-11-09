@@ -13,12 +13,17 @@ one-click views on the Macros toolbar. For step-by-step walkthroughs, see
    ParaView also offers its VisIt NASTRAN reader for some extensions.
 3. In the Properties panel, switch blocks on or off and optionally set *OP2 File Name*, which
    takes an `.op2` or MSC/NX `.h5` file. Each result step (subcase, load step or mode) becomes a
-   time step. *NSMSet* picks the bulk nonstructural mass set
+   time step, and *Result Types* lists the [result types](model.md#result-types) the file has
+   (all checked: uncheck one to leave its arrays off). *NSMSet* picks the bulk nonstructural mass set
    ([Nonstructural mass](model.md#nonstructural-mass)), *BushStiffnessReference* is `convert --k-ref`
    (0 = the softest stiffness), and *Random ASD* turns the modes into a random response
    ([Random vibration](random-vibration.md)).
 
 `nastran-pv view DECK --view masses` does all of this in one command.
+
+Output Messages lists the deck's warnings and, last, the card report: a one-line count of the cards
+no block draws, by card type ([Cards not drawn](model.md#cards-not-drawn); `nastran-pv convert`
+prints the full table).
 
 Open the run deck (the file with `INCLUDE`s) rather than a geometry include. Material and property
 cards often live in the run deck. A bare geometry file still loads, but without MID, density or mass.
@@ -37,8 +42,8 @@ source (or the source upstream of it).
 
 A converted file is fixed at conversion time, so a few things still need the deck:
 
-* *OP2 File Name*, *NSMSet* and the *Random* properties: convert again with `--results`,
-  `--nsm-set` or `--random` instead.
+* *OP2 File Name*, *Result Types*, *NSMSet* and the *Random* properties: convert again with
+  `--results`, `--result-types`, `--nsm-set` or `--random` instead.
 * The visibility checklists and the Show Only / Hide / Show All macros. On a converted file,
   use ParaView's Extract Selection or Threshold, or, for include files,
   [Nastran Files](#include-files).
@@ -49,7 +54,7 @@ The reader outputs a model tree, in the spirit of Femap's Model Info tree. Open 
 *View > MultiBlock Inspector*:
 
 ```
-Model/         Shells  Solids  Lines  Masses  Rigid  Connectors  Bushes  Constraints  Loads/LOAD_1001 …
+Model/         Shells  Solids  Lines  Masses  Rigid  Connectors  Plotels  Bushes  Constraints  Loads/LOAD_1001 …
 Properties/    PSHELL_101  PCOMP_7  PBUSH_3 …        (PID_<n> when the card is missing)
 Materials/     MAT1_1  MAT8_2 …                      (MID_<n> when the card is missing)
 ElementTypes/  CQUAD4  CTRIA3  CHEXA  RBE2  CBUSH …
@@ -85,12 +90,23 @@ of that group. The rules, in Nastran terms:
 * An RBE2, RBE3, RBAR or CBUSH is kept when **any** of its grids is on a kept element. Its other
   grids then count as kept too. So the CONM2 on the independent grid of an RBE3 spider, such as an
   engine mass, stays with the wing elements it hangs from. The chain continues only through grids
-  that no shell, solid or line element uses.
+  that no shell, solid or line element uses, and only through kept rigid elements and bushes.
 * A CONM2/CONM1/CMASS, an SPC grid or a FORCE/MOMENT grid is kept when its grid is kept.
-* CBAR/CBEAM sections are elements: their own EID, PID and group decide.
-* **An item's own EID wins** when the lists name it. Show Only `1 201` keeps shell 1 and only
-  CONM2 201 of the masses on it. Hidden Elements `201` hides CONM2 201 wherever its grid is.
-* With nothing hidden, every overlay shows everything.
+* CBAR/CBEAM sections are elements: their own EID, PID and group decide, and a swept section
+  follows its beam.
+* **An item's own EID wins** when Show Only (or a Show only Selection File of EIDs) names it.
+  Show Only `1 201` keeps shell 1 and only CONM2 201 of the masses on it. A named RBE2 or CBUSH
+  keeps what hangs on its grids too: Show Only of an engine's RBE2 shows its CONM2. An MPC's legs
+  carry its set id as their EID, as in the reader's lists.
+* A Show only Selection File of grids, properties, materials, families or groups **adds** what it
+  lists to the rules above: a GRID file keeps the masses and SPCs on its grids, a PID file of PBUSH
+  ids keeps those bushes and what hangs on them, and the RBE3 spider off the listed wing still
+  keeps the engine mass on its unlisted centre grid.
+* **What is hidden always goes**: an unticked checklist entry, Hidden Elements `201` (CONM2 201
+  wherever its grid is) or a Hide Selection File (PBUSH 51's bushes). A hidden RBE2 or CBUSH carries
+  no chain either, so the masses beyond it go too.
+* With nothing hidden, every overlay shows everything. An ID list the reader cannot parse, or a
+  Selection File it cannot read, is ignored (with an error in Output Messages): no scope.
 
 The overlays draw through the *Nastran Scope* filter (`NPV scope`, after `NPV deform`). It reads
 the reader's whole model and its visibility settings, so it updates when you change a checklist
@@ -279,7 +295,8 @@ the selection commands make no filter of their own.
 [Nastran Files](#include-files)):
 
 * **Nastran Deform** moves the whole model by *Scale Factor* × `Displacement`. Blocks without
-  one (load sets, ...) follow their grids by NID. The NPV views draw through it (*NPV deform*),
+  one (load sets, connectors, bush lines, ...) follow their grids by NID, on the reader also grids
+  that only hidden elements use. The NPV views draw through it (*NPV deform*),
   which is how NPV Results and the animation macros deform every view; at 0 it passes the
   model through. *Auto Scale* (NPV Results turns it on) ignores *Scale Factor* and scales each
   time step so its largest displacement is *Auto Scale Peak* (0.08) × the model diagonal; the
@@ -291,9 +308,11 @@ the selection commands make no filter of their own.
 * **Nastran Scope** is the overlays' copy of the model. Its mesh blocks keep what the reader
   keeps (checklists, Show Only/Hide, the selection file). Masses, rigid elements, bushes, SPCs
   and loads stay when they hang off a kept element, also when the reader's own output drops them;
-  EIDs named in Show Only win, and hidden EIDs always go. With nothing hidden, or on a converted
+  EIDs named in Show Only win, a Show only file adds what it lists, and what is hidden always goes
+  ([the rules](#overlays-follow-the-scope)). With nothing hidden, or on a converted
   file, it passes its input through. It goes after *Nastran Deform* on the reader and moves by the
-  scale that filter applied, so the NPV overlays draw through it (*NPV scope*) and follow the mode.
+  scale that filter applied, so the NPV overlays draw through it (*NPV scope*) and follow the mode;
+  a rigid, connector or bush line to a grid of a hidden element moves with that grid too.
 
 * **Nastran Mass Glyphs** builds one ellipsoid per concentrated mass. Its sizing controls:
   - *SizeMode*:
