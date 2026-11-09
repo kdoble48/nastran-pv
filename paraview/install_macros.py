@@ -52,8 +52,11 @@ def macro_dir() -> Path:
     if sys.platform.startswith("win"):
         base = Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming")
     else:
-        xdg = os.environ.get("XDG_CONFIG_HOME")
-        base = Path.home() / (xdg or ".config")  # Qt: unset or empty means ~/.config; relative is under ~
+        xdg = os.environ.get("XDG_CONFIG_HOME") or ""  # unset or empty: ~/.config
+        if sys.platform == "darwin":
+            base = Path.home() / (xdg or ".config")  # qsettings.cpp: a relative value is under ~
+        else:  # qstandardpaths_unix.cpp follows the XDG spec: a relative value is ignored
+            base = Path(xdg) if os.path.isabs(xdg) else Path.home() / ".config"
     return base / "ParaView" / "Macros"
 
 

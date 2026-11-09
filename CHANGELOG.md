@@ -161,8 +161,11 @@ All notable changes to nastran-pv are listed here. The format follows
   pvpython's own error (a missing system library, ...) when it fails to start. An empty
   `XDG_CONFIG_HOME` put the macros in the current folder (#59).
 - ParaView 6.0 on Linux could crash after a Nastran filter was deleted (a VTK bug in how it frees a
-  deleted Python filter's state); the plugin's filters now release their cached data when ParaView
-  deletes them (#59).
+  deleted Python filter's state); the plugin's filters and the VTKHDF series writer now release
+  their cached data when they are deleted (#59).
+- A deleted Nastran reader, and every filter with a checklist (Load and SPC Glyphs, Nastran Files,
+  Nastran Diff and the topology filters), was never freed, so its deck, model and results stayed in
+  memory for the session; they are freed now (#59).
 
 ## [0.1.0]
 

@@ -1860,19 +1860,34 @@ def scope_filter_checks(pv, nv, reader, view, deform, full):
 
 
 def deleted_filter_checks(pv, reader):
-    """A deleted Nastran filter lets go of its cached data at once. ParaView 6.0's VTK would release
-    it later, inside vtkPythonUtil::FindObject, and corrupt its ghost map: a crash on Linux after
-    pv.Delete (nastran_bdf_reader._drop_state_on_delete)."""
+    """A deleted reader or filter is freed and lets go of its caches at once. Two things kept them:
+    ParaView 6.0's VTK released a deleted Python algorithm's dict late, inside FindObject, and
+    corrupted its ghost map (a crash on Linux; vtkutil.drop_state_on_delete), and the checklists'
+    observers and the deck's logger held their algorithm, so it was never freed at all
+    (vtkutil.modified_callback, load_deck)."""
     import gc
+    import weakref
 
-    f = pv.NastranDeform(Input=reader, ScaleFactor=2.0)
-    f.UpdatePipeline()
-    state = f.GetClientSideObject().__dict__
-    check(state.get("_deformer") is not None, "Nastran Deform caches its deformer")
-    pv.Delete(f)
-    del f
+    fresh = rm.load_reader(DECK)  # not `reader`: the other checks keep using it
+    filters = {"reader": fresh, "NastranMassGlyphs": pv.NastranMassGlyphs(Input=fresh),
+               "NastranLoadGlyphs": pv.NastranLoadGlyphs(Input=fresh),  # checklists
+               "NastranGrow": pv.NastranGrow(Input=fresh, SeedIDs="EID 1"),  # card types checklist
+               "NastranDeform": pv.NastranDeform(Input=fresh, ScaleFactor=2.0)}
+    states = {}
+    for name, proxy in filters.items():
+        proxy.UpdatePipeline()
+        states[name] = proxy.GetClientSideObject().__dict__
+    del proxy  # it would keep the last filter, and so the reader, alive
+    check(states["NastranDeform"].get("_deformer") is not None, "Nastran Deform caches its deformer")
+    deck = weakref.ref(states["reader"]["_deck"])
+    for name in ("NastranMassGlyphs", "NastranLoadGlyphs", "NastranGrow", "NastranDeform", "reader"):
+        pv.Delete(filters.pop(name))
+    del fresh
     gc.collect()
-    check(not state, f"a deleted Nastran Deform drops its cached state (left: {sorted(state)})")
+    for name, state in states.items():
+        check(not state, f"a deleted {name} is freed and drops its cached state (left: {sorted(state)})")
+    check(deck() is None, "a deleted reader frees its deck")
+    pv.SetActiveSource(reader)
 
 
 LEGS_DECK = """$ shell 1 (grids 1-4) and shell 2 (5-8), joined by CBUSH 11 (2-5) and CELAS2 12 (3-6): with shell 2

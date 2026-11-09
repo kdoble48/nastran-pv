@@ -127,3 +127,23 @@ def test_entry_points_write_no_bytecode_into_the_plugin_folder():
     assert _guarded((PLUGIN.parent / "render_model.py").read_text(encoding="utf-8"), "import nastran_views")
     ensure = _plugin_defs("ensure_plugin", path=PLUGIN.parent / "nastran_views.py")
     assert _guarded(ensure, "pv.LoadPlugin(")
+
+
+def test_settable_init_wrapper_keeps_the_init_identity():
+    """_Settable wraps each subclass __init__ (to call _drop_state_on_delete) with functools.wraps."""
+    import functools
+
+    calls = []
+    ns = {"functools": functools, "_drop_state_on_delete": calls.append}
+    exec(_plugin_defs("_Settable"), ns)
+
+    class Filter(ns["_Settable"]):
+        def __init__(self, n=1):
+            """Build the filter."""
+            self.n = n
+
+    f = Filter(3)
+    assert f.n == 3 and calls == [f]
+    assert Filter.__init__.__doc__ == "Build the filter."
+    assert Filter.__init__.__qualname__.endswith("Filter.__init__")
+    assert Filter.__init__.__wrapped__.__name__ == "__init__"

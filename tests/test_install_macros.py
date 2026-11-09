@@ -37,6 +37,16 @@ def test_xdg_config_folder_on_linux_and_macos(home, monkeypatch, platform):
     assert install_macros.macro_dir() == home / "cfg" / "ParaView" / "Macros"
 
 
+def test_relative_xdg_config_home(home, monkeypatch):
+    """Qt on macOS joins a relative XDG_CONFIG_HOME to ~ (qsettings.cpp); Qt on Linux ignores it
+    (qstandardpaths_unix.cpp: "spec says relative paths should be ignored")."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", "cfg")
+    _on(monkeypatch, "darwin")
+    assert install_macros.macro_dir() == home / "cfg" / "ParaView" / "Macros"
+    _on(monkeypatch, "linux")
+    assert install_macros.macro_dir() == home / ".config" / "ParaView" / "Macros"
+
+
 def test_appdata_on_windows(home, monkeypatch):
     _on(monkeypatch, "win32")
     assert install_macros.macro_dir() == home / "AppData" / "Roaming" / "ParaView" / "Macros"

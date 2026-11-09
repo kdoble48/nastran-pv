@@ -253,9 +253,14 @@ Every gotcha found so far, by area. The few that bite on any change are also in 
   "ghost" that `vtkPythonUtil::FindObject` releases when a new object takes its address. Releasing
   cached data objects there (they are `data_model` subclasses, so they leave ghosts too) makes it
   erase its ghost-map entry twice and corrupts the heap; pv_smoke crashed in the parity checks.
-  Every plugin algorithm derives from `_Settable`, whose `__init_subclass__` makes each `__init__`
-  end with `_drop_state_on_delete`: a `DeleteEvent` observer that empties the dict during the
-  deletion. VTK master releases the ghost only after erasing it.
+  Every Python algorithm calls `vtkutil.drop_state_on_delete` in its `__init__` (the plugin's
+  through `_Settable.__init_subclass__`; `vtkhdf._StepSource` itself): a `DeleteEvent` observer that
+  empties the dict during the deletion. VTK master releases the ghost only after erasing it.
+- A Python object that holds its algorithm keeps it alive for good when the reference runs through
+  C++ (an observer, a logger the deck keeps), because Python's garbage collector cannot see it: a
+  deleted reader or checklist filter was never freed, caches and all. Checklist observers use
+  `vtkutil.modified_callback` (a `vtkWeakReference`), and `load_deck` lets go of the caller's
+  progress when the read ends. pv_smoke deletes a reader and its filters and checks they are freed.
 - pyNastran quirks:
   - pyNastran main turns on its developer self-checks when `GITHUB_ACTOR` (or `TRAVIS`, `APPVEYOR`)
     is set (`pyNastran.IS_CI`). One of them, `_check_result_slice`, fails on the synthetic OP2

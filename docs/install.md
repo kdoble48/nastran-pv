@@ -85,10 +85,12 @@ with one.
 
 1. `pvpython` or `paraview` in `NASTRAN_PV_PARAVIEW_BIN`;
 2. the one on `PATH`;
-3. the newest ParaView, by the version in its folder name, among `C:\Program Files\ParaView*`,
+3. the newest ParaView, by the version right after "ParaView" in its folder name (a release before
+   its release candidates, equal versions by name), among `C:\Program Files\ParaView*`,
    `/Applications/ParaView*.app`, `/opt/ParaView*`, `~/Applications/ParaView*.app` and
    `~/ParaView*`. The last one is a Linux tarball unpacked in the home folder, such as
-   `~/ParaView-6.0.1-MPI-Linux-Python3.12-x86_64`.
+   `~/ParaView-6.0.1-MPI-Linux-Python3.12-x86_64`. In an `.app`, `paraview` is the GUI binary in
+   `Contents/MacOS` and `pvpython` is in `Contents/bin`.
 
 `--pvpython` (and `view --paraview`) overrides the search.
 

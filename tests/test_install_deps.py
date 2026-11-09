@@ -150,6 +150,19 @@ def test_pip_platform_tags():
     assert match(["cp312-cp312-macosx_12_0_arm64"], "312", pp("macosx-11.0-arm64", mac_version="14.0")[0])
 
 
+def test_pip_platform_on_macos_seen_through_the_compatibility_shim(monkeypatch):
+    """An interpreter built against a pre-11 SDK (or SYSTEM_VERSION_COMPAT=1) is told "10.16" on
+    macOS 11+: no wheel has macosx_10_16_arm64. Ask sw_vers for the real version, else take 11."""
+    pp = install_deps.pip_platform
+    monkeypatch.setattr(install_deps, "_real_mac_version", lambda: "14.6.1")
+    assert pp("macosx-11.0-arm64", mac_version="10.16") == ["macosx_14_0_arm64"]
+    monkeypatch.setattr(install_deps, "_real_mac_version", lambda: "")
+    assert pp("macosx-11.0-arm64", mac_version="10.16") == ["macosx_11_0_arm64"]
+    assert pp("macosx-10.15-x86_64", mac_version="10.16") == ["macosx_11_0_x86_64"]
+    assert pp("macosx-11.0-arm64", mac_version="15") == ["macosx_15_0_arm64"]  # no minor
+    assert install_deps.version_tuple("15") == (15, 0) and install_deps.version_tuple("1.14.1") == (1, 14)
+
+
 def test_default_target_is_per_paraview_python_when_installed(tmp_path, monkeypatch, capsys):
     """An installed plugin (nastran_pv/paraview/) vendors into the per-user folder of ParaView's
     Python version, not into site-packages; a checkout keeps paraview/_vendor."""

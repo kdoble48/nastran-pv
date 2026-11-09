@@ -15,6 +15,7 @@ The plugin finds its dependencies in this order:
    ``NASTRAN_PV_VENDOR_DIR``),
 4. folders listed in the ``NASTRAN_PV_SITE_PACKAGES`` environment variable.
 """
+import functools
 import importlib
 import importlib.machinery
 import itertools
@@ -209,17 +210,24 @@ def _whole_model(data):
 
 
 def _drop_state_on_delete(algorithm):
-    """Empty the algorithm's ``__dict__`` (its cached models, deformers, ...) when ParaView deletes it.
+    """``vtkutil.drop_state_on_delete``: empty the algorithm's ``__dict__`` when ParaView deletes it
+    (a stale dict released later crashes ParaView 6.0 on Linux)."""
+    try:
+        from nastran_pv.vtkutil import drop_state_on_delete
+    except ImportError:  # the reader reports a missing nastran_pv on first use
+        return
+    drop_state_on_delete(algorithm)
 
-    VTK 9.4/9.5 (ParaView 6.0) keeps a deleted Python algorithm's dict in a stale "ghost" and
-    releases it later, inside ``vtkPythonUtil::FindObject`` when a new object takes the address. The
-    data objects released then are ``data_model`` subclasses that leave ghosts of their own, and
-    adding a ghost sweeps the stale ones, so FindObject erases its map entry twice and corrupts
-    the heap (a crash on Linux; VTK master erases before the release). Released here, during the
-    deletion, the dict is empty by the time the ghost goes stale."""
-    state = algorithm.__dict__
-    if "_npv_on_delete" not in state:
-        state["_npv_on_delete"] = algorithm.AddObserver("DeleteEvent", lambda obj, event: state.clear())
+
+def _reexecutes(owner):
+    """A ``ModifiedEvent`` observer for a checklist ``owner`` keeps: re-executes ``owner`` unless it is
+    filling its lists (``vtkutil.modified_callback``, which holds it weakly: a lambda capturing
+    ``owner`` kept every deleted reader and checklist filter alive, caches and all)."""
+    try:
+        from nastran_pv.vtkutil import modified_callback
+    except ImportError:  # the reader reports a missing nastran_pv on first use
+        return lambda *args: None if owner._listing else owner.Modified()
+    return modified_callback(owner)
 
 
 class _Settable:
@@ -231,11 +239,11 @@ class _Settable:
         super().__init_subclass__(**kwargs)
         init = cls.__dict__.get("__init__")
         if init is not None:
+            @functools.wraps(init)
             def __init__(self, *args, **kw):
                 init(self, *args, **kw)
                 _drop_state_on_delete(self)
 
-            __init__.__doc__ = init.__doc__
             cls.__init__ = __init__
 
     def _set(self, attr, value):
@@ -369,7 +377,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         self._results = None
         self._results_key = None
         self._result_types = vtkDataArraySelection()  # ResultTypes: what the results file has
-        self._result_types.AddObserver("ModifiedEvent", lambda *args: None if self._listing else self.Modified())
+        self._result_types.AddObserver("ModifiedEvent", _reexecutes(self))
         self._random_asd = ""
         self._random_drive = 2
         self._random_damping = 0.05
@@ -383,7 +391,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         self._lists = {}
         for cat in _VISIBILITY.values():
             sel = vtkDataArraySelection()
-            sel.AddObserver("ModifiedEvent", lambda *args: None if self._listing else self.Modified())
+            sel.AddObserver("ModifiedEvent", _reexecutes(self))
             self._lists[cat] = sel
         self._listed_key = None
         self._reported_key = None
@@ -923,7 +931,7 @@ def _named_block(mb, name):
 def _checklist(owner):
     """A checklist property's selection: a change re-executes ``owner``, except while it is filled."""
     sel = vtkDataArraySelection()
-    sel.AddObserver("ModifiedEvent", lambda *args: None if owner._listing else owner.Modified())
+    sel.AddObserver("ModifiedEvent", _reexecutes(owner))
     return sel
 
 
@@ -1939,7 +1947,7 @@ class _TopologyFilter(_FieldFilter):
         _FieldFilter.__init__(self, n_out)
         self._listing = False
         self._cards = vtkDataArraySelection()
-        self._cards.AddObserver("ModifiedEvent", lambda *args: None if self._listing else self.Modified())
+        self._cards.AddObserver("ModifiedEvent", _reexecutes(self))
         self._groups = {g: 1 for g in _GROUPS}
         self._exclude_pids = ""
         self._within = 0

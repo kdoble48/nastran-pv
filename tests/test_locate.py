@@ -104,6 +104,10 @@ def test_user_data_dir(monkeypatch, tmp_path):
     for platform, base in expected.items():
         monkeypatch.setattr(locate, "sys", types.SimpleNamespace(platform=platform))
         assert locate.user_data_dir() == base / "nastran-pv"
+    # the XDG spec ignores a relative path (setup and ParaView run in different folders)
+    monkeypatch.setenv("XDG_DATA_HOME", "relative/data")
+    monkeypatch.setattr(locate, "sys", types.SimpleNamespace(platform="linux"))
+    assert locate.user_data_dir() == tmp_path / ".local" / "share" / "nastran-pv"
 
 
 def test_vendor_dir(tmp_path, no_env):
@@ -171,10 +175,40 @@ def test_path_and_env_come_first(search, tmp_path, monkeypatch):
 def test_macos_app_bundles(search):
     app = _touch(search / "Applications" / "ParaView-6.0.1.app" / "Contents" / "bin" / "pvpython")
     gui = _touch(search / "Applications" / "ParaView-6.0.1.app" / "Contents" / "MacOS" / "paraview")
-    if locate.EXE:
-        pytest.skip("app bundles have no .exe")
+    _touch(search / "Applications" / "ParaView-6.0.1.app" / "Contents" / "bin" / "paraview")  # a helper
     assert locate.find_executable("pvpython") == app
-    assert locate.find_executable("paraview") == gui
+    assert locate.find_executable("paraview") == gui  # the GUI binary, not a bin/ helper
+
+
+def test_paraview_versions_newest_first():
+    names = ["ParaView-superbuild-2025", "ParaView-5.9.1-MPI-Linux-Python3.8-64bit",
+             "ParaView-6.0.0-RC2-MPI-Linux-Python3.12-x86_64", "ParaView-5.13.1-osmesa-MPI-Linux-Python3.10-x86_64",
+             "ParaView-6.0.1-MPI-Linux-Python3.12-x86_64", "ParaView 6.0.0", "ParaView-6.0.1.app",
+             "ParaView-5.13.1-MPI-Linux-Python3.10-x86_64", "ParaView-6.0.0-MPI-Linux-Python3.12-x86_64"]
+    ordered = [p.name for p in locate._newest_first([Path(n) for n in names])]
+    assert ordered == [
+        "ParaView-6.0.1-MPI-Linux-Python3.12-x86_64", "ParaView-6.0.1.app",  # equal versions: by name
+        "ParaView 6.0.0", "ParaView-6.0.0-MPI-Linux-Python3.12-x86_64",
+        "ParaView-6.0.0-RC2-MPI-Linux-Python3.12-x86_64",  # a release candidate after its release
+        "ParaView-5.13.1-MPI-Linux-Python3.10-x86_64", "ParaView-5.13.1-osmesa-MPI-Linux-Python3.10-x86_64",
+        "ParaView-5.9.1-MPI-Linux-Python3.8-64bit",  # 5.13 > 5.9, and Python 3.8 or 64bit count for nothing
+        "ParaView-superbuild-2025"]  # no version: last
+    assert ordered == [p.name for p in locate._newest_first([Path(n) for n in reversed(names)])]
+
+
+def test_each_folder_is_listed_once(search, tmp_path, monkeypatch):
+    """One listing per install folder (a home folder on a network drive is slow), and the layouts
+    inside a ParaView folder are checked only until the executable is found."""
+    _pv(search, "ParaView-6.0.1-MPI-Linux-Python3.12-x86_64")
+    _pv(search, "ParaView-5.13.1-MPI-Linux-Python3.10-x86_64")
+    system = tmp_path / "Program Files"
+    system.mkdir()
+    monkeypatch.setattr(locate, "INSTALL_ROOTS", (system,))
+    listed = []
+    real = locate._list_installs
+    monkeypatch.setattr(locate, "_list_installs", lambda root: listed.append(root) or real(root))
+    assert locate.find_executable("pvpython").parents[1].name.startswith("ParaView-6.0.1")
+    assert sorted(listed) == sorted([system, search / "Applications", search])
 
 
 def test_vendor_dirs_the_plugin_searches(tmp_path, no_env):

@@ -112,21 +112,34 @@ def find_pvpython() -> str | None:
         return None
 
 
+def _real_mac_version() -> str:
+    """This Mac's version from ``sw_vers`` with the compatibility shim off ("" if unknown)."""
+    try:
+        return subprocess.run(["sw_vers", "-productVersion"], capture_output=True, text=True, timeout=10,
+                              env={**os.environ, "SYSTEM_VERSION_COMPAT": "0"}).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
 def pip_platform(sysconfig_platform: str, mac_version: str | None = None) -> list[str]:
     """pip ``--platform`` tags for ParaView's Python (its ``sysconfig.get_platform()``).
 
     Linux: manylinux2014 for its machine (x86_64, aarch64). macOS: this Mac's version (``mac_version``,
     default ``platform.mac_ver()``), since pip also accepts every older one; ParaView's own deployment
-    target (the version in its platform string, 11.0) is older than any scipy wheel for arm64 (12.0)."""
+    target (the version in its platform string, 11.0) is older than any scipy wheel for arm64 (12.0),
+    so it is only the floor. An interpreter built against a pre-11 SDK (or ``SYSTEM_VERSION_COMPAT=1``)
+    is told "10.16" on macOS 11+, a tag no wheel has: then ``sw_vers`` tells the real one, else 11."""
     p = sysconfig_platform.replace("-", "_").replace(".", "_")
     if p.startswith("linux_"):
         arch = p[len("linux_"):]
         return [f"manylinux2014_{arch}", f"manylinux_2_17_{arch}"]
     if p.startswith("macosx"):
         arch = "arm64" if p.endswith("arm64") else "x86_64"
-        version = mac_ver()[0] if mac_version is None else mac_version
-        parts = [int(n) for n in re.findall(r"\d+", version or sysconfig_platform)[:2]]
-        major, minor = (parts + [0, 0])[:2]
+        mac = version_tuple(mac_ver()[0] if mac_version is None else mac_version)
+        if mac == (10, 16):
+            mac = max(version_tuple(_real_mac_version()), (11, 0))
+        target = version_tuple(sysconfig_platform.split("-")[1] if sysconfig_platform.count("-") >= 2 else "")
+        major, minor = max(mac, target)
         return [f"macosx_{major}_0_{arch}" if major >= 11 else f"macosx_10_{minor}_{arch}"]
     return [p]  # win_amd64
 
@@ -223,14 +236,14 @@ def scipy_range(numpy_major: int):
 
 
 def version_tuple(version: str | None) -> tuple[int, int]:
-    m = re.match(r"(\d+)\.(\d+)", version or "")
-    return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+    """(major, minor) of "1.14.1", "14.6" or "15"; (0, 0) when there is none."""
+    m = re.match(r"(\d+)(?:\.(\d+))?", version or "")
+    return (int(m.group(1)), int(m.group(2) or 0)) if m else (0, 0)
 
 
 def is_main_build(version: str | None) -> bool:
     """True for a pyNastran newer than the 1.4 releases (main/dev builds are 1.5+)."""
-    m = re.match(r"(\d+)\.(\d+)", version or "")
-    return bool(m) and (int(m.group(1)), int(m.group(2))) >= (1, 5)
+    return version_tuple(version) >= (1, 5)
 
 
 def probe(pvpython: str, dirs, modules, script: str = PROBE):

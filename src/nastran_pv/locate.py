@@ -51,8 +51,9 @@ def user_data_dir() -> Path:
         base = os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local"
     elif sys.platform == "darwin":
         base = Path.home() / "Library" / "Application Support"
-    else:
-        base = os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share"
+    else:  # the XDG spec ignores a relative XDG_DATA_HOME
+        xdg = os.environ.get("XDG_DATA_HOME") or ""
+        base = xdg if os.path.isabs(xdg) else Path.home() / ".local" / "share"
     return Path(base) / "nastran-pv"
 
 
@@ -110,12 +111,33 @@ def under_appdata(path) -> bool:
 # folders that hold ParaView installs (ParaView*/bin, ParaView*.app); the home folder is searched too,
 # for tarballs unpacked there (ParaView-6.0.1-MPI-Linux-Python3.12-x86_64/bin/pvpython)
 INSTALL_ROOTS = (Path("C:/Program Files"), Path("/Applications"), Path("/opt"))
-_LAYOUTS = ("ParaView*/bin/{exe}", "ParaView*.app/Contents/bin/{name}", "ParaView*.app/Contents/MacOS/{name}")
+# inside a ParaView folder: an install or tarball's bin/, then a macOS bundle's GUI binary
+# (Contents/MacOS/paraview) before its Contents/bin/ (pvpython, and helpers named like the GUI)
+_LAYOUTS = ("bin/{exe}", "Contents/MacOS/{name}", "Contents/bin/{name}")
+_VERSION = re.compile(r"ParaView[-_ ]?v?(\d+)\.(\d+)(?:\.(\d+))?(?:[-_.]?(rc|beta|alpha)\d*)?", re.IGNORECASE)
 
 
-def _version_key(folder: str) -> tuple[int, ...]:
-    """The numbers in a ParaView folder name: ParaView-5.13.1-... sorts after ParaView-5.9.1-..."""
-    return tuple(int(n) for n in re.findall(r"\d+", folder))
+def _version_key(folder: str) -> tuple[int, int, int, int]:
+    """(major, minor, patch, release) from the version right after "ParaView" in a folder name
+    (``ParaView-6.0.1-MPI-...``, ``ParaView 6.0.0``, ``ParaView-6.0.0-RC2-...``), so a release sorts
+    after its release candidates and a folder with no leading version after every release."""
+    m = _VERSION.match(folder)
+    if not m:
+        return (-1, -1, -1, -1)
+    return (int(m[1]), int(m[2]), int(m[3] or 0), 0 if m[4] else 1)
+
+
+def _newest_first(folders) -> list[Path]:
+    """ParaView folders, the newest version first; equal versions by name, so the order is stable."""
+    return sorted(sorted(folders, key=lambda p: p.name), key=lambda p: _version_key(p.name), reverse=True)
+
+
+def _list_installs(root: Path) -> list[Path]:
+    """The ``ParaView*`` entries of one folder: a single listing (a home folder may be slow)."""
+    try:
+        return list(root.glob("ParaView*"))
+    except OSError:
+        return []
 
 
 def _candidates(name: str):
@@ -125,14 +147,13 @@ def _candidates(name: str):
     found = shutil.which(name)
     if found:
         yield Path(found)
-    installs = []  # (version of the ParaView folder right under the root, executable)
-    for root in (*INSTALL_ROOTS, Path.home() / "Applications", Path.home()):
-        if root.is_dir():
-            for layout in _LAYOUTS:
-                for cand in root.glob(layout.format(exe=f"{name}{EXE}", name=name)):
-                    installs.append((_version_key(cand.relative_to(root).parts[0]), cand))
-    for _, cand in sorted(installs, key=lambda item: item[0], reverse=True):  # the newest first
-        yield cand
+    # the newest ParaView of all folders wins, so every folder is listed (once); the layouts inside
+    # each ParaView folder are only checked until one holds the executable
+    folders = [f for root in (*INSTALL_ROOTS, Path.home() / "Applications", Path.home())
+               for f in _list_installs(root)]
+    for folder in _newest_first(folders):
+        for layout in _LAYOUTS:
+            yield folder / layout.format(exe=f"{name}{EXE}", name=name)
 
 
 def find_executable(name: str) -> Path:
