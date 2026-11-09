@@ -702,6 +702,29 @@ def remove_result_arrays(mb, registry=result_types.REGISTRY) -> None:
 
 
 STEP_FIELDS = ("Time", "PhaseAngle")  # root fields of transient and of complex steps only
+STEP_LABELS = ("ResultLabel", "ResultStep", "Frequency")  # root fields every step writes
+
+
+def step_name(step) -> str:
+    """A step's name as the views show it: its ``ResultLabel``, with its frequency when it has one
+    and the label does not say it (``Subcase 1 mode 3 (45.2 Hz)``)."""
+    label = step.label
+    freq = getattr(step, "frequency", float("nan"))
+    if freq is not None and np.isfinite(freq) and "Hz" not in label:
+        label += f" ({float(freq):.6g} Hz)"
+    return label
+
+
+def step_arrays(registry=result_types.REGISTRY) -> tuple[frozenset, frozenset]:
+    """``(point and cell array names, root field names)`` a step attaches: the registry's arrays with
+    their complex parts, its resultants and tables, and the step's label fields. What a model shows
+    for a step it does not have (scene layers R5) leaves out."""
+    arrays, fields = set(), set(STEP_FIELDS + STEP_LABELS)
+    for rtype in registry:
+        for spec in rtype.arrays:
+            arrays.update((spec.name,) + result_types.part_names(spec, rtype.complex))
+        fields.update(rtype.resultant_names + rtype.table_names)
+    return frozenset(arrays), frozenset(fields)
 
 
 def attach_step(results, mb, step_index: int, deck=None) -> None:

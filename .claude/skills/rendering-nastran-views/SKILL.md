@@ -37,7 +37,12 @@ python -m nastran_pv render $DECK --preset loads  --views showcase     --out sho
    shows phase k; don't call `scene.Play()` with Loop on from a script, it never returns);
    `nv.stop_mode_animation()` or any `nv.apply` undoes it. The GUI buttons are *NPV Animate Mode*
    (vibrates, then leaves Play looping it) / *NPV Stop Mode Animation* / *NPV Animate All Modes* /
-   *NPV Save Mode Animations*.
+   *NPV Save Mode Animations*. They never redraw the view (only an empty one gets `results`). In a
+   comparison they move both models, B's mode and A's step of the same index at B's amplitude
+   (`docs/paraview.md#comparing-two-models`).
+   Each view has one text, `NPV info [RenderView1]` (`nv.info_of(view)` reads it): its layers' summaries,
+   the one clicked last in full; after NPV Diff the diff summary comes first. Two open decks with one
+   file name are labelled by folder (`a/model.bdf`), in texts and `NPV ...` names (`nv._label(reader)`).
    A `.vtm`/`.vtkhdf` from `convert` also works (and skips the slow deck read on big models), but
    not with `--results`/`--nsm-set`: convert with those instead.
 2. **Run renders in the background** (`run_in_background`; the user asked for this) and tell the
