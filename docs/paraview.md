@@ -19,6 +19,10 @@ one-click views on the Macros toolbar. For step-by-step walkthroughs, see
 
 `nastran-pv view DECK --view masses` does all of this in one command.
 
+Output Messages lists the deck's warnings and, last, the card report: a one-line count of the cards
+no block draws, by card type ([Cards not drawn](model.md#cards-not-drawn); `nastran-pv convert`
+prints the full table).
+
 Open the run deck (the file with `INCLUDE`s) rather than a geometry include. Material and property
 cards often live in the run deck. A bare geometry file still loads, but without MID, density or mass.
 
@@ -48,7 +52,7 @@ The reader outputs a model tree, in the spirit of Femap's Model Info tree. Open 
 *View > MultiBlock Inspector*:
 
 ```
-Model/         Shells  Solids  Lines  Masses  Rigid  Connectors  Bushes  Constraints  Loads/LOAD_1001 …
+Model/         Shells  Solids  Lines  Masses  Rigid  Connectors  Plotels  Bushes  Constraints  Loads/LOAD_1001 …
 Properties/    PSHELL_101  PCOMP_7  PBUSH_3 …        (PID_<n> when the card is missing)
 Materials/     MAT1_1  MAT8_2 …                      (MID_<n> when the card is missing)
 ElementTypes/  CQUAD4  CTRIA3  CHEXA  RBE2  CBUSH …

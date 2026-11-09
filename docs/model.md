@@ -9,13 +9,14 @@ out when the deck has nothing for it.
 
 | Block | Data | Main arrays |
 |---|---|---|
-| `Shells` | CTRIA3/6, CTRIAR, CQUAD4/8, CQUAD, CQUADR, CSHEAR | cell: `EID PID MID ElementType Thickness Density MassPerArea ElementMass FamilyId GroupId Normal ElementXAxis MaterialAxis`, with NSM also `NSMPerArea NSMMass NSMSource`; point: `NID SPC_DOF F_<sid> M_<sid>` |
+| `Shells` | CTRIA3/6, CTRIAR, CQUAD4/8, CQUAD (9 grids: biquadratic, no G9: 8-node quadratic), CQUADR, CSHEAR | cell: `EID PID MID ElementType Thickness Density MassPerArea ElementMass FamilyId GroupId Normal ElementXAxis MaterialAxis`, with NSM also `NSMPerArea NSMMass NSMSource`; point: `NID SPC_DOF F_<sid> M_<sid>` |
 | `Solids` | CHEXA/CPENTA/CTETRA/CPYRAM, linear and quadratic | cell: `EID PID MID ElementType Density ElementMass`; point: as for shells |
 | `Lines` | CBAR, CBEAM, CROD, CONROD, CTUBE, CVISC, CBEND | cell: `EID PID MID ElementType Density Area ElementMass Axis1-3 OffsetA OffsetB` (frame and offsets of CBAR/CBEAM, NaN for the others), with NSM also `NSMPerLength NSMMass NSMSource` |
 | `Masses` | CONM2, CONM1, CMASS1/2 (one point at the CG) | point: `EID NID CID Mass MassScale Inertia InertiaEllipsoid EquivalentRadius Offset HasInertia`; field: `TotalMass` |
 | `MassOffsets` | grid-to-CG lines for offset CONM2s | `EID` |
 | `Rigid` | RBE2/RBE3/RBAR/... spider legs | cell: `EID RigidType DOF`; point: `NID` |
-| `Connectors` | MPC, CELAS1/2, CDAMP1/2, CGAP, CFAST (GA/GB form) legs | cell: `EID ConnectorType DOF PID` (MPC legs: `EID` = MPC set id); point: `NID` |
+| `Connectors` | MPC, CELAS1/2, CDAMP1/2/5, CGAP, CFAST (GA/GB form) legs between two grids | cell: `EID ConnectorType DOF PID` (MPC legs: `EID` = MPC set id); point: `NID` |
+| `Plotels` | PLOTEL lines (no stiffness or mass, not traversed by the [model tools](tools.md)) | cell: `EID ElementType`; point: `NID` |
 | `Bushes` | CBUSH spring locations | point: `EID PID GA GB K Axis1-3 K1dir…K6dir KTransTensor KRotTensor KTransLogTensor KRotLogTensor`; field: `KRef KLogMax KRotRef KRotLogMax` |
 | `BushLines` | CBUSH GA–GB lines | cell: `EID PID`; point: `NID` |
 | `Constraints` | SPC/SPC1/SPCADD/GRID PS points per set | point: `NID SPCSet SPC_DOF DOFCode CD`, plus `SPCEnforced` (6: the SPC enforced value per DOF) when a value is not 0 |
@@ -29,7 +30,7 @@ Categorical arrays keep their names in block field data: `ElementTypeNames`, `Ri
 ## Include files
 
 A deck that reads more than one file (INCLUDEs, nested or not) gets `FileId` on every block with
-an `EID`: Shells, Solids, Lines, Masses (point array), MassOffsets, Rigid, Connectors, Bushes
+an `EID`: Shells, Solids, Lines, Masses (point array), MassOffsets, Rigid, Connectors, Plotels, Bushes
 (point array), BushLines and BeamSections. `FileId` is the file that holds the element's own card,
 in read order (0 is the main file); it is -1 where the file is unknown (a card made by `=`
 replication) and on MPC legs, whose `EID` is the MPC set id. Grids, SPCs and loads have no file,
@@ -44,7 +45,10 @@ character other than letters, digits and `_` turned into `_`: `wing.bdf` becomes
 those characters. These arrays are what the [Files branch and checklist](paraview.md#include-files)
 use, also on a converted `.vtm` or VTKHDF. A single-file deck gets none of them.
 
-Root field data: `DeckPath SOL WTMASS ActiveLoadSets ActiveSPCSets StructuralMass ConcentratedMass ModelMass ModelCG`,
+Root field data: `DeckPath SOL WTMASS ActiveLoadSets ActiveSPCSets ActiveMPCSets StructuralMass ConcentratedMass ModelMass ModelCG`,
+the card report `SKIPPED_Card SKIPPED_Count SKIPPED_Reason SKIPPED_IDs` and `SkippedCardCount` (see
+[Cards not drawn](#cards-not-drawn)), the MPCADD sets `MPCADD_ID MPCADD_Set` (one row per MPC set
+of each MPCADD, nested MPCADDs expanded; decks with MPCADD),
 `Warnings` (when there are any), the material table `MAT_ID MAT_Type MAT_E MAT_E2 MAT_G MAT_Nu MAT_Rho`
 (one row per material card), the coordinate systems `CORD_ID CORD_Type CORD_RID CORD_Origin CORD_Axes`
 and `CoordSystemCount` (see [Coordinate systems](#coordinate-systems)), the grid systems
@@ -156,8 +160,49 @@ with a warning. Warnings that change the mass are listed first, so the CLI's and
 shortened lists show them. The `nsm` view shows all of this
 ([toolbar macros](paraview.md#one-click-views-toolbar-macros)).
 
+## Cards not drawn
+
+Every bulk-data card is drawn (a block shows it), used (its values become arrays or root tables:
+properties, materials, coordinate systems, NSM, PMASS, PARAM), analysis control with nothing to draw
+(EIGRL, FREQ, TABLED1, DESVAR, FLUTTER, DOF sets, ...), or **skipped**. The skipped cards are the
+card report: `convert` prints it after the block list, `stats` on stderr, the reader in its message in
+Output Messages, and the root table keeps it, so a converted file reports what its deck did.
+
+```text
+22 card(s) of 18 type(s) not drawn:
+  Card     Count  Reason                      IDs
+  CTRIAX6  2      not drawn                   EID 40 41
+  PLOAD4   2      not drawn                   SID 9
+  SPOINT   2      scalar points, no location  ID 101 102
+  CELAS2   1      grounded, one grid          EID 31
+  ...
+```
+
+A deck with nothing skipped prints `card report: every card is drawn or used`.
+
+One row per card type and reason, most cards first. `Count` is what pyNastran stored (elements,
+load entries, matrices, scalar points); `IDs` lists up to five ids (EID, SID for load and constraint
+sets, SE for superelements) and ends with `...` when there are more. The reasons:
+
+| Reason | Cards |
+|---|---|
+| `not drawn` | card types no block shows: axisymmetric, plane and heat-transfer elements (CTRIAX/CTRIAX6/CQUADX, CPLSTN/CPLSTS, CHBDY*), CBUSH1D/2D, GENEL, CBEAM3, PLOAD*, TEMP, SPCD, LSEQ, SPCAX, SUPORT, dynamic loads (DAREA, TLOAD*, RLOAD*), CAERO panels and splines, contact bodies, bolts, any card type nastran-pv does not know |
+| `scalar points, no location` | SPOINT/EPOINT and what connects only them (CELAS3/4, CDAMP3/4, CMASS3/4), and CELAS1/2, CDAMP1/2/5 with an end on a scalar point. Scalar points have no coordinates, so these are counted, not drawn; their mass is not in `ModelMass` |
+| `grounded, one grid` | CELAS1/2, CDAMP1/2/5, CGAP with one grid (or two DOFs of one grid): no line to draw |
+| `patch form, no GA/GB` | CFAST given by patches only |
+| `matrix input` | DMIG, DMI, DMIJ, DMIJI, DMIK, DMIAX |
+| `superelement` | the cards of a `BEGIN SUPER` section (data and control cards left out) and the superelement cards (SEBULK, SECONCT, SELOC, ...) |
+| `not read` | cards pyNastran rejected (unknown to it), and CWELD, which nastran-pv turns off because pyNastran 1.5 aborts the read on some of its forms |
+
+A card of a drawn type whose grid is missing is a warning instead: that is a broken deck, not a
+card nastran-pv cannot draw. Rows for forms of drawn cards (grounded, scalar point, patch) are made
+when their block is built, so `--no-connectors` drops them. `SkippedCardCount` is the total (0 when
+every card is drawn or used); a file without it predates the report. The design notes are in
+`docs/design/2026-11-08-card-report.md`.
+
 ## Not visualized yet
 
-Pressure loads (PLOAD*), scalar-point masses and springs (CMASS3/4, CELAS3/4), grounded springs,
-CFAST patch forms, CWELD (not read), and GRAV as nodal forces (GRAV is
-reported as field data only).
+Everything in the [card report](#cards-not-drawn) (pressure loads, axisymmetric and heat-transfer
+elements, CBUSH1D/2D, GENEL, DMIG, superelements, grounded springs, CFAST patch forms, CWELD,
+PLOTEL3/4/6/8 and the 3D plot elements), and GRAV as nodal forces (GRAV is reported as field data
+only). Scalar-point cards stay in the report: they have no location to draw at.

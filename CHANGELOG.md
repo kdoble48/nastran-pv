@@ -8,6 +8,16 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Added
 
+- Card report: every card no block draws is counted per card type and reason (not drawn, scalar
+  points, grounded, patch form, matrix input, superelement, not read), with its first ids.
+  `convert` prints it, `stats` on stderr, the reader in Output Messages, and the root table
+  `SKIPPED_Card SKIPPED_Count SKIPPED_Reason SKIPPED_IDs` plus `SkippedCardCount` keep it in
+  `.vtm`/VTKHDF. It replaces the scattered CMASS3/4, CWELD, CFAST patch, SPC and load-type
+  warnings, and covers what was dropped without a word (CTRIAX6, CQUADX, CBUSH1D/2D, CHBDY*,
+  GENEL, DMIG, superelements, grounded springs, cards pyNastran rejected). New `Plotels` block
+  (PLOTEL lines, `--no-plotels`, reader *Plotels*); CQUAD with nine grids is a biquadratic cell
+  (quadratic without G9); CDAMP5 joins the Connectors; MPCADD is resolved into the root
+  `MPCADD_ID MPCADD_Set` table, with `ActiveMPCSets` from Case Control (#PR).
 - Include-file groups: a deck read from two or more files gets `FileId` (and `FileNames`,
   `FileParents`, root `FILE_Name FILE_Path FILE_Parent`), so each element, mass, rigid element and
   connector belongs to the INCLUDE file that holds its card. The reader gains a *Visible Files*

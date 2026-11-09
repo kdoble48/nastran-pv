@@ -1,0 +1,81 @@
+$ Card report deck (tests/test_cards.py): the cards nastran-pv draws since the report (9-node
+$ CQUAD, PLOTEL, MPCADD, CDAMP5) and one of each kind of skipped card, with the counts worked
+$ out by hand in test_cards.REPORT.
+SOL 101
+CEND
+SUBCASE 1
+  MPC = 60
+  SPC = 1
+  LOAD = 9
+BEGIN BULK
+$ a 2 x 1 plate on a 0.5 grid: rows y = 0, 0.5, 1 hold grids 1-5, 6-10, 11-15
+GRID,1,,0.,0.,0.
+GRID,2,,0.5,0.,0.
+GRID,3,,1.,0.,0.
+GRID,4,,1.5,0.,0.
+GRID,5,,2.,0.,0.
+GRID,6,,0.,0.5,0.
+GRID,7,,0.5,0.5,0.
+GRID,8,,1.,0.5,0.
+GRID,9,,1.5,0.5,0.
+GRID,10,,2.,0.5,0.
+GRID,11,,0.,1.,0.
+GRID,12,,0.5,1.,0.
+GRID,13,,1.,1.,0.
+GRID,14,,1.5,1.,0.
+GRID,15,,2.,1.,0.
+SPOINT,101,102
+MAT1,1,7.e10,,0.3,2.
+PSHELL,1,1,0.1
+$ drawn: CQUAD 10 with all 9 grids (biquadratic), CQUAD 11 without G9 (quadratic)
+CQUAD,10,1,1,3,13,11,2,8
+,12,6,7
+CQUAD,11,1,3,5,15,13,4,10
+,14,8
+$ drawn: PLOTEL lines, MPC legs, MPCADD 60 = sets 50 + 51, CDAMP5 between two grids
+PLOTEL,20,1,5
+PLOTEL,21,11,15
+MPC,50,1,1,1.,15,1,-1.
+MPC,51,5,2,1.,11,2,-1.
+MPC,52,2,3,1.,14,3,-1.
+MPCADD,60,50,51
+MAT4,2,1.
+PDAMP5,5,2,1.
+CDAMP5,30,5,1,2
+$ drawn types in a form no block draws
+CELAS2,31,10.,3,1
+CELAS2,32,10.,3,1,101,0
+CFAST,39,7,PROP,1,1
+,0.5,0.,0.
+PFAST,7,1.,,,1.,1.,1.
+$ scalar points only
+PELAS,3,100.
+PDAMP,4,1.
+PMASS,6,2.
+CELAS3,33,3,101,102
+CELAS4,34,5.,101
+CDAMP3,35,4,101,102
+CDAMP4,36,2.,101
+CMASS3,37,6,101,102
+CMASS4,38,3.,101
+$ not drawn
+CTRIAX6,40,1,1,2,3,8,13,7
+CTRIAX6,41,1,3,4,5,10,15,9
+PBUSH1D,8,100.
+CBUSH1D,43,8,1,2
+GENEL,44,,1,1,2,1
+,UD,,3,1
+,K,1.,2.,3.
+PHBDY,9,1.
+CHBDYP,45,9,POINT,,,1
+DMIG,KAAX,0,6,2
+DMIG,KAAX,1,1,,1,1,1.
+SUPORT,3,3
+FORCE,9,3,0,1.,0.,0.,1.
+PLOAD4,9,10,1.
+PLOAD4,9,11,2.
+SPC1,1,123,1
+$ not read: an unknown card, and CWELD (turned off: pyNastran 1.5 aborts on some forms)
+FOOBAR,1,2
+CWELD,80,9,1,,,PARTPAT,1,2
+ENDDATA

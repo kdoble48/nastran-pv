@@ -17,7 +17,7 @@ pvpython code.
 
 | Change | Files |
 |---|---|
-| New element/card in an existing block | `builders/<block>.py`. A new type code goes **only** in `categories.py` (`ELEMENT_TYPES`/`RIGID_TYPES`/`CONNECTOR_TYPES` are global tables shared by every block's indexed LUT: append, never reorder). Solid cells need the winding check (`solids.FLIP`). |
+| New element/card in an existing block | `builders/<block>.py`; the card leaves the card report by itself when its type is in the builder's table that `cards.drawn_types` reads (else add it to `cards.DRAWN_OTHER`), and a form the builder cannot draw goes to `deck.skip(card, reason, eid)`, not a warning per card. A new type code goes **only** in `categories.py` (`ELEMENT_TYPES`/`RIGID_TYPES`/`CONNECTOR_TYPES` are global tables shared by every block's indexed LUT: append, never reorder). Solid cells need the winding check (`solids.FLIP`). |
 | Topology (a new traversable block, rule or check) | A line/cell block with a `NID` point array joins the graph through `topology/graph.py` `GRAPH_BLOCKS` (group alias + type array + names table); checks live in `topology/check.py` `CHECKS`/`SEVERITY`/`FUNCS`; the plugin's `_TopologyFilter` and `_Traversal`; docs/tools.md. Test on `tests/data/topology.bdf` with hand-counted values. |
 | New block | `builders/<new>.py` (geometry via `vtkutil`/`common.CellTable`; return None when empty) → `assemble.Options` field + build call → `cli.BLOCK_FLAGS` (gives `--no-<block>`) → reader `_FLAGS` + `@smproperty.intvector` toggle in `paraview/nastran_bdf_reader.py`. Block names must be valid XML names. Then decide **for each** mesh-block list whether the block belongs in it (see below). |
 | New cell/point array | The builder. Use `vtkutil.add_array(..., skip_all_nan=True)`, because all-NaN arrays break the XML reader. If it is categorical, add legend names in `labels_for` (`nastran_views.py`). `index_colors` is generic. |
@@ -49,7 +49,8 @@ views and proxies; `cli.md`/`fields.md`/`store.md` for flags) **in the same chan
   pin block order and counts (`test_assemble.py::test_block_names`, the `tiny_run` counts), so update
   them on purpose. Don't just make them pass.
 - Add the bad-input cases (missing grid, grounded or scalar-point connection) to
-  `test_robustness.py`: a warning plus a skip, never an exception.
+  `test_robustness.py`: a warning (missing grid) or a card-report row (grounded, scalar point) plus a
+  skip, never an exception. `tests/data/cards.bdf` / `test_cards.py` pin the card report's counts.
 - Plugin, view or block changes: extend `tests/pv_smoke.py` (expected block names, the toggle).
 - OP2 data: synthesize it in `tests/op2_fixture.py` (no pytest imports there; `pv_smoke` shares it).
 

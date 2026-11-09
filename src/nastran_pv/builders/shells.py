@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 from vtkmodules.vtkCommonDataModel import (
+    VTK_BIQUADRATIC_QUAD,
     VTK_QUAD,
     VTK_QUADRATIC_QUAD,
     VTK_QUADRATIC_TRIANGLE,
@@ -14,7 +15,9 @@ from ..deck import RECTANGULAR, Deck
 from ..families import Families
 from .common import CellTable, add_mid_density, compact_mesh, property_info, shell_mass_per_area, unit
 
-# etype -> (corner count, linear vtk type, full node count, quadratic vtk type)
+# etype -> (corner count, linear vtk type, full node count, quadratic vtk type). A cell is
+# quadratic when all its grids are given, else linear; a CQUAD without its centre grid G9 is an
+# 8-node quadratic quad (PARTIAL).
 SHELLS = {
     "CTRIA3": (3, VTK_TRIANGLE, 3, None),
     "CTRIAR": (3, VTK_TRIANGLE, 3, None),
@@ -23,8 +26,9 @@ SHELLS = {
     "CQUADR": (4, VTK_QUAD, 4, None),
     "CSHEAR": (4, VTK_QUAD, 4, None),
     "CQUAD8": (4, VTK_QUAD, 8, VTK_QUADRATIC_QUAD),
-    "CQUAD": (4, VTK_QUAD, 9, None),
+    "CQUAD": (4, VTK_QUAD, 9, VTK_BIQUADRATIC_QUAD),
 }
+PARTIAL = {"CQUAD": (8, VTK_QUADRATIC_QUAD)}
 
 
 def build_shells(deck: Deck, families: Families):
@@ -45,8 +49,11 @@ def build_shells(deck: Deck, families: Families):
             deck.warn(f"{elem.type} {eid}: missing grid(s), skipped")
             continue
         full = nids[:nfull]
+        part = PARTIAL.get(elem.type)
         if quad_type is not None and len(full) == nfull and all(n in grids for n in full):
             table.add(eid, elem.Pid(), elem.type, quad_type, full)
+        elif part is not None and all(n in grids for n in nids[:part[0]]):
+            table.add(eid, elem.Pid(), elem.type, part[1], nids[:part[0]])
         else:
             table.add(eid, elem.Pid(), elem.type, lin_type, corner)
         corners.append(corner + [corner[0]] * (4 - ncorner))

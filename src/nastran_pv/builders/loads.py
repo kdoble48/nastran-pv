@@ -1,7 +1,6 @@
 """Static nodal loads (FORCE*, MOMENT*, LOAD combinations, GRAV) -> vectors."""
 from __future__ import annotations
 
-from collections import defaultdict
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -48,7 +47,8 @@ def _direction(deck: Deck, card) -> np.ndarray:
     raise TypeError(card.type)
 
 
-def direct_load_set(deck: Deck, sid: int, unsupported: dict[str, int]) -> LoadSet:
+def direct_load_set(deck: Deck, sid: int) -> LoadSet:
+    """The FORCE*/MOMENT* and GRAV cards of set ``sid``; the other load cards are in the card report."""
     ls = LoadSet(sid)
     for card in deck.model.loads.get(sid, []):
         t = card.type
@@ -61,8 +61,6 @@ def direct_load_set(deck: Deck, sid: int, unsupported: dict[str, int]) -> LoadSe
             elif t == "GRAV":
                 n = np.asarray(card.N, dtype=float)
                 ls.grav.append(float(card.scale) * deck.vector_to_basic(card.Cid(), n, np.zeros(3)))
-            else:
-                unsupported[t] = unsupported.get(t, 0) + 1
         except (KeyError, ValueError, TypeError) as exc:
             deck.warn(f"{t} in load set {sid}: skipped ({exc})")
     return ls
@@ -71,14 +69,12 @@ def direct_load_set(deck: Deck, sid: int, unsupported: dict[str, int]) -> LoadSe
 def load_sets(deck: Deck) -> dict[int, LoadSet]:
     """All direct load sets plus resolved LOAD combinations, keyed by SID."""
     model = deck.model
-    unsupported: dict[str, int] = defaultdict(int)
-    direct = {sid: direct_load_set(deck, sid, unsupported) for sid in model.loads}
+    direct = {sid: direct_load_set(deck, sid) for sid in model.loads}
     out = dict(direct)
     for sid, cards in model.load_combinations.items():
         combo = LoadSet(sid, combined=True)
         for card in cards:
-            if card.type != "LOAD":
-                unsupported[card.type] += 1
+            if card.type != "LOAD":  # LSEQ, CLOAD: in the card report
                 continue
             for si, lid in zip(card.scale_factors, card.load_ids):
                 lid = int(lid) if not hasattr(lid, "sid") else lid.sid
@@ -87,8 +83,6 @@ def load_sets(deck: Deck) -> dict[int, LoadSet]:
                     continue
                 combo.add(direct[lid], float(card.scale) * float(si))
         out[sid] = combo
-    for t, n in unsupported.items():
-        deck.warn(f"{n} {t} card(s) not visualized")
     return out
 
 

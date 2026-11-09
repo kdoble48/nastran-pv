@@ -32,7 +32,8 @@ from .assemble import Options, add_beam_sections, block_names, build_multiblock,
 from .progress import Progress
 from .vtkio import MODEL_SUFFIXES, read_model, write_series, write_vtm
 
-BLOCK_FLAGS = ("shells", "lines", "solids", "masses", "rigid", "connectors", "bushes", "constraints", "loads")
+BLOCK_FLAGS = ("shells", "lines", "solids", "masses", "rigid", "connectors", "plotels", "bushes", "constraints",
+               "loads")
 
 __all__ = ["main", "write_vtm", "write_series", "summarize"]
 
@@ -303,6 +304,7 @@ def cmd_convert(args) -> int:
     print("\n".join(summarize(mb)))
     for n in notes:
         print(n)
+    print_skipped(mb)
     print_warnings(model_warnings(mb, deck))
     return 0
 
@@ -405,6 +407,14 @@ def model_warnings(mb, deck) -> list[str]:
     return list(deck.warnings) if deck is not None else field_strings(mb, "Warnings")
 
 
+def print_skipped(mb, file=None) -> None:
+    """The card report: the cards no block draws (root ``SKIPPED_*``, so a converted file prints it too)."""
+    from . import cards
+
+    for line in cards.lines(cards.read(mb)):
+        print(line, file=file)
+
+
 def print_warnings(warnings, file=None, limit=10) -> None:
     """The first ``warnings`` (mass ones come first, see ``Deck.warn``)."""
     if not warnings:
@@ -421,7 +431,8 @@ def cmd_stats(args) -> int:
     mb, deck, _ = load_model(args, args.verbose)
     apply_field_options(mb, args)
     mb, selected = apply_select_options(mb, args)
-    print_warnings(model_warnings(mb, deck), file=sys.stderr)  # stderr: the table (or --csv) stays clean
+    print_skipped(mb, file=sys.stderr)  # stderr: the table (or --csv) stays clean
+    print_warnings(model_warnings(mb, deck), file=sys.stderr)
     for n in selected:
         print(n, file=sys.stderr)
     rows = group_stats(mb, args.by, args.field, broadcast=False)

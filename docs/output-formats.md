@@ -46,7 +46,8 @@ Every command, view and filter that takes a deck also takes the `.vtkhdf` or `.v
 same `stats`, `check`, `sections`, `diff` and `store` output, and the same Nastran filter
 outputs and views in ParaView. The tests check this for every entry point
 (`tests/test_vtkhdf_parity.py`, and `parity_checks` in `tests/pv_smoke.py`). The CLI also prints
-the warnings the file was converted with, and `store add` records the original deck.
+the card report and the warnings the file was converted with, and `store add` records the
+original deck.
 
 A converted file is fixed at conversion time, so these need the deck and are refused on a file
 with a message that names them:

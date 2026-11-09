@@ -38,7 +38,8 @@ step, `--step N` (0-based, default 0); `--all-steps` writes them all. On a conve
 the `SPC_DOF`/`F_<sid>` point arrays off the mesh blocks, and `--ascii` writes ASCII XML for
 debugging.
 
-`--no-<block>` skips a block, and `--k-ref` sets the reference translational stiffness for the bush bars (see
+`--no-<block>` skips a block (`shells`, `lines`, `solids`, `masses`, `rigid`, `connectors`, `plotels`,
+`bushes`, `constraints`, `loads`), and `--k-ref` sets the reference translational stiffness for the bush bars (see
 [Model blocks and arrays](model.md#derived-quantities)). `--nsm-set ID` picks the bulk NSM set
 (default: Case Control `NSM=`; `0` = none; see [Nonstructural mass](model.md#nonstructural-mass));
 `view` and `render` take it too. An output ending in `.vtkhdf`, or
@@ -66,8 +67,10 @@ every 5 s instead. Stdout (the block summary and the tables) is unchanged. `-q`/
 the progress off, and `-v`/`--verbose` also echoes pyNastran's warnings as they come. In
 ParaView, the same stages and card counts drive the reader's progress bar.
 
-`convert` ends with the deck's first ten warnings, and `stats` and `check` print them to stderr
-(so the table and `--csv` stay clean). A failed cross-reference comes first, then the warnings
+`convert` ends with the card report (every card no block draws, one line per card type and
+reason; see [Cards not drawn](model.md#cards-not-drawn)) and the deck's first ten warnings. `stats`
+prints both to stderr and `check` the warnings (so the table and `--csv` stay clean); on a
+converted file they are the ones it was written with. A failed cross-reference comes first, then the warnings
 that change the mass (NSM ids that match no element, excluded structural mass, impossible
 inertia), then pyNastran's own.
 

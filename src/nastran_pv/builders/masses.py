@@ -62,8 +62,7 @@ def _cmass_mass(model, m) -> float:
 def build_masses(deck: Deck):
     """Return ``(points_block, offset_lines_block)``; either may be None."""
     model = deck.model
-    rows = []  # (eid, nid, cid, mass, cg, offset, inertia, card)
-    skipped: dict[str, int] = {}
+    rows = []  # (eid, nid, cid, mass, cg, offset, inertia, card); CMASS3/4 (scalar points) are reported
     for eid, m in model.masses.items():
         if m.type == "CONM2":
             nid = m.Nid()
@@ -111,11 +110,7 @@ def build_masses(deck: Deck):
             # grounded: at the grid; between two grids: at the midpoint
             rows.append((eid, int(nodes[0]), 0, _cmass_mass(deck.model, m), deck.xyz[gidx].mean(axis=0),
                          np.zeros(3), np.zeros((3, 3)), m.type))
-        else:
-            skipped[m.type] = skipped.get(m.type, 0) + 1
 
-    for t, k in skipped.items():
-        deck.warn(f"{k} {t} card(s) not shown (scalar-point masses have no location)")
     if not rows:
         return None, None
 

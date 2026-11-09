@@ -1221,6 +1221,37 @@ def _listed(diffs, limit=12):
     return "".join("\n  " + d for d in diffs[:limit])
 
 
+def card_report_checks(pv, nv):
+    """tests/data/cards.bdf: the Plotels block and its toggle, the biquadratic CQUAD, the card report's
+    root table, and its summary line in the reader's messages (test_cards.py has the counts)."""
+    from vtkmodules.vtkCommonCore import vtkFileOutputWindow, vtkOutputWindow
+
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        log = os.path.join(tmp, "messages.txt")
+        previous = vtkOutputWindow.GetInstance()
+        win = vtkFileOutputWindow()
+        win.SetFileName(log)
+        win.FlushOn()
+        vtkOutputWindow.SetInstance(win)
+        try:
+            reader = rm.load_reader(os.path.join(HERE, "data", "cards.bdf"))
+            model = rm.Model(reader)
+        finally:
+            vtkOutputWindow.SetInstance(previous)
+        with open(log, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    check(model.names == ["Shells", "Connectors", "Plotels", "Constraints", "Loads"], f"cards: blocks {model.names}")
+    check(model.field("SkippedCardCount").tolist() == [22] and "CTRIAX6" in model.field_strings(None, "SKIPPED_Card"),
+          "cards: the SKIPPED_ table on the reader's output")
+    check("22 card(s) of 18 type(s) not drawn: 2 CTRIAX6" in text, "cards: the card report in the reader's messages")
+    shells = model.block("Shells")
+    check(sorted(shells.GetCellType(i) for i in range(shells.GetNumberOfCells())) == [23, 28],
+          "cards: CQUAD drawn biquadratic (9 grids) and quadratic (no G9)")
+    reader.Plotels = 0
+    check("Plotels" not in rm.Model(reader).names, "Plotels toggle removes the block")
+    pv.Delete(reader)
+
+
 def parity_checks(pv, nv):
     """Deck vs converted file: the deck reader and ParaView's reader on the .vtkhdf (or .vtm) that
     `convert` wrote give the same model, the same output from every Nastran filter and the same
@@ -1240,7 +1271,8 @@ def parity_checks(pv, nv):
         with open(table, "w") as f:
             f.write("PID,Allow\n1,10\n2,20\n3,30\n")
         cases = [("tiny_run", ".vtkhdf", None), ("tiny_run", ".vtm", None), ("beams", ".vtkhdf", None),
-                 ("topology", ".vtkhdf", None), ("nsm", ".vtkhdf", None), ("tiny_run", ".vtkhdf", op2)]
+                 ("topology", ".vtkhdf", None), ("nsm", ".vtkhdf", None), ("cards", ".vtkhdf", None),
+                 ("tiny_run", ".vtkhdf", op2)]
         for name, suffix, results in cases:
             deck = os.path.join(HERE, "data", name + ".bdf")
             path = os.path.join(tmp, name + ("_series" if results else "") + suffix)
@@ -1645,6 +1677,8 @@ def main():
     group_scope_checks(pv, nv)
     pv.SetActiveSource(reader)
     selection_file_checks(pv, nv, reader)
+    card_report_checks(pv, nv)
+    pv.SetActiveSource(reader)
 
     from op2_fixture import make_op2  # synthesized results, written with pyNastran
 

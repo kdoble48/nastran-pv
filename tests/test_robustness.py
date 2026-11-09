@@ -142,13 +142,46 @@ PGAP,10
 
 
 def test_connector_edge_cases_warn_and_skip(tmp_path):
+    from nastran_pv import cards
+
     deck = load_deck(write(tmp_path, "conn.bdf", CONNECTOR_EDGE_CASES), echo=False)
-    con = get_block(build_multiblock(deck), "Connectors")
+    mb = build_multiblock(deck)
+    con = get_block(mb, "Connectors")
     assert arr(con, "EID", "cell").tolist() == [9]  # only the CGAP connects two known grids
     text = "\n".join(deck.warnings)
-    assert "CFAST 4: patch form" in text
-    assert "CWELD: 1 card(s)" in text
-    assert "connectors: 1 leg(s) reference unknown grids" in text  # CELAS2 2 -> grid 777; CELAS3 is not drawn
+    assert "connectors: 1 leg(s) reference unknown grids" in text  # CELAS2 2 -> grid 777: a broken deck
+    report = {(r["Card"], r["Reason"]): r["IDs"] for r in cards.read(mb)}  # unsupported forms: the report
+    report.pop(("PWELD", cards.NOT_READ), None)  # pyNastran 1.4 does not know PWELD; 1.5 reads it
+    assert report == {("CELAS2", cards.GROUNDED): "EID 1", ("CELAS3", cards.SCALAR): "EID 3",
+                      ("CFAST", cards.PATCH): "EID 4", ("CWELD", cards.NOT_READ): "",
+                      ("SPOINT", cards.SCALAR): "ID 99"}
+
+
+PLOTEL_CQUAD_EDGE_CASES = """\
+GRID,1,,0.,0.,0.
+GRID,2,,1.,0.,0.
+GRID,3,,1.,1.,0.
+GRID,4,,0.,1.,0.
+GRID,5,,0.5,0.,0.
+MAT1,1,7.e10,,0.3,2.
+PSHELL,1,1,0.1
+CQUAD,10,1,1,2,3,4,5,777
+PLOTEL,20,1,777
+PLOTEL,21,1,3
+"""
+
+
+def test_plotel_and_cquad_on_missing_grids_warn_and_fall_back(tmp_path):
+    from vtkmodules.vtkCommonDataModel import VTK_QUAD
+
+    from nastran_pv import vtkutil
+
+    deck = load_deck(write(tmp_path, "plot.bdf", PLOTEL_CQUAD_EDGE_CASES), echo=False)
+    mb = build_multiblock(deck)
+    assert arr(get_block(mb, "Plotels"), "EID", "cell").tolist() == [21]
+    assert "PLOTEL: 1 leg(s) reference unknown grids" in "\n".join(deck.warnings)
+    shells = get_block(mb, "Shells")  # G6 is not a grid and G7-G9 are blank: the linear quad
+    assert vtkutil.to_numpy(vtkutil.cell_types(shells)).tolist() == [VTK_QUAD]
 
 
 NSM_EDGE_CASES = BULK + """\
