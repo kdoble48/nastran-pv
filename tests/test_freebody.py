@@ -86,7 +86,7 @@ def test_both_readers_attach_the_element_rows(model, results):
     assert arr(model, "GridPointForceEID", "field").tolist() == [e for _, e, _ in want]
     np.testing.assert_allclose(arr(model, "GridPointForce", "field"), [v[:3] for *_, v in want], atol=1e-6)
     np.testing.assert_allclose(arr(model, "GridPointMoment", "field"), [v[3:] for *_, v in want], atol=1e-6)
-    assert fd.GetArray("GridPointForceEID").GetDataType() in (6, 12, 16)  # an integer array
+    assert arr(model, "GridPointForceEID", "field").dtype.kind in "iu" and fd.GetArray("GridPointForceNID") is not None
 
 
 def test_unselected_the_table_goes(model, results, deck):
