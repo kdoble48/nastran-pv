@@ -17,7 +17,7 @@ All notable changes to nastran-pv are listed here. The format follows
   (`AxialStress TorsionalStress MaxStress MinStress`) and the matching strains, from OP2 and
   MSC/NX HDF5 alike, in the frame Nastran writes them in. Every force, stress or strain table no
   type reads (composite plies, complex tables, STRCUR plate strains, CSHEAR, ...) is reported in the
-  warnings instead of dropped silently, and `convert` names the types it left out (#PR).
+  warnings instead of dropped silently, and `convert` names the types it left out (#64).
 - Card report: every card no block draws is counted per card type and reason (not drawn, scalar
   points, grounded, patch form, heat transfer, matrix input, superelement, not read), with its
   first ids. `convert` prints it, `stats` and `check` on stderr, the reader in Output Messages,
@@ -110,7 +110,7 @@ All notable changes to nastran-pv are listed here. The format follows
 ### Fixed
 
 - `VonMisesMax` reads MSC/NX HDF5 shell stress tables that spell the shear `TXY1`/`TXY2` (TRIA3
-  and the corner layouts), which it dropped before (#PR).
+  and the corner layouts), which it dropped before (#64).
 - A random response with `--beam-sections` no longer leaves the first mode's `Displacement` on
   `BeamSections` (#60).
 - Overlays follow the scope as the reader applies it: a selection file of PIDs, MIDs, families,
