@@ -204,17 +204,28 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   per frame (the plugin keeps one per input object + MTime); a complex step's
   `Displacement_Real/_Imag` (own or by grid) let `apply(scale, phase)` draw any phase,
   `peak_scale` sizes it by `Displacement_Mag`, `reference_phase` finds the `PhaseAngle` its arrays
-  were attached at (root, or a VTKHDF block's copy) and `peak_phase` its largest swing. The views draw through the plugin's *Nastran Deform* (`NPV deform`),
-  so `nastran_views.animate_modes` vibrates whatever view is shown; analysis filters stay on the
-  undeformed model. `play_mode` (after Animate Mode) sets every Nastran Deform downstream of the
-  reader to *Vibrate Mode*: the filter holds its input at *Mode Time* (`RequestUpdateExtent`) and
-  publishes one cycle of phases as `TimestepValues`, the reader's own time is suppressed in the
-  time keeper, and the play button loops the mode; `held_time` makes `Model()`/`current_step` read
-  the held mode, and every view (`apply`) and `_prepare_modes` call `stop_mode_animation` first.
-  The undeformed ghost goes through a scale-0 deform (`NPV undeformed model`) so nothing reads the
-  reader at a phase time. On a complex step (the Deformer's `complex`) *Vibrate Mode* turns the
-  shape through its phase at full *Amplitude* (from the input's root `PhaseAngle` + *Phase*)
-  instead of a sine, and the filter writes `DeformPhase` next to `DeformScale` for *Nastran Scope*.
+  were attached at (root, or a VTKHDF block's copy) and `peak_phase` its largest swing.
+  `matched_index`/`matched_time` match steps by index (R5: A's step of the index of B's step at a
+  time); `grid_displacements` is a whole model's NID lookup, which `diff.removed_displacement` uses
+  to give A's removed items A's displacement. The views draw through the plugin's *Nastran Deform*
+  (`NPV deform`), so `nastran_views.animate_modes` vibrates whatever view is shown; analysis
+  filters stay on the undeformed model. `play_mode` (after Animate Mode) sets every Nastran Deform
+  of the model (`model_deforms`: the model source upstream, through a Nastran Diff its B) to
+  *Vibrate Mode*: the filter holds its input at *Mode Time* (`RequestUpdateExtent`) and publishes
+  one cycle of phases as `TimestepValues`, the reader's own time is suppressed in the time keeper,
+  and the play button loops the mode; `held_time` makes `Model()`/`current_step` read the held
+  mode, and every view (`apply`) and `_prepare_modes` call `stop_mode_animation` first. In a
+  comparison B leads and A vibrates too, at its own step of B's index and B's amplitude, both
+  readers suppressed. *Match Steps* (a held time per model, R5) makes a deform follow another
+  model's steps by index: at their n-th the input is read at its own n-th step, and without one it
+  is not moved (the output is stamped with the asked time, so a time change re-executes only the
+  deform). The Nastran Diff does the same for A on its own (`RequestUpdateExtent`: A's step of B's
+  index) and gives the Removed block A's displacement then (`diff.removed_displacement`), so A's
+  removed items move with A. The undeformed ghost goes through a scale-0 deform (`NPV undeformed
+  model`) so nothing reads the reader at a phase time. On a complex step (the Deformer's
+  `complex`) *Vibrate Mode* turns the shape through its phase at full *Amplitude* (from the input's
+  root `PhaseAngle` + *Phase*) instead of a sine, and the filter writes `DeformPhase` next to
+  `DeformScale` for *Nastran Scope*.
 - `randvib.py`: base-drive random vibration from normal modes (no SOL 111 needed). `RandomResponse`
   has the results interface (`steps`/`times`/`attach`): steps are frequency frames, every frame
   carries the static `AccelRMS AccelN0 DispRMS DominantMode*` and its own `AccelASD`. Participation
@@ -224,6 +235,13 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   in CD). CLI `--random/--drive/--damping/--g`; reader `Random*` properties; views `random`/`randomsweep`
   (the sweep's frequency label indexes `RandomFrameFrequencies` by `time_index`: a temporal VTKHDF
   has no root field data, and `min`/`max` are numpy reductions in PythonAnnotation).
+- `labels.py`: `unique_labels(paths)`, the models' labels (scene layers R6): the file name, with as
+  many parent folders as it takes when two open models share a file name (`a/model.bdf`,
+  `b/model.bdf`). `nastran_views._labels` uses it for texts and `NPV ...` names.
+- `scene.py`: the scene registry's bookkeeping (no VTK): `Layer` (the objects a layer showed, its
+  view arguments, and the `summary` its view wrote, with `where` it went) and `Scene` (one
+  coloring, the overlays, the comparison's role, partner, diff and side; `summary(header)` composes
+  the view's one info text, the layer drawn last, `latest`, in full and the others by their first line).
 - `glyphs.py`: mass ellipsoids, bush triads, load arrows (`load_glyphs`; forces single-, moments
   double-headed) and SPC markers (`spc_glyphs`) as real `vtkPolyData`, plus the subsets the filters
   offer (`minimum_mass`, `bush_selection`, `default_load_set`).
@@ -293,11 +311,33 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
     information property `ScopeActive`: its settings as a read applies them, 0 after a failed read;
     asking does not run the reader) picks the "in the reader's scope" text. `_feed` re-feeds objects
     made before (fed by `NPV deform`).
-  - The shared `NPV info` text belongs to no layer: `Scene.info` names the layer that wrote it last,
-    and `apply` hides it when that layer goes (an overlay toggled off, a coloring replaced by one
-    that writes none). `scene_of` empties a scene whose reader was deleted and hides what is left
-    of it in the view (its objects still open, the `NPV ...` text); a deleted Diff or model ends the
+  - Annotations (R6): one text per view, `NPV info [<view>]` (`info_name`, `info_of`). A view
+    function's `info_text` inside `_recorded` is its layer's `summary`; `write_info` composes the
+    view's text from `Scene.summary` under `_header` (B's view of a comparison: the diff summary,
+    whatever the coloring; A's view of a pair: `A: <label> (the reference)` and, when A has no step
+    of B's index, that it does not move), and hides it when nothing is left to say. Labels
+    (`_labels`, `_label`): the Pipeline Browser name, or for models that share it
+    `labels.unique_labels` of their paths. Every command (`@_command`: the views, the macros,
+    `run_macro`) runs `sync_labels` once when it starts, which renames a model's `NPV ...` objects when
+    its label changed, and reads the labels from that map while it runs; outside a command `_labels`
+    works them out without renaming, and `load_reader` syncs after opening a model. `scene_of` empties a scene whose reader was deleted and hides what is left of it
+    in the view (its objects still open, the `NPV ...` texts); a deleted Diff or model ends the
     comparison the same way, and a closed partner view ends the pair.
+  - Time (R5): `_layout_models(view)` is `(B, [A])` in a comparison, else the view's model; the
+    animation commands take B's steps and move A's deforms too (`_kept_view`, `_mode_sweeps`,
+    `_mode_labels`: A's own label, or that it has no such step). `_sync_steps` (end of every
+    `_apply_view`) puts B's time steps in the *Match Steps* of A's deforms while A is the left side
+    of a pair (`_followed`), and empties every other's; `Model` of that A reads A's step of B's index
+    (`Model.step`, `Model.unmatched`; without one its data drops the step's arrays, as A's deforms do).
+    NPV Results in a pair draws A at B's scale (`_share_scale`, after both views). `_prepare_modes`
+    never redraws: only a view with no layers gets NPV Results. A's mode label comes from the reader's
+    *StepLabels* (an information property: each step's name, without reading A at it). `play_mode`
+    records the readers it took out of the time keeper (`_SUPPRESSED`), so Stop gives back A even with
+    no deform of its own (one comparison view).
+  - Pipeline Browser (R7): no command shows a raw reader. *Highlight File* sets its selection on the
+    reader directly (`pv.SelectThresholds` would show the reader) and draws `NPV highlight`, an
+    ExtractSelection of `NPV deform` by that selection; *Index Colors* uses the active source's
+    visible representation (`_shown_rep`, which creates none), else the view's coloring layer.
   - Mode animation: `mode_times` (the reader's steps, or one step for a converted single-step
     file with a `Displacement`), `animate_modes`/`animate_mode` and `save_mode_animations`. They
     run inside `_kept_view`, which puts back the view's time and every NPV deform scale and
@@ -339,8 +379,12 @@ Every gotcha found so far, by area. The few that bite on any change are also in 
     field data survive); `nastran_views.fetch` copies it back from the data information.
   - The reader outputs the model tree: select blocks with `nastran_views.selectors`
     (`/Root/Model/<b>`, `/Root/<b>` and, for VTKHDF, `/assembly/<b>`), and read data through `nastran_views.Model` (gathered).
-  - Opening the same deck twice gives two readers with one label; `_name` then adds the proxy id,
-    so they do not share `NPV ...` objects.
+  - Opening the same deck twice gives two readers with one label; `_labels` then adds the proxy id
+    to the second, so they do not share `NPV ...` objects. Two decks with one file name from
+    different folders are labelled by folder (`a/model.bdf`).
+  - `pv.SelectThresholds`, `pv.GetRepresentation` and `pv.GetDisplayProperties` *show* a source the
+    view does not show yet (`GetRepresentation` calls the controller's `Show`): to select on or ask
+    about a hidden source, set its selection input directly or walk `view.Representations`.
 - ParaView 5.x (tested 5.13.1, `out/pv513/` locally, gitignored): `servermanager.Fetch` returns an empty
   multiblock for a `vtkPartitionedDataSetCollection`, so `nastran_views.fetch` copies the
   builtin session's output instead (remote pvserver: a clear error). Setting

@@ -719,7 +719,7 @@ def beam_checks(pv, nv, view, tmp):
     pv.SetActiveSource(beams)
     model = nv.apply("beams", reader=beams, view=view)
     check(pv.GetActiveSource() is pv.FindSource(nv._name(model, "beam sections")), "beams view selects NPV beam sections")
-    text = pv.FindSource(nv._name(model, "info")).Text
+    text = nv.info_of(view)
     check("12 CBAR/CBEAM, 6 section PID(s)" in text and "4 PBAR/PBEAM station(s)" in text
           and "Deformation" not in text, f"beams view text: {text!r}")
     axes = pv.FindSource(nv._name(model, "beam axes"))
@@ -946,8 +946,8 @@ def scene_checks(pv, nv, reader):
 
 def stray_checks(pv, nv, reader):
     """What no layer holds is hidden: the reader's own surface always, and in a fresh scene every model
-    source and NPV object left by another model or a reopened state. One overlay's toggle-off hides the
-    info text only when that overlay wrote it."""
+    source and NPV object left by another model or a reopened state. The view's one info text lists
+    its layers (R6): an overlay's toggle-off drops its line, and the text goes with the last summary."""
     view = pv.CreateRenderView()
 
     def vis(src):
@@ -958,12 +958,13 @@ def stray_checks(pv, nv, reader):
     check(not vis(reader) and vis(pv.FindSource(nv._name(m, "mass glyphs"))),
           "Masses hides the reader's own surface (shown before) over the ghost")
     nv.apply("loads", reader=reader, view=view)
-    info = pv.FindSource(nv._name(m, "info"))
-    text = info.Text
+    info = pv.FindSource(nv.info_name(view))
+    both = info.Text
     nv.apply("masses", reader=reader, view=view, toggle=True)
-    check(vis(info) and info.Text == text, "Masses off keeps the Loads summary (Loads wrote the text)")
+    check(vis(info) and "Concentrated mass" in both and "Concentrated mass" not in info.Text
+          and info.Text.splitlines()[0] in both, f"Masses off keeps the Loads summary, drops the masses line: {both!r}")
     nv.apply("loads", reader=reader, view=view, toggle=True)
-    check(not vis(info), "Loads off hides the text it wrote")
+    check(not vis(info), "Loads off: no layer has anything to say, the text goes")
     nv.apply("loads", reader=reader, view=view)
     pv.Show(reader, view)                           # as Highlight File does
     nv.apply("pid", reader=reader, view=view)
@@ -972,7 +973,7 @@ def stray_checks(pv, nv, reader):
     check(vis(info) and not vis(reader), "PID over Loads keeps the Loads summary")
     nv.apply("pid", reader=twin, view=view)
     check(not vis(reader) and not vis(info) and nv.scene_of(view).model is twin,
-          "another model's PID hides A's reader and A's NPV info")
+          "another model's PID hides A's reader, and A's summaries go with A's scene")
     nv.clear(view)
     _newest_first(pv, _model_sources(pv, nv, twin))
     state = pv.CreateRenderView()                   # a reopened .pvsm: shown objects, no scene
@@ -1780,7 +1781,7 @@ def diff_checks(pv, nv):
     pv.SetActiveSource(b)
     view = pv.CreateRenderView()
     nv.apply("diff", reader=b, view=view)
-    text = pv.FindSource(nv._name(nv.Model(b), "info")).Text
+    text = nv.info_of(view)
     check("elements: 2 added, 2 removed, 3 changed" in text and "10.9 -> 14.4" in text, f"diff view text {text!r}")
     check(nv.diff_of(nv.Model(b)) == d, "the diff view reuses the Nastran Diff on B")
     check(pv.GetActiveSource() is d, "the diff view selects the Nastran Diff")
@@ -1797,8 +1798,8 @@ def diff_checks(pv, nv):
     names = {v: k[0] for k, v in pv.GetSources().items()}
     sides = [sorted(names.get(s, "?") for s in nv.shown_sources(v)) for v in (left, right)]
     of_d = lambda what: f"NPV {nv._diff_what(d, what)} [diff_b.bdf]"  # noqa: E731  (d is not B's own NPV diff)
-    check(sides == [sorted(["NPV Shells [diff_a.bdf]", of_d("removed element"), "NPV info [diff_a.bdf]"]),
-                    sorted([of_d("Shells"), of_d("removed element"), "NPV info [diff_b.bdf]"])],
+    check(sides == [sorted(["NPV Shells [diff_a.bdf]", of_d("removed element"), nv.info_name(left)]),
+                    sorted([of_d("Shells"), of_d("removed element"), nv.info_name(right)])],
           f"A's shells left, B's from the diff right, A's removed elements in both: {sides}")
     rgb = list(pv.GetColorTransferFunction("Thickness").RGBPoints)
     check(abs(rgb[0] - 0.1) < 1e-9 and abs(rgb[-4] - 0.25) < 1e-9, f"shared Thickness range {rgb[0]}..{rgb[-4]}")
@@ -1813,7 +1814,7 @@ def diff_checks(pv, nv):
     names = {v: k[0] for k, v in pv.GetSources().items()}
     shown = sorted(names.get(s, "?") for s in nv.shown_sources(left))
     check(nv._shown_array(right) == ("CELLS", "DiffStatus"), "DiffStatus on the right")
-    check(shown == sorted([of_d("removed"), "NPV info [diff_a.bdf]", "NPV mesh [diff_a.bdf]"]),
+    check(shown == sorted([of_d("removed"), nv.info_name(left), "NPV mesh [diff_a.bdf]"]),
           f"side by side DiffStatus, left: {shown}")
 
     # hidden elements are still part of the model: a reader's hidden EID 6 is not "removed"
@@ -1948,7 +1949,7 @@ def diff2_checks(pv, nv):
     pv.SetActiveSource(b)
     view = pv.CreateRenderView()
     nv.apply("diff", reader=b, view=view)
-    text = pv.FindSource(nv._name(nv.Model(b), "info")).Text
+    text = nv.info_of(view)
     check("loads: 2 added, 3 removed, 2 changed" in text and "coords: 1 added" in text
           and "masses:" not in text, f"diff v2 view text {text!r}")
     mesh = pv.FindSource(nv._name(nv._ReaderOnly(b), nv._diff_what(d, "items")))  # d: a user's Diff
@@ -2195,8 +2196,8 @@ def clear_checks(pv, nv, reader):
     pv.SetActiveSource(reader)
     model = nv.apply("masses", reader=reader, view=view)
     src = pv.FindSource(nv._name(model, "mesh"))
-    objs, _ = nv._recorded(lambda: nv._show(src, view))
-    check(objs == [src], "_recorded lists what _show showed")
+    objs, _, said = nv._recorded(lambda: nv._show(src, view))
+    check(objs == [src] and said is None, "_recorded lists what _show showed (no text written)")
     deform = pv.FindSource(nv._name(model, "deform"))
     deform.ScaleFactor = 1.0
     sources = set(pv.GetSources())
@@ -2318,8 +2319,9 @@ def _point_values(src, name):
     return set(vtk_to_numpy(a).tolist()) if a is not None else set()
 
 
-def _info(nv, model):
-    return nv.pv.FindSource(nv._name(model, "info")).Text
+def _info(nv, model=None):
+    """The active view's info text (one per view, rule R6; ``model`` is not needed any more)."""
+    return nv.info_of(nv.pv.GetActiveView())
 
 
 GRAV_MOMENT_DECK = """SOL 101
@@ -2422,7 +2424,7 @@ def filter_property_checks(pv, nv, reader, view):
               f"loads view on a moment-only set with Show Forces says so: {text!r}")
         nv.apply("loads", reader=gr, view=view, show="Moments")
         check("SID_6: 1 loaded grids" in _info(nv, gm), "Show Moments draws the MOMENT")
-        for what in ("load glyphs", "mesh", "deform", "info"):
+        for what in ("load glyphs", "mesh", "deform"):
             pv.Delete(pv.FindSource(nv._name(gm, what)))
         pv.Delete(gr)
 
@@ -2622,20 +2624,20 @@ def scene_review_checks(pv, nv, reader):
     file of grids keeps the masses on them in NPV Masses."""
     view = pv.CreateRenderView()
     m = nv.apply("family", reader=reader, view=view)
-    info = pv.FindSource(nv._name(m, "info"))
-    check(info in nv.shown_sources(view), "Family writes the info text")
+    info = pv.FindSource(nv.info_name(view))
+    check(info in nv.shown_sources(view) and "element families" in info.Text, "Family writes the info text")
     nv.apply("pid", reader=reader, view=view)
-    check(info not in nv.shown_sources(view) and nv.scene_of(view).info is None,
-          "PID (no text) replacing Family hides Family's text")
+    check(info not in nv.shown_sources(view), "PID (no text) replacing Family hides Family's text")
     nv.apply("masses", reader=reader, view=view)
     nv.apply("thickness", reader=reader, view=view)
-    check(info in nv.shown_sources(view) and nv.scene_of(view).info == "masses",
+    check(info in nv.shown_sources(view) and info.Text.startswith("Concentrated mass"),
           "Thickness (no text) keeps the Masses summary")
     nv.clear(view)
 
     keep = set(pv.GetSources().values())
     twin = rm.load_reader(DECK)
-    text = pv.FindSource(nv._name(nv.apply("masses", reader=twin, view=view), "info"))
+    nv.apply("masses", reader=twin, view=view)
+    text = pv.FindSource(nv.info_name(view))
     # Delete Tree on the twin reader: its info text stays
     _newest_first(pv, [s for s in pv.GetSources().values() if any(u == twin for u in nv.upstream(s))])
     check(nv.scene_of(view).model is None and text not in nv.shown_sources(view),
@@ -2915,6 +2917,20 @@ def comparison_detail_checks(pv, nv):
     gone = pv.FindSource(nv._name(m, "diff removed mass"))
     check(gone is not None and nv._gather(nv.fetch(gone), "EID", "CELLS").tolist() == [202]
           and "1 removed (red)" in _info(nv, m), "A's removed CONM2 202 red in the masses overlay")
+    a_deforms = len(nv.model_deforms(a))  # A is not drawn in this view: none of its own
+    nv.play_mode(1, frames=4, view=view)
+    try:
+        held = list(pv.GetTimeKeeper().SuppressedTimeSources)
+    except AttributeError:  # no such property: not checked
+        held = [a, b]
+    nv.stop_mode_animation(view=view)
+    try:
+        left_out = list(pv.GetTimeKeeper().SuppressedTimeSources)
+    except AttributeError:
+        left_out = []
+    check(a in held and b in held and a not in left_out and b not in left_out,
+          f"Animate Mode in one comparison view takes both readers out of the time controls and Stop gives "
+          f"both back (A with {a_deforms} deform(s))")
     pv.SetActiveSource(a)  # roles are the Diff's: A selected changes nothing
     sources = set(pv.GetSources())
     nv.apply("diff", view=view)
@@ -3095,6 +3111,185 @@ def comparison_review_checks(pv, nv):
     cmp._delete_derived()
 
 
+def scene_time_checks(pv, nv):
+    """Scene layers R5 to R7 on the same-named pair (tests/data/same_name: A -> B removes shell 3 on grids
+    3 8 9 6, CONM2 202 and CBUSH 501). Labels by folder, A's objects renamed when B opens; one info text
+    per view, the diff summary first; A follows B's steps by index (A has the static step only, at twice
+    B's displacement): Animate Mode in a pair vibrates both readers at one amplitude, Animate All Modes
+    moves both sides, a step A lacks leaves A (and its removed items) where they are, which otherwise
+    move with A; Highlight File and Index Colors show no reader."""
+    from op2_fixture import make_op2
+
+    keep = set(pv.GetSources().values())
+    tmp = tempfile.mkdtemp()  # not removed: ParaView keeps the OP2 files open
+    full = os.path.join(tmp, "full.op2")
+    make_op2().write_op2(full)  # the static step (T3 = 0.1 NID on grids 1-7), mode 1 (T1 = 1), mode 2 (T2 = NID)
+    short = make_op2()
+    short.eigenvectors.clear()
+    short.displacements[1].data[:] *= 2.0
+    one = os.path.join(tmp, "one.op2")
+    short.write_op2(one)
+    data = os.path.join(HERE, "data", "same_name")
+    a = nv.load_reader(os.path.join(data, "a", "model.bdf"), one)
+    view = pv.CreateRenderView()
+    view.ViewSize = [600, 400]
+    pv.SetActiveView(view)
+    m = nv.apply("pid", reader=a, view=view)
+    mesh = pv.FindSource(nv._name(m, "mesh"))
+    check(nv._name(m, "mesh") == "NPV mesh [model.bdf]" and mesh is not None, "one model.bdf: its file name is its label")
+    b = nv.load_reader(os.path.join(data, "b", "model.bdf"), full)
+    check(nv._label(a) == "a/model.bdf" and nv._label(b) == "b/model.bdf" and nv._name(m, "mesh") == "NPV mesh [a/model.bdf]"
+          and pv.FindSource("NPV mesh [a/model.bdf]") == mesh and pv.FindSource("NPV mesh [model.bdf]") is None,
+          f"two model.bdf from different folders: labels by folder ({nv._label(a)}, {nv._label(b)}), A's objects renamed")
+
+    pv.SetActiveSource(b)
+    nv.apply("pid", view=view)
+    nv.apply("diff", view=view)
+    d = nv.scene_of(view).diff
+    nv.apply("masses", view=view)
+    text = nv.info_of(view)
+    check(text.startswith("b/model.bdf vs a/model.bdf") and "elements: 1 added, 1 removed" in text
+          and "Concentrated mass: 3  (1 items)" in text, f"NPV Masses after NPV Diff: the diff summary first ({text!r})")
+    left, right = nv.side_by_side(view=view)
+    nv.apply("bushes", view=right)
+    texts = [nv.info_of(v) for v in (left, right)]
+    check(nv.info_name(left) != nv.info_name(right) and texts[0].startswith("A: a/model.bdf (the reference)")
+          and "Concentrated mass: 3  (2 items)" in texts[0] and "1 CBUSH" in texts[0]
+          and texts[1].startswith("b/model.bdf vs a/model.bdf") and "Concentrated mass: 3  (1 items)" in texts[1]
+          and "No CBUSH" in texts[1], f"each view of the pair lists its own layers, the diff summary first: {texts}")
+    nv.apply("masses", view=right)  # drawn last, though Bushes comes after it in the scene
+    nv.side_by_side(view=right)  # the pair drawn again in place
+    text = nv.info_of(left)
+    check("Model mass (structure + concentrated)" in text and "thick = clearly" not in text,
+          f"Side by Side again keeps the layer drawn last (Masses) in full, not the last one redrawn: {text!r}")
+
+    nv.apply("pid", view=right)  # A's removed elements under the coloring, red, in both views
+    steps = nv.timesteps(b)
+    a_mesh = pv.FindSource(nv._name(nv._ReaderOnly(a), "mesh"))
+    b_mesh = pv.FindSource(nv._name(nv._ReaderOnly(b), nv._diff_what(d, "mesh")))
+    gone = pv.FindSource(nv._name(nv._ReaderOnly(b), nv._diff_what(d, "removed element")))  # A's shell 3
+    a_deforms, b_deforms = nv.model_deforms(a), nv.model_deforms(b)
+    check(len(steps) == 3 and nv.timesteps(a) == steps[:1] and a_deforms and b_deforms
+          and all(f.MatchSteps == " ".join(repr(t) for t in steps) for f in a_deforms)
+          and not any(f.MatchSteps for f in b_deforms), "A's deforms follow B's steps by index, B's follow none")
+
+    def bounds(src, v):
+        src.UpdatePipeline(v.ViewTime)
+        return src.GetDataInformation().GetBounds()
+
+    nv._set_layout_time(right, steps[0])
+    rest = [bounds(s, v) for s, v in ((a_mesh, left), (b_mesh, right), (gone, left))]
+    pv.SetActiveView(left)
+    nv.play_mode(1, frames=4, view=left)  # from A's view: B leads, A follows
+    try:
+        suppressed = list(pv.GetTimeKeeper().SuppressedTimeSources)
+    except AttributeError:  # no such property: not checked
+        suppressed = [a, b]
+    peak = [bounds(s, v) for s, v in ((a_mesh, left), (b_mesh, right), (gone, left))]
+    label = pv.FindSource(nv._name(nv._ReaderOnly(a), "mode label")).Text
+    check(all(f.VibrateMode for f in list(a_deforms) + list(b_deforms)) and a in suppressed and b in suppressed,
+          "Animate Mode in a pair: every deform of both readers vibrates, both readers' steps leave the time controls")
+    check(peak[1][5] > rest[1][5] + 1e-6 and abs(peak[0][5] - 2 * peak[1][5]) < 1e-6 and abs(peak[2][5] - peak[0][5]) < 1e-6,
+          f"a mode played in a pair moves both models at one amplitude (A twice as far), A's removed shell with A: "
+          f"top z {[p[5] for p in peak]}")
+    check(nv._step_names(a) == ["Subcase 1"] and label == "A: Subcase 1",
+          f"A's mode label from the reader's StepLabels, without reading A at the step: {label!r}")
+    nv.stop_mode_animation(view=left)
+    check(not any(f.VibrateMode for f in list(a_deforms) + list(b_deforms)) and left.ViewTime == steps[0]
+          and right.ViewTime == steps[0], "Stop Mode Animation: both readers back on the step")
+    seen = {"A": set(), "B": set()}
+    real = nv.pv.Render
+
+    def render(v=None, *args, **kw):
+        out = real(v, *args, **kw)
+        seen["A"].add(round(bounds(a_mesh, left)[5], 9))
+        seen["B"].add(round(bounds(b_mesh, right)[5], 9))
+        return out
+
+    nv.pv.Render = render
+    try:
+        nv.animate_modes([1], frames=4, fps=0, view=right)
+    finally:
+        nv.pv.Render = real
+    check(len(seen["A"]) > 1 and len(seen["B"]) > 1 and right.ViewTime == steps[0],
+          f"Animate All Modes in a pair moves both models: top z of A {sorted(seen['A'])}, of B {sorted(seen['B'])}")
+    paths, real_path = [], nv._model_path
+    nv._model_path = lambda r: paths.append(r) or real_path(r)
+    try:
+        nv.save_mode_animations([1], frames=4, folder=os.path.join(tmp, "gifs"), view=left)
+    finally:
+        nv._model_path = real_path
+    check(paths and paths[0] == a, "Save Mode Animations in A's view of a pair names the GIF after A, which it shows")
+
+    nv.apply("results", view=right)
+    moved = [bounds(s, v) for s, v in ((a_mesh, left), (b_mesh, right), (gone, left))]
+    a_main = pv.FindSource(nv._name(nv._ReaderOnly(a), "deform"))
+    b_layers = pv.FindSource(nv._name(nv._ReaderOnly(b), f"deform {nv._diff_what(d, '')}"))
+    check(not a_main.AutoScale and abs(a_main.ScaleFactor - b_layers.ScaleFactor) < 1e-12
+          and abs(moved[2][5] - moved[0][5]) < 1e-6 and moved[0][5] > rest[0][5] + 1e-6,
+          f"NPV Results in a pair: one scale (A {a_main.ScaleFactor:.4g}, B's layers {b_layers.ScaleFactor:.4g}), so "
+          f"A's removed shell stays on A's mesh (top z {moved[2][5]:.4g}, {moved[0][5]:.4g})")
+    nv._set_layout_time(right, steps[2])  # the time controls on B's mode 2 (T2 = NID): A has no third step
+    later = [bounds(s, v) for s, v in ((a_mesh, left), (b_mesh, right), (gone, left))]
+    check(later[0] == rest[0] and later[2] == rest[2] and later[1][3] > rest[1][3] + 1e-6,
+          f"stepping to a step A lacks: A and its removed items stay (z {later[0][5]:.3g}, {later[2][5]:.3g}), "
+          f"B moves (y max {later[1][3]:.3g})")
+    lacks = nv.Model(a, steps[2])
+    check(not {"Displacement", "DisplacementMagnitude"} & set(a_mesh.PointData.keys()) and lacks.unmatched
+          and lacks.field_strings(None, "ResultLabel") == [] and lacks.array("Shells", "Displacement") is None,
+          f"a step A lacks shows none of A's results (not its nearest step's): {sorted(a_mesh.PointData.keys())}")
+    nv.apply("results", view=right)
+    check("no step 3 here (it has 1): not moved" in nv.info_of(left) and "Subcase" in nv.info_of(right),
+          f"NPV Results on a step A lacks: A's text says so ({nv.info_of(left)!r})")
+    nv._set_layout_time(right, steps[0])  # back to a step A has, with the time controls only
+    back = bounds(a_mesh, left)
+    color = pv.GetDisplayProperties(a_mesh, left).ColorArrayName[1]
+    check(back[5] > rest[0][5] + 1e-6 and color == "DisplacementMagnitude" and "DisplacementMagnitude" in a_mesh.PointData.keys(),
+          f"NPV Results clicked on a step A lacks: back on one it has, A is deformed and colored again (top z {back[5]:.3g})")
+
+    nv.apply("pid", view=right)
+    ids = os.path.join(tmp, "ids.csv")
+    with open(ids, "w") as f:
+        f.write("EID\n1\n2\n")
+    pv.SetActiveView(right)
+    nv.highlight_file(ids, view=right)
+    lit = [pv.FindSource(nv._name(nv._ReaderOnly(r), "highlight")) for r in (a, b)]
+    shown = [nv.shown_sources(v) for v in (left, right)]
+    check(a not in shown[0] and b not in shown[1] and lit[0] in shown[0] and lit[1] in shown[1]
+          and lit[1].GetDataInformation().GetNumberOfCells() == 2 and pv.GetActiveSource() == b
+          and nv.selected_ids() == ("EID", [1, 2]),
+          "Highlight File in a pair: each view draws its model's highlight, no reader shown, B's selection active")
+    only_b = os.path.join(tmp, "only_b.csv")
+    with open(only_b, "w") as f:
+        f.write("EID\n4\n")  # the shell B added
+    nv.highlight_file(only_b, view=right)
+    shown = [nv.shown_sources(v) for v in (left, right)]
+    check(lit[0] not in shown[0] and lit[1] in shown[1] and lit[1].GetDataInformation().GetNumberOfCells() == 1,
+          "Highlight File of an element only B has: B's view highlights it, A's highlight goes, no error")
+    nothing = os.path.join(tmp, "nothing.csv")
+    with open(nothing, "w") as f:
+        f.write("EID\n999\n")
+    try:
+        nv.highlight_file(nothing, view=right)
+        check(False, "a file neither model has should be reported")
+    except RuntimeError as exc:
+        check("match nothing in either model" in str(exc), f"Highlight File, ids in neither model: {exc}")
+    for r in (a, b):
+        pv.ClearSelection(r)
+    pv.SetActiveView(left)
+    pv.SetActiveSource(a)  # a model the view does not show, selected in the Pipeline Browser
+    lut = nv.index_colors(view=left)
+    check(a not in nv.shown_sources(left) and "PID 1" in list(lut.Annotations),
+          "Index Colors with an unshown reader selected: the view's coloring, no reader shown")
+
+    nv.single(view=right)
+    pv.Delete(left)
+    nv._SCENES.clear()
+    cleanup = _Cmp.__new__(_Cmp)
+    cleanup.pv, cleanup.nv, cleanup.keep = pv, nv, keep
+    cleanup._delete_derived()
+
+
 def comparison_checks(pv, nv):
     """The comparison audit matrix (scene layers R3/R4): every command in each starting state (one
     model; after NPV Diff; side by side with each view active; NPV Diff plus Show Only) on diff_a/b,
@@ -3239,7 +3434,7 @@ def main():
         deform.AutoScale = 0
         deform.ScaleFactor = 0.5
         nv.apply("results", reader=reader, view=anim)
-        rtext = pv.FindSource(nv._name(model, "info")).Text
+        rtext = nv.info_of(anim)
         check(deform.ScaleFactor == 0.5 and not deform.AutoScale and "x0.5 (Auto Scale off" in rtext,
               f"results view rerun keeps a typed Scale Factor: {rtext!r}")
         nv.apply("results", reader=reader, view=anim, scale=2.0)
@@ -3354,15 +3549,15 @@ def main():
     pv.Delete(bg)
     view = pv.CreateRenderView()
     bmodel = nv.apply("bushes", reader=reader, view=view)
-    btext = pv.FindSource(nv._name(bmodel, "info")).Text
+    btext = nv.info_of(view)
     check("K1" in btext and "released" not in btext, f"bushes view text: {btext!r}")
     pv.FindSource(nv._name(bmodel, "bush glyphs")).ShowTriads = 0  # a user switched the bars off
     nv.apply("bushes", reader=reader, view=view)
-    btext = pv.FindSource(nv._name(bmodel, "info")).Text
+    btext = nv.info_of(view)
     check("No translational" not in btext and "K_ref = 1e+06" in btext,
           f"bushes view turns the bars back on: {btext!r}")
-    rmodel = nv.apply("bushrotations", reader=reader, view=view)
-    rtext = pv.FindSource(nv._name(rmodel, "info")).Text
+    nv.apply("bushrotations", reader=reader, view=view)
+    rtext = nv.info_of(view)
     check("K4" in rtext and "K_rot_ref = 10" in rtext, f"bush rotations view text: {rtext!r}")
     for name in nv.VIEWS:
         nv.apply(name, reader=reader, view=view)
@@ -3375,8 +3570,8 @@ def main():
         beam_checks(pv, nv, view, tmp)
     pv.SetActiveSource(reader)
     nsm_reader = rm.load_reader(os.path.join(HERE, "data", "nsm.bdf"))
-    nmodel = nv.apply("nsm", reader=nsm_reader, view=view)
-    ntext = pv.FindSource(nv._name(nmodel, "info")).Text
+    nv.apply("nsm", reader=nsm_reader, view=view)
+    ntext = nv.info_of(view)
     check("Nonstructural mass: 13.25" in ntext and "set 40: 8.6" in ntext, f"nsm view totals: {ntext!r}")
     nsm_reader.NSMSet = 0
     bulk = rm.Model(nsm_reader).field("BulkNSMMass")
@@ -3387,10 +3582,10 @@ def main():
     npts = max(nloads.GetBlock(i).GetNumberOfPoints() for i in range(nloads.GetNumberOfBlocks()))
     check(npts > 1, f"tiny deck load set has {npts} points")
     lmodel = nv.apply("loads", reader=reader, view=view, stride=2)
-    info = pv.FindSource(nv._name(lmodel, "info"))  # this reader's objects: "NPV <what> [<reader>]"
+    info = nv.info_of(view)  # the view's one text; the objects are this reader's: "NPV <what> [<reader>]"
     glyph = pv.FindSource(nv._name(lmodel, "load glyphs"))
-    check(glyph.EveryNthPoint == 2 and "arrows on 1 of every 2 loaded grids" in info.Text,
-          f"loads arrow stride: {glyph.EveryNthPoint}, {info.Text!r}")
+    check(glyph.EveryNthPoint == 2 and "arrows on 1 of every 2 loaded grids" in info,
+          f"loads arrow stride: {glyph.EveryNthPoint}, {info!r}")
     glyph.EveryNthPoint = 0
     nv.set_camera(view, "showcase")
     pos, foc = np.array(view.CameraPosition), np.array(view.CameraFocalPoint)
@@ -3620,6 +3815,7 @@ def main():
     diff_checks(pv, nv)
     comparison_detail_checks(pv, nv)
     comparison_review_checks(pv, nv)
+    scene_time_checks(pv, nv)
     comparison_checks(pv, nv)
     clear_checks(pv, nv, reader)
     preset_checks(pv, nv)

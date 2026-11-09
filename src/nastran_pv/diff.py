@@ -874,6 +874,42 @@ def reattach(annotated, source, own) -> None:
                     a_attr.AddArray(arr)
 
 
+def removed_displacement(annotated, a, moved: bool = True) -> None:
+    """Move A's removed items with A (scene layers rule R5): the ``Removed`` block of ``annotated``
+    (an annotated B with attribute containers of its own) gets a point ``Displacement`` looked up by
+    NID in ``a``, A's model at the step that goes with B's, and on a complex step its
+    ``Displacement_Real``/``_Imag`` too (so a phase sweep turns them), so a deform moves the items by
+    A's displacement, not by B's grids of the same id. Zeros when ``moved`` is False (A has no step of
+    that index) or A has no displacement while B has one; nothing when neither model has one."""
+    from .deform import PARTS, grid_displacements
+
+    removed = next((ds for path, ds in iter_blocks(annotated) if path == "Removed"), None)
+    if removed is None or not removed.GetNumberOfPoints():
+        return
+    pd = removed.GetPointData()
+    for name in ("Displacement",) + PARTS:
+        pd.RemoveArray(name)
+    nids, disp, parts = grid_displacements(a) if moved else (np.zeros(0, np.int64), None, None)
+    b_moves = any(path != "Removed" and ds.GetPointData().GetArray("Displacement") is not None
+                  for path, ds in iter_blocks(annotated))
+    if not len(nids) and not b_moves:
+        return
+    n, nid = removed.GetNumberOfPoints(), pd.GetArray("NID")
+    idx = vtkutil.match_ids(nids, vtkutil.to_numpy(nid).astype(np.int64)) if len(nids) and nid is not None \
+        else np.full(n, -1)
+    hit = idx >= 0
+
+    def by_grid(rows):
+        out = np.zeros((n, 3))
+        out[hit] = rows[idx[hit]]
+        return out
+
+    vtkutil.add_array(pd, "Displacement", by_grid(disp) if hit.any() else np.zeros((n, 3)))
+    if parts is not None and hit.any():
+        for name, rows in zip(PARTS, parts):
+            vtkutil.add_array(pd, name, by_grid(rows))
+
+
 # ------------------------------------------------------------------- report
 def table_rows(d: ModelDiff) -> list[dict]:
     """:attr:`ModelDiff.rows` with one type per column (for a vtkTable): ``A B Delta Rel`` as floats
