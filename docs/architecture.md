@@ -163,10 +163,11 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   - Each reader output is tagged (`NPVWholeModel`) with a registry entry `(whole multiblock,
     signature, Visibility, names, generation)`; `_whole_model` (Nastran Diff) and `_reader_scope`
     (Nastran Scope) find it while the array signature still matches (a deform keeps it).
-  - At import it bootstraps `sys.path` with `../src` (a checkout) or imports the installed package
-    it ships in from that site-packages alone (a wheel: `nastran_pv/paraview/`, see
-    `docs/design/2026-11-08-wheel-plugin.md`), then appends `locate.vendor_dir`, then
-    `NASTRAN_PV_SITE_PACKAGES`, and imports the rest of nastran_pv lazily.
+  - At import it bootstraps `sys.path` with `../src` (a checkout), or, for a wheel
+    (`nastran_pv/paraview/`), adds a meta path finder (`_InstalledPackage`) that imports the package
+    it ships in from that site-packages alone and writes no bytecode there (see
+    `docs/design/2026-11-08-wheel-plugin.md`). Then it appends `locate.vendor_dirs` (`_vendor_paths`),
+    then `NASTRAN_PV_SITE_PACKAGES`, and imports the rest of nastran_pv lazily.
   - The reader caches the deck by the mtimes of the main file and every INCLUDE, and caches the
     built multiblock by its options, so changing the time step only re-attaches results. The cut
     model tree is cached by the visibility settings too; its checklists are filled in

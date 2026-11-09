@@ -53,22 +53,27 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Build the sdist, and the wheel from it
+      - name: Build the sdist and the wheel from it, and a wheel straight from the tree
         run: |
-          # stand-ins for a developer's vendored packages and caches: they must stay out of the wheel
+          # stand-ins for a developer's vendored packages and caches: they must stay out of the wheel.
+          # The sdist's wheel tests MANIFEST.in; the tree's wheel (as pip builds a clone) tests setup.py
           mkdir -p paraview/_vendor/scipy paraview/__pycache__
           touch paraview/_vendor/scipy/__init__.py paraview/__pycache__/nastran_views.cpython-312.pyc
           python -m pip install build
           python -m build --outdir dist
-      - name: The wheel carries the plugin, and nothing else from paraview/
+          python -m build --wheel --outdir dist-tree
+      - name: Both wheels carry the plugin, and nothing else from paraview/
         run: |
-          python -m zipfile -l dist/*.whl | grep nastran_pv/paraview/
-          python -m zipfile -l dist/*.whl > files.txt
-          for f in nastran_bdf_reader.py nastran_views.py install_deps.py install_macros.py \
-                   render_model.py nastran_pv_colors.json; do
-            grep -q "nastran_pv/paraview/$f" files.txt || { echo "::error::wheel lacks $f"; exit 1; }
+          for whl in dist/*.whl dist-tree/*.whl; do
+            echo "== $whl"
+            python -m zipfile -l "$whl" | grep nastran_pv/paraview/
+            python -m zipfile -l "$whl" > files.txt
+            for f in nastran_bdf_reader.py nastran_views.py install_deps.py install_macros.py \
+                     render_model.py nastran_pv_colors.json; do
+              grep -q "nastran_pv/paraview/$f" files.txt || { echo "::error::$whl lacks $f"; exit 1; }
+            done
+            if grep -E "_vendor|__pycache__|\.pyc" files.txt; then echo "::error::$whl has vendored files"; exit 1; fi
           done
-          if grep -E "_vendor|__pycache__|\.pyc" files.txt; then echo "::error::wheel has vendored files"; exit 1; fi
       - name: Install it into a fresh venv and find the plugin there
         run: |
           python -m venv "$RUNNER_TEMP/venv"

@@ -56,19 +56,54 @@ def user_data_dir() -> Path:
 
 
 def vendor_dir(scripts=None, python: str | None = None) -> Path:
-    """Where ``install_deps.py`` vendors pyNastran & co. for ParaView's Python and the plugin looks.
+    """Where ``install_deps.py`` vendors pyNastran & co. for ParaView's Python: the first of
+    :func:`vendor_dirs`.
 
     ``NASTRAN_PV_VENDOR_DIR`` when set (used as is); else a checkout's ``paraview/_vendor``; else, for
     an installed package, ``user_data_dir()/vendor/py<python>``, one per ParaView Python version
     (``python``: ``"3.12"``, default the running interpreter, which in pvpython is ParaView's)."""
+    return vendor_dirs(scripts, python)[0]
+
+
+def vendor_dirs(scripts=None, python: str | None = None) -> list[Path]:
+    """The folders the plugin in ``scripts`` puts on ``sys.path`` (after ParaView's own), in order.
+
+    ``[NASTRAN_PV_VENDOR_DIR]`` when set. An installed package: its per-user folder. A checkout: its
+    ``paraview/_vendor``, then the per-user folder, which ``nastran-pv setup`` from a pip-installed
+    nastran-pv fills, so a checkout's plugin (``PV_PLUGIN_PATH``) also works after that setup."""
     env = os.environ.get("NASTRAN_PV_VENDOR_DIR")
     if env:
-        return Path(env)
+        return [Path(env)]
     scripts = Path(scripts) if scripts else paraview_scripts_dir()
-    if not is_installed_plugin_dir(scripts):
-        return scripts / "_vendor"
     python = python or f"{sys.version_info[0]}.{sys.version_info[1]}"
-    return user_data_dir() / "vendor" / f"py{python}"
+    user = user_data_dir() / "vendor" / f"py{python}"
+    return [user] if is_installed_plugin_dir(scripts) else [scripts / "_vendor", user]
+
+
+def store_python() -> bool:
+    """True for a Python from the Microsoft Store (also a venv made from one). Windows redirects what
+    it writes under AppData into the app's private LocalCache, where ParaView does not look."""
+    if not sys.platform.startswith("win"):
+        return False
+    paths = (sys.executable, sys.prefix, sys.base_prefix, getattr(sys, "base_exec_prefix", ""))
+    return any("windowsapps" in (p or "").lower().replace("/", "\\").split("\\") for p in paths)
+
+
+STORE_PYTHON = ("this Python comes from the Microsoft Store, and Windows redirects what it writes under "
+                "AppData (the vendored packages, the toolbar macros) into its private LocalCache, where "
+                "ParaView does not look. Install nastran-pv with a Python from python.org (or conda), or "
+                "vendor with install_deps.py --target <folder outside AppData>, set NASTRAN_PV_VENDOR_DIR "
+                "to it, and import the macros in ParaView (Macros > Import new macro).")
+
+
+def under_appdata(path) -> bool:
+    """True when ``path`` is inside %LOCALAPPDATA% or %APPDATA% (redirected for a Store Python)."""
+    path = os.path.normcase(os.path.abspath(str(path)))
+    for name in ("LOCALAPPDATA", "APPDATA"):
+        base = os.environ.get(name)
+        if base and (path + os.sep).startswith(os.path.normcase(os.path.abspath(base)) + os.sep):
+            return True
+    return False
 
 
 def _candidates(name: str):

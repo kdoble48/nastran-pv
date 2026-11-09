@@ -69,8 +69,10 @@ All notable changes to nastran-pv are listed here. The format follows
   `pip install` of a wheel and `nastran-pv setup` work without a clone. For an installed package,
   `install_deps.py` vendors into a per-user folder, one per ParaView Python (so ParaView 5.13 and
   6.0 both work from one install), and `NASTRAN_PV_VENDOR_DIR` overrides it; `setup` prints the
-  plugin path, and `setup --dry-run` works without ParaView. CI builds the wheel and checks it in
-  a fresh venv (#58).
+  plugin path, and `setup --dry-run` works without ParaView. A plugin loaded from a clone also
+  looks in the per-user folder; `setup` refuses a Microsoft Store Python, whose writes under AppData
+  ParaView cannot see. CI builds the wheel (from the sdist and from the tree) and checks it in a
+  fresh venv (#58).
 
 ### Changed
 

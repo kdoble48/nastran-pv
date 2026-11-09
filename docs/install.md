@@ -64,13 +64,20 @@ clone. `nastran-pv setup` prints the plugin path and `install_deps.py` the vendo
 |---|---|---|
 | Plugin, views, macros | `site-packages/nastran_pv/paraview/` | `paraview/` |
 | How the plugin finds `nastran_pv` | It imports the package it ships in, on its own, and keeps the rest of that site-packages off ParaView's path | `../src` |
-| Vendor folder (`install_deps.py`) | One per ParaView Python, per user: `%LOCALAPPDATA%\nastran-pv\vendor\py3.12` (Windows), `~/Library/Application Support/nastran-pv/vendor/py3.12` (macOS), `~/.local/share/nastran-pv/vendor/py3.12` (Linux, or under `$XDG_DATA_HOME`) | `paraview/_vendor` |
+| Vendor folder (`install_deps.py`) | One per ParaView Python, per user: `%LOCALAPPDATA%\nastran-pv\vendor\py3.12` (Windows), `~/Library/Application Support/nastran-pv/vendor/py3.12` (macOS), `~/.local/share/nastran-pv/vendor/py3.12` (Linux, or under `$XDG_DATA_HOME`) | `paraview/_vendor`; the plugin also looks in the per-user folder |
 | Toolbar macros import from | the installed `nastran_pv/paraview/` | `paraview/` |
 
 `pip install -U nastran-pv` updates the plugin and the macros in place, and the vendor folder
 survives upgrades. After moving or recreating the environment, run `nastran-pv setup` again,
 because the macros and ParaView's *Auto Load* entry point at the old path. A regular
-(non-editable) `pip install .` from a clone uses the installed copy, not the clone's `paraview/`.
+(non-editable) `pip install .` from a clone uses the installed copy, not the clone's `paraview/`:
+`setup` then vendors into the per-user folder. A plugin loaded from the clone (`PV_PLUGIN_PATH`)
+looks there after its own `paraview/_vendor`, so it keeps working.
+
+On Windows, use a Python from python.org or conda, not one from the Microsoft Store. Windows
+redirects what a Store Python writes under AppData (the vendored packages, the toolbar macros)
+into the app's private folder, where ParaView does not look, so `nastran-pv setup` refuses to run
+with one.
 
 ## ParaView-side dependencies
 

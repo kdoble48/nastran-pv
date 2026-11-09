@@ -7,7 +7,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from .locate import find_executable, paraview_scripts_dir
+from .locate import STORE_PYTHON, find_executable, paraview_scripts_dir, store_python
 
 
 def nsm_set_id(text: str) -> int:
@@ -146,6 +146,10 @@ def cmd_render(args) -> int:
 
 def cmd_setup(args) -> int:
     """Vendor pyNastran & co. for ParaView's Python and install the toolbar macros."""
+    if store_python():
+        if not args.dry_run:
+            raise SystemExit(f"nastran-pv setup: {STORE_PYTHON}")
+        print(f"warning: {STORE_PYTHON}")
     scripts = paraview_scripts_dir()
     plugin = scripts / "nastran_bdf_reader.py"
     print(f"plugin: {plugin}")
