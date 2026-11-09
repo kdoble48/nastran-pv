@@ -19,6 +19,9 @@ def nsm_set_id(text: str) -> int:
         raise argparse.ArgumentTypeError("give a set id, or 0 for none (leave it out for Case Control NSM=)")
     return value
 
+# Batch pvpython never needs a window on screen; ParaView 5.13 and 6.0 accept the flag on every OS.
+OFFSCREEN = "--force-offscreen-rendering"
+
 VIEW_NAMES = ("masses", "bushes", "bushrotations", "beams", "loads", "spc", "rigid", "family", "group", "pid", "mid",
               "elementtype", "thickness", "nsm", "results", "random", "randomsweep", "parts", "check", "diff", "none")
 
@@ -111,7 +114,7 @@ def cmd_render(args) -> int:
     """Batch screenshots through pvpython + render_model.py."""
     _check_inputs(args)
     exe = Path(args.pvpython) if args.pvpython else find_executable("pvpython")
-    cmd = [str(exe), str(paraview_scripts_dir() / "render_model.py"), str(Path(args.deck).resolve()),
+    cmd = [str(exe), OFFSCREEN, str(paraview_scripts_dir() / "render_model.py"), str(Path(args.deck).resolve()),
            "--out", args.out, "--size", *map(str, args.size), "--preset", *args.preset, "--views", *args.views]
     if args.results:
         cmd += ["--op2", str(Path(args.results).resolve())]

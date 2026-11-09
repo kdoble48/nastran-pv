@@ -60,7 +60,7 @@ python -m pytest -q
 python -m pyflakes src paraview/*.py tests
 PYTHONPATH=src python -m nastran_pv convert tests/data/tiny_run.bdf -o out/check.vtm   # prints the blocks and cell counts
 PYTHONPATH=src python -m nastran_pv convert tests/data/tiny_run.bdf -o out/check.vtkhdf
-"C:/Program Files/ParaView 6.0.0/bin/pvpython.exe" tests/pv_smoke.py                   # run_in_background
+"C:/Program Files/ParaView 6.0.0/bin/pvpython.exe" --force-offscreen-rendering tests/pv_smoke.py   # run_in_background
 ```
 
 Use `PYTHONPATH=src python .claude/skills/converting-nastran-decks/summary.py out/check.vtm --arrays`

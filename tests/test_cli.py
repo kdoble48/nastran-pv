@@ -72,6 +72,8 @@ def test_launchers_dry_run(capsys):
     out = capsys.readouterr().out
     assert "--script=" in out and "nv.apply('masses'" in out and "render_model.py" in out \
         and "--views showcase" in out
+    render = next(line for line in out.splitlines() if "render_model.py" in line)
+    assert "--force-offscreen-rendering" in render  # batch screenshots open no window
 
 
 def test_launchers_open_converted_models(tmp_path, capsys):

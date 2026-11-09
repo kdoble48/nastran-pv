@@ -181,7 +181,7 @@ for `--view diff` and [side by side](diff.md#side-by-side).
 nastran-pv render run_deck.bdf --preset family masses loads spc --views iso top --out shots/
 nastran-pv render run.dat --results run.op2 --step 3 --preset results
 nastran-pv render out/modes.vtkhdf --step 3 --preset results   # a converted series: no --results
-# same as: pvpython paraview/render_model.py run_deck.bdf --preset ...
+# same as: pvpython --force-offscreen-rendering paraview/render_model.py run_deck.bdf --preset ...
 ```
 
 `--preset` defaults to `family masses loads spc`, `--out` to `shots/` and `--size` to `1600 1000`.

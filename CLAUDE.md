@@ -12,8 +12,8 @@ python -m pyflakes src paraview/*.py tests            # lint (never paraview/_ve
 PYTHONPATH=src python -m nastran_pv convert <deck> -o out/x.vtm --derive   # CLI without installing
 PYTHONPATH=src python -m nastran_pv view <deck> --view masses --dry-run    # launcher: print, don't open
 PYTHONPATH=src python -m nastran_pv diff <A> <B> [--csv out/d.csv]         # model diff
-"C:/Program Files/ParaView 6.0.0/bin/pvpython.exe" tests/pv_smoke.py      # plugin, views, filters
-out/pv513/ParaView-5.13.1-Windows-Python3.10-msvc2017-AMD64/bin/pvpython.exe tests/pv_smoke.py   # ParaView 5.13
+"C:/Program Files/ParaView 6.0.0/bin/pvpython.exe" --force-offscreen-rendering tests/pv_smoke.py      # plugin, views, filters
+out/pv513/ParaView-5.13.1-Windows-Python3.10-msvc2017-AMD64/bin/pvpython.exe --force-offscreen-rendering tests/pv_smoke.py   # 5.13
 PYTHONPATH=src python -m nastran_pv setup [--dry-run] # install_deps.py (vendor pyNastran+scipy) + install_macros.py
 .venv/Scripts/python -m sphinx -W -b html docs docs/_build/html   # docs site
 python docs/build_gallery.py --ucrm9 <coarse run deck> --mystran tools/mystran-19.0.0-windows-x86_64.exe   # gallery (slow)
@@ -25,8 +25,10 @@ Environment:
   In Git Bash the repo's `.venv` comes first on PATH and has no numpy: it is for Sphinx only.
 - pv_smoke from a worktree (no `paraview/_vendor` there) needs
   `NASTRAN_PV_SITE_PACKAGES=D:/ws/nastran_pv/paraview/_vendor` and `NASTRAN_PV_PYTHON=<system python>`.
-  Run it, renders and the gallery in the background. A rare ParaView 6 exit 127 with no traceback
-  is a known pvpython flake: rerun once.
+  Run it, renders and the gallery in the background, and offscreen: pass `--force-offscreen-rendering`
+  to every batch pvpython (`render` and `build_gallery.py` do it themselves), so no window opens on
+  the user's desktop. A rare ParaView 6 exit 127 with no traceback is a known pvpython flake: rerun
+  once.
 
 ## Skills
 
