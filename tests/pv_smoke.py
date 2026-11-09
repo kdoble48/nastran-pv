@@ -3552,7 +3552,8 @@ def main():
             mode = meta("mode-results.json")
             check(len(mode["frames"]) == 1 and mode["frames"][0]["frequency"] is not None
                   and abs(mode["frames"][0]["frequency"] - 30.0) < 1e-6,
-                  f"a file of one mode keeps its mode tab and frequency: {mode['frames']}")
+                  f"a file of one mode keeps its mode tab and frequency: "
+                  f"{[(fr['label'], fr['frequency']) for fr in mode['frames']]}")
             spc = meta("fb-spcforces.json")
             check(spc["title"] == "SPC forces" and "SPC forces" in spc["gui"]
                   and 'nastran_views.apply("loads", source="SPC forces")' in spc["reproduce"][1]
