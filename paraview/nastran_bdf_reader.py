@@ -2428,9 +2428,14 @@ class _Traversal:
 
     @smproperty.intvector(name="StayWithinSeedPIDs", default_values=0, panel_visibility="never")
     def SetStayWithinSeedPIDs(self, v):
-        """Old spelling of StayWithin = seed properties, kept for saved states and scripts. Only 1
-        acts, so a newer state's default 0 does not undo its StayWithin."""
+        """Old spelling of StayWithin = seed properties, kept for saved states and scripts until
+        nastran-pv 1.0.0 (deprecated: a line in Output Messages). Only 1 acts, so a newer state's
+        default 0 does not undo its StayWithin."""
         if int(v):
+            from nastran_pv import deprecation
+            from nastran_pv.topology.graph import WITHIN_PIDS_REMOVED
+
+            deprecation.notice("the StayWithinSeedPIDs property", "StayWithin = seed properties", WITHIN_PIDS_REMOVED)
             self._set("_within", _WITHIN.index("pid"))
 
     @smproperty.intvector(name="LimitHops", default_values=0)

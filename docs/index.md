@@ -6,8 +6,8 @@ you use.
 
 ## Gallery
 
-- [View gallery](gallery/index.md): every one-click view on the uCRM-9 wingbox and a demo model,
-  interactive in 3D in your browser.
+- [View gallery](gallery/index.md): every one-click view, and a scene for each static and composite
+  result, on the uCRM-9 wingbox and demo models, interactive in 3D in your browser.
 
 ## Getting started
 
@@ -46,6 +46,8 @@ you use.
   offsets, section properties (J, shear center) and the section table.
 - [Performance](performance.md): how long each stage takes on large models (load, build,
   convert, check, diff, ParaView views), the budget it is held to, and how to benchmark.
+- [Python API](api.md): the public `nastran_pv` functions and classes (load a deck, build the
+  blocks, attach results, write files, fields, model tools, results helpers), with an example.
 
 ## Development
 
@@ -93,6 +95,7 @@ model
 output-formats
 beam-sections
 performance
+api
 ```
 
 ```{toctree}

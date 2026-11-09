@@ -6,7 +6,8 @@ import pytest
 from nastran_pv.assemble import build_multiblock, get_block
 from nastran_pv.deck import load_deck
 from nastran_pv.results import attach_op2, open_results
-from nastran_pv.results_h5 import H5Results, von_mises_table
+from nastran_pv.result_types import von_mises_table
+from nastran_pv.results_h5 import H5Results
 from conftest import DATA, arr, row_of, strings
 
 NIDS = np.array([1, 2, 3, 4, 5, 6, 7])
@@ -38,6 +39,14 @@ def write_msc_h5(path):
         r["ELEMENTAL/STRESS/QUAD4"] = quad
         r["ELEMENTAL/STRESS/HEXA"] = hexa
     return path
+
+
+def test_without_h5py_the_error_names_the_extra(tmp_path, monkeypatch):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "h5py", None)
+    with pytest.raises(ImportError, match=r'nastran-pv\[h5\]'):
+        H5Results(tmp_path / "run.h5")
 
 
 def test_von_mises_formulas():

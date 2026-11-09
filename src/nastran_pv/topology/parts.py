@@ -14,6 +14,10 @@ from .graph import Graph, Rules, graph_for
 
 @dataclass
 class PartsResult:
+    """What :func:`parts` found: the part ``count``, a ``summary`` row per part (Id Cells Grids
+    Mass PIDs) and the ``links``, the excluded elements joining two parts (EID CardType PartA
+    PartB)."""
+
     count: int
     summary: list            # rows: Id Cells Grids Mass PIDs
     links: list              # rows: EID CardType PartA PartB

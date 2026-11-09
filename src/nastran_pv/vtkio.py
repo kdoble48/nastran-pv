@@ -7,6 +7,8 @@ from vtkmodules.vtkIOXML import vtkXMLMultiBlockDataReader, vtkXMLMultiBlockData
 
 
 def write_vtm(mb, out, binary: bool = True) -> Path:
+    """Write ``mb`` as a ``.vtm`` (one file per block in the folder next to it, zlib-compressed
+    unless ``binary`` is False, then ASCII); returns the path, given the ``.vtm`` suffix."""
     out = Path(out)
     if out.suffix.lower() != ".vtm":
         out = out.with_suffix(".vtm")
@@ -32,7 +34,9 @@ def read_vtm(path):
 
 
 def write_series(mb, results, out, binary: bool = True, deck=None) -> Path:
-    """One .vtm per result step plus a .pvd collection (time = step index)."""
+    """One .vtm per result step plus a .pvd collection (time = step index): each step of
+    ``results`` (:func:`~nastran_pv.results.open_results`) attached to ``mb`` in turn, rotated to
+    basic with ``deck``. Returns the ``.pvd`` path."""
     out = Path(out).with_suffix("")
     entries = []
     for i, t in enumerate(results.times):
@@ -96,3 +100,6 @@ def read_model(path, step: int | None = None):
             obj.GetFieldData().RemoveArray("Time")
             obj.GetInformation().Remove(vtkDataObject.DATA_TIME_STEP())
     return mb
+
+
+__all__ = ["read_model", "write_series", "write_vtm"]

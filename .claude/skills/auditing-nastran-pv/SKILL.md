@@ -66,7 +66,7 @@ gotcha). Per PR, run the `extending-nastran-pv` done-gate plus:
   `.claude/skills/converting-nastran-decks/summary.py --arrays`. Any difference goes in the PR body.
 - **pv_smoke from a worktree** (it has no `_vendor`):
   `NASTRAN_PV_SITE_PACKAGES=<main checkout>/paraview/_vendor`, plus
-  `NASTRAN_PV_PYTHON=<system python>` for 5.13's CLI step (a `.venv` python lacks numpy).
+  `NASTRAN_PV_PYTHON=<system python>` for 5.13's CLI step (the `.venv` python is for Sphinx).
   ParaView 5.13 lives in the main checkout's `out/pv513/`. Run it in the background.
 
 ## Common mistakes

@@ -3,3 +3,8 @@ pydata-sphinx-theme==0.23.0
 myst-parser==5.1.0
 sphinx-design==0.7.0
 trame-vtk==2.11.17
+# autodoc imports nastran_pv from src/ for the Python API page (docs/api.md): its dependencies
+# (pyproject.toml), h5py for nastran_pv.vtkhdf
+pyNastran==1.4.1
+vtk==9.5.2
+h5py==3.16.0

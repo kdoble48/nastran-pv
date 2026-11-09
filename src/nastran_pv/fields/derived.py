@@ -154,3 +154,6 @@ def _pid_mass(mesh) -> list[str]:
         replace_array(ds.GetCellData(), "PIDMass", pm)
         replace_array(ds.GetCellData(), "PIDMassFraction", pm / total if total > 0 else np.full(len(pm), np.nan))
     return ["PIDMass", "PIDMassFraction"]
+
+
+__all__ = ["add_derived"]

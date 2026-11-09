@@ -2,6 +2,7 @@
 
     python docs/models/make_demo.py                                  # (re)write docs/models/demo.bdf
     python docs/models/make_demo.py --solve --mystran tools/mystran-19.0.0-windows-x86_64.exe
+    python docs/models/make_demo.py --deck static|plate [--solve ...]  # the result scenes' static runs
 
 Units: mm, t (tonne), s, N. The tray is an aluminum plate, 600 x 400 x 6 mm, 12 x 8 CQUAD4, 50 mm
 above four grounded grids, carrying a 20 kg box (CONM2, CG 40 mm above the plate). Three isolators
@@ -14,6 +15,12 @@ stringers run along x (rows y = -100 and +100) and two PBARL CHAN rails along th
 their flanges facing inward; all are CBARs on the plate grids, offset below the plate by WA/WB, with
 the orientation vector up (element y = basic z). ``write_bush_check`` writes a one-bush deck used to
 verify that the solver honors the CBUSH CID.
+
+Two static decks (SOL 101) feed the gallery's result scenes. ``write_demo_static`` is the same tray
+under 1 g down (GRAV) plus a pressure on the plate that grows from 1 kPa at its left edge to 3 kPa
+at its right (PLOAD4 corner pressures), combined in LOAD 100. ``write_composite_plate`` is a
+300 x 200 x 1 mm carbon/epoxy plate, [0/45/-45/90]s (PCOMP, MAT8), clamped along x = 0 and loaded
+at its free edge by 20 N down, more at one corner than the other, so it bends and twists.
 """
 from __future__ import annotations
 
@@ -35,11 +42,31 @@ PAINT_NSM, HARNESS_NSM, BUNDLE_MASS = 2.0e-9, 2.0e-8, 0.002  # t/mm^2, t/mm^2, t
 STRINGER = [30.0, 20.0, 20.0, 1.5, 2.0, 2.0]   # PBARL I: depth, flange widths, web, flange thicknesses
 RAIL = [15.0, 25.0, 1.5, 1.5]                  # PBARL CHAN: width, depth, web, flange
 STRINGER_ROWS = (2, 6)
+PRESSURE = (1.0e-3, 3.0e-3)  # N/mm^2 down on the tray, at x = -LX/2 and +LX/2 (linear in x)
+G = 9806.65  # mm/s^2
+STATIC_REQUESTS = ("DISP = ALL", "STRESS = ALL", "FORCE = ALL", "SPCFORCES = ALL")
+# composite plate: mm, t, N; T300/5208-like carbon/epoxy plies (MAT8 with strengths for FT)
+PLATE = {"nx": 12, "ny": 8, "lx": 300.0, "ly": 200.0, "ply_t": 0.125, "angles": (0.0, 45.0, -45.0, 90.0),
+         "tip_force": 20.0}
+PLY_MAT = {"e11": 181000.0, "e22": 10300.0, "nu12": 0.28, "g12": 7170.0, "g1z": 7170.0, "g2z": 3780.0,
+           "rho": 1.6e-9, "xt": 1500.0, "xc": 1500.0, "yt": 40.0, "yc": 246.0, "s": 68.0, "sb": 90.0}
 
 
 def _case_control(title, extra=()):
     return CaseControlDeck([f"TITLE = {title}", "ECHO = NONE", *extra, "SUBCASE 1", "  METHOD = 1",
                             "  SPC = 1", "  DISP = ALL", "BEGIN BULK"])
+
+
+def _new_static(title, load, requests=STATIC_REQUESTS, case_extra=()):
+    """An empty SOL 101 model: one subcase with SPC 1 and LOAD ``load``, and ``requests``."""
+    model = BDF(debug=None)
+    model.sol = 101
+    model.executive_control_lines = ["SOL 101", "CEND"]
+    model.case_control_deck = CaseControlDeck([f"TITLE = {title}", "ECHO = NONE", *case_extra, "SUBCASE 1",
+                                               "  SPC = 1", f"  LOAD = {load}",
+                                               *(f"  {r}" for r in requests), "BEGIN BULK"])
+    model.add_param("POST", [-1])
+    return model
 
 
 def _rotated_cid(model, cid, angle_deg):
@@ -76,6 +103,67 @@ def _new(title, givens=False, case_extra=()):
 def write_demo(path=HERE / "demo.bdf") -> Path:
     path = Path(path)
     model = _new("nastran-pv demo: tray on four isolators", case_extra=["NSM = 10"])
+    _tray(model)
+    _write(model, path)
+    return path
+
+
+def write_demo_static(path) -> Path:
+    """The demo tray as a static run: LOAD 100 = GRAV 102 (1 g down) + PLOAD4 101 on every plate
+    element (the corner pressures of ``PRESSURE``, linear in x, pushing down)."""
+    path = Path(path)
+    model = _new_static("nastran-pv demo: tray under 1 g and a pressure", 100, case_extra=["NSM = 10"])
+    gid = _tray(model)
+    lo, hi = PRESSURE
+    eid = 1
+    for j in range(NY):
+        for i in range(NX):
+            corners = [gid(i, j), gid(i + 1, j), gid(i + 1, j + 1), gid(i, j + 1)]
+            # the plate normal is +Z (corners counterclockwise from above): down is negative
+            p = [-(lo + (hi - lo) * (model.nodes[g].xyz[0] / LX + 0.5)) for g in corners]
+            model.add_pload4(101, [eid], p)
+            eid += 1
+    model.add_grav(102, G, [0.0, 0.0, -1.0])
+    model.add_load(100, 1.0, [1.0, 1.0], [101, 102])
+    _write(model, path)
+    return path
+
+
+def write_composite_plate(path) -> Path:
+    """A [0/45/-45/90]s carbon/epoxy plate (PCOMP 1 of MAT8 1, plies written out, SOUT=YES, Tsai-Wu
+    FT), clamped along x = 0; FORCE 1 at the tip grids sums to ``tip_force`` down, growing linearly
+    from 0 at y = -ly/2 to twice the mean at +ly/2 (bending plus twist)."""
+    path = Path(path)
+    p, m = PLATE, PLY_MAT
+    nx, ny, lx, ly = p["nx"], p["ny"], p["lx"], p["ly"]
+    model = _new_static("nastran-pv demo: composite plate, [0/45/-45/90]s cantilever", 1,
+                        requests=("DISP = ALL", "STRESS = ALL", "STRAIN = ALL", "FORCE = ALL"))
+    model.add_mat8(1, m["e11"], m["e22"], m["nu12"], g12=m["g12"], g1z=m["g1z"], g2z=m["g2z"], rho=m["rho"],
+                   Xt=m["xt"], Xc=m["xc"], Yt=m["yt"], Yc=m["yc"], S=m["s"])
+    angles = list(p["angles"]) + list(reversed(p["angles"]))
+    model.add_pcomp(1, [1] * len(angles), [p["ply_t"]] * len(angles), thetas=angles, souts=["YES"] * len(angles),
+                    ft="TSAI", sb=m["sb"])
+    gid = lambda i, j: 1 + i + j * (nx + 1)  # noqa: E731
+    for j in range(ny + 1):
+        for i in range(nx + 1):
+            model.add_grid(gid(i, j), [i * lx / nx, j * ly / ny - ly / 2, 0.0])
+    eid = 1
+    for j in range(ny):
+        for i in range(nx):
+            model.add_cquad4(eid, 1, [gid(i, j), gid(i + 1, j), gid(i + 1, j + 1), gid(i, j + 1)])
+            eid += 1
+    model.add_spc1(1, "123456", [gid(0, j) for j in range(ny + 1)])
+    weights = [j / ny for j in range(ny + 1)]  # 0 at y = -ly/2 to 1 at +ly/2
+    for j, w in enumerate(weights):
+        if w:
+            model.add_force(1, gid(nx, j), p["tip_force"] * w / sum(weights), [0.0, 0.0, -1.0])
+    _write(model, path)
+    return path
+
+
+def _tray(model):
+    """The tray, its box, isolators, stiffeners and NSM into ``model``; returns the plate's grid id
+    function ``gid(i, j)``."""
     model.add_mat1(1, 70000.0, None, 0.33, rho=2.7e-9)
     model.add_pshell(1, mid1=1, t=T, mid2=1, nsm=PAINT_NSM)
     gid = lambda i, j: 1 + i + j * (NX + 1)  # noqa: E731
@@ -104,8 +192,7 @@ def write_demo(path=HERE / "demo.bdf") -> Path:
         model.add_cbush(2001 + n, 12 if rotated else 11, [ground, top], None, None, cid=10 if rotated else 0)
     model.add_spc1(1, "123456", [1001, 1002, 1003, 1004])
     _add_stiffeners(model, gid)
-    _write(model, path)
-    return path
+    return gid
 
 
 def _add_stiffeners(model, gid):
@@ -158,13 +245,20 @@ def solve(bdf, mystran) -> Path:
     raise RuntimeError(f"MYSTRAN wrote no OP2 for {bdf.name}:\n{tail}")
 
 
+DECKS = {"demo": (write_demo, "demo.bdf"), "static": (write_demo_static, "demo_static.bdf"),
+         "plate": (write_composite_plate, "composite_plate.bdf")}
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--out", default=str(HERE / "demo.bdf"))
+    ap.add_argument("--deck", choices=list(DECKS), default="demo",
+                    help="the modal demo (default), the tray's static run or the composite plate")
+    ap.add_argument("--out", help="the deck to write (default: docs/models/<the deck's name>)")
     ap.add_argument("--solve", action="store_true", help="also run MYSTRAN to write the .op2")
     ap.add_argument("--mystran", help="path to the MYSTRAN executable")
     args = ap.parse_args(argv)
-    bdf = write_demo(args.out)
+    write, name = DECKS[args.deck]
+    bdf = write(args.out or HERE / name)
     print(f"wrote {bdf}")
     if args.solve:
         if not args.mystran:

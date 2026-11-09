@@ -25,6 +25,9 @@ MESH_ONLY = ("FreeEdges", "FreeFaces")  # read the Shells/Solids blocks, not the
 
 @dataclass
 class CheckResult:
+    """What :func:`check` found: ``findings``, a multiblock with one block per check that found
+    something, and a ``summary`` row per check (Name Count Severity)."""
+
     findings: object                 # vtkMultiBlockDataSet, one block per check with findings
     summary: list                    # rows: Name Count Severity
     warnings: list = field(default_factory=list)

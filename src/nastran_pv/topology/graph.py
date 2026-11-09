@@ -13,7 +13,7 @@ from functools import cached_property
 import numpy as np
 from scipy import sparse
 
-from .. import vtkutil
+from .. import deprecation, vtkutil
 from ..categories import CONNECTOR_TYPES, ELEMENT_TYPES, RIGID_TYPES
 from ..fields.common import field_strings, get_array, iter_blocks
 
@@ -34,6 +34,7 @@ RULES_SYNTAX = ("exclude=NAME,... (or include=NAME,...) exclude_pids=ID,A-B,... 
                 "max_hops=N")
 WITHIN = ("pid", "mid", "family", "group")
 WITHIN_ALIASES = {"property": "pid", "material": "mid", "pids": "pid"}
+WITHIN_PIDS_REMOVED = "1.0.0"  # the release that drops within_pids (Rules, --rules) and StayWithinSeedPIDs
 SEEDS_SYNTAX = "EID 1001 1002; GRID 55; PID 7"
 
 
@@ -75,6 +76,12 @@ def _element_keys(card, eid, lead, dof, alone, mpc_card) -> np.ndarray:
 
 @dataclass
 class Graph:
+    """A multiblock's cells and grids as one bipartite graph (:meth:`from_multiblock`): build it
+    once and pass it as ``graph=`` to :func:`grow`, :func:`parts`, :func:`path`, :func:`check`,
+    :func:`~nastran_pv.post.freebody.select_body` and :func:`~nastran_pv.post.freebody.free_body`,
+    which then skip the build. The rows are the cells of every element, rigid-element and
+    connector block."""
+
     nids: np.ndarray                 # (G,) sorted grid ids
     xyz: np.ndarray                  # (G, 3) grid coordinates
     incidence: sparse.csr_matrix     # (C, G): 1 where cell c uses grid g
@@ -116,6 +123,8 @@ class Graph:
 
     @classmethod
     def from_multiblock(cls, mb) -> "Graph":
+        """The graph of ``mb`` (a deck's multiblock or a converted file); a
+        :class:`NoElementsError` when no block has cells and a ``NID`` array."""
         rows, cols, nid_parts, xyz_parts = [], [], [], []
         eid, pid, card, group = [], [], [], []
         lead, dof, alone, warnings = [], [], [], []  # for the element keys
@@ -220,15 +229,22 @@ def _name(text: str) -> str:
 
 @dataclass(frozen=True)
 class Rules:
+    """Traversal rules (``docs/tools.md#traversal-rules``): the card types or groups a traversal
+    may enter (``include``) or not (``exclude``), PIDs it may not enter (``exclude_pids``), the
+    key it stays within (``within``: ``pid``, ``mid``, ``family`` or ``group`` of the seeds) and
+    ``max_hops``. :meth:`parse` reads the CLI's ``--rules`` text."""
+
     include: frozenset = frozenset()
     exclude: frozenset = frozenset()
     exclude_pids: frozenset = frozenset()
-    within_pids: bool = False  # old spelling of within="pid"
+    within_pids: bool = False  # deprecated: the old spelling of within="pid" (WITHIN_PIDS_REMOVED)
     max_hops: int | None = None
     within: str = ""  # "", or stay inside the seeds' pid / mid / family / group
 
     def __post_init__(self):
         if self.within_pids:
+            # stacklevel 4: warn, __post_init__, the dataclass __init__, the caller
+            deprecation.warn("Rules(within_pids=True)", 'Rules(within="pid")', WITHIN_PIDS_REMOVED, stacklevel=4)
             object.__setattr__(self, "within", self.within or "pid")
             object.__setattr__(self, "within_pids", False)
         within = WITHIN_ALIASES.get(self.within.lower(), self.within.lower())
@@ -242,6 +258,8 @@ class Rules:
 
     @classmethod
     def parse(cls, text) -> "Rules":
+        """Rules from text such as ``exclude=rigid,CBUSH exclude_pids=7,10-20 within=pid
+        max_hops=3``; a ValueError names a bad token."""
         kw = {}
         for token in (text or "").replace(";", " ").split():
             key, eq, value = token.partition("=")
@@ -253,6 +271,7 @@ class Rules:
                 elif key == "exclude_pids" and items:
                     kw[key] = parse_pids(value)
                 elif key == "within_pids" and not eq:
+                    deprecation.notice("the rules token within_pids", "within=pid", WITHIN_PIDS_REMOVED)
                     kw["within"] = "pid"
                 elif key == "within" and value:
                     kw["within"] = WITHIN_ALIASES.get(value.lower(), value.lower())
@@ -301,6 +320,8 @@ class Rules:
 
 @dataclass(frozen=True)
 class Seeds:
+    """Where a traversal starts: element ids, grid ids and PIDs (:meth:`parse`)."""
+
     eids: tuple = ()
     grids: tuple = ()
     pids: tuple = ()
@@ -310,6 +331,7 @@ class Seeds:
 
     @classmethod
     def parse(cls, text) -> "Seeds":
+        """Seeds from text such as ``EID 1001 1002; GRID 55; PID 7`` (``NID`` is ``GRID``)."""
         out = {"EID": [], "GRID": [], "PID": []}
         for part in re.split(r"[;\n]", text or ""):
             words = part.replace(",", " ").split()

@@ -7,7 +7,9 @@ of `.vtm` files. An output ending in `.vtkhdf`, or `--format vtkhdf`, writes VTK
 
 VTKHDF is VTK's HDF5 format, and ParaView opens it natively: the files nastran-pv writes are
 tested in ParaView 5.13.1 and 6.0 ([ParaView versions](install.md#paraview-versions)). Writing
-them needs VTK 9.5 or newer; with an older VTK, `convert` refuses and says so.
+them needs VTK 9.5 or newer; with an older VTK, `convert` refuses and says so. A series of several
+steps (`--all-steps`) and reading a VTKHDF file back (`convert`, `stats` on one) also need h5py,
+the `h5` extra ([Install](install.md)); without it they say so before writing anything.
 
 ```bash
 nastran-pv convert run.bdf -o out/model.vtkhdf                                  # one snapshot

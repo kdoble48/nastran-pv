@@ -8,6 +8,19 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Added
 
+- The Python API on the docs site ([Python API](docs/api.md)): `load_deck`, `build_multiblock`
+  and `Options`, `open_results` and the results objects, the `.vtm` and VTKHDF writers, the
+  result types, fields, model tools, beam sections and results helpers, rendered by autodoc from
+  their docstrings (several written for it). Each of those modules lists its public names in
+  `__all__`, and the page defines the public Python API of the version policy. A deprecation
+  policy ([Deprecation](docs/versioning.md#deprecation)): a renamed or removed public name warns
+  (`DeprecationWarning`, or a line on stderr for a CLI flag), is listed under *Deprecated*, and
+  lives at least until the next minor release before 1.0 and the next major release after; the
+  helpers are in `nastran_pv.deprecation` (`flag_alias` for CLI flags). The docs build now
+  installs pyNastran, VTK and h5py, which autodoc imports (#76).
+- Without h5py (the `h5` extra), `write_vtkhdf` and an uncompacted series still write, and a
+  compacted VTKHDF series, reading a VTKHDF file back and `H5Results` stop with an `ImportError`
+  that names the extra, before writing anything (#76).
 - `nastran-pv --version`: the version of nastran-pv, the folder it runs from (and the commit of a
   source checkout), the versions of Python, pyNastran, numpy, VTK and h5py, the `pvpython` it finds
   and the OS. It answers before the CLI imports its dependencies, so a missing or broken VTK or
@@ -16,7 +29,6 @@ All notable changes to nastran-pv are listed here. The format follows
   issue form (`.github/ISSUE_TEMPLATE/bug_report.yml`) asks for them, for a deck that shows the
   problem (a cut-down one for a confidential model), the results file when results are involved,
   what was expected and seen, and the card report and warnings; the README links it (#78).
-
 - Composite plies in ParaView: the reader's *Ply* (`convert --ply`: a ply id, or 0 for each
   element's critical ply), the *Nastran Ply Axes* filter (a ply's fibre and 2-directions as lines
   through each shell, from the layup table, so on converted files too; ply 0 draws the reader's ply
@@ -210,6 +222,15 @@ All notable changes to nastran-pv are listed here. The format follows
   a `vX.Y.Z` tag to PyPI ([Releasing](docs/versioning.md#releasing)). The package metadata gains
   classifiers, project URLs and keywords, and test CI also runs Python 3.13 and 3.14, with
   pyNastran `main` at a pinned commit and pyNastran's own self-checks on (#69).
+- Gallery result scenes: `docs/build_gallery.py` also solves, with MYSTRAN, the uCRM-9 static
+  cruise case (a copy with CQUADR written as CQUAD4 and PSHELL MID4 blanked), the demo tray under
+  1 g and a pressure (`make_demo.py --deck static`) and a composite plate (`--deck plate`), and
+  shows displacement, element forces, stress, SPC and MPC forces, applied loads, a free body, nodal
+  averaging, the deck's pressures and GRAV, and plies. A gallery entry can be a view with fixed
+  arguments or a filter scene (`export_site.py`), a single static step is one scene (not a
+  one-mode tab), and `--out` builds elsewhere. Frequency response, transient and complex results
+  have no scene (MYSTRAN solves none); the gallery index says so. The export takes each display's
+  own color map for its legend, so the plies scene no longer shows a stray 0 to 1 scale bar (#77).
 
 ### Changed
 
@@ -257,6 +278,13 @@ All notable changes to nastran-pv are listed here. The format follows
   without `tests/data`; `license` is an SPDX expression (built by setuptools 77 or newer); the
   version is written once, as `nastran_pv.__version__`, which `pyproject.toml` reads; the
   README's links are absolute, so they work on PyPI (#69).
+
+### Deprecated
+
+- `Rules(within_pids=True)` and the `--rules` token `within_pids`, the old spellings of
+  `within=pid`, and the model-tool filters' hidden `StayWithinSeedPIDs` property (use *Stay Within*
+  = seed properties): they keep working until 1.0.0, now with a `DeprecationWarning` or a
+  `nastran-pv:` line on stderr (ParaView's Output Messages) (#76).
 
 ### Fixed
 
