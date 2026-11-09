@@ -37,6 +37,16 @@ All notable changes to nastran-pv are listed here. The format follows
   type reads (composite plies, complex tables, STRCUR plate strains, CSHEAR, ...) is reported in the
   warnings (and, in the reader too, the root `Warnings`) instead of dropped silently, and `convert`
   names the types it left out (#64).
+- Comparisons follow the scene (scene layers PR 2, rules R3 and R4): after *NPV Diff* every macro in
+  the view draws from the diff (colorings by their array, overlays by `DiffStatus` with A's removed
+  items of their kind in red), cut by both models' scope; the visibility macros write A's and B's
+  readers by ID, picks on A's removed items are A's, and the model a macro acts on follows the view.
+  *NPV Side by Side* draws every later macro in both views and is drawn again in place from either
+  view; the new *NPV Single* macro ends a comparison. The Nastran Diff compares again only when a
+  model's content changes, not on a scope change or a time step (uCRM-9 coarse: a scope change after
+  NPV Diff 2.1 s -> 0.75 s, NPV Masses 0.9 s -> 0.14 s). The mass, bush, load and SPC glyphs and beam
+  sections carry `DiffStatus`, and the diff's Removed block knows the grid of a removed mass or bush.
+  `tests/data/same_name/` holds a same-named pair (#67).
 - Pressure loads and GRAV drawn: PLOAD, PLOAD2 and PLOAD4 (shells, THRU ranges, solid faces, corner
   pressures, N1-N3 directions) become the `Pressures/SID_n`/`LOAD_n` blocks, a polygon per loaded
   face with `Pressure CornerPressure PressureDirection PressureForce` and the set's
@@ -148,7 +158,7 @@ All notable changes to nastran-pv are listed here. The format follows
   opts out, and `--dry-run` quotes the command it prints (#62).
 - Views combine instead of redrawing (#54): a coloring (PID, Thickness, Results, ...) replaces the
   coloring and keeps the overlays, an overlay (Masses, Loads, SPC, ...) adds itself and a second
-  toolbar click removes it, and only NPV Clear (and Side by Side) resets the view. Overlays follow
+  toolbar click removes it, and only NPV Clear resets the view. Overlays follow
   the reader's scope: with a group, a Show Only list or a selection file, NPV Masses, Bushes, Rigid,
   SPC and Loads draw what hangs off the kept elements (through RBE2/RBE3/CBUSH chains), and EIDs the
   scope names win.

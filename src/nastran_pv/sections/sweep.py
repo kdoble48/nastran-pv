@@ -81,6 +81,9 @@ class _Beams:
         self.ga, self.gb = nid[a], nid[b]
         none = np.full(lines.GetNumberOfCells(), -1)
         self.cells = {name: get_array(cd, name, none)[idx] for name in ("EID", "PID", "MID", "ElementType")}
+        for name in ("DiffStatus", "DiffReason"):  # a Nastran Diff output's Lines: the sections show the change
+            if cd.GetArray(name) is not None:
+                self.cells[name] = get_array(cd, name)[idx]
 
     def at(self, t) -> np.ndarray:
         """Points on the beam line at fractions t: (n, len(t), 3)."""

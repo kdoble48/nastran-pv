@@ -1,0 +1,29 @@
+$ Reference model (A) of a same-named pair: same_name/b/model.bdf is the modified copy, with the same
+$ file name, so labels and pipeline names must tell the two apart.
+$ Three unit shells; CONM2 201 (2.0) on grid 7, hung off shell 1's grid 5 by RBE2 301 (an engine
+$ mass); CONM2 202 (1.0) on shell 3's grid 9; CBUSH 501 from shell 2's grid 6 to grid 9; SPCs on
+$ grids 1 and 4; FORCE set 10 at grid 3.
+$ vs B: shell 3, CONM2 202 and CBUSH 501 removed (grids 8, 9 too), shell 4 added (grids 10, 11),
+$ CONM2 201 2.0 -> 3.0.
+GRID,1,,0.,0.,0.
+GRID,2,,1.,0.,0.
+GRID,3,,2.,0.,0.
+GRID,4,,0.,1.,0.
+GRID,5,,1.,1.,0.
+GRID,6,,2.,1.,0.
+GRID,7,,1.,1.,1.
+GRID,8,,3.,0.,0.
+GRID,9,,3.,1.,0.
+CQUAD4,1,1,1,2,5,4
+CQUAD4,2,1,2,3,6,5
+CQUAD4,3,2,3,8,9,6
+PSHELL,1,1,0.1
+PSHELL,2,1,0.2
+MAT1,1,70000.,,0.3,2.0
+CONM2,201,7,,2.0
+CONM2,202,9,,1.0
+RBE2,301,5,123456,7
+CBUSH,501,51,6,9,0.,0.,1.
+PBUSH,51,K,100.,100.,100.
+SPC1,1,123456,1,4
+FORCE,10,3,,1.,0.,0.,1.
