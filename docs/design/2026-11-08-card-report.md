@@ -70,7 +70,10 @@ was missing from it.
 - **CQUAD** with all nine grids is a `VTK_BIQUADRATIC_QUAD`; without G9 (G5 to G8 given) a
   `VTK_QUADRATIC_QUAD`; otherwise the linear quad as before. Area, mass and centroid come from VTK's
   cell size, which integrates the curved cell.
-- **CDAMP5** between two grids is a connector leg (code appended to `CONNECTOR_TYPES`).
+- **CDAMP5** between two grids is a connector leg (code appended to `CONNECTOR_TYPES`). The roadmap
+  groups it with the scalar-point cards, but its G1/G2 are grid *or* scalar points (unlike
+  CDAMP3/4's S1/S2), so it has a placement whenever both are grids; an end on a scalar point is
+  reported like CELAS1/2's.
 - **CELAS3/4, CDAMP3/4, CMASS3/4 and SPOINT/EPOINT are reported, not drawn.** They connect scalar
   points, which have no coordinates. Placing them would need a grid for each scalar point, and
   nothing in a deck gives one (an MPC that ties a scalar point to a grid DOF is an equation, not a
