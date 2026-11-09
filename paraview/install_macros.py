@@ -42,10 +42,16 @@ nastran_views.run_macro("{view}")
 
 
 def macro_dir() -> Path:
+    """ParaView's user macro folder: ``Macros`` next to its settings ini, which is
+    ``QSettings(IniFormat, UserScope, "ParaView")`` (ParaView 6.0 ``pqApplicationCore::settings``,
+    ``pqCoreUtilities::getParaViewUserDirectory``, ``pqPythonMacroSupervisor``). Qt puts that under
+    %APPDATA% on Windows, and under $XDG_CONFIG_HOME or ~/.config on Linux *and* macOS, where Qt
+    keeps its non-XDG path for INI files (qsettings.cpp ``make_user_path``): not ~/Library."""
     if sys.platform.startswith("win"):
-        base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+        base = Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming")
     else:
-        base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+        xdg = os.environ.get("XDG_CONFIG_HOME")
+        base = Path.home() / (xdg or ".config")  # Qt: unset or empty means ~/.config; relative is under ~
     return base / "ParaView" / "Macros"
 
 

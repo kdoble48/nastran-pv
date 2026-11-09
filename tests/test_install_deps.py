@@ -122,6 +122,35 @@ def test_verify_reports_imports_that_still_fail(monkeypatch, capsys, tmp_path):
     assert install_deps.verify("pvpython", tmp_path, dry_run=False) == 0
 
 
+def test_pvpython_search_is_the_shared_one(monkeypatch):
+    monkeypatch.setattr(install_deps.locate, "find_executable", lambda name: Path("pv") / "bin" / name)
+    assert install_deps.find_pvpython() == str(Path("pv") / "bin" / "pvpython")
+
+    def missing(name):
+        raise FileNotFoundError(name)
+
+    monkeypatch.setattr(install_deps.locate, "find_executable", missing)
+    assert install_deps.find_pvpython() is None
+
+
+def test_pip_platform_tags():
+    pp = install_deps.pip_platform
+    assert pp("win-amd64") == ["win_amd64"]
+    assert pp("linux-x86_64") == ["manylinux2014_x86_64", "manylinux_2_17_x86_64"]
+    assert pp("linux-aarch64") == ["manylinux2014_aarch64", "manylinux_2_17_aarch64"]
+    # macOS: this Mac's version (pip also takes every older one), not ParaView's deployment target:
+    # scipy has no arm64 wheel below macosx_12_0, so macosx_11_0 found none
+    assert pp("macosx-11.0-arm64", mac_version="14.6.1") == ["macosx_14_0_arm64"]
+    assert pp("macosx-10.15-x86_64", mac_version="13.2") == ["macosx_13_0_x86_64"]
+    assert pp("macosx-10.15-x86_64", mac_version="10.15.7") == ["macosx_10_15_x86_64"]
+    assert pp("macosx-11.0-arm64", mac_version="") == ["macosx_11_0_arm64"]  # unknown: the target
+    match = install_deps.tags_match
+    aarch64 = ["cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64"]
+    assert match(aarch64, "312", pp("linux-aarch64")[0])
+    assert not match(aarch64, "312", pp("linux-x86_64")[0])
+    assert match(["cp312-cp312-macosx_12_0_arm64"], "312", pp("macosx-11.0-arm64", mac_version="14.0")[0])
+
+
 def test_default_target_is_per_paraview_python_when_installed(tmp_path, monkeypatch, capsys):
     """An installed plugin (nastran_pv/paraview/) vendors into the per-user folder of ParaView's
     Python version, not into site-packages; a checkout keeps paraview/_vendor."""

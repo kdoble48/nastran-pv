@@ -6,6 +6,7 @@ importable (see ``nastran_bdf_reader._bootstrap``).
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -71,6 +72,17 @@ def vendor_dir(scripts=None, python: str | None = None) -> Path:
     return user_data_dir() / "vendor" / f"py{python}"
 
 
+# folders that hold ParaView installs (ParaView*/bin, ParaView*.app); the home folder is searched too,
+# for tarballs unpacked there (ParaView-6.0.1-MPI-Linux-Python3.12-x86_64/bin/pvpython)
+INSTALL_ROOTS = (Path("C:/Program Files"), Path("/Applications"), Path("/opt"))
+_LAYOUTS = ("ParaView*/bin/{exe}", "ParaView*.app/Contents/bin/{name}", "ParaView*.app/Contents/MacOS/{name}")
+
+
+def _version_key(folder: str) -> tuple[int, ...]:
+    """The numbers in a ParaView folder name: ParaView-5.13.1-... sorts after ParaView-5.9.1-..."""
+    return tuple(int(n) for n in re.findall(r"\d+", folder))
+
+
 def _candidates(name: str):
     env = os.environ.get("NASTRAN_PV_PARAVIEW_BIN")
     if env:
@@ -78,21 +90,20 @@ def _candidates(name: str):
     found = shutil.which(name)
     if found:
         yield Path(found)
-    roots = [Path("C:/Program Files"), Path("/Applications"), Path("/opt"), Path.home() / "Applications"]
-    for root in roots:
-        if not root.exists():
-            continue
-        for cand in sorted(root.glob(f"ParaView*/bin/{name}{EXE}"), reverse=True):
-            yield cand
-        for cand in sorted(root.glob(f"ParaView*.app/Contents/MacOS/{name}"), reverse=True):
-            yield cand
-        for cand in sorted(root.glob(f"ParaView*.app/Contents/bin/{name}"), reverse=True):
-            yield cand
+    installs = []  # (version of the ParaView folder right under the root, executable)
+    for root in (*INSTALL_ROOTS, Path.home() / "Applications", Path.home()):
+        if root.is_dir():
+            for layout in _LAYOUTS:
+                for cand in root.glob(layout.format(exe=f"{name}{EXE}", name=name)):
+                    installs.append((_version_key(cand.relative_to(root).parts[0]), cand))
+    for _, cand in sorted(installs, key=lambda item: item[0], reverse=True):  # the newest first
+        yield cand
 
 
 def find_executable(name: str) -> Path:
-    """``paraview`` or ``pvpython``: NASTRAN_PV_PARAVIEW_BIN, PATH, then standard install folders."""
+    """``paraview`` or ``pvpython``: NASTRAN_PV_PARAVIEW_BIN, PATH, then the newest ParaView in the
+    standard install folders, ``~/Applications`` or the home folder. ``install_deps.py`` uses it too."""
     for cand in _candidates(name):
-        if cand.exists():
+        if cand.is_file():
             return cand
     raise FileNotFoundError(f"{name} not found; put ParaView's bin folder on PATH or set NASTRAN_PV_PARAVIEW_BIN")

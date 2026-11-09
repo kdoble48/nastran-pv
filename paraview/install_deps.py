@@ -35,6 +35,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from platform import mac_ver
 
 HERE = Path(__file__).resolve().parent
 # nastran_pv.locate (standard library only): a checkout's ../src, else the installed package this
@@ -97,25 +98,29 @@ VERIFY_MODULES = ["scipy", "cpylog", "pyNastran.bdf.bdf"]
 
 
 def find_pvpython() -> str | None:
-    exe = shutil.which("pvpython")
-    if exe:
-        return exe
-    roots = [Path("C:/Program Files"), Path("/Applications"), Path("/opt")]
-    for root in roots:
-        for cand in sorted(root.glob("ParaView*/bin/pvpython*"), reverse=True):
-            return str(cand)
-        for cand in sorted(root.glob("ParaView*.app/Contents/bin/pvpython"), reverse=True):
-            return str(cand)
-    return None
+    """The pvpython that ``nastran-pv view/render/setup`` would use (``locate.find_executable``)."""
+    try:
+        return str(locate.find_executable("pvpython"))
+    except FileNotFoundError:
+        return None
 
 
-def pip_platform(sysconfig_platform: str) -> list[str]:
+def pip_platform(sysconfig_platform: str, mac_version: str | None = None) -> list[str]:
+    """pip ``--platform`` tags for ParaView's Python (its ``sysconfig.get_platform()``).
+
+    Linux: manylinux2014 for its machine (x86_64, aarch64). macOS: this Mac's version (``mac_version``,
+    default ``platform.mac_ver()``), since pip also accepts every older one; ParaView's own deployment
+    target (the version in its platform string, 11.0) is older than any scipy wheel for arm64 (12.0)."""
     p = sysconfig_platform.replace("-", "_").replace(".", "_")
-    if p.startswith("linux"):
-        return ["manylinux2014_x86_64", "manylinux_2_17_x86_64"]
+    if p.startswith("linux_"):
+        arch = p[len("linux_"):]
+        return [f"manylinux2014_{arch}", f"manylinux_2_17_{arch}"]
     if p.startswith("macosx"):
-        arch = "arm64" if "arm64" in p else "x86_64"
-        return [f"macosx_11_0_{arch}", f"macosx_10_9_{arch}"]
+        arch = "arm64" if p.endswith("arm64") else "x86_64"
+        version = mac_ver()[0] if mac_version is None else mac_version
+        parts = [int(n) for n in re.findall(r"\d+", version or sysconfig_platform)[:2]]
+        major, minor = (parts + [0, 0])[:2]
+        return [f"macosx_{major}_0_{arch}" if major >= 11 else f"macosx_10_{minor}_{arch}"]
     return [p]  # win_amd64
 
 

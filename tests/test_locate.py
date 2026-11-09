@@ -121,6 +121,62 @@ def test_vendor_dir(tmp_path, no_env):
     assert locate.vendor_dir(checkout) == tmp_path / "v"
 
 
+def _pv(root: Path, folder: str) -> Path:
+    return _touch(root / folder / "bin" / f"pvpython{locate.EXE}")
+
+
+@pytest.fixture
+def search(tmp_path, monkeypatch):
+    """Only tmp_path/home is searched: no PATH hit, no NASTRAN_PV_PARAVIEW_BIN, fake home."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.delenv("NASTRAN_PV_PARAVIEW_BIN", raising=False)
+    monkeypatch.setattr(locate.shutil, "which", lambda name: None)
+    monkeypatch.setattr(locate.Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setattr(locate, "INSTALL_ROOTS", ())
+    return home
+
+
+def test_pvpython_from_a_tarball_in_the_home_folder(search):
+    with pytest.raises(FileNotFoundError, match="NASTRAN_PV_PARAVIEW_BIN"):
+        locate.find_executable("pvpython")
+    old = _pv(search, "ParaView-5.9.1-osmesa-MPI-Linux-Python3.8-64bit")
+    assert locate.find_executable("pvpython") == old
+    pv513 = _pv(search, "ParaView-5.13.1-osmesa-MPI-Linux-Python3.10-x86_64")
+    assert locate.find_executable("pvpython") == pv513  # by version: 5.13 > 5.9 (not by name)
+    pv6 = _pv(search, "ParaView-6.0.1-MPI-Linux-Python3.12-x86_64")
+    assert locate.find_executable("pvpython") == pv6
+
+
+def test_newest_paraview_across_install_folders(search, tmp_path, monkeypatch):
+    system = tmp_path / "Program Files"
+    pv60 = _pv(system, "ParaView 6.0.0")
+    monkeypatch.setattr(locate, "INSTALL_ROOTS", (system,))
+    _pv(search, "ParaView-5.13.1-MPI-Linux-Python3.10-x86_64")
+    assert locate.find_executable("pvpython") == pv60
+    pv61 = _pv(search, "ParaView-6.1.0-MPI-Linux-Python3.12-x86_64")
+    assert locate.find_executable("pvpython") == pv61
+
+
+def test_path_and_env_come_first(search, tmp_path, monkeypatch):
+    _pv(search, "ParaView-6.0.1-MPI-Linux-Python3.12-x86_64")
+    on_path = _touch(tmp_path / "usr" / "bin" / f"pvpython{locate.EXE}")
+    monkeypatch.setattr(locate.shutil, "which", lambda name: str(on_path))
+    assert locate.find_executable("pvpython") == on_path
+    env = _pv(tmp_path, "custom")
+    monkeypatch.setenv("NASTRAN_PV_PARAVIEW_BIN", str(env.parent))
+    assert locate.find_executable("pvpython") == env
+
+
+def test_macos_app_bundles(search):
+    app = _touch(search / "Applications" / "ParaView-6.0.1.app" / "Contents" / "bin" / "pvpython")
+    gui = _touch(search / "Applications" / "ParaView-6.0.1.app" / "Contents" / "MacOS" / "paraview")
+    if locate.EXE:
+        pytest.skip("app bundles have no .exe")
+    assert locate.find_executable("pvpython") == app
+    assert locate.find_executable("paraview") == gui
+
+
 def test_setup_dry_run_without_paraview(no_env, capsys):
     """`nastran-pv setup --dry-run` shows the plugin and the commands even with no pvpython found
     (the CI wheel check); a real run still needs pvpython."""
