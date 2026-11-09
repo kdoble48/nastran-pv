@@ -20,7 +20,7 @@ SPC = ((0, -100, -50), (-2, 100, -200))
 MPC = ((0, 0, 0), (0, 0, 0))
 RESULTANTS = {"SPCForce": SPC, "MPCForce": MPC, "AppliedForce": APPLIED}
 NEW_ARRAYS = ("SPCForce", "SPCMoment", "MPCForce", "MPCMoment", "AppliedForce", "AppliedMoment")
-ROOT_ARRAYS = tuple(f"{a}Resultant" for a in NEW_ARRAYS)
+ROOT_ARRAYS = tuple(f"Resultant{a}" for a in NEW_ARRAYS)
 
 
 @pytest.fixture()
@@ -50,11 +50,11 @@ def _root(mb, name):
 def _check_resultants(mb):
     for force, (f, m) in RESULTANTS.items():
         moment = force.replace("Force", "Moment")
-        np.testing.assert_allclose(_root(mb, f"{force}Resultant"), f, atol=1e-9, err_msg=force)
-        np.testing.assert_allclose(_root(mb, f"{moment}Resultant"), m, atol=1e-9, err_msg=moment)
+        np.testing.assert_allclose(_root(mb, f"Resultant{force}"), f, atol=1e-9, err_msg=force)
+        np.testing.assert_allclose(_root(mb, f"Resultant{moment}"), m, atol=1e-9, err_msg=moment)
     # static equilibrium: the reactions balance the applied load
-    np.testing.assert_allclose(_root(mb, "SPCForceResultant") + _root(mb, "AppliedForceResultant"), 0, atol=1e-9)
-    np.testing.assert_allclose(_root(mb, "SPCMomentResultant") + _root(mb, "AppliedMomentResultant"), 0, atol=1e-9)
+    np.testing.assert_allclose(_root(mb, "ResultantSPCForce") + _root(mb, "ResultantAppliedForce"), 0, atol=1e-9)
+    np.testing.assert_allclose(_root(mb, "ResultantSPCMoment") + _root(mb, "ResultantAppliedMoment"), 0, atol=1e-9)
 
 
 # ------------------------------------------------------------------ the declarations
@@ -74,7 +74,7 @@ def test_the_types_are_appended_to_the_registry():
         assert np.isnan(rtype.fill) and rtype.blocks == rt.RESULT_BLOCKS and rtype.resultant
         assert rtype.op2.tables == (op2,) and rtype.h5.datasets == (h5,)
         assert rtype.h5.fields == ("X", "Y", "Z", "RX", "RY", "RZ")
-        assert rtype.resultant_names == tuple(f"{a}Resultant" for a in arrays)
+        assert rtype.resultant_names == tuple(f"Resultant{a}" for a in arrays)
 
 
 def test_a_resultant_needs_force_and_moment_columns():
@@ -120,8 +120,8 @@ def test_unselected_types_leave_no_arrays_or_resultants(results, deck):
     results.select(["Displacement", "AppliedLoad"]).attach(mb, 0, deck)
     shells = get_block(mb, "Shells")
     assert shells.GetPointData().GetArray("SPCForce") is None and shells.GetPointData().GetArray("MPCMoment") is None
-    assert _root(mb, "SPCForceResultant") is None and _root(mb, "MPCMomentResultant") is None
-    np.testing.assert_allclose(_root(mb, "AppliedForceResultant"), APPLIED[0], atol=1e-9)
+    assert _root(mb, "ResultantSPCForce") is None and _root(mb, "ResultantMPCMoment") is None
+    np.testing.assert_allclose(_root(mb, "ResultantAppliedForce"), APPLIED[0], atol=1e-9)
     results.select([]).attach(mb, 0, deck)
     assert all(_root(mb, name) is None for name in ROOT_ARRAYS)
     assert strings(mb, "ResultLabel") == ["Subcase 1"]
@@ -146,13 +146,68 @@ def test_resultant_leaves_out_grids_the_model_does_not_place(deck):
     spc.data = np.concatenate([spc.data, np.array([[[1000, 0, 0, 0, 0, 0]]], dtype=spc.data.dtype)], axis=1)
     mb = build_multiblock(deck)
     Op2Results(op2).attach(mb, 0, deck)
-    np.testing.assert_allclose(_root(mb, "SPCForceResultant"), SPC[0], atol=1e-9)
+    np.testing.assert_allclose(_root(mb, "ResultantSPCForce"), SPC[0], atol=1e-9)
 
 
 def test_resultant_without_a_deck_places_grids_by_the_blocks(deck):
     mb = build_multiblock(deck)
     Op2Results(make_loads_op2()).attach(mb, 0)  # no deck: the blocks' points place the grids
     _check_resultants(mb)
+
+
+def test_no_resultant_without_a_deck_when_rows_stay_in_cd(tmp_path):
+    """Without a deck the rows are not rotated: a grid with a CD system (GRIDCS_* on the root) would
+    mix its CD-frame force with basic positions, so the resultant is left out; with the deck it is
+    taken in basic."""
+    from test_result_types import _cd_deck, _cd_op2
+
+    deck = _cd_deck(tmp_path)
+    mb = build_multiblock(deck)
+    Op2Results(_cd_op2("spc_forces")).attach(mb, 0)
+    assert get_block(mb, "Shells").GetPointData().GetArray("SPCForce") is not None  # the arrays, in CD
+    assert _root(mb, "ResultantSPCForce") is None and _root(mb, "ResultantSPCMoment") is None
+    Op2Results(_cd_op2("spc_forces")).attach(mb, 0, deck)
+    np.testing.assert_allclose(_root(mb, "ResultantSPCForce"), [0, 5, 0], atol=1e-12)
+
+
+def _without_displacements(tmp_path, kind):
+    if kind == "op2":
+        op2 = make_loads_op2()
+        op2.displacements.clear()  # DISP=NONE
+        path = tmp_path / "nodisp.op2"
+        op2.write_op2(str(path))
+        return path
+    import h5py
+
+    path = write_loads_h5(tmp_path / "nodisp.h5")
+    with h5py.File(path, "a") as h5:
+        del h5["/NASTRAN/RESULT/NODAL/DISPLACEMENT"]
+    return path
+
+
+@pytest.mark.parametrize("kind", ["op2", "h5"])
+def test_the_tables_define_the_steps_without_displacements(tmp_path, deck, kind):
+    """DISP=NONE with SPCFORCES/MPCFORCES/OLOAD: the first of these types with tables gives the steps."""
+    assert [t.op2.kinds for t in (rt.SPC_FORCE, rt.MPC_FORCE, rt.APPLIED_LOAD)] == [("displacement",)] * 3
+    assert [t.h5.kinds for t in (rt.SPC_FORCE, rt.MPC_FORCE, rt.APPLIED_LOAD)] == [("displacement",)] * 3
+    res = open_results(_without_displacements(tmp_path, kind))
+    assert [s.label for s in res.steps] == ["Subcase 1"]
+    assert res.available == ("SPCForce", "MPCForce", "AppliedLoad")
+    mb = build_multiblock(deck)
+    res.attach(mb, 0, deck)
+    assert get_block(mb, "Shells").GetPointData().GetArray("Displacement") is None
+    _check_resultants(mb)
+    assert strings(mb, "ResultLabel") == ["Subcase 1"]
+
+
+def test_displacements_still_define_the_steps(results):
+    assert [s.label for s in results.steps] == ["Subcase 1"]  # not one more step per load table
+
+
+def test_convert_without_displacements(tmp_path):
+    code, text = run_cli(["convert", DATA / "tiny_run.bdf", "--results", _without_displacements(tmp_path, "op2"),
+                          "-o", tmp_path / "n.vtm"])
+    assert code == 0 and "1 result step(s): Subcase 1" in text and "SPCForce resultant (Subcase 1)" in text, text
 
 
 def test_random_response_drops_the_arrays_and_resultants(deck):
@@ -211,11 +266,17 @@ def test_a_series_fills_steps_without_the_tables(tmp_path):
     path = tmp_path / "two.op2"
     op2.write_op2(str(path))
     out = tmp_path / "two.vtkhdf"
-    assert run_cli(["convert", DATA / "tiny_run.bdf", "--results", path, "--all-steps", "-o", out])[0] == 0
+    code, text = run_cli(["convert", DATA / "tiny_run.bdf", "--results", path, "--all-steps", "-o", out])
+    assert code == 0, code
+    # convert prints the resultant of the --step it attached (0), not of the last step written
+    assert "SPCForce resultant (Subcase 1): force (0, -100, -50)" in text, text
     _check_resultants(read_model(out, 0))
     second = read_model(out, 1)
     assert get_block(second, "Shells").GetPointData().GetArray("SPCForce") is None
     assert all(_root(second, name) is None for name in ROOT_ARRAYS)
+    code, text = run_cli(["convert", DATA / "tiny_run.bdf", "--results", path, "--all-steps", "--step", "1",
+                          "-o", tmp_path / "two1.vtkhdf"])
+    assert code == 0 and "resultant (" not in text, text  # subcase 2 has none
 
 
 # ------------------------------------------------------------------ arrows
@@ -238,3 +299,17 @@ def test_result_arrows_one_per_grid_with_output(deck):
     assert result_load_points(build_multiblock(deck), "SPCForce").GetNumberOfPoints() == 0
     with pytest.raises(ValueError, match="resultant"):
         result_load_points(mb, "Displacement")
+    np.testing.assert_allclose(arr(pts, "ForceSum", "field").reshape(-1), SPC[0], atol=1e-9)  # what is drawn
+
+
+def test_result_arrows_sum_what_the_scope_keeps(deck):
+    """The arrows of a cut model (Nastran Scope) sum only the grids it keeps."""
+    from nastran_pv import selection
+    from nastran_pv.glyphs import result_load_points
+
+    mb = build_multiblock(deck)
+    Op2Results(make_loads_op2()).attach(mb, 0, deck)
+    cut = selection.apply_selection(mb, selection.IdList("NID", frozenset({3})), "keep")[0]
+    pts = result_load_points(cut, "SPCForce")
+    assert arr(pts, "NID").tolist() == [3]
+    np.testing.assert_allclose(arr(pts, "ForceSum", "field").reshape(-1), [0, 0, -50], atol=1e-9)

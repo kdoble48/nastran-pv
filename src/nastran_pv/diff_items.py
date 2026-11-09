@@ -365,7 +365,7 @@ def compare_bushes(A, B, moved, row, tol, res: Result) -> None:
 def _resultant(s):
     if s is None:
         return np.zeros(3), np.zeros(3), np.zeros(3)
-    return s["F"].sum(axis=0), (np.cross(s["xyz"], s["F"]) + s["M"]).sum(axis=0), s["G"]
+    return (*vtkutil.resultant(s["xyz"], s["F"], s["M"]), s["G"])
 
 
 def compare_loads(A, B, moved, row, tol, res: Result, gravity: bool = True) -> None:

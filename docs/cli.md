@@ -40,7 +40,7 @@ attaches the stresses without the displacements (names are case-insensitive and 
 comma-separated; `all` is every type; the default is every type, `Displacement VonMisesMax
 SPCForce MPCForce AppliedLoad`). A type named that the results file lacks gives a warning. With SPC
 forces, MPC forces or applied loads attached, `convert` prints their resultant at the attached
-step, e.g. `SPCForce resultant (Subcase 1): force (0, -100, -50), moment (-2, 100, -200) about the
+step (`--step`, also with `--all-steps`), e.g. `SPCForce resultant (Subcase 1): force (0, -100, -50), moment (-2, 100, -200) about the
 basic origin`; `stats` and `store add` take the flag too. `--no-nodal-arrays` leaves
 the `SPC_DOF`/`F_<sid>` point arrays off the mesh blocks, and `--ascii` writes ASCII XML for
 debugging.

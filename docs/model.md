@@ -85,19 +85,24 @@ The [field options](fields.md) add further arrays on top of these.
 |---|---|---|
 | `Displacement` | point `Displacement` (T1-T3), `Rotation` (R1-R3), `DisplacementMagnitude`, rotated from each grid's CD into basic; 0 on grids without output | `displacements`, `eigenvectors` / `NODAL/DISPLACEMENT`, `NODAL/EIGENVECTOR`; these define the result steps |
 | `VonMisesMax` | cell `VonMisesMax` on the mesh blocks: the largest value over the element's layers, fibres and nodes; NaN without output | every stress table with a von Mises column / `ELEMENTAL/STRESS/*`, computed from the components |
-| `SPCForce` | point `SPCForce` (F1-F3), `SPCMoment` (M1-M3), rotated from each grid's CD into basic; NaN on grids without output; root `SPCForceResultant SPCMomentResultant` | `spc_forces` / `NODAL/SPC_FORCE` (Case Control `SPCFORCES=`) |
-| `MPCForce` | point `MPCForce`, `MPCMoment`, as for `SPCForce`; root `MPCForceResultant MPCMomentResultant` | `mpc_forces` / `NODAL/MPC_FORCE` (`MPCFORCES=`) |
-| `AppliedLoad` | point `AppliedForce`, `AppliedMoment` (OLOAD: the load Nastran applied, GRAV and pressures included), as for `SPCForce`; root `AppliedForceResultant AppliedMomentResultant` | `load_vectors` / `NODAL/APPLIED_LOAD` (`OLOAD=`) |
+| `SPCForce` | point `SPCForce` (F1-F3), `SPCMoment` (M1-M3), rotated from each grid's CD into basic; NaN on grids without output; root `ResultantSPCForce ResultantSPCMoment` | `spc_forces` / `NODAL/SPC_FORCE` (Case Control `SPCFORCES=`) |
+| `MPCForce` | point `MPCForce`, `MPCMoment`, as for `SPCForce`; root `ResultantMPCForce ResultantMPCMoment` | `mpc_forces` / `NODAL/MPC_FORCE` (`MPCFORCES=`) |
+| `AppliedLoad` | point `AppliedForce`, `AppliedMoment` (OLOAD: the load Nastran applied, GRAV and pressures included), as for `SPCForce`; root `ResultantAppliedForce ResultantAppliedMoment` | `load_vectors` / `NODAL/APPLIED_LOAD` (`OLOAD=`) |
 
 All are attached by default; a file without a type's tables gets none of its arrays. The types are
 declared in `src/nastran_pv/result_types.py`.
 
-The resultants are per step: `<array>Resultant` is the sum of the forces, and the moment one the
-sum of M + r × F about the origin of the basic system (what the `.f06` prints as the SPCFORCE and
-OLOAD RESULTANT without `PARAM,GRDPNT`), each grid once, in basic. Rows of grids the model does not
-place (scalar points, grids the deck lacks) are left out. `convert` prints them, and in a static
-run `SPCForceResultant` + `AppliedForceResultant` is zero (and the moments too) when there are no
-other reactions. [Nastran Load Glyphs](paraview.md#filter-properties) draws all three as arrows
+The resultants are per step, named like the Loads blocks' `ResultantForce`: `Resultant<array>`
+is the sum of the forces, and the moment one the sum of M + r × F about the origin of the basic
+system (what the `.f06` prints as the SPCFORCE and OLOAD RESULTANT without `PARAM,GRDPNT`), each
+grid once, in basic. Rows of grids the model does not place (scalar points, grids the deck lacks)
+are left out; without the deck (the Python API's `attach` with no `deck`) the rows stay in each
+grid's CD system, so the resultant is written only when none of those grids has one. `convert`
+prints them for the attached `--step`, and in a static run `ResultantSPCForce` +
+`ResultantAppliedForce` is zero (and the moments too) when there are no other reactions.
+
+A run without displacement output (`DISP=NONE`) takes its result steps from the SPC forces, else
+the MPC forces, else the applied loads (static steps, one per subcase). [Nastran Load Glyphs](paraview.md#filter-properties) draws all three as arrows
 (*Source*).
 
 ## Derived quantities

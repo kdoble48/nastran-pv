@@ -93,12 +93,15 @@ class ResultType:
       basic when the deck is known; ``none`` leaves the values as they are.
     * ``steps``: its tables define the result steps (one per subcase, load step or mode; each
       source's ``kinds`` names the kind of step of each table); the other types are paired with
-      those steps by subcase and time value.
+      those steps by subcase and time value. A type with ``steps=False`` whose sources declare
+      ``kinds`` defines the steps when no step-defining type has tables (a run without displacement
+      output): the first such type with tables, in registry order.
     * ``default``: attached when nothing is selected.
     * ``resultant``: a point type whose first two arrays are a force (columns 0-2) and a moment
       (3-5) at each grid: ``attach_step`` also writes their sums at each step, root
-      ``<force array>Resultant`` and ``<moment array>Resultant`` (``resultant_names``): the
-      force sum and the moment about the basic origin (sum of M + r x F).
+      ``Resultant<force array>`` and ``Resultant<moment array>`` (``resultant_names``, named like
+      the Loads blocks' ``ResultantForce``): the force sum and the moment about the basic origin
+      (sum of M + r x F).
     """
 
     name: str
@@ -118,8 +121,8 @@ class ResultType:
         for value, allowed in ((self.location, LOCATIONS), (self.reduce, REDUCTIONS), (self.frame, FRAMES)):
             if value not in allowed:
                 raise ValueError(f"result type {self.name}: {value!r} is not one of {allowed}")
-        if self.steps and (len(self.op2.kinds) != len(self.op2.tables)
-                           or len(self.h5.kinds) != len(self.h5.datasets)):
+        if (self.steps or self.op2.kinds or self.h5.kinds) and (len(self.op2.kinds) != len(self.op2.tables)
+                                                              or len(self.h5.kinds) != len(self.h5.datasets)):
             raise ValueError(f"result type {self.name} defines steps: give one step kind per OP2 table "
                              "and per H5 dataset (Op2Source.kinds, H5Source.kinds)")
         if self.resultant and (self.location != "point" or len(self.arrays) < 2
@@ -130,7 +133,13 @@ class ResultType:
     @property
     def resultant_names(self) -> tuple[str, ...]:
         """The root field arrays of the resultant (force, moment), or () for a type without one."""
-        return tuple(f"{a.name}Resultant" for a in self.arrays[:2]) if self.resultant else ()
+        return tuple(f"Resultant{a.name}" for a in self.arrays[:2]) if self.resultant else ()
+
+    @property
+    def defines_steps(self) -> bool:
+        """The type can give the steps: a step-defining type, or one whose sources declare kinds
+        (when no step-defining type has tables)."""
+        return self.steps or bool(self.op2.kinds)
 
     @property
     def id_array(self) -> str:
@@ -172,12 +181,14 @@ def von_mises_table(rows) -> np.ndarray | None:
 
 
 # ------------------------------------------------------------------ the registry
+_GRID_VECTOR = ("X", "Y", "Z", "RX", "RY", "RZ")  # MSC/NX HDF5 fields of a nodal table
+
 DISPLACEMENT = ResultType(
     "Displacement", "point", RESULT_BLOCKS,
     (ArraySpec("Displacement", (0, 1, 2)), ArraySpec("Rotation", (3, 4, 5)),
      ArraySpec("DisplacementMagnitude", (0, 1, 2), magnitude=True)),
     op2=Op2Source(("displacements", "eigenvectors"), kinds=("displacement", "eigenvector")),
-    h5=H5Source(("NODAL/DISPLACEMENT", "NODAL/EIGENVECTOR"), fields=("X", "Y", "Z", "RX", "RY", "RZ"),
+    h5=H5Source(("NODAL/DISPLACEMENT", "NODAL/EIGENVECTOR"), fields=_GRID_VECTOR,
                 kinds=("displacement", "eigenvector")),
     frame="grid_cd", fill=0.0, steps=True)
 
@@ -187,15 +198,14 @@ VON_MISES_MAX = ResultType(
     h5=H5Source(("ELEMENTAL/STRESS/*",), compute=von_mises_table),
     reduce="max")
 
-_GRID_VECTOR = ("X", "Y", "Z", "RX", "RY", "RZ")  # MSC/NX HDF5 fields of a nodal table
-
-
 def _grid_loads(name, force, moment, op2_table, h5_dataset) -> ResultType:
     """A force and moment per grid (T1-T3, R1-R3), rotated from CD like displacements, NaN where
-    a grid has no output, with root resultants."""
+    a grid has no output, with root resultants; its tables give static steps when the file has no
+    displacements (DISP=NONE)."""
     return ResultType(
         name, "point", RESULT_BLOCKS, (ArraySpec(force, (0, 1, 2)), ArraySpec(moment, (3, 4, 5))),
-        op2=Op2Source((op2_table,)), h5=H5Source((h5_dataset,), fields=_GRID_VECTOR),
+        op2=Op2Source((op2_table,), kinds=("displacement",)),
+        h5=H5Source((h5_dataset,), fields=_GRID_VECTOR, kinds=("displacement",)),
         frame="grid_cd", resultant=True)
 
 

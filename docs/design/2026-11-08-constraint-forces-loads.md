@@ -26,14 +26,17 @@ and gravity next to the nodal loads, with the Load Glyphs filter the Loads view 
 | Blocks | `RESULT_BLOCKS`, like `Displacement` | Every grid of the mesh, masses, rigid elements and SPCs carries the vector, so a reaction is visible on the `Constraints` points and the mesh alike, and any cut of the model keeps it |
 | Fill | NaN | A grid without output has no value, which is not a zero reaction; the arrays are not written when every row is NaN |
 | Frame | `grid_cd` | Nastran writes them in each grid's CD system, like displacements |
-| Default | on | Nastran writes these tables only when Case Control asks (`SPCFORCES=`, `MPCFORCES=`, `OLOAD=`), so a file that has them was asked for them; a file without them gets nothing new |
-| Resultants | new `ResultType.resultant`: root `<force array>Resultant` and `<moment array>Resultant` (3 each) per step: ΣF and Σ(M + r × F) about the basic origin | The total reaction per subcase, what the `.f06` prints as SPCFORCE/OLOAD RESULTANT (about the basic origin without `PARAM,GRDPNT`) |
+| Default | on (measured below) | Nastran writes these tables only when Case Control asks (`SPCFORCES=`, `MPCFORCES=`, `OLOAD=`), so a file that has them was asked for them; a file without them gets nothing new |
+| Steps | the three sources declare `kinds=("displacement",)`: a file with no step-defining tables (`DISP=NONE`) takes its steps from the first of them with tables (`_Results.step_type`) | A run that asked only for reactions still attaches them; the registry's own sketch for DISP=NONE |
+| Resultants | new `ResultType.resultant`: root `Resultant<force array>` and `Resultant<moment array>` (3 each) per step: ΣF and Σ(M + r × F) about the basic origin | The total reaction per subcase, what the `.f06` prints as SPCFORCE/OLOAD RESULTANT (about the basic origin without `PARAM,GRDPNT`); named like the Loads blocks' `ResultantForce` |
 | Resultant rows | each grid once, the grids the model places (the deck's grids, or the result blocks' points without a deck); scalar points and grids of other superelements are left out | A moment needs a position; a scalar point has none |
-| Resultant frame | basic when the deck is given (always in the CLI and the plugin) | The rows are rotated first; without a deck they stay in CD, as the arrays do |
-| CLI | `convert` prints one line per attached type with a resultant: `SPCForce resultant (Subcase 1): force (0, -100, -50), moment (-2, 100, -200) about the basic origin` | Read off against the `.f06` without opening ParaView |
+| Resultant frame | basic: with the deck (always in the CLI and the plugin) the rows are rotated first; without one they stay in CD, so the resultant is written only when no row's grid has a CD system (root `GRIDCS_*`) | CD-frame forces at basic positions would be no resultant at all |
+| CLI | `convert` prints one line per attached type with a resultant, for the `--step` it attached (also with `--all-steps`): `SPCForce resultant (Subcase 1): force (0, -100, -50), moment (-2, 100, -200) about the basic origin` | Read off against the `.f06` without opening ParaView |
 | Glyphs | *Nastran Load Glyphs* gains *Source*: Deck load sets (default), SPC forces, MPC forces, Applied loads (OLOAD) | The same arrows, scaling, Show (forces/moments/both), Arrow Length, Size and Every Nth Point; one filter to learn, and a second instance draws reactions next to the deck loads |
 | Result arrows | one arrow per grid with output (`glyphs.result_load_points`: the first block that has the grid, NaN rows dropped, zero vectors none); *Load Sets* is ignored for a result source | A grid sits on several blocks; drawing it once keeps arrows from stacking |
-| View | the `loads` view takes `source=`; with a result source its text gives the step label and the root resultants | No new macro: NPV Loads with Source = SPC forces on 'NPV load glyphs' draws the reactions, and a rerun keeps the choice (`_set_given`) |
+| View | the `loads` view takes `source=`; with a result source its text gives the step label and the root resultants; with the reader's scope cutting the model, the force sum of the grids drawn (`ForceSum`, from `result_load_points`) and the resultant labelled "whole model" | No new macro: NPV Loads with Source = SPC forces on 'NPV load glyphs' draws the reactions, and a rerun keeps the choice (`_set_given`); the text says whose numbers it gives |
+| Shared helpers | `vtkutil.first_per_id` (the first block that has a grid places it: the resultant without a deck, the result arrows, the diff's grids) and `vtkutil.resultant` (ΣF, Σ M + r × F: these resultants and the diff's per-set ones); `vtkutil.vector_text` formats every 3-vector the CLI and the views print | One copy each |
+| VTKHDF series | every field array has one size at every step (`vtkhdf._field_widths`): string arrays padded with `""`, a string array a step lacks filled with `""` and listed in `FillArrays`, a numeric field array that changes size refused | vtkHDFWriter (VTK 9.5) mis-offsets a field array whose size changes; it already broke the MSC H5 fixture's series on main |
 | Random response | drops these arrays and the root resultants with the other registry arrays | It replaces every result array by its own (`remove_result_arrays`) |
 
 The new declaration field:
@@ -66,8 +69,29 @@ resultant behind.
 - The CD test deck of `test_result_types.py` (CORD2R 10 on grid 2) checks the rotation and that the
   resultant is taken in basic.
 - Manual: uCRM-9 coarse static solved by MYSTRAN with `SPCFORCES=ALL`, `MPCFORCES=ALL`,
-  `OLOAD=ALL`: SPCForceResultant = -AppliedForceResultant (forces and moments, to solver
-  precision).
+  `OLOAD=ALL`: `ResultantSPCForce` (6185.97, 40821.0, -632210) matches the `.f06` SPC FORCE
+  TOTALS, and `ResultantSPCForce` + `ResultantAppliedForce` leaves 1.8e-8 of the applied force
+  (3.9e-6 for the moments about the origin): float32 OP2 values.
+
+### Cost, and why the types stay on by default
+
+uCRM-9 coarse static (23,812 grids), MYSTRAN with `SPCFORCES=ALL MPCFORCES=ALL OLOAD=ALL`, which
+writes a row for every grid (MSC writes only the constrained or loaded ones, so its arrays are
+mostly NaN and compress to almost nothing):
+
+| | point arrays in memory | `.vtm` | VTKHDF (one-step series) | attach |
+|---|---|---|---|---|
+| `Displacement VonMisesMax` | 4.7 MB | 6.79 MB | 36.1 MB | |
+| every type (the default) | 8.4 MB (+3.7 MB) | 7.16 MB (+5 %) | 42.4 MB (+17 %) | 0.03 s for all five |
+
+The added memory is 6 arrays × 3 floats × 8 bytes = 144 bytes per grid on `Shells` (and the few
+`Masses`, `Rigid` and `Constraints` points), per step. A file on disk grows 5 % (`.vtm`) to 17 %
+(VTKHDF). That is small next to what the user asked Nastran to write, so the types stay on by
+default, on `RESULT_BLOCKS`: writing them only on `Constraints`/`Rigid` would lose OLOAD, which
+sits on the mesh's grids (aero forces, GRAV at every grid with mass). Whoever does not want them
+unchecks them (*Result Types*) or passes `--result-types Displacement,VonMisesMax`. A block with
+no output grid gets no array (all NaN is not written), except that a VTKHDF series NaN-fills an
+array at the steps that lack it.
 
 ## Deck half
 

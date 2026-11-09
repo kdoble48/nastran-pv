@@ -358,7 +358,9 @@ the selection commands make no filter of their own.
   tail on the grid: forces single-headed, moments double-headed. *Source* **Deck load sets** (the
   default) draws the deck's sets; **SPC forces**, **MPC forces** and **Applied loads (OLOAD)**
   draw the current result step's [SPC forces, MPC forces or applied loads](model.md#result-types)
-  instead, one arrow per grid with output (*Load Sets* is hidden then: it applies to the deck). *Show* picks **Forces**,
+  instead, one arrow per grid with output (*Load Sets* is hidden then: it applies to the deck).
+  NPV Loads with a result source gives the resultant; with the reader's scope cutting the model,
+  it gives the force sum of the grids drawn and labels the resultant as the whole model's. *Show* picks **Forces**,
   **Moments** or **Forces and moments**. *Arrow Length* **By magnitude** gives the largest force
   (and, on its own scale, the largest moment) over the checked sets *Size* × the model diagonal
   (0.08) and the others their share; **Fixed** draws every arrow that long. *Every Nth Point*

@@ -67,6 +67,26 @@ class _Results:
     available: tuple = ()
     selected: tuple | None = None  # type names to attach; None: the registry's defaults
     named: tuple = ()  # the types selected by name (not by "all"), which the file should have
+    step_type: str | None = None  # the type that gave the steps when no step-defining type has tables
+
+    def _collect_steps(self) -> list[Step]:
+        """The steps of the step-defining types; a file without any (DISP=NONE) takes them from
+        the first type with declared step kinds that has tables (``step_type``)."""
+        steps = [s for t in self.registry if t.steps for s in self._steps_of(t)]
+        if not steps:
+            fallback = next((t for t in self.registry if not t.steps and t.defines_steps and self.tables[t.name]),
+                            None)
+            if fallback is not None:
+                self.step_type = fallback.name
+                steps = self._steps_of(fallback)
+        return steps
+
+    def _gives_steps(self, rtype) -> bool:
+        """``rtype``'s tables are the step tables: read each step's own table, not by pairing."""
+        return rtype.steps or rtype.name == self.step_type
+
+    def _steps_of(self, rtype) -> list[Step]:
+        raise NotImplementedError
 
     @property
     def times(self) -> list[float]:
@@ -202,10 +222,10 @@ class Op2Results(_Results):
     # ------------------------------------------------------------ discovery
     def _find_tables(self, rtype) -> list:
         """(result name, subcase key, table, column indices or None, step kind) of every usable
-        table; the kind is None for a type that does not define steps."""
+        table; the kind is None for a type that cannot define steps."""
         found = []
         for pat, name, result in _op2_results(self.op2, rtype.op2.tables):
-            kind = rtype.op2.kind(pat) if rtype.steps else None
+            kind = rtype.op2.kind(pat) if rtype.defines_steps else None
             for key, obj in result.items():
                 if getattr(obj, "is_complex", False):
                     if rtype.steps:
@@ -222,28 +242,25 @@ class Op2Results(_Results):
                 found.append((name, key, obj, cols, kind))
         return found
 
-    def _collect_steps(self) -> list[Step]:
+    def _steps_of(self, rtype) -> list[Step]:
         steps = []
-        for rtype in self.registry:
-            if not rtype.steps:
-                continue
-            for name, key, res, _, kind in self.tables[rtype.name]:
-                sc = int(key) if np.isscalar(key) else key[0]
-                ntimes = res.data.shape[0]
-                times = np.asarray(getattr(res, "_times", []), dtype=float)
-                cycles = getattr(res, "mode_cycles", None)
-                eigns = getattr(res, "eigns", None)
-                modes = getattr(res, "modes", [])
-                for it in range(ntimes):
-                    t = float(times[it]) if len(times) > it else float("nan")
-                    if kind == "eigenvector":
-                        freq = _mode_frequency(eigns, cycles, it)
-                        mode = int(modes[it]) if len(modes) > it else it + 1
-                        label = f"Subcase {sc} mode {mode} ({freq:.6g} Hz)"
-                        steps.append(Step(label, kind, key, it, freq, t, name))
-                    else:
-                        label = f"Subcase {sc}" + (f" step {t:g}" if ntimes > 1 else "")
-                        steps.append(Step(label, kind, key, it, time=t, table=name))
+        for name, key, res, _, kind in self.tables[rtype.name]:
+            sc = int(key) if np.isscalar(key) else key[0]
+            ntimes = res.data.shape[0]
+            times = np.asarray(getattr(res, "_times", []), dtype=float)
+            cycles = getattr(res, "mode_cycles", None)
+            eigns = getattr(res, "eigns", None)
+            modes = getattr(res, "modes", [])
+            for it in range(ntimes):
+                t = float(times[it]) if len(times) > it else float("nan")
+                if kind == "eigenvector":
+                    freq = _mode_frequency(eigns, cycles, it)
+                    mode = int(modes[it]) if len(modes) > it else it + 1
+                    label = f"Subcase {sc} mode {mode} ({freq:.6g} Hz)"
+                    steps.append(Step(label, kind, key, it, freq, t, name))
+                else:
+                    label = f"Subcase {sc}" + (f" step {t:g}" if ntimes > 1 else "")
+                    steps.append(Step(label, kind, key, it, time=t, table=name))
         return steps
 
     # ------------------------------------------------------------ values
@@ -253,7 +270,7 @@ class Op2Results(_Results):
         for name, key, obj, cols, _ in self.tables[rtype.name]:
             if key != step.key:
                 continue
-            if rtype.steps:
+            if self._gives_steps(rtype):
                 if name != step.table:
                     continue
                 itime = step.itime
@@ -326,32 +343,43 @@ def _placed(mb, names, rtype, ids, deck):
         block = get_block(mb, name)
         nid = block.GetPointData().GetArray("NID")
         if nid is not None and block.GetNumberOfPoints():
-            nids.append(vtkutil.to_numpy(nid).astype(np.int64))
+            nids.append(vtkutil.to_numpy(nid))
             pts.append(vtkutil.to_numpy(block.GetPoints().GetData()).reshape(-1, 3))
-    if not nids:
-        return xyz, np.zeros(len(ids), dtype=bool)
-    known, first = np.unique(np.concatenate(nids), return_index=True)
+    known, known_xyz = vtkutil.first_per_id(nids, pts)
     idx = vtkutil.match_ids(known, ids)
     ok = idx >= 0
-    xyz[ok] = np.concatenate(pts)[first][idx[ok]]
+    xyz[ok] = known_xyz[idx[ok]]
     return xyz, ok
+
+
+def _in_basic(mb, ids) -> bool:
+    """Rows of grids ``ids`` that were not rotated (no deck) are in basic: no grid of them has a CD
+    system (root ``GRIDCS_*``; a model without ``CoordSystemCount`` predates the table: unknown)."""
+    fd = mb.GetFieldData()
+    if fd.GetArray("CoordSystemCount") is None:
+        return False
+    nid, cd = fd.GetArray("GRIDCS_NID"), fd.GetArray("GRIDCS_CD")
+    if nid is None or cd is None:
+        return True  # no grid with a CP or CD system
+    in_cd = vtkutil.to_numpy(nid)[vtkutil.to_numpy(cd) != 0]
+    return not np.isin(ids, in_cd).any()
 
 
 def _write_resultant(mb, names, rtype, got, deck) -> None:
     """Root ``rtype.resultant_names`` of ``got``: the force sum and the moment about the basic
     origin, sum of M + r x F, each grid once and only the grids the model places; dropped when
-    ``got`` is None."""
+    ``got`` is None, and left out without a deck when a row stays in its grid's CD system."""
     fd = mb.GetFieldData()
     for name in rtype.resultant_names:
         fd.RemoveArray(name)
     if got is None or not rtype.resultant:
         return
     ids, first = np.unique(got[0], return_index=True)
+    if deck is None and rtype.frame == "grid_cd" and not _in_basic(mb, ids):
+        return  # CD-frame forces at basic positions would be no resultant
     vals = got[1][first]
     xyz, ok = _placed(mb, names, rtype, ids, deck)
-    force = vals[ok, 0:3]
-    moment = vals[ok, 3:6].sum(axis=0) + np.cross(xyz[ok], force).sum(axis=0)
-    for name, value in zip(rtype.resultant_names, (force.sum(axis=0), moment)):
+    for name, value in zip(rtype.resultant_names, vtkutil.resultant(xyz[ok], vals[ok, 0:3], vals[ok, 3:6])):
         vtkutil.add_array(fd, name, value[None, :])
 
 
@@ -360,13 +388,12 @@ def resultant_lines(mb, registry=result_types.REGISTRY) -> list[str]:
     fd = mb.GetFieldData()
     label = fd.GetAbstractArray("ResultLabel")
     label = label.GetValue(0) if label is not None and label.GetNumberOfValues() else "?"
-    vec = lambda a: "(" + ", ".join(f"{float(x) + 0.0:.6g}" for x in vtkutil.to_numpy(a).reshape(-1)) + ")"  # noqa: E731
     lines = []
     for rtype in registry:
         arrays = [fd.GetArray(n) for n in rtype.resultant_names]
         if arrays and all(a is not None for a in arrays):
-            lines.append(f"{rtype.name} resultant ({label}): force {vec(arrays[0])}, moment {vec(arrays[1])} "
-                         "about the basic origin")
+            force, moment = (vtkutil.vector_text(vtkutil.to_numpy(a), 6) for a in arrays)
+            lines.append(f"{rtype.name} resultant ({label}): force {force}, moment {moment} about the basic origin")
     return lines
 
 
