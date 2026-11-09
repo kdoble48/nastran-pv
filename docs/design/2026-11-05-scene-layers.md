@@ -219,3 +219,33 @@ PR or a stack (suggested: R1+R2 single-model first, then R3/R4 comparison, then 
 Already right and to keep: rerunning NPV Diff from anything under B restores it with no new
 objects; Side by Side from the diff state (one shared color range, linked cameras); `_named`
 reuse; the camera link surviving every command.
+
+## Addendum: what PR 2 (R3, R4) decided (2026-11-08)
+
+The "Left to the builder" points for the comparison, as built:
+
+- **Registry.** `scene.Scene` gains `role`, `partner` (the other view's id; both views of a pair
+  have their own entry in `_SCENES`), `diff` and `side` (a pair without a diff: the model of that
+  side). `subject(view)` takes a comparison side's model from the Diff's sides; a single view keeps
+  its model unless the user selected another model's object since the last command (so selecting
+  another reader and clicking still switches the view, as in PR 1). One PR, not a stack.
+- **Overlays from the diff.** B's side draws from `NPV diff scope` (Nastran Scope on the Diff:
+  the Diff's whole annotated output cut by B's scope, its Removed block by A's, then the Diff's Show
+  settings) and `NPV deform diff` after it. The glyph filters take that as their input and carry
+  `DiffStatus` (rather than extracts of points), so masses stay ellipsoids, colored by change. They
+  are separate objects (`NPV diff mass glyphs [B]`): the single-model ones keep their settings.
+- **The Removed layer.** A's removed elements stay red and translucent under every coloring; each
+  overlay adds A's removed items of its kind, red and opaque; NPV Diff shows all of them.
+- **NPV Single** is a text button like every NPV macro (none has an icon). NPV Clear keeps the
+  comparison and, in a pair, clears both views.
+- **Scope.** The visibility macros write both readers; a checklist ticked by hand on one reader is
+  not copied (a macro cannot see the edit). With a converted A, B's scope cuts A's removed items by
+  ID, and A's side of a pair is not cut.
+- **Time.** B's diff layers move with B's deformation (NPV Results colors and deforms them); A's
+  removed items follow B's grids by NID. A's own held time and index-matched steps stay for PR 3.
+- **Cache.** The Diff keys a reader input on its whole multiblock object (held, so the identity is
+  safe; the reader makes a new one for a new deck or other options); other inputs keep object +
+  MTime.
+- **Texts.** In a pair each view says `A: <label>` / `B: <label>` (with the diff summary) when no
+  layer writes a text; the per-view text of R6 is PR 3. `side_by_side(array=)` for an array no view
+  shows draws an internal "array" coloring.

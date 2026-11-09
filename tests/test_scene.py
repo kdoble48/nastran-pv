@@ -69,4 +69,22 @@ def test_clear_macro_installed():
     spec = importlib.util.spec_from_file_location("install_macros", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    assert mod.MACROS["Clear"] == "clear"
+    assert mod.MACROS["Clear"] == "clear" and mod.MACROS["Single"] == "single"
+
+
+def test_clear_keeps_the_comparison_and_end_comparison_drops_it():
+    s = Scene(model="B", coloring=Layer("diff", ["diff mesh"]), role="B", partner="7", diff="the diff", side="B")
+    assert s.comparison and s.clear() == ["diff mesh"] and s.empty and s.model is None
+    assert (s.role, s.partner, s.diff, s.side) == ("B", "7", "the diff", "B")
+    s.end_comparison()
+    assert not s.comparison and (s.role, s.partner, s.diff, s.side) == (None, None, None, None)
+
+
+def test_layer_args_redraw_what_the_scene_shows():
+    s = Scene(coloring=Layer("array", ["mesh"], args={"array": "Thickness"}))
+    s.add_overlay(Layer("masses", ["glyphs"], args={"relative": 0.05}))
+    coloring, overlays = s.layer_args()
+    assert coloring == ("array", {"array": "Thickness"}) and overlays == [("masses", {"relative": 0.05})]
+    coloring[1]["array"] = "PID"
+    assert s.coloring.args == {"array": "Thickness"}  # copies
+    assert scene.kind("array") == "coloring" and Scene().layer_args() == (None, [])
