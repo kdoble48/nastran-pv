@@ -429,6 +429,8 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         self._results_key = None
         self._result_types = vtkDataArraySelection()  # ResultTypes: what the results file has
         self._result_types.AddObserver("ModifiedEvent", _reexecutes(self))
+        self._ply = 0  # Ply: a ply id, 0 the critical ply
+        self._ply_key = None  # (multiblock key, multiblock, ply) whose layup is on the cached model
         self._random_asd = ""
         self._random_drive = 2
         self._random_damping = 0.05
@@ -480,6 +482,14 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         """The result types the OP2/HDF5 file has (Displacement, VonMisesMax, ...): only the
         checked ones are attached at each time step (convert --result-types)."""
         return self._result_types
+
+    @smproperty.intvector(name="Ply", default_values=0)
+    def SetPly(self, v):
+        """Composite ply (convert --ply): a ply id (the PCOMP ply number or a PCOMPG global ply id;
+        -N the mirrored copy of a symmetric PCOMPG's ply N) lays that ply's layup on Shells
+        (PlyAngle, PlyAxis, ...) and gives the ply result types (PlyStress, PlyStrain,
+        PlyFailureIndex) at that ply; 0 gives each element's critical ply."""
+        self._set("_ply", int(v))
 
     @smproperty.doublevector(name="PhaseAngle", default_values=0.0)
     @smdomain.doublerange(min=-360.0, max=360.0)
@@ -839,8 +849,20 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         without a RequestInformation, and then its new types must be listed (at their default)."""
         if hasattr(res, "select"):
             self._list_result_types()
-            res.select([n for n in res.available if self._result_types.ArrayIsEnabled(n)])
+            res.select([n for n in res.available if self._result_types.ArrayIsEnabled(n)], ply=self._ply)
             res.phase = self._phase_angle  # complex steps: the instant the arrays show
+
+    def _attach_ply(self, mb):
+        """The Ply's layup on the cached model's Shells (``plies.attach_ply``), when the ply or the
+        model changed; its messages (no composite, no property with that ply) go to Output Messages."""
+        key = (self._mb_key, id(mb), self._ply)
+        if key == self._ply_key:
+            return
+        from nastran_pv.plies import attach_ply
+
+        for msg in attach_ply(mb, self._ply):
+            _message(f"nastran-pv: Ply: {msg}")
+        self._ply_key = key
 
     def _list_categories(self, mb, deck):
         """Checklist entries for the current multiblock; settings of labels that stay are kept."""
@@ -945,6 +967,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
             rebuilt = self._reported_key != self._mb_key  # RequestInformation may have built it
             self._reported_key = self._mb_key
             self._list_categories(mb, deck)
+            self._attach_ply(mb)
             res = self._get_response()
             time_value = None
             messages = []
@@ -1386,6 +1409,56 @@ class NastranPVSPCGlyphs(_GlyphFilter):
 
         on = {int(n.split()[-1]) for n in _checked(self._spc_sets)}
         return spc_glyphs(block, diag, self._size, sets=on, dofs=self._dofs, resolution=self._resolution)
+
+
+_PLY_AXIS_SIZE = 0.5  # copy of nastran_pv.glyphs.PLY_AXIS_SIZE (test_plugin_constants)
+
+
+@smproxy.filter(name="NastranPVPlyAxes", label="Nastran Ply Axes")
+@smhint.xml('<ShowInMenu category="Nastran" />')
+@smproperty.input(name="Input", port_index=0)
+@smdomain.datatype(dataTypes=["vtkDataObject"], composite_data_supported=True)
+class NastranPVPlyAxes(_GlyphFilter):
+    """A composite ply's material axes as lines through each shell's centre: its 1-direction (the
+    fibre) and, with Both Axes, its 2-direction. Ply: a ply id (the PCOMP ply number or a PCOMPG
+    global ply id; -N the mirrored copy of a symmetric PCOMPG's ply N); 0 draws the model's PlyAxis
+    (the reader's Ply) or, without one, the element material axes (THETA/MCID). Size: a line's
+    length over its element's size. Nothing to draw is reported in Output Messages, with why."""
+
+    BLOCK, REQUIRED = "Shells", "NID"
+
+    def __init__(self):
+        _GlyphFilter.__init__(self)
+        self._ply = 0
+        self._size = _PLY_AXIS_SIZE
+        self._both = 0
+        self._note = None  # the last reason reported (once per change)
+
+    @smproperty.intvector(name="Ply", default_values=0)
+    def SetPly(self, v):
+        self._set("_ply", int(v))
+
+    @smproperty.doublevector(name="Size", default_values=_PLY_AXIS_SIZE)
+    @smdomain.doublerange(min=0.05, max=2.0)
+    def SetSize(self, v):
+        self._set("_size", float(v))
+
+    @smproperty.intvector(name="BothAxes", default_values=0)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetBothAxes(self, v):
+        """Also the 2-direction (normal x 1-direction)."""
+        self._set("_both", int(v))
+
+    def _glyphs(self, block, diag, model):
+        from nastran_pv.fields.common import field_strings
+        from nastran_pv.glyphs import ply_axes
+
+        out = ply_axes(block, self._ply, self._size, bool(self._both))
+        note = (field_strings(out, "AxesNote") or [None])[0]
+        if note is not None and note != self._note:
+            _message(f"nastran-pv: Nastran Ply Axes: nothing drawn: {note}")
+        self._note = note
+        return out
 
 
 def _spc_set_ids(data):
@@ -1871,8 +1944,13 @@ class _FieldFilter(_Settable, VTKPythonAlgorithmBase):
         info.Set(self.INPUT_REQUIRED_DATA_TYPE(), "vtkDataObject")
         return 1
 
+    EXTRA_OUTPUT = "vtkTable"  # the type of the outputs after the model (Free Body: its glyph port 2 too)
+
+    def _extra_output(self, port):
+        return self.EXTRA_OUTPUT
+
     def FillOutputPortInformation(self, port, info):
-        info.Set(vtkDataObject.DATA_TYPE_NAME(), "vtkDataObject" if port == 0 else "vtkTable")
+        info.Set(vtkDataObject.DATA_TYPE_NAME(), "vtkDataObject" if port == 0 else self._extra_output(port))
         return 1
 
     def _keeps_tree(self):
@@ -1880,13 +1958,15 @@ class _FieldFilter(_Settable, VTKPythonAlgorithmBase):
         return True
 
     def RequestDataObject(self, request, inInfo, outInfo):
-        from vtkmodules.vtkCommonDataModel import vtkTable
+        from vtkmodules.vtkCommonDataModel import vtkPolyData, vtkTable
 
         inp = vtkDataObject.GetData(inInfo[0], 0)
         tree_out = inp is not None and inp.IsA("vtkPartitionedDataSetCollection") and self._keeps_tree()
+        types = {"vtkTable": vtkTable, "vtkPolyData": vtkPolyData}
         for port in range(self.GetNumberOfOutputPorts()):
             info = outInfo.GetInformationObject(port)
-            want = (vtkPartitionedDataSetCollection if tree_out else vtkMultiBlockDataSet) if port == 0 else vtkTable
+            want = (vtkPartitionedDataSetCollection if tree_out else vtkMultiBlockDataSet) if port == 0 else \
+                types[self._extra_output(port)]
             out = info.Get(vtkDataObject.DATA_OBJECT())
             if out is None or out.GetClassName() != want.__name__:
                 info.Set(vtkDataObject.DATA_OBJECT(), want())
@@ -1918,7 +1998,8 @@ class _FieldFilter(_Settable, VTKPythonAlgorithmBase):
             return _missing(exc)
         out = mb
         try:
-            out = self._apply(mb, outInfo) or mb  # a multiblock of its own, or the arrays added to mb
+            made = self._apply(mb, outInfo)  # a multiblock of its own, or None: the arrays added to mb
+            out = mb if made is None else made
         except ImportError as exc:
             return _missing(exc)
         except Exception as exc:  # report, pass the data through unchanged
@@ -2081,6 +2162,179 @@ class NastranPVGroupStats(_FieldFilter):
         from nastran_pv.fields.calc import group_stats
 
         _fill_table(vtkTable.GetData(outInfo, 1), group_stats(mb, _GROUP_BY[self._by], self._field))
+
+
+# ------------------------------------------------------- results helpers
+# copies of nastran_pv.post.envelope.KINDS and of nastran_pv.post.average.WITHIN's keys (test_plugin_constants)
+_ENVELOPE_KINDS = ("max", "min", "absmax")
+_AVERAGE_WITHIN = ("pid", "mid", "family", "group", "none")
+
+
+@smproxy.filter(name="NastranPVEnvelope", label="Nastran Envelope")
+@smhint.xml('<ShowInMenu category="Nastran" />')
+@smproperty.input(name="Input", port_index=0)
+@smdomain.datatype(dataTypes=["vtkMultiBlockDataSet", "vtkPartitionedDataSetCollection"],
+                  composite_data_supported=True)
+class NastranPVEnvelope(_FieldFilter):
+    """Max, min and max-abs of every result array over the input's time steps (the reader's result
+    steps, or a converted series), per component, with the step of each extreme:
+    ``<array>_Max``/``_MaxStep``, ``_Min``/``_MinStep``, ``_AbsMax``/``_AbsMaxStep``. The output has
+    no time steps: the model without the per-step result arrays, plus the envelopes."""
+
+    LABEL = "Envelope"
+
+    def __init__(self):
+        _FieldFilter.__init__(self)
+        self._kinds = {k: 1 for k in _ENVELOPE_KINDS}
+        self._steps = ""
+        self._times = []  # the input's time steps
+        self._todo = []  # the time steps this execution reads, and how far it got
+        self._done = 0
+        self._env = None
+
+    def _kind(self, key, v):
+        self._set_key("_kinds", key, int(v))
+
+    @smproperty.intvector(name="Max", default_values=1)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetMax(self, v):
+        self._kind("max", v)
+
+    @smproperty.intvector(name="Min", default_values=1)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetMin(self, v):
+        self._kind("min", v)
+
+    @smproperty.intvector(name="MaxAbs", default_values=1)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetMaxAbs(self, v):
+        """The signed value of the largest magnitude."""
+        self._kind("absmax", v)
+
+    @smproperty.stringvector(name="Steps", default_values="")
+    def SetSteps(self, v):
+        """The steps to cover (0-based, as the time steps), e.g. 0-2 5; empty: every step."""
+        self._set("_steps", (v or "").strip())
+
+    def RequestInformation(self, request, inInfo, outInfo):
+        info = inInfo[0].GetInformationObject(0)
+        key = vtkStreamingDemandDrivenPipeline.TIME_STEPS()
+        self._times = list(info.Get(key)) if info.Has(key) else []
+        out = outInfo.GetInformationObject(0)  # one envelope for all the steps: no time of its own
+        out.Remove(vtkStreamingDemandDrivenPipeline.TIME_STEPS())
+        out.Remove(vtkStreamingDemandDrivenPipeline.TIME_RANGE())
+        return 1
+
+    def _chosen(self):
+        """Indexes into the input's time steps (all of them on a bad Steps, which is reported)."""
+        try:
+            from nastran_pv.post.envelope import chosen_steps
+
+            return chosen_steps(len(self._times), self._steps) if self._times else [0]
+        except ValueError as exc:
+            _message(f"nastran-pv Envelope: Steps {self._steps!r}: {exc}; every step is used", error=True)
+            return list(range(len(self._times)))
+        except ImportError:
+            return list(range(len(self._times))) or [0]
+
+    def RequestUpdateExtent(self, request, inInfo, outInfo):
+        if self._done == 0:
+            self._todo = self._chosen()
+        if self._times and self._done < len(self._todo):  # the next step to read
+            inInfo[0].GetInformationObject(0).Set(vtkStreamingDemandDrivenPipeline.UPDATE_TIME_STEP(),
+                                                  self._times[self._todo[self._done]])
+        return 1
+
+    def RequestData(self, request, inInfo, outInfo):
+        try:
+            from nastran_pv.post.envelope import MIXED, Envelope, drop_step_arrays
+
+            mb, tree_in, layout = self._model(inInfo)
+        except ImportError as exc:
+            return _missing(exc)
+        try:
+            if self._done == 0:
+                kinds = [k for k, on in self._kinds.items() if on]
+                self._env = Envelope(kinds) if kinds else None
+            if self._env is not None:
+                self._env.add(mb, self._todo[self._done] if self._todo else 0)
+        except Exception as exc:  # start over next time, and pass the model through
+            self._done, self._env = 0, None
+            request.Remove(vtkStreamingDemandDrivenPipeline.CONTINUE_EXECUTING())
+            _message(f"nastran-pv Envelope: {exc}", error=True)
+            self._emit(outInfo, mb, tree_in, layout)
+            return 1
+        self._done += 1
+        if self._done < len(self._todo):
+            request.Set(vtkStreamingDemandDrivenPipeline.CONTINUE_EXECUTING(), 1)
+            return 1
+        request.Remove(vtkStreamingDemandDrivenPipeline.CONTINUE_EXECUTING())
+        self._done = 0
+        env, self._env = self._env, None
+        if env is None:
+            _message("nastran-pv Envelope: check Max, Min or Max Abs", error=True)
+        else:
+            drop_step_arrays(mb)
+            env.write(mb)
+            for w in env.warnings + ([MIXED] if env.mixed else []):
+                _message(f"nastran-pv Envelope: {w}")
+        self._emit(outInfo, mb, tree_in, layout)
+        return 1
+
+
+@smproxy.filter(name="NastranPVNodalAverage", label="Nastran Nodal Average")
+@smhint.xml('<ShowInMenu category="Nastran" />')
+@smproperty.input(name="Input", port_index=0)
+@smdomain.datatype(dataTypes=["vtkMultiBlockDataSet", "vtkPartitionedDataSetCollection"],
+                  composite_data_supported=True)
+class NastranPVNodalAverage(_FieldFilter):
+    """Cell arrays averaged to the grids without crossing property boundaries: one grid per mesh
+    block (Shells, Solids, Lines) whose points are its grids, once per PID that uses them, carrying
+    the averages as point arrays of the same names, and NID, PID and Displacement. Color it by
+    point data: contours jump at the PID boundaries. Follows the time steps."""
+
+    LABEL = "Nodal Average"
+
+    def __init__(self):
+        _FieldFilter.__init__(self)
+        self._listing = False
+        self._arrays = _checklist(self)
+        self._within = 0
+
+    @smproperty.dataarrayselection(name="Arrays")
+    def GetArrays(self):
+        """The cell arrays to average (results come checked)."""
+        return self._arrays
+
+    @smproperty.intvector(name="AverageWithin", default_values=0)
+    @smdomain.xml(_enum_xml(("Property", "Material", "Family", "Group", "Whole block")))
+    def SetAverageWithin(self, v):
+        """What the averaging does not cross: grids on a boundary get one value per side."""
+        self._set("_within", int(v))
+
+    def _keeps_tree(self):
+        return False  # its own blocks: the averaged meshes
+
+    def _list(self, data):
+        try:
+            from nastran_pv.post.average import float_cell_arrays, result_cell_arrays
+        except ImportError:
+            return
+        _fill_checklist(self, self._arrays, float_cell_arrays(data), set(result_cell_arrays()))
+
+    def RequestInformation(self, request, inInfo, outInfo):
+        data = _input_model(inInfo)
+        if data is not None and data.IsA("vtkMultiBlockDataSet"):
+            self._list(data)
+        return 1
+
+    def _apply(self, mb, outInfo):
+        from nastran_pv.post.average import float_cell_arrays, nodal_average
+
+        self._list(mb)
+        here = set(float_cell_arrays(mb))  # a step without an array (a mode's stress) is no error
+        names = [n for n in _checked(self._arrays) if n in here]
+        return nodal_average(mb, names, _AVERAGE_WITHIN[self._within % len(_AVERAGE_WITHIN)]).blocks
 
 
 # ---------------------------------------------------- topology filters
@@ -2423,6 +2677,84 @@ class NastranPVModelCheck(_TopologyFilter):
         _fill_table(vtkTable.GetData(outInfo, 1), res.summary)
         self._report(res.warnings)
         return res.only("error" if self._show_only else None)
+
+
+@smproxy.filter(name="NastranPVFreeBody", label="Nastran Free Body")
+@smhint.xml('<ShowInMenu category="Nastran" />')
+@smproperty.input(name="Input", port_index=0)
+@smdomain.datatype(dataTypes=["vtkMultiBlockDataSet", "vtkPartitionedDataSetCollection"],
+                  composite_data_supported=True)
+@_with_glyph_size(0.08, 0.001, 0.5, 6, 3, 32)
+@_with_traversal
+class NastranPVFreeBody(_TopologyFilter):
+    """The load a free body transmits to the rest of the model through its cut grids, about a point,
+    at the current time step: from the grid point force balance (the GridPointForce result type,
+    off by default in the reader's Result Types: nastran_views.free_body checks it) plus the MPC
+    forces of the body's rigid elements at the cut, else from the applied and SPC forces inside
+    the body. The body is what Seed IDs reach under the Traversal rules (Stay Within seed
+    properties for a property; Limit Hops with Max Hops 0 for exactly the seed elements).
+
+    Output 0: the model with ``FreeBody`` (cells) and ``FreeBodyGrid`` (2 cut, 1 interior);
+    output 1: the table (Cut, Elements, MPC, Applied, SPC, Imbalance); output 2: the cut load as
+    arrows at the summation point (Size: their length as a fraction of the model diagonal)."""
+
+    LABEL = "Free Body"
+
+    def __init__(self):
+        _TopologyFilter.__init__(self, n_out=3)
+        self._seeds = ""
+        self._about = 0
+        self._point = (0.0, 0.0, 0.0)
+        self._grid = 0
+        self._size = 0.08
+        self._resolution = 6
+
+    def _extra_output(self, port):
+        return "vtkPolyData" if port == 2 else "vtkTable"
+
+    @smproperty.stringvector(name="SeedIDs", default_values="")
+    def SetSeedIDs(self, v):
+        """The free body's seeds, e.g. PID 7 (with Stay Within seed properties) or EID 1001 1002."""
+        self._set("_seeds", v or "")
+
+    @smproperty.intvector(name="SumAbout", default_values=0)
+    @smdomain.xml(_enum_xml(("Cut centroid", "Point", "Grid")))
+    def SetSumAbout(self, v):
+        """The summation point: the centroid of the cut grids, Point (basic) or Grid's position."""
+        self._set("_about", int(v))
+
+    @smproperty.doublevector(name="Point", default_values=[0.0, 0.0, 0.0])
+    def SetPoint(self, x, y, z):
+        self._set("_point", (float(x), float(y), float(z)))
+
+    @smproperty.intvector(name="Grid", default_values=0)
+    def SetGrid(self, v):
+        self._set("_grid", int(v))
+
+    def _where(self):
+        if self._about == 1:
+            return "xyz", self._point
+        if self._about == 2:
+            return "grid", self._grid
+        return "centroid", None
+
+    def _run(self, mb, graph, outInfo):
+        from vtkmodules.vtkCommonDataModel import vtkPolyData, vtkTable
+
+        from nastran_pv.glyphs import glyph_diagonal
+        from nastran_pv.post.freebody import cut_glyph, select_body, sum_free_body, write_free_body
+        from nastran_pv.topology import Seeds
+
+        seeds = Seeds.parse(self._seeds)
+        if not seeds:
+            return None
+        body = select_body(mb, seeds, self._rules(), graph)
+        res = sum_free_body(mb, body, self._where())
+        write_free_body(mb, body, res)
+        _fill_table(vtkTable.GetData(outInfo, 1), res.rows)
+        vtkPolyData.GetData(outInfo, 2).ShallowCopy(cut_glyph(res, glyph_diagonal(mb), self._size, self._resolution))
+        self._report(res.warnings)  # the body's (seeds not found, ...) are among them
+        return None
 
 
 # ---------------------------------------------------------- model diff

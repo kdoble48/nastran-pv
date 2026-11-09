@@ -76,7 +76,7 @@ file, not full fuel.
 
 ## Presets
 
-`masses bushes bushrotations beams loads spc rigid family group pid mid elementtype thickness nsm results forces stress random randomsweep parts check diff`
+`masses bushes bushrotations beams loads spc rigid family group pid mid elementtype thickness nsm results forces stress plies random randomsweep parts check diff`
 (`random`/`randomsweep` need `--results MODES --random ASD`, or a SOL 111 OP2 with `--random-output`, see
 `docs/random-vibration.md`; `diff` needs `--against A`; after it every view in that render view draws from the
 diff, and `nv.side_by_side(array=...)` puts A and B in two linked views that draw every later view, see
@@ -84,7 +84,7 @@ diff, and `nv.side_by_side(array=...)` puts A and B in two linked views that dra
 (`grow` and `path` are GUI views seeded by the selection macros). `family` and `group`
 need ICEM/TACS family comments (uCRM-9 has them; Linderholt does not). `results` needs
 `--results run.op2|run.h5` and optionally `--step N`; `forces` and `stress` need element forces or stresses in
-them (`FORCE=`/`STRESS=` output; `stress` checks the stress types, off by default, and falls back to `VonMisesMax`). `bushes`/`bushrotations` need CBUSH cards (rotations: PBUSH K4–K6). An empty view
+them (`FORCE=`/`STRESS=` output; `stress` checks the stress types, off by default, and falls back to `VonMisesMax`); `plies` needs a PCOMP/PCOMPG deck (ply results from composite stress output, else the layup). `bushes`/`bushrotations` need CBUSH cards (rotations: PBUSH K4–K6). An empty view
 says so in its overlay text, so read the PNG. A deck that fails to load makes `render` exit 1
 with `cannot read DECK: <error>` and writes no PNG.
 

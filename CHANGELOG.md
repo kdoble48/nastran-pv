@@ -8,6 +8,46 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Added
 
+- Composite plies in ParaView: the reader's *Ply* (`convert --ply`: a ply id, or 0 for each
+  element's critical ply), the *Nastran Ply Axes* filter (a ply's fibre and 2-directions as lines
+  through each shell, from the layup table, so on converted files too; ply 0 draws the reader's ply
+  or the element material axes) and the NPV Plies view and macro (`view`/`render --preset plies`:
+  the shells by `PlyFailureIndexMax`, `PlyVonMises` or the ply's layup, grey where an element has
+  no such ply, with the ply axes; `nv.apply("plies", ply=, quantity=, component=, size=, both=)`:
+  it turns on only the result types the quantity needs, and a bad argument changes nothing).
+  Ply ids may be -N, the mirrored copy of a symmetric PCOMPG ply.
+  The views that recolor a reused block (NPV Forces, NPV Stress, NPV Plies) now hide the legend
+  of the array they replace (#74).
+- Composite layups and ply results (roadmap task 13). A deck whose shells use a PCOMP or PCOMPG
+  gets Shells `PlyCount` and the field table `PLY_PID PLY_Index PLY_ID PLY_MID PLY_Thickness
+  PLY_Angle PLY_Z PLY_SOUT PLY_FT` (one row per ply, `LAM=SYM` and `SMCORE` expanded, PCOMPG global ply ids,
+  `-GPLYID` for the mirrored copy of a symmetric PCOMPG's ply); other decks are unchanged. The result types `PlyStress` (`PlyStress PlyInterlaminarStress
+  PlyPrincipalStress PlyMaxShearStress PlyVonMises`), `PlyStrain` and `PlyFailureIndex`
+  (`PlyFailureIndex PlyBondIndex PlyFailureIndexMax`, on by default) read the OP2 composite stress,
+  strain and failure-index tables and the MSC/NX HDF5 `*_COMP` datasets, one ply per element:
+  `--ply N` (a ply id) for ply N, which also lays its layup on the shells (`PlyThickness PlyAngle
+  PlyMID PlySOUT PlyZ PlyAxis`, the ply's fibre direction), or `--ply max` (the default) for each
+  element's critical ply, with its id in `PlyStressPly` and the like; `convert` names the ply types that have
+  the ply and warns about the others. Those tables leave the "not attached" report; the ply types read
+  real tables only (a complex ply table stays reported) (#71).
+- Results helpers (roadmap task 12; docs/results-helpers.md), from the CLI and as filters:
+  - Envelopes: `--envelope [max min absmax]` (`convert`, `stats`, `store add`; `--envelope-steps`)
+    and *Nastran Envelope* (over the input's time steps) add `<array>_Max`, `_Min`, `_AbsMax` and
+    the step of each (`_MaxStep`, ...) for every result array, per component.
+  - Element-to-node averaging that does not cross PID boundaries: `convert --average [ARRAY ...]`
+    (`--average-within pid|mid|family|group|none`) adds the `Averaged` block, the mesh blocks on
+    points duplicated per (grid, PID) with the averages as point arrays; *Nastran Nodal Average*
+    outputs the same. Each step of a series gets its own.
+  - Free-body sums: `convert --free-body SEEDS` (with `--free-body-rules`, by default within the
+    seeds' properties, and `--free-body-point`) and
+    *Nastran Free Body* (table and arrows at the summation point) give the load a free body grown
+    under the traversal rules transmits through its cut grids, from the grid point force balance,
+    the body's rigid elements' MPC forces there included, with the applied and SPC forces inside
+    it as the check; without GPFORCE, from equilibrium.
+  - The `GridPointForce` result type (OP2 `grid_point_forces`, HDF5 `NODAL/GRID_FORCE`), off by
+    default and turned on by `--free-body`: the balance's element rows as a root table per step
+    (a new `table` location in the registry; every step has the file's rows, so a VTKHDF series
+    holds subcases with different GPFORCE sets), MYSTRAN's negated OP2 rows normalised (#73).
 - Complex, frequency and transient results (roadmap task 11). A frequency response (SOL 108/111),
   complex modes (SOL 107/110) and a transient (SOL 109/112) load as time series in the reader and
   convert to `.pvd` or temporal VTKHDF (compaction unchanged): one step per frequency, complex mode

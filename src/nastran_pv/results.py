@@ -106,6 +106,7 @@ class _Results:
     available: tuple = ()
     selected: tuple | None = None  # type names to attach; None: the registry's defaults
     named: tuple = ()  # the types selected by name (not by "all"), which the file should have
+    ply: int = 0  # the ply the ply types attach (a ply id), 0: each element's critical ply
     step_type: str | None = None  # the type that gave the steps when no step-defining type has tables
     phase: float = 0.0  # degrees: complex steps attach the response at this phase angle
 
@@ -132,21 +133,49 @@ class _Results:
     def times(self) -> list[float]:
         return [float(i) for i in range(len(self.steps))]
 
-    def select(self, names=None):
+    def select(self, names=None, ply=0):
         """Attach only the types ``names`` from now on (``result_types.parse``: a list or a
         comma-separated string, ``all``); an empty list attaches none, None restores the defaults.
-        Returns ``self``."""
+        ``ply``: the ply id the ply types attach, or 0 / None / ``max`` for each element's critical
+        ply (``result_types.parse_ply``). Returns ``self``; a ValueError leaves the selection as it was."""
+        ply = result_types.parse_ply(ply)
         if names is not None and not isinstance(names, str) and len(names) == 0:
-            self.selected = self.named = ()
-            return self
-        self.selected = None if names is None else result_types.parse(names, self.registry)
-        self.named = () if names is None or result_types.says_all(names) else self.selected
+            selected = named = ()
+        else:
+            selected = None if names is None else result_types.parse(names, self.registry)
+            named = () if names is None or result_types.says_all(names) else selected
+        self.selected, self.named, self.ply = selected, named, ply
+        return self
+
+    def also(self, names):
+        """Attach the types ``names`` too, on top of the selection (the defaults when nothing is
+        selected), without asking the file for them: a helper that can use a type (the free body:
+        ``GridPointForce``) turns it on and copes without it. Returns ``self``."""
+        base = result_types.parse(None, self.registry) if self.selected is None else self.selected
+        extra = {result_types.by_name(n, self.registry).name for n in names}
+        self.selected = tuple(t.name for t in self.registry if t.name in base or t.name in extra)
         return self
 
     def attached(self) -> list:
         """The result types the next :meth:`attach` writes: selected and in the file."""
         want = result_types.parse(None, self.registry) if self.selected is None else self.selected
         return [t for t in self.registry if t.name in want and t.name in self.available]
+
+    def table_keys(self, rtype) -> np.ndarray:
+        """Sorted (n, 2) id and integer-column pairs of every row table type ``rtype`` has at any
+        step, made once: each step writes this one set of rows (NaN where it has none), so a
+        VTKHDF series, which needs one size per field array, holds steps with different rows."""
+        cache = self.__dict__.setdefault("_table_keys", {})
+        if rtype.name not in cache:
+            col = next(spec.columns[0] for spec in rtype.arrays if spec.integer)
+            keys = []
+            for step in self.steps:
+                got = self.values(rtype, step)
+                if got is not None:
+                    ok = np.isfinite(got[1][:, col])
+                    keys.append(np.column_stack([got[0][ok], got[1][ok, col].astype(np.int64)]))
+            cache[rtype.name] = np.unique(np.concatenate(keys), axis=0) if keys else np.zeros((0, 2), np.int64)
+        return cache[rtype.name]
 
     def missing(self) -> list[str]:
         """Types selected by name that the file does not have."""
@@ -155,17 +184,22 @@ class _Results:
     def values(self, rtype, step):
         """(sorted ids, (n, k) values) of ``rtype`` at ``step``, in the systems the file writes
         them in, or None when the file has none for the step: float, or complex for a complex
-        step. Rows from several tables are joined; ``rtype.reduce == "max"`` keeps each id's
-        largest value per column."""
+        step. Rows from several tables are joined; values ``rtype.missing`` names become NaN;
+        ``rtype.reduce == "max"`` keeps each id's largest value per column, ``ply`` one ply per
+        element (``result_types.reduce_plies`` with the selection's ``ply``: the ply id goes in a
+        last column)."""
         rows = list(self._rows(rtype, step))
         if not rows:
             return None
-        ids = [np.asarray(i, dtype=np.int64) for i, _ in rows]
         kind = complex if any(np.iscomplexobj(v) for _, v in rows) else float  # complex tables stay complex
-        vals = [np.asarray(v, dtype=kind).reshape(len(v), -1) for _, v in rows]
+        ids = np.concatenate([np.asarray(i, dtype=np.int64) for i, _ in rows])
+        vals = np.concatenate([np.asarray(v, dtype=kind).reshape(len(v), -1) for _, v in rows])
+        for col, value in rtype.missing:
+            vals[vals[:, col] == value, col] = np.nan
         if rtype.reduce == "max":
             return max_per_eid(ids, vals)
-        ids, vals = np.concatenate(ids), np.concatenate(vals)
+        if rtype.reduce == "ply":
+            return result_types.reduce_plies(rtype, ids, vals, self.ply)
         order = np.argsort(ids)
         return ids[order], vals[order]
 
@@ -179,16 +213,30 @@ class _Results:
         attach_step(self, mb, step_index, deck)
 
 
-def max_per_eid(eids: list, vals: list) -> tuple[np.ndarray, np.ndarray]:
-    """(sorted unique eids, the largest value of each) over lists of eid/value arrays; values
-    may be (n,) or (n, k) (the maximum of each column)."""
-    if not eids:
-        return np.zeros(0, dtype=np.int64), np.zeros(0)
-    uniq, inv = np.unique(np.concatenate(eids), return_inverse=True)
-    values = np.concatenate(vals)
+def max_per_eid(eids: np.ndarray, values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """(sorted unique eids, the largest value of each) of the rows ``eids``/``values``; values may
+    be (n,) or (n, k) (the maximum of each column)."""
+    uniq, inv = np.unique(eids, return_inverse=True)
     vmax = np.full((len(uniq),) + values.shape[1:], -np.inf)
     np.maximum.at(vmax, inv.reshape(-1), values)
     return uniq, vmax
+
+
+def ply_summary(results, mb) -> tuple[str | None, list[str]]:
+    """What the ply types attached to ``mb`` at its step: the line ``convert`` prints (None when
+    none of them wrote a value) and a warning per selected ply type that wrote none (the chosen ply
+    is in no element's output: SOUT=NO, or not written; or the step has no ply rows)."""
+    from .assemble import block_names, get_block
+
+    types = [t for t in getattr(results, "attached", lambda: [])() if t.reduce == "ply"]
+    if not types:
+        return None, []
+    shells = get_block(mb, "Shells") if "Shells" in block_names(mb) else None
+    wrote = [t.name for t in types if shells is not None and shells.GetCellData().GetArray(f"{t.name}Ply") is not None]
+    which = f"ply {results.ply}" if results.ply else "each element's critical ply"
+    warnings = [f"{t.name}: no element has {which} in the results at this step (SOUT=NO, or not written)"
+                for t in types if t.name not in wrote]
+    return (f"ply results: {which} ({', '.join(wrote)})" if wrote else None), warnings
 
 
 # ------------------------------------------------------------------ OP2
@@ -250,10 +298,14 @@ def _pick_columns(obj, picks):
 
 
 def _ids(obj, rtype):
-    """Grid ids (types keyed by NID) or element ids (by EID) of a pyNastran table's rows."""
+    """Grid ids (types keyed by NID) or element ids (by EID) of a pyNastran table's rows; for a ply
+    type (n, 2) element and ply ids (``element_layer``)."""
     if rtype.id_array == "NID":
         ng = getattr(obj, "node_gridtype", None)
         return ng[:, 0] if ng is not None and np.ndim(ng) == 2 else None
+    if rtype.reduce == "ply":
+        layers = getattr(obj, "element_layer", None)
+        return layers if layers is not None and np.ndim(layers) == 2 else None
     return _element_ids(obj)
 
 
@@ -273,7 +325,7 @@ class Op2Table(NamedTuple):
     header indices to take (``columns``; None: every column) or, for a type with picks, one tuple
     of indices per pick, the step kind (types that can define steps) and, with picks, the
     :class:`~nastran_pv.result_types.PickPlan` of its rows (made once: the rows do not change
-    between steps)."""
+    between steps); for a source with ``rows``, that function (``Op2Source.rows``)."""
 
     name: str
     key: object
@@ -281,6 +333,7 @@ class Op2Table(NamedTuple):
     columns: object
     kind: str | None
     plan: result_types.PickPlan | None = None
+    rows: object = None
 
 
 class Op2Results(_Results):
@@ -323,6 +376,10 @@ class Op2Results(_Results):
                     if not src.reads(is_complex) or (src.accept is not None and not src.accept(obj)):
                         continue
                     kind = result_types.step_kind(declared, is_complex, getattr(obj, "analysis_code", None))
+                    if src.rows is not None:  # rows not one per id: the source reads them when a step
+                        if getattr(obj, "data", None) is not None:  # needs them (_table_rows)
+                            found.append(Op2Table(name, key, obj, None, kind, rows=src.rows))
+                        continue
                     ids = _ids(obj, rtype)
                     if not rtype.steps and ids is None:
                         continue
@@ -347,19 +404,20 @@ class Op2Results(_Results):
         """One message per force, stress or strain table no type of the registry reads
         (``result_types.unread_reason``), with its subcases."""
         read = {(t.name, t.key) for tables in self.tables.values() for t in tables}
+        plies = {(t.name, t.key) for r in self.registry if r.reduce == "ply" for t in self.tables[r.name]}
         reasons = {}
         for _, name, result in _op2_results(self.op2, result_types.REPORTED_OP2):
             for key, obj in result.items():
                 reason = result_types.unread_reason(
                     name, (name, key) in read, complex_=getattr(obj, "is_complex", False),
-                    curvature=result_types.op2_curvature(name, obj, _headers(obj)))
+                    curvature=result_types.op2_curvature(name, obj, _headers(obj)), plies=(name, key) in plies)
                 if reason is not None:
                     reasons.setdefault((name, reason), []).append(_subcase(key))
         return [f"{name}, {_subcases(scs)}: {reason}" for (name, reason), scs in reasons.items()]
 
     def _steps_of(self, rtype) -> list[Step]:
         steps = []
-        for name, key, res, _, kind, _ in self.tables[rtype.name]:
+        for name, key, res, _, kind, *_ in self.tables[rtype.name]:
             sc = _subcase(key)
             ntimes = res.data.shape[0]
             times = np.asarray(getattr(res, "_times", []), dtype=float)
@@ -385,6 +443,24 @@ class Op2Results(_Results):
         return steps
 
     # ------------------------------------------------------------ values
+    def _table_rows(self, table, itime):
+        """(ids, values) of a table whose source reads its rows (``Op2Source.rows``) at ``itime``,
+        made once per table and time (a series attaches each step twice); its note goes into
+        ``skipped`` once. None when the source cannot read the table."""
+        cache = self.__dict__.setdefault("_rows_cache", {})
+        key = (table.name, table.key, itime)
+        if key not in cache:
+            try:
+                got = table.rows(table.obj, itime)
+            except (AttributeError, IndexError, ValueError):
+                got = None
+            if got is not None and got[2]:
+                note = f"{table.name}, subcase {_subcase(table.key)}: {got[2]}"
+                if note not in self.skipped:
+                    self.skipped.append(note)
+            cache[key] = None if got is None else got[:2]
+        return cache[key]
+
     def _rows(self, rtype, step):
         """A step-defining type reads the step's own table at its index; the others every table
         of the step's subcase and form (:func:`_same_form`), at the row whose time value matches
@@ -402,6 +478,11 @@ class Op2Results(_Results):
                 itime = _time_index(table.obj, step)
                 if itime is None:
                     continue
+            if table.rows is not None:
+                got = self._table_rows(table, itime)
+                if got is not None:
+                    yield got
+                continue
             data = table.obj.data[itime]
             if table.plan is not None:
                 yield table.plan.ids, result_types.pick_values(data, table.plan, table.columns)
@@ -472,6 +553,42 @@ def _write(mb, names, targets, rtype, got, phase: float = 0.0) -> None:
             for part, part_name in zip(parts, result_types.part_names(spec, parts)):
                 v = result_types.complex_part(vals[:, _columns(spec.columns)], part)
                 vtkutil.add_array(attrs, part_name, _squeezed(v), skip_all_nan=skip_nan)
+
+
+def _write_table(mb, rtype, got, keys=None) -> None:
+    """Root ``rtype.table_names`` from ``got`` (ids, values) on the rows ``keys`` (sorted (n, 2) id
+    and integer-column pairs, :meth:`_Results.table_keys`; None: the rows of ``got``): the ids,
+    then each array, NaN where this step has no such row (rows of one pair sum). A row of ``got``
+    with a non-finite integer column is no row of the table. Dropped when ``got`` is None."""
+    fd = mb.GetFieldData()
+    names = rtype.table_names
+    for name in names:
+        fd.RemoveArray(name)
+    if got is None:
+        return
+    col = next(spec.columns[0] for spec in rtype.arrays if spec.integer)
+    ids, vals = got
+    ok = np.isfinite(vals[:, col])
+    ids, vals = ids[ok].astype(np.int64), vals[ok]
+    pairs = np.column_stack([ids, vals[:, col].astype(np.int64)])
+    keys = np.unique(pairs, axis=0) if keys is None else np.asarray(keys, dtype=np.int64)
+    if not len(keys):
+        return
+    code = lambda k: k[:, 0] * 2**32 + (k[:, 1] % 2**32)  # noqa: E731  (ids and EIDs are below 2**31)
+    idx = vtkutil.match_ids(code(keys), code(pairs))
+    hit = idx >= 0
+    table = np.zeros((len(keys), vals.shape[1]))
+    np.add.at(table, idx[hit], vals[hit])
+    have = np.zeros(len(keys), bool)
+    have[idx[hit]] = True
+    table[~have] = np.nan
+    vtkutil.add_array(fd, names[0], keys[:, 0])
+    for name, spec in zip(names[1:], rtype.arrays):
+        if spec.integer:
+            vtkutil.add_array(fd, name, keys[:, 1])
+            continue
+        v = table[:, _columns(spec.columns)]
+        vtkutil.add_array(fd, name, v[:, 0] if v.shape[1] == 1 else v)
 
 
 def _attach_sections(mb, names) -> None:
@@ -560,7 +677,7 @@ def remove_result_arrays(mb, registry=result_types.REGISTRY) -> None:
                 for spec in rtype.arrays:
                     for array in (spec.name,) + result_types.part_names(spec, rtype.complex):
                         attrs.RemoveArray(array)
-        for name in rtype.resultant_names:
+        for name in rtype.resultant_names + rtype.table_names:
             mb.GetFieldData().RemoveArray(name)
     for name in STEP_FIELDS:
         mb.GetFieldData().RemoveArray(name)
@@ -586,6 +703,9 @@ def attach_step(results, mb, step_index: int, deck=None) -> None:
         got = results.values(rtype, step) if rtype.name in wanted else None
         if got is not None and rtype.frame == "grid_cd" and deck is not None:
             got = (got[0], to_basic(deck, got[0], got[1]))
+        if rtype.location == "table":
+            _write_table(mb, rtype, got, None if got is None else results.table_keys(rtype))
+            continue
         _write(mb, names, targets, rtype, got, phase)
         if got is not None and np.iscomplexobj(got[1]):  # the resultant of the forces at that instant
             got = (got[0], result_types.at_phase(got[1], phase))
@@ -633,8 +753,8 @@ class PhaseSweep:
     def times(self) -> list[float]:
         return [float(i) for i in range(len(self.steps))]
 
-    def select(self, names=None):
-        self.results.select(names)
+    def select(self, names=None, ply=0):
+        self.results.select(names, ply=ply)
         return self
 
     def attach(self, mb, step_index: int = 0, deck=None) -> None:
@@ -708,19 +828,25 @@ def to_basic(deck, nids: np.ndarray, data: np.ndarray) -> np.ndarray:
     return data
 
 
-def attach_op2(mb, deck, op2_path, step_index: int = 0, types=None, phase: float = 0.0):
+def attach_op2(mb, deck, op2_path, step_index: int = 0, types=None, phase: float = 0.0, also=(), ply=0):
     """Read an OP2 or HDF5 results file and attach one step; returns the results object.
     ``types``: the result types to attach (``results.select``); None attaches the defaults.
-    ``phase``: degrees, the phase angle complex steps are attached at."""
+    ``phase``: degrees, the phase angle complex steps are attached at. ``also``: types to attach
+    on top when the file has them (``results.also``). ``ply``: the ply of the ply types (a ply id;
+    0 the critical ply). Messages the attach adds (a table read on first use) are warned too."""
     results = open_results(op2_path)
     results.phase = float(phase)
-    if types is not None:
-        results.select(types)
+    results.select(types, ply=ply)
+    if also:
+        results.also(also)
     for msg in results.skipped:
         deck.warn(msg)
     for name in results.missing():
         deck.warn(f"{op2_path}: no {name} results to attach")
     if not results.steps:
         deck.warn(f"{op2_path}: no displacement/eigenvector output found")
+    known = len(results.skipped)
     results.attach(mb, step_index, deck)
+    for msg in results.skipped[known:]:
+        deck.warn(msg)
     return results

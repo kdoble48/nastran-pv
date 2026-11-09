@@ -406,7 +406,10 @@ def element_result_checks(pv, nv):
             reader.ResultTypes = [t.name for t in REGISTRY if t.default]  # a new file: back to the defaults
             t0 = rm.timesteps(reader)[0]
             text += _messages(lambda: reader.UpdatePipeline(t0))
-            absent = ("SPCForce", "MPCForce", "AppliedLoad", "Velocity", "Acceleration")  # not in the fixture
+            # not in the fixture: nodal loads, velocities, accelerations, grid point forces, ply
+            # strains and failure indices (its CQUAD4 3 ply stresses give PlyStress)
+            absent = ("SPCForce", "MPCForce", "AppliedLoad", "Velocity", "Acceleration", "GridPointForce",
+                      "PlyStrain", "PlyFailureIndex")
             listed = [t.name for t in REGISTRY if t.name not in absent]
             check(nv._listed(reader, "ResultTypes") == listed, f"{kind}: every type the fixture has is listed")
             check(_by_eid(reader, "Lines", "AxialForce") == {21: 7.0, 22: 15.0, 23: 31.0},
@@ -561,6 +564,113 @@ def force_stress_view_checks(pv, nv):
               f"stress on a file without components shows the VonMisesMax envelope: {text!r}")
         model = nv.apply("forces", reader=src, view=view)
         check(colored(model, "Lines")[0] == "AxialForce", "forces on a converted file")
+        pv.Delete(view)
+        _newest_first(pv, _model_sources(pv, nv, src) + _model_sources(pv, nv, reader))
+
+
+def ply_view_checks(pv, nv):
+    """Composite plies (roadmap task 13) on tests/data/composites.bdf with the synthesized OP2 (its
+    values by hand: tests/test_composites.py): the reader's Ply (critical ply, a chosen ply, a PCOMPG
+    global ply, a ply no property has), the layup it lays on the shells, NPV Plies (the array, the
+    Result Types it turns on, its arguments) and Nastran Ply Axes (count, ply, Both Axes kept on a
+    rerun), and a file converted with --ply."""
+    from op2_fixture import make_composite_op2
+
+    deck = os.path.join(HERE, "data", "composites.bdf")
+    nan = float("nan")
+
+    def same(got, want):
+        return all((np.isnan(w) and np.isnan(got[k])) or abs(got[k] - w) < 1e-4 for k, w in want.items())
+
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        op2 = os.path.join(tmp, "composites.op2")
+        make_composite_op2(failure=False).write_op2(op2)  # pyNastran writes no failure-index table
+        reader = nv.load_reader(deck, op2)
+        reader.UpdatePipeline()
+        check(int(reader.Ply) == 0, "the reader's Ply starts at 0: each element's critical ply")
+        check(_by_eid(reader, "Shells", "PlyCount") == {1: 3, 2: 3, 3: 4, 4: 3, 5: 2, 6: 0},
+              "Shells PlyCount (LAM=SYM: 4 plies)")
+        view = pv.CreateRenderView()
+        model = nv.apply("plies", reader=reader, view=view)
+        disp = pv.GetDisplayProperties(pv.FindSource(nv._name(model, "Shells")), view)
+        check(disp.ColorArrayName[1] == "PlyVonMises" and "PlyStress" in list(reader.ResultTypes),
+              f"NPV Plies turns PlyStress on and colors by PlyVonMises: {disp.ColorArrayName[1]}")
+        check(same(_by_eid(reader, "Shells", "PlyStressPly"), {1: 1, 2: 3, 3: 4, 4: 103, 5: 102, 6: nan}),
+              "the critical ply of each element (its id in PlyStressPly)")
+        axes = pv.FindSource(nv._name(model, "ply axes"))
+        text = _info(nv, model)
+        check(axes is not None and int(nv._glyph_field(axes, "AxisCount")) == 6 and "critical" in text
+              and "element material axes" in text, f"critical ply: the element material axes, 6 lines: {text!r}")
+        model = nv.apply("plies", reader=reader, view=view, ply=2)
+        check(int(reader.Ply) == 2 and same(_by_eid(reader, "Shells", "PlyVonMises"),
+                                            {1: nan, 2: nan, 3: 20.0, 4: nan, 5: nan, 6: nan}),
+              "ply=2 sets the reader's Ply: CTRIA3 3's ply 2 (PCOMP 10's ply 2 has SOUT=NO)")
+        check(same(_by_eid(reader, "Shells", "PlyAngle"), {1: 45, 2: 45, 3: 60, 4: nan, 5: nan, 6: nan}),
+              "the reader lays ply 2's layup on the shells")
+        check(int(nv._glyph_field(axes, "AxisCount")) == 3 and int(nv._glyph_field(axes, "AxesPly")) == 2
+              and "ply 2" in _info(nv, model), "the axes follow the reader's ply: 3 lines")
+        axes.BothAxes = 1  # the user turns the 2-direction on: kept by a rerun
+        model = nv.apply("plies", reader=reader, view=view, ply=102, quantity="angle")
+        disp = pv.GetDisplayProperties(pv.FindSource(nv._name(model, "Shells")), view)
+        check(disp.ColorArrayName[1] == "PlyAngle" and int(axes.BothAxes) == 1
+              and int(nv._glyph_field(axes, "AxisCount")) == 4,
+              "a PCOMPG global ply: PlyAngle, both axes of EIDs 4 and 5 (Both Axes kept on the rerun)")
+        model = nv.apply("plies", reader=reader, view=view, quantity="stress", component=1)
+        disp = pv.GetDisplayProperties(pv.FindSource(nv._name(model, "Shells")), view)
+        lut = pv.GetColorTransferFunction("PlyStress", disp, separate=True)
+        check(nv.enum_text(lut, "VectorMode") == "Component" and int(lut.VectorComponent) == 1,
+              "quantity=stress component=1: PlyStress S22")
+        # a bad argument is refused before the reader changes (its Ply, its Result Types)
+        types, ply_before = list(reader.ResultTypes), int(reader.Ply)
+        for bad in ({"ply": 3, "quantity": "tsai"}, {"ply": "first"}, {"ply": 3, "quantity": "stress", "component": 3}):
+            try:
+                nv.apply("plies", reader=reader, view=view, **bad)
+                check(False, f"plies {bad} should be refused")
+            except ValueError as exc:
+                check(int(reader.Ply) == ply_before and list(reader.ResultTypes) == types,
+                      f"plies {bad} refused before the reader changes: {exc}")
+        axes.Ply = 1  # the user's own setting on the filter: an explicit ply= wins over it
+        nv.apply("plies", reader=reader, view=view, ply=2)
+        check(int(axes.Ply) == 2 and int(reader.Ply) == 2, "an explicit ply= sets the axes filter's Ply too")
+        reader.ResultTypes = ["Displacement"]
+        model = nv.apply("plies", reader=reader, view=view, quantity="angle")
+        check(list(reader.ResultTypes) == ["Displacement"] and not nv._TURNED_ON.get("plies"),
+              "quantity=angle (the layup) turns no result type on")
+        disp = pv.GetDisplayProperties(pv.FindSource(nv._name(model, "Shells")), view)
+        own = pv.GetColorTransferFunction("PlyAngle", disp, separate=True)
+        shared = pv.GetColorTransferFunction("PlyAngle")
+        check(list(own.NanColor) == list(nv.PLY_NAN_RGB) and list(shared.NanColor) != list(nv.PLY_NAN_RGB),
+              "the grey of elements without the ply is on the display's own color map, not the shared one")
+        reader.Ply = 0
+        model = nv.apply("plies", reader=reader, view=view, quantity="Angle")
+        check("No angle to show: a ply id (the reader's Ply) lays that ply's layup" in _info(nv, model),
+              f"a layup quantity without a laid ply says how to lay one: {_info(nv, model)!r}")
+        plain = nv.load_reader(DECK)
+        no_layup = pv.NastranPlyAxes(Input=plain)
+        no_layup.Ply = 2
+        out = _messages(no_layup.UpdatePipeline)
+        check(no_layup.GetDataInformation().GetNumberOfCells() == 0 and "no composite layup" in out,
+              f"Nastran Ply Axes on a deck without PCOMP draws nothing and says why: {out.strip()[:120]!r}")
+        pv.Delete(no_layup)
+        pv.Delete(plain)
+        out = _messages(lambda: (setattr(reader, "Ply", 9), reader.UpdatePipeline()))
+        check("Ply: ply 9: no composite shell property has it (ply ids: 1-4, 101-104)" in out
+              and reader.GetDataInformation().GetNumberOfPoints() > 0,
+              f"a ply no property has is reported in Output Messages: {out.strip()[:160]!r}")
+        reader.Ply = 0
+        pv.Delete(view)
+        vtm = os.path.join(tmp, "plies.vtm")
+        convert(["convert", deck, "--results", op2, "--result-types", "PlyStress", "--ply", "3", "-o", vtm, "-q"])
+        src = nv.load_reader(vtm)
+        view = pv.CreateRenderView()
+        model = nv.apply("plies", reader=src, view=view)
+        axes = pv.FindSource(nv._name(model, "ply axes"))
+        check("as the file was converted" in _info(nv, model) and int(nv._glyph_field(axes, "AxesPly")) == 3
+              and int(nv._glyph_field(axes, "AxisCount")) == 3,
+              "a file converted with --ply 3: its ply results and its PlyAxis")
+        model = nv.apply("plies", reader=src, view=view, ply=101)
+        check(int(axes.Ply) == 101 and int(nv._glyph_field(axes, "AxisCount")) == 1,
+              "ply= on a converted file draws that ply's axes from the layup table (PCOMPG 20)")
         pv.Delete(view)
         _newest_first(pv, _model_sources(pv, nv, src) + _model_sources(pv, nv, reader))
 
@@ -1229,6 +1339,164 @@ def result_load_checks(pv, nv, main_reader):
     g.UpdatePipeline(t0)
     check(_point_values(g, "NID") == {2, 5}, "Load Glyphs on a converted series: the MPC forces at grids 2 and 5")
     pv.Delete(g)
+    pv.Delete(src)
+
+
+def _table_row(table, source):
+    """FX FY FZ MX MY MZ of the row ``source`` of a free-body table."""
+    names = table.GetColumnByName("Source")
+    k = [names.GetValue(i) for i in range(table.GetNumberOfRows())].index(source)
+    return [table.GetColumnByName(c).GetValue(k) for c in ("FX", "FY", "FZ", "MX", "MY", "MZ")]
+
+
+def _averaged(nv, src, block="Shells"):
+    """{(NID, PID): VonMisesMax} of a Nastran Nodal Average output block."""
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    data = nv.fetch(src)
+    pd = data.GetBlock(nv.block_names(data).index(block)).GetPointData()
+    vm = pd.GetArray("VonMisesMax")
+    if vm is None:
+        return None
+    nid = vtk_to_numpy(pd.GetArray("NID")).tolist()
+    pid = vtk_to_numpy(pd.GetArray("PID")).tolist() if pd.GetArray("PID") is not None else [0] * len(nid)
+    return dict(zip(zip(nid, pid), vtk_to_numpy(vm).tolist()))
+
+
+def results_helper_checks(pv, nv):
+    """Nastran Envelope over the reader's and a converted series' time steps, Nastran Nodal Average
+    following the time, Nastran Free Body on the reader (OP2 and HDF5) and on a converted file:
+    the hand-computed values of test_envelope.py, test_average.py and test_freebody.py."""
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    from op2_fixture import make_envelope_op2, make_freebody_op2, make_op2, write_freebody_h5
+
+    tmp = tempfile.mkdtemp()  # not removed: an open VTKHDF reader keeps its file locked
+    env_op2 = os.path.join(tmp, "env.op2")
+    make_envelope_op2().write_op2(env_op2)
+    reader = rm.load_reader(DECK, env_op2)
+    env = pv.NastranEnvelope(Input=reader)
+    env.UpdatePipeline()
+    info = env.GetDataInformation().DataInformation
+    check(info.GetNumberOfTimeSteps() == 0 and rm.timesteps(reader),
+          f"Nastran Envelope: the output has no time steps ({info.GetNumberOfTimeSteps()})")
+    vmax = _by_eid(env, "Shells", "VonMisesMax_Max")
+    check(vmax[1] == 9 and vmax[2] == 7 and np.isnan(vmax[3])
+          and _by_eid(env, "Shells", "VonMisesMax_MaxStep") == {1: 2, 2: 0, 3: -1},
+          "Envelope over the reader's 3 steps: VonMisesMax max 9 (step 2) and 7 (step 0)")
+    from nastran_pv.tree import as_multiblock
+
+    blk = as_multiblock(rm.nv.fetch(env))
+    blk = blk.GetBlock(nv.block_names(blk).index("Shells"))
+    nid = list(vtk_to_numpy(blk.GetPointData().GetArray("NID")))
+    dmin = vtk_to_numpy(blk.GetPointData().GetArray("Displacement_Min"))[nid.index(3)].tolist()
+    check(np.allclose(dmin, [-0.6, 0, -6], rtol=1e-5) and blk.GetPointData().GetArray("Displacement") is None
+          and blk.GetCellData().GetArray("VonMisesMax") is None,
+          f"Displacement_Min at grid 3 {dmin}; the per-step arrays are gone")
+    env.Steps = "0 2"
+    env.MaxAbs = 0
+    env.UpdatePipeline()
+    blk = as_multiblock(rm.nv.fetch(env))
+    blk = blk.GetBlock(nv.block_names(blk).index("Shells"))
+    dmin = vtk_to_numpy(blk.GetPointData().GetArray("Displacement_Min"))[nid.index(3)].tolist()
+    check(np.allclose(dmin, [0.15, 0, 3], rtol=1e-5) and blk.GetPointData().GetArray("Displacement_AbsMax") is None,
+          f"Steps 0 2, no Max Abs: Displacement_Min at grid 3 {dmin}")
+    env.Steps = ","  # selects no step: said, and every step is used (it raised IndexError in the pipeline)
+    text = _messages(lambda: env.UpdatePipeline())
+    blk = as_multiblock(rm.nv.fetch(env))
+    blk = blk.GetBlock(nv.block_names(blk).index("Shells"))
+    dmin = vtk_to_numpy(blk.GetPointData().GetArray("Displacement_Min"))[nid.index(3)].tolist()
+    check("selects no step" in text and np.allclose(dmin, [-0.6, 0, -6], rtol=1e-5),
+          f"Steps ',': reported, every step used ({dmin})")
+    pv.Delete(env)
+    pv.Delete(reader)
+    series = os.path.join(tmp, "env.vtkhdf")
+    convert(["convert", DECK, "--results", env_op2, "--all-steps", "-o", series, "-q"])
+    src = nv.load_reader(series)
+    env = pv.NastranEnvelope(Input=src)
+    env.UpdatePipeline()
+    check(_by_eid(env, "Shells", "VonMisesMax_Max")[1] == 9.0 and _by_eid(env, "Shells", "VonMisesMax_MinStep")[2] == 2,
+          "Envelope over a converted VTKHDF series' time steps")
+    pv.Delete(env)
+    pv.Delete(src)
+
+    full = os.path.join(tmp, "full.op2")
+    make_op2().write_op2(full)
+    reader = rm.load_reader(DECK, full)
+    times = rm.timesteps(reader)
+    avg = pv.NastranNodalAverage(Input=reader)
+    avg.UpdatePipeline(times[0])
+    vm = _averaged(nv, avg)
+    check(vm is not None and vm[(5, 2)] == 7 and vm[(5, 1)] == 3 and len(vm) == 9,
+          f"Nodal Average: grid 5 gets 3 in PID 1 and 7 in PID 2, 9 points: {vm}")
+    avg.UpdatePipelineInformation()
+    listed = nv._listed(avg, "Arrays")
+    check("VonMisesMax" in listed and "Thickness" in listed, f"the Arrays checklist lists VonMisesMax: {listed}")
+    avg.AverageWithin = "Whole block"
+    avg.UpdatePipeline(times[0])
+    vm = _averaged(nv, avg)
+    check(len(vm) == 7, f"Average Within Whole block: one point per grid ({len(vm)})")
+    avg.UpdatePipeline(times[-1])
+    check(_averaged(nv, avg) is None, "a mode step has no VonMisesMax to average")
+    pv.Delete(avg)
+    pv.Delete(reader)
+
+    fb_deck = os.path.join(HERE, "data", "freebody.bdf")
+    op2 = os.path.join(tmp, "fb.op2")
+    make_freebody_op2().write_op2(op2)
+    h5 = str(write_freebody_h5(os.path.join(tmp, "fb.h5")))
+    for results in (op2, h5):
+        ext = os.path.splitext(results)[1]
+        reader = rm.load_reader(fb_deck, results)
+        t0 = (rm.timesteps(reader) or [0.0])[0]
+        fb = pv.NastranFreeBody(Input=reader, SeedIDs="PID 2")
+        fb.StayWithin = "seed properties"
+        text = _messages(lambda: fb.UpdatePipeline(t0))
+        check(np.isnan(_table_row(rm.nv.fetch(fb, 1), "Elements")).all() and "no GridPointForce" in text,
+              f"{ext}: GridPointForce is off by default: the cut load from equilibrium, and the filter says so")
+        pv.Delete(fb)
+        fb = nv.free_body("PID 2", reader=reader)  # checks GridPointForce in the reader, stays in PID 2
+        check("GridPointForce" in list(reader.ResultTypes) and nv.enum_text(fb, "StayWithin") == "seed properties",
+              f"{ext}: nv.free_body checks GridPointForce and stays within the seed property")
+        fb.UpdatePipeline(t0)
+        cut = _table_row(rm.nv.fetch(fb, 1), "Cut")
+        check(np.allclose(cut, [10, 0, 80, -15, -180, -10], atol=1e-5), f"{ext}: Free Body PID 2, cut load {cut}")
+        check(np.allclose(_table_row(rm.nv.fetch(fb, 1), "Imbalance"), 0, atol=1e-5), f"{ext}: the imbalance is zero")
+        check(_root(fb, "ArrowCount", 2) == [2], f"{ext}: the glyph has the force and moment arrows")
+        check(_by_eid(fb, "Lines", "FreeBody") == {1: 0, 2: 1, 3: 1, 4: 1, 21: 0, 22: 0, 23: 0, 24: 0, 31: 0, 32: 0},
+              f"{ext}: FreeBody marks bars 2-4")
+        fb.SumAbout = "Grid"
+        fb.Grid = 4
+        fb.UpdatePipeline(t0)
+        cut = _table_row(rm.nv.fetch(fb, 1), "Cut")
+        check(np.allclose(cut, [10, 0, 80, -15, -20, -10], atol=1e-5), f"{ext}: about GRID 4 {cut}")
+        fb.SumAbout = "Cut centroid"
+        fb.SeedIDs = "EID 3"
+        fb.StayWithin = "anything"
+        fb.LimitHops = 1
+        fb.MaxHops = 0
+        fb.UpdatePipeline(t0)
+        cut = _table_row(rm.nv.fetch(fb, 1), "Cut")
+        check(np.allclose(cut, [0, 0, 100, 5, -100, 0], atol=1e-5), f"{ext}: bar 3 alone (Max Hops 0) {cut}")
+        fb.SeedIDs = "PID 32"  # with the RBE2, not CBAR 31: its MPC force at grid 32 is the cut load
+        fb.LimitHops = 0
+        fb.ExcludePIDs = "31"
+        fb.UpdatePipeline(t0)
+        table = rm.nv.fetch(fb, 1)
+        cut, mpc = _table_row(table, "Cut"), _table_row(table, "MPC")
+        check(np.allclose(cut, [0, 0, 10, 0, -15, 0], atol=1e-5) and np.allclose(mpc, cut, atol=1e-5),
+              f"{ext}: the load through the body's RBE2 is in the cut load {cut}")
+        pv.Delete(fb)
+        pv.Delete(reader)
+    vtm = os.path.join(tmp, "fb.vtm")
+    convert(["convert", fb_deck, "--results", op2, "--result-types", "all", "-o", vtm, "-q"])
+    src = nv.load_reader(vtm)
+    fb = pv.NastranFreeBody(Input=src, SeedIDs="PID 22")
+    fb.StayWithin = "seed properties"
+    fb.UpdatePipeline()
+    cut = _table_row(rm.nv.fetch(fb, 1), "Cut")
+    check(np.allclose(cut, [0, -10, 0, 0, 0, -5], atol=1e-5), f"Free Body on a converted .vtm: the truss tip {cut}")
+    pv.Delete(fb)
     pv.Delete(src)
 
 
@@ -1917,7 +2185,7 @@ VIEW_SELECTS = {"masses": "mass glyphs", "bushes": "bush glyphs", "bushrotations
                 "beams": None, "loads": "load glyphs", "spc": "spc glyphs", "rigid": None, "family": None,
                 "group": None, "pid": None, "mid": None, "elementtype": None, "thickness": None, "nsm": None,
                 "results": "deform", "random": None, "randomsweep": None, "parts": "parts", "grow": "grow",
-                "path": "path", "check": "check", "forces": None, "stress": None}
+                "path": "path", "check": "check", "forces": None, "stress": None, "plies": None}
 
 
 def clear_checks(pv, nv, reader):
@@ -3082,6 +3350,7 @@ def main():
         result_type_checks(rm, nv, reader, full)
         element_result_checks(pv, nv)
         force_stress_view_checks(pv, nv)
+        ply_view_checks(pv, nv)
         anim = pv.CreateRenderView()
         model = nv.apply("results", reader=reader, view=anim)  # the results view: peak deflection
         deform = pv.FindSource(nv._name(model, "deform"))
@@ -3436,6 +3705,7 @@ def main():
     calc_nan_checks(pv, nv)
     random_checks(pv, nv)
     result_load_checks(pv, nv, reader)
+    results_helper_checks(pv, nv)
     pressure_checks(pv, nv)
     dynamic_result_checks(pv, nv)
     topology_checks(pv, nv)

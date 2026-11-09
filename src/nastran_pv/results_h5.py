@@ -94,6 +94,15 @@ def pick_fields(rows, picks, slots="") -> np.ndarray:
     return np.column_stack(cols) if cols else np.zeros((len(rows), 0))
 
 
+def _row_ids(rows, rtype, id_field) -> np.ndarray:
+    """The ids of a dataset's (or structured array's) rows: (n,), or (n, 2) EID and ``PLY`` for a
+    ply type."""
+    ids = np.asarray(rows[id_field], dtype=np.int64)
+    if rtype.reduce == "ply":
+        return np.column_stack([ids, np.asarray(rows[result_types.PLY_FIELD], dtype=np.int64)])
+    return ids
+
+
 def complex_fields(rows, picks, slots="") -> np.ndarray:
     """:func:`pick_fields` of a ``_CPLX`` dataset: each field ``F`` as ``FR + i FI``."""
     return (pick_fields(rows, result_types.complex_picks(picks, "R"), slots)
@@ -160,7 +169,7 @@ class H5Results(_Results):
             return []
         names = set(ds.dtype.names)
         id_field = ID_FIELDS[rtype.id_array]
-        if not {id_field, "DOMAIN_ID"} <= names:
+        if not {id_field, "DOMAIN_ID"} | ({result_types.PLY_FIELD} if rtype.reduce == "ply" else set()) <= names:
             return []
         kind = src.kind(pat) if rtype.defines_steps else None
         if src.picks or (is_complex and src.fields):
@@ -170,7 +179,7 @@ class H5Results(_Results):
                 return []
             if src.accept is not None and not src.accept(ds):
                 return []
-            return [H5Table(path, np.asarray(ds[id_field], dtype=np.int64), np.asarray(ds["DOMAIN_ID"], dtype=np.int64),
+            return [H5Table(path, _row_ids(ds, rtype, id_field), np.asarray(ds["DOMAIN_ID"], dtype=np.int64),
                             None, kind, src, is_complex)]
         if is_complex:  # a compute(rows) source has no complex form
             return []
@@ -183,13 +192,14 @@ class H5Results(_Results):
             vals = np.column_stack([rows[f].astype(float) for f in src.fields])
         else:
             return []
-        return [H5Table(path, rows[id_field].astype(np.int64), rows["DOMAIN_ID"].astype(np.int64),
+        return [H5Table(path, _row_ids(rows, rtype, id_field), rows["DOMAIN_ID"].astype(np.int64),
                         np.asarray(vals, dtype=float), kind)]
 
     def _unread(self, res) -> list[str]:
         """One message per element force, stress or strain dataset no type of the registry reads
         (``result_types.unread_reason``)."""
         read = {t.path for tables in self.tables.values() for t in tables}
+        plies = {t.path for r in self.registry if r.reduce == "ply" for t in self.tables[r.name]}
         out = []
         for _, path in _paths(res, result_types.REPORTED_H5):
             ds = res[path]
@@ -197,7 +207,7 @@ class H5Results(_Results):
                 continue
             name = path.rsplit("/", 1)[-1]
             reason = result_types.unread_reason(name, path in read, complex_="_CPLX" in name,
-                                                curvature=not result_types.fibre_rows(ds))
+                                                curvature=not result_types.fibre_rows(ds), plies=path in plies)
             if reason is not None:
                 out.append(f"{path}: {reason}")
         return out

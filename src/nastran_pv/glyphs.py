@@ -857,3 +857,69 @@ def glyph_diagonal(mb) -> float:
     if a is not None and a.GetNumberOfTuples() and a.GetValue(0) > 0:
         return float(a.GetValue(0))
     return model_diagonal(mb)
+
+
+# ------------------------------------------------------------------ composite ply axes
+PLY_AXIS_SIZE = 0.5  # Nastran Ply Axes default: a bar's length over its element's size
+
+
+def ply_axes(shells, ply: int = 0, size: float = PLY_AXIS_SIZE, both: bool = False) -> vtkPolyData:
+    """Line glyphs of a composite ply's material axes: per shell, a bar along the ply's 1-direction
+    (the fibre) through the element's centre and, with ``both``, one along its 2-direction (normal x
+    1-direction). ``ply``: a ply id, drawn from the Shells layup (``plies.ply_arrays``), or 0 for
+    the block's own ``PlyAxis`` (the ply ``convert --ply`` or the reader's *Ply* laid on it), else
+    the element material axes (``MaterialAxis``). A bar is ``size`` x the element's size (twice its
+    mean centre-to-grid distance) long; elements without the ply get none. Cell data ``EID``,
+    ``Direction`` (1 or 2) and ``PlyAngle`` (degrees from the material axis); field ``AxesPly`` (the
+    ply drawn, 0 for the material axes), ``AxisCount`` and, when nothing is drawn, ``AxesNote``
+    (why: no composite layup, no such ply, no material axes)."""
+    from . import plies
+    from .selection import _cell_points
+
+    cd, n = shells.GetCellData(), shells.GetNumberOfCells()
+
+    def cells(name):
+        a = cd.GetArray(name)
+        return vtkutil.to_numpy(a).astype(float) if a is not None else None
+
+    layup = shells.GetFieldData().GetArray(plies.LAYUP_PLY)
+    if ply:
+        arrays = plies.ply_arrays(shells, ply)
+        axis, angle, drawn = (arrays or {}).get("PlyAxis"), (arrays or {}).get("PlyAngle"), int(ply)
+        why = ("no composite layup (PCOMP, PCOMPG) on these shells" if arrays is None
+               else "the shells have no MaterialAxis and Normal" if axis is None else f"no shell has ply {ply}")
+    elif cells("PlyAxis") is not None:
+        axis, angle = cells("PlyAxis"), cells("PlyAngle")
+        drawn, why = (int(layup.GetValue(0)) if layup is not None else 0), "no shell has the laid ply"
+    else:
+        axis, angle, drawn, why = cells("MaterialAxis"), np.zeros(n), 0, "the shells have no MaterialAxis"
+    normal, eid = cells("Normal"), cells("EID")
+    sizes, conn = _cell_points(shells)
+    owner = np.repeat(np.arange(len(sizes)), sizes)
+    xyz = vtkutil.to_numpy(shells.GetPoints().GetData()).reshape(-1, 3).astype(float)[conn] if n else np.zeros((0, 3))
+    centre = np.zeros((n, 3))
+    np.add.at(centre, owner, xyz)
+    centre /= np.maximum(sizes, 1)[:, None]
+    reach = np.zeros(n)
+    np.add.at(reach, owner, np.linalg.norm(xyz - centre[owner], axis=1))
+    length = size * 2.0 * reach / np.maximum(sizes, 1)
+    ok = np.zeros(n, dtype=bool) if axis is None else np.isfinite(axis).all(axis=1) & (length > 0)
+    rows = np.flatnonzero(ok)
+    dirs = [] if axis is None else [(1, axis)] + ([(2, np.cross(normal, axis))] if both and normal is not None else [])
+    starts = [centre[rows] - 0.5 * length[rows, None] * d[rows] for _, d in dirs]
+    ends = [centre[rows] + 0.5 * length[rows, None] * d[rows] for _, d in dirs]
+    m = len(rows) * len(dirs)
+    pts = np.empty((2 * m, 3))
+    if m:
+        pts[0::2], pts[1::2] = np.concatenate(starts), np.concatenate(ends)
+    pd = vtkutil.polydata(pts, verts=False, lines=np.arange(2 * m).reshape(-1, 2))
+    cells_of = np.tile(rows, len(dirs))
+    out = pd.GetCellData()
+    vtkutil.add_array(out, "EID", (eid[cells_of] if eid is not None else cells_of).astype(np.int64))
+    vtkutil.add_array(out, "Direction", np.repeat([k for k, _ in dirs], len(rows)).astype(np.int8))
+    vtkutil.add_array(out, "PlyAngle", angle[cells_of] if angle is not None else np.full(m, np.nan))
+    vtkutil.add_array(pd.GetFieldData(), "AxesPly", np.array([drawn], dtype=np.int64))
+    vtkutil.add_array(pd.GetFieldData(), "AxisCount", np.array([m], dtype=np.int64))
+    if not m:
+        vtkutil.set_field_strings(pd, "AxesNote", [why])
+    return pd

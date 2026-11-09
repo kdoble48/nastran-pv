@@ -21,6 +21,7 @@ with `--help` for the full option list.
 
 The field options `--derive`, `--map` and `--calc` (for `convert`, `stats` and `store add`) are
 described in [Fields](fields.md); `--parts`, `--grow` and `--rules` in [Model tools](tools.md);
+`--envelope`, `--average` and `--free-body` in [Results helpers](results-helpers.md);
 `--select` below, in [Selection from an ID file](#selection-from-an-id-file). The `store` commands are described in [Run store](store.md),
 and `diff` and `--diff-against` in [Model diff](diff.md). Wherever a command takes a deck, it also
 takes a `.vtm` or `.vtkhdf` written by `convert`, with the same result; the options that need the deck
@@ -41,9 +42,13 @@ chooses what the steps carry, by [result type](model.md#result-types): `--result
 attaches the stresses without the displacements, `--result-types ShellStress,SolidStress` the
 stress components (names are case-insensitive and may be comma-separated; `all` is every type;
 the default is `Displacement VonMisesMax SPCForce MPCForce AppliedLoad`, the element forces and
-`Velocity Acceleration`).
+`Velocity Acceleration PlyFailureIndex`).
 `convert` prints the types the file has that it left out, and a type named that the results
-file lacks gives a warning. With SPC forces, MPC forces or applied loads attached, `convert`
+file lacks gives a warning. `--ply N` picks a composite ply by its id (the PCOMP ply number or a
+PCOMPG global ply id; `-N` for the mirrored copy of a symmetric PCOMPG's ply N): the ply result types (`PlyStress`, `PlyStrain`, `PlyFailureIndex`) attach
+that ply, and Shells get its layup (`PlyAngle`, `PlyAxis`, ...); `--ply max`, the default, gives
+each element's critical ply instead, with its id in `PlyStressPly` and the like (see
+[Composites](model.md#composites)); `convert` names the types that have the ply and warns about the others. Without `--results`, `--ply N` lays the layup only. With SPC forces, MPC forces or applied loads attached, `convert`
 prints their resultant at the attached step (`--step`, also with `--all-steps`), e.g.
 `SPCForce resultant (Subcase 1): force (0, -100, -50), moment (-2, 100, -200) about the
 basic origin`; `stats` and `store add` take the flag too. `--no-nodal-arrays` leaves
@@ -56,6 +61,13 @@ debugging.
 (default: Case Control `NSM=`; `0` = none; see [Nonstructural mass](model.md#nonstructural-mass));
 `view` and `render` take it too. An output ending in `.vtkhdf`, or
 `--format vtkhdf`, writes VTKHDF instead (see [Output formats](output-formats.md)).
+
+`--envelope [max min absmax]` adds the envelopes of every result array over the steps
+(`--envelope-steps` to choose them), with the step of each extreme; `stats` and `store add` take it
+too. `convert --average [ARRAY ...]` adds the `Averaged` block, the element results averaged to the
+grids within each PID, and `convert --free-body SEEDS` (with `--free-body-rules` and `--free-body-point`)
+prints and stores the load a free body transmits through its cut; both follow every step of an
+`--all-steps` series (see [Results helpers](results-helpers.md)).
 
 `--random ASD` turns the `--results` normal modes into a base-drive random response, with
 `--drive`, `--damping`, `--g` and `--random-frames`; `--random-output` shows instead the random
@@ -214,7 +226,7 @@ nastran-pv render out/modes.vtkhdf --step 3 --preset results   # a converted ser
 
 `--preset` defaults to `family masses loads spc`, `--out` to `shots/` and `--size` to `1600 1000`.
 `--step` is 0-based. The presets are the views from the toolbar macros: `masses`, `bushes`, `bushrotations`, `beams`, `loads`, `spc`, `rigid`,
-`family`, `group`, `pid`, `mid`, `elementtype`, `thickness`, `nsm`, `results`, `forces`, `stress`, `random`,
+`family`, `group`, `pid`, `mid`, `elementtype`, `thickness`, `nsm`, `results`, `forces`, `stress`, `plies`, `random`,
 `randomsweep`, `parts`, `check` and `diff`. The two random views need `--random` or `--random-output` (or a converted random series),
 and `diff` needs `--against A`. Rendering is offscreen, so no ParaView window opens; `--onscreen`
 renders in a visible window instead, for a ParaView build whose offscreen PNGs come out blank.
