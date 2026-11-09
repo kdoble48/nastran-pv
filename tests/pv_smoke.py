@@ -3499,14 +3499,18 @@ def main():
             single.eigenvectors.clear()  # one static step, no frequency
             static = os.path.join(tmp, "static.op2")
             single.write_op2(static)
-            from op2_fixture import make_freebody_op2
+            from op2_fixture import make_freebody_op2, make_modes_op2
 
             fb_op2 = os.path.join(tmp, "fb.op2")
             make_freebody_op2().write_op2(fb_op2)
+            one_mode = os.path.join(tmp, "onemode.op2")
+            make_modes_op2(freqs=(30.0,)).write_op2(one_mode)
             models = [
                 {"id": "tiny", "title": "Tiny", "deck": DECK, "results": modes,
                  "views": ["pid", "bushes", "results"], "credit": "test"},
                 {"id": "one", "title": "One", "deck": DECK, "results": static,
+                 "views": ["results"], "credit": "test"},
+                {"id": "mode", "title": "Mode", "deck": DECK, "results": one_mode,
                  "views": ["results"], "credit": "test"},
                 # a view with fixed arguments (VARIANTS) and a filter scene (SCENES)
                 {"id": "fb", "title": "FB", "deck": os.path.join(HERE, "data", "freebody.bdf"), "results": fb_op2,
@@ -3545,6 +3549,10 @@ def main():
             check(not one["frames"] and one["scene"] == "one-results.vtksz"
                   and os.path.exists(os.path.join(out, one["scene"])),
                   "single static step: one scene, no per-step frames (no 'Mode 1' tab)")
+            mode = meta("mode-results.json")
+            check(len(mode["frames"]) == 1 and mode["frames"][0]["frequency"] is not None
+                  and abs(mode["frames"][0]["frequency"] - 30.0) < 1e-6,
+                  f"a file of one mode keeps its mode tab and frequency: {mode['frames']}")
             spc = meta("fb-spcforces.json")
             check(spc["title"] == "SPC forces" and "SPC forces" in spc["gui"]
                   and 'nastran_views.apply("loads", source="SPC forces")' in spc["reproduce"][1]
@@ -3574,6 +3582,18 @@ def main():
         check(sm.GetRepresentation(unshown, xview) is None, "export helpers create no representations")
         pv.Delete(unshown)
         pv.Delete(xview)
+        # a display colored by an array its data lacks draws grey: no content for the gallery
+        gview = pv.CreateRenderView()
+        ball = pv.Sphere()
+        gd = pv.Show(ball, gview)
+        pv.ColorBy(gd, ("POINTS", "NoSuchArray"))
+        pv.Render(gview)  # as export_view, which asks after the view rendered
+        grey = es.has_content(gview)
+        pv.ColorBy(gd, ("POINTS", "Normals"))
+        pv.Render(gview)
+        check(not grey and es.has_content(gview), "has_content needs the color array in the shown data")
+        pv.Delete(ball)
+        pv.Delete(gview)
 
         reader.Bushes = 0
         check(es.export_view(reader, {"id": "nb", "title": "", "deck": DECK, "results": None,

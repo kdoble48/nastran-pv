@@ -21,7 +21,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 import numpy as np  # noqa: E402
-from paraview import servermanager  # noqa: E402
 from paraview import simple as pv  # noqa: E402
 
 import nastran_views as nv  # noqa: E402
@@ -99,10 +98,6 @@ def new_view():
     return nv.white_view(SIZE)
 
 
-def _step(state):
-    return (state.field_strings(None, "ResultLabel") or ["no result step"])[0]
-
-
 def _framed(view):
     """Reset the camera to the scene and render, as ``nastran_views.apply`` ends: set_camera reads
     the camera properties, which are stale before that."""
@@ -111,17 +106,24 @@ def _framed(view):
 
 
 def _fetched_points(src, array, value):
-    """Coordinates of the points of ``src``'s output whose point ``array`` equals ``value``, once each
-    (the model tree's partitions repeat the grids they share)."""
+    """Coordinates of the grids of ``src``'s output whose point ``array`` equals ``value``, one per
+    NID: the model tree's partitions repeat the grids they share, and coincident grids (a CBUSH or
+    RBE pair) are distinct grids at one place."""
     from vtkmodules.util.numpy_support import vtk_to_numpy
 
-    out = []
+    nids, xyz = [], []
     for leaf in nv._leaves(nv.fetch(src)):
-        a = leaf.GetPointData().GetArray(array) if leaf is not None and leaf.GetNumberOfPoints() else None
-        if a is not None:
+        if leaf is None or not leaf.GetNumberOfPoints():
+            continue
+        a, ids = leaf.GetPointData().GetArray(array), leaf.GetPointData().GetArray("NID")
+        if a is not None and ids is not None:
             mask = vtk_to_numpy(a).reshape(-1) == value
-            out.append(vtk_to_numpy(leaf.GetPoints().GetData())[mask])
-    return np.unique(np.concatenate(out), axis=0) if out else np.zeros((0, 3))
+            nids.append(vtk_to_numpy(ids).reshape(-1)[mask])
+            xyz.append(vtk_to_numpy(leaf.GetPoints().GetData())[mask])
+    if not nids:
+        return np.zeros((0, 3))
+    _, first = np.unique(np.concatenate(nids), return_index=True)
+    return np.concatenate(xyz)[first]
 
 
 def scene_freebody(reader, view, state, seeds, label="", **props):
@@ -148,7 +150,7 @@ def scene_freebody(reader, view, state, seeds, label="", **props):
         made.append(pts)
     arrows = pv.Show(pv.OutputPort(fb, 2), view)
     nv.solid(arrows, ARROW_RGB, view)
-    table = servermanager.Fetch(fb, idx=1)
+    table = nv.fetch(fb, 1)
     cols = {table.GetColumnName(i): table.GetColumn(i) for i in range(table.GetNumberOfColumns())}
     rows = [cols["Source"].GetValue(r) for r in range(table.GetNumberOfRows())]
 
@@ -156,7 +158,7 @@ def scene_freebody(reader, view, state, seeds, label="", **props):
         r = rows.index(row)
         return "(" + ", ".join(f"{float(vtk_to_numpy(cols[n])[r]):.4g}" for n in names) + ")"
 
-    text = [f"Free body{': ' + label if label else ''}, {_step(state)}",
+    text = [f"Free body{': ' + label if label else ''}, {nv._step_label(state, view)}",
             f"{len(cut)} cut grids (red), where elements outside it meet it; arrows: the cut load at the cut "
             "centroid"]
     for row in ("Cut", "Applied", "Imbalance"):
@@ -167,9 +169,28 @@ def scene_freebody(reader, view, state, seeds, label="", **props):
     return made
 
 
+def result_type_of(array):
+    """The name of the result type that writes ``array`` (None: not a result array)."""
+    from nastran_pv.result_types import REGISTRY
+
+    return next((t.name for t in REGISTRY if any(a.name == array for a in t.arrays)), None)
+
+
+def _average_reproduce(deck, res, args):
+    array = args.get("array", "VonMisesMax")
+    rtype = result_type_of(array)
+    types = f" --result-types {rtype}" if rtype and rtype != "VonMisesMax" else ""  # VonMisesMax: a default
+    return [f"nastran-pv convert {deck}{res}{types} --average {array} -o out/average.vtm"]
+
+
 def scene_average(reader, view, state, array="VonMisesMax", within=None):
     """Nastran Nodal Average of the reader (Average Within ``within``, default Property), its
-    mesh blocks colored by the averaged point ``array``. Returns the pipeline objects it made."""
+    mesh blocks colored by the averaged point ``array``, whose result type it checks in the reader's
+    *Result Types* first (VonMisesMax is on by default; the stresses are not). Returns the pipeline
+    objects it made."""
+    rtype = result_type_of(array)
+    if rtype:
+        nv.turn_on_result_types(reader, [rtype])
     avg = pv.NastranNodalAverage(Input=reader)
     if within is not None:
         avg.AverageWithin = within
@@ -177,7 +198,7 @@ def scene_average(reader, view, state, array="VonMisesMax", within=None):
     d = pv.Show(avg, view)
     d.Representation = "Surface"
     nv.continuous(d, "POINTS", array, preset="Turbo", view=view)
-    nv.info_text(state, view, f"{_step(state)}: {array} averaged to the grids "
+    nv.info_text(state, view, f"{nv._step_label(state, view)}: {array} averaged to the grids "
                               "within each property (Nastran Nodal Average)")
     _framed(view)
     return [avg]
@@ -190,29 +211,49 @@ SCENES = {
                                        f'# ParaView Python shell: nastran_views.free_body("{a["seeds"]}")'],
                  "check *GridPointForce* in the reader's *Result Types*, then apply *Filters > Nastran > Nastran "
                  "Free Body* with the seeds as *Seed IDs* and *Stay Within* seed properties"),
-    "average": (scene_average,
-                lambda deck, res, a: [f"nastran-pv convert {deck}{res} --average {a.get('array', 'VonMisesMax')} "
-                                      "-o out/average.vtm"],
-                "apply *Filters > Nastran > Nastran Nodal Average* to the reader and color it by a point array"),
+    "average": (scene_average, _average_reproduce,
+                "apply *Filters > Nastran > Nastran Nodal Average* to the reader (its *Arrays* lists the cell "
+                "arrays of the result types checked in the reader's *Result Types*; VonMisesMax is on by default) "
+                "and color it by that array on points"),
 }
 
 
-def has_content(view):
-    """True if a visible, non-text representation with data is colored by an array.
+ASSOCIATIONS = {"POINTS": 0, "CELLS": 1, "FIELD": 2}  # vtkDataObject.FIELD_ASSOCIATION_*
 
-    Views that find nothing to draw show only a solid ghost mesh and an info text.
+
+def has_content(view):
+    """True if a visible, non-text representation with data is colored by an array its data has.
+
+    Views that find nothing to draw show only a solid ghost mesh and an info text; a display
+    colored by an array its input lacks draws grey, and counts as nothing too.
     """
     for src, rep in se.representations(view):
         if not rep.Visibility or src.GetXMLName() == "TextSource":
             continue
         arr = getattr(rep, "ColorArrayName", None)
-        if arr and arr[1] and src.GetDataInformation().GetNumberOfPoints() > 0:
+        if not arr or not arr[1]:
+            continue
+        info = rep.GetRepresentedDataInformation()
+        if info.GetNumberOfPoints() > 0 and info.GetArrayInformation(arr[1], ASSOCIATIONS.get(arr[0], 0)):
             return True
     return False
 
 
 def _finite(x):
     return float(x) if x is not None and math.isfinite(float(x)) else None
+
+
+def per_step_scenes(reader, times):
+    """The results view gets a scene (a page tab) per step for modes, frequencies and times, each
+    labelled by its step and frequency, even when the file has one; one static subcase is one
+    scene. Steps of those kinds carry a root Frequency or Time; a static step has neither."""
+    if len(times) > 1:
+        return True
+    if not times:
+        return False
+    state = nv.Model(reader, times[0])
+    return any(v is not None and v.size and _finite(v[0]) is not None
+               for v in (state.field("Frequency"), state.field("Time")))
 
 
 def _reproduce(model, entry, view_name, args):
@@ -244,7 +285,8 @@ def export_view(reader, model, entry, out):
     args = {**args, **model.get("view_args", {}).get(entry, {})}
     base = f"{model['id']}-{entry}"
     times = nv.timesteps(reader)
-    steps = times if view_name == "results" and len(times) > 1 else [times[0] if times else None]
+    per_step = view_name == "results" and per_step_scenes(reader, times)
+    steps = times if per_step else [times[0] if times else None]
     meta, frames, made = None, [], []
     for k, t in enumerate(steps, start=1):
         view = new_view()
@@ -260,7 +302,7 @@ def export_view(reader, model, entry, out):
             pv.Delete(view)
             meta = None
             break
-        stem = f"{base}-m{k}" if len(steps) > 1 else base
+        stem = f"{base}-m{k}" if per_step else base
         over = se.overlays(view)
         pv.SaveScreenshot(os.path.join(out, f"{stem}.png"), view, ImageResolution=SIZE)
         se.write_vtksz(view, os.path.join(out, f"{stem}.vtksz"))
@@ -280,7 +322,7 @@ def export_view(reader, model, entry, out):
                 meta["results"] = os.path.basename(model["results"])
             se.hide_overlays(view)
             pv.SaveScreenshot(os.path.join(out, meta["thumb_raw"]), view, ImageResolution=SIZE)
-        if len(steps) > 1:
+        if per_step:
             label = state.field_strings(None, "ResultLabel")
             freq = state.field("Frequency")
             frames.append({"label": label[0] if label else f"Step {k}",

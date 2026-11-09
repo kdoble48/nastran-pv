@@ -89,13 +89,14 @@ UCRM9_ROOT_RIB = "PID 238"  # WING_RIBS/RIB.00, the rib at the root (y = 0)
 UCRM9_REQUESTS = ("FORCE = ALL", "SPCFORCES = ALL", "MPCFORCES = ALL", "OLOAD = ALL", "GPFORCE = ALL")
 
 
-def _mystran_bulk(src, dst) -> None:
+def _mystran_bulk(src, dst):
     """Write bulk-data include ``src`` as MYSTRAN 19 runs it: CQUADR as CQUAD4 and PSHELL MID4
-    blanked (MYSTRAN 19 runs neither); other files are copied."""
+    blanked (MYSTRAN 19 runs neither), in 16-character fields so the grids keep the deck's digits;
+    returns the pyNastran model it read. Other files are copied (None)."""
     text = Path(src).read_text(encoding="latin-1")
     if "CQUADR" not in text and "PSHELL" not in text:
         shutil.copyfile(src, dst)
-        return
+        return None
     from pyNastran.bdf.bdf import BDF
 
     model = BDF(debug=None)
@@ -108,21 +109,25 @@ def _mystran_bulk(src, dst) -> None:
     for prop in model.properties.values():
         if prop.type == "PSHELL":
             prop.mid4 = None
-    model.write_bdf(str(dst))
+    model.write_bdf(str(dst), size=16)
+    return model
 
 
-def ucrm9_for_mystran(run_deck, out_dir) -> Path:
+def ucrm9_for_mystran(run_deck, out_dir) -> tuple[Path, list]:
     """Copy the uCRM-9 static run deck and its includes into ``out_dir`` as MYSTRAN 19 solves them
-    (``_mystran_bulk``), asking for ``UCRM9_REQUESTS``; returns the run deck's copy. The scenes show
-    the original deck with the copy's OP2 (the results are keyed by grid and element id)."""
+    (``_mystran_bulk``), asking for ``UCRM9_REQUESTS``; returns the run deck's copy and the
+    pyNastran models of the includes it rewrote (``outboard_pids`` reads them). The scenes show the
+    original deck with the copy's OP2 (the results are keyed by grid and element id)."""
     run_deck, out_dir = Path(run_deck), Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    lines = []
+    lines, models = [], []
     for line in run_deck.read_text(encoding="latin-1").splitlines():
         include = re.match(r"\s*INCLUDE\s+'([^']+)'", line, re.I)
         if include:
             name = include.group(1)
-            _mystran_bulk(run_deck.parent / name, out_dir / Path(name).name)
+            model = _mystran_bulk(run_deck.parent / name, out_dir / Path(name).name)
+            if model is not None:
+                models.append(model)
             line = f"INCLUDE '{Path(name).name}'"
         elif re.match(r"\s*STRAIN\s*=", line, re.I):
             continue
@@ -133,7 +138,7 @@ def ucrm9_for_mystran(run_deck, out_dir) -> Path:
         lines.append(line)
     copy = out_dir / run_deck.name
     copy.write_text("\n".join(lines) + "\n", encoding="latin-1")
-    return copy
+    return copy, models
 
 
 def model_tools_reproduce(deck: str, view_args: dict) -> dict:
@@ -189,38 +194,64 @@ def build_models(ucrm9, demo_bdf, demo_op2, solved=None) -> list[dict]:
     return models
 
 
-def outboard_pids(deck, y) -> list[int]:
-    """The PIDs whose elements have every grid at a span (basic y) of at least ``y``."""
-    from nastran_pv.deck import load_deck
-
-    model = load_deck(str(deck), echo=False).model
+def outboard_pids(models, y) -> list[int]:
+    """The PIDs whose elements have every grid at a span (basic y) of at least ``y``, over the
+    pyNastran ``models`` (read without cross-referencing: the grids go to basic through their CP
+    systems). Grids a model lacks and scalar points have no position and are left out."""
     inboard, seen = set(), set()
-    for elem in model.elements.values():
-        pid = getattr(elem, "pid", None)
-        if pid is None:
+    for model in models:
+        if not model.nodes:
             continue
-        seen.add(pid)
-        if min(model.nodes[n].xyz[1] for n in elem.node_ids if n) < y:
-            inboard.add(pid)
+        nid_cp_cd, xyz, *_ = model.get_xyz_in_coord_array(cid=0, fdtype="float64", idtype="int64")
+        span = {int(nid): float(p[1]) for nid, p in zip(nid_cp_cd[:, 0], xyz) if int(nid) in model.nodes}
+        for elem in model.elements.values():
+            pid = getattr(elem, "pid", None)
+            ys = [span[n] for n in elem.node_ids if n in span]
+            if pid is None or not ys:
+                continue
+            seen.add(pid)
+            if min(ys) < y:
+                inboard.add(pid)
     return sorted(seen - inboard)
 
 
 def solve_results(ucrm9, mystran, out) -> dict:
     """Write and solve the static decks of the result scenes with MYSTRAN, each in its own folder
-    under ``out`` (MYSTRAN writes a dozen side files): ``build_models``' ``solved``."""
+    under ``out`` (MYSTRAN writes a dozen side files): ``build_models``' ``solved``. A solve that
+    fails is reported and its model left out; the others go on."""
     md = _make_demo()
-    solved = {"tray": None, "plate": None}
+    solved = {}
     for key, write, name in (("tray", md.write_demo_static, "demo_static.bdf"),
                              ("plate", md.write_composite_plate, "composite_plate.bdf")):
         (out / key).mkdir(parents=True, exist_ok=True)
         deck = write(out / key / name)
-        solved[key] = (deck, md.solve(deck, mystran))
+        try:
+            solved[key] = (deck, md.solve(deck, mystran))
+        except RuntimeError as exc:  # MYSTRAN wrote no OP2: its .f06 tail is in the message
+            print(f"skip model {key}: {exc}", flush=True)
     if ucrm9:
-        copy = ucrm9_for_mystran(ucrm9, out / "ucrm9-mystran")
+        copy, models = ucrm9_for_mystran(ucrm9, out / "ucrm9-mystran")
         print(f"solving uCRM-9 static with MYSTRAN ({copy.parent})", flush=True)
-        pids = outboard_pids(ucrm9, UCRM9_CUT_Y)
-        solved["ucrm9"] = {"results": md.solve(copy, mystran), "body": "PID " + " ".join(map(str, pids))}
+        pids = outboard_pids(models, UCRM9_CUT_Y)
+        try:
+            solved["ucrm9"] = {"results": md.solve(copy, mystran), "body": "PID " + " ".join(map(str, pids))}
+        except RuntimeError as exc:
+            print(f"skip model ucrm9static: {exc}", flush=True)
     return solved
+
+
+MARKER = ".npv-gallery"  # written into every build folder: the next build may empty that folder
+
+
+def is_gallery_folder(path) -> bool:
+    """True if a build may empty ``path``: absent, empty, or a previous build's folder (its marker,
+    or the manifest.json / models.json of a build before the marker)."""
+    path = Path(path)
+    if not path.exists():
+        return True
+    if not path.is_dir():
+        return False
+    return not any(path.iterdir()) or any((path / n).is_file() for n in (MARKER, "manifest.json", "models.json"))
 
 
 def pvpython_command(pvpython, models_json, out_dir) -> list[str]:
@@ -327,12 +358,16 @@ def main(argv=None) -> int:
 
     if args.ucrm9 and not args.ucrm9.exists():
         ap.error(f"uCRM-9 deck not found: {args.ucrm9}")
-    pvpython = args.pvpython or find_executable("pvpython")
     out = args.out.resolve()
-    zip_path = ZIP if args.out == OUT else out.parent / ZIP.name
+    zip_path = out.parent / ZIP.name
+    if not is_gallery_folder(out):
+        ap.error(f"--out {args.out}: not empty and not a gallery build folder (no {MARKER}); "
+                 "give a new or empty folder")
+    pvpython = args.pvpython or find_executable("pvpython")
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
+    (out / MARKER).write_text("docs/build_gallery.py output: emptied by the next build\n", encoding="utf-8")
     md = _make_demo()
     demo_bdf = md.write_demo(out / "demo.bdf")
     demo_op2, solved = None, {}
