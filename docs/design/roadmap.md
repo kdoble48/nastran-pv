@@ -1,7 +1,7 @@
 # Roadmap to 1.0
 
 Date: 2026-11-08. This replaces the 2026-10-09 version. Status: the 15 tasks below were agreed
-with the user. Each task gets its own spec before it is built.
+with the user. Each task that adds behaviour gets its own spec before it is built (see Process).
 
 ## Goal
 
@@ -19,7 +19,7 @@ and CI proves all of this on every push.
 
 | Topic | Decision | Why |
 |---|---|---|
-| Sequencing | Release foundation first, then results in public 0.x betas, then 1.0 hardening. Reconfirmed 2026-11-08, after features had shipped ahead of the release work | Users start early and their decks steer the results work; CI exists before the results code roughly doubles |
+| Sequencing | Release foundation first, then results in public 0.x betas, then 1.0 hardening. Reconfirmed 2026-11-08, after features had shipped ahead of the release work. The same day the user asked to start all tasks: tasks run in parallel waves wherever their files don't collide, the *Depends on* lines below are the only ordering, and releases are tagged in milestone order | Users start early and their decks steer the results work; CI exists before the results code roughly doubles |
 | First release | Everything merged before 0.2.0 ships in 0.2.0 | Nothing has been released since 0.1.0, so model tools, NSM and the rest have no version of their own |
 | 1.0 results scope | Broad: forces, full stress/strain, complex and frequency response, transient, composites | The user's choice; analysts expect these from a post-processor |
 | Audience | GUI and Python/CLI users equally | The user's choice; every task ships both front ends where it applies |
@@ -48,6 +48,9 @@ skills that quote changed flags or workflows, the gallery when a view changes, a
 
 ### 0.2: Public beta (release foundation)
 
+Release gate: part A of task 6 (listed under 0.3 with its part B) is merged before the 0.2.0 tag,
+so the fixes ship in 0.2.0.
+
 **1. Plugin in the wheel**
 - Scope:
   - The wheel carries the plugin, views, macros and installers from `paraview/` as package data,
@@ -60,8 +63,8 @@ skills that quote changed flags or workflows, the gallery when a view changes, a
 
 **2. ParaView in CI, and setup on Linux and macOS**
 - Scope:
-  - A CI job downloads a headless ParaView 6.0 for Linux (cached), runs `nastran-pv setup`, then
-    `tests/pv_smoke.py`.
+  - A CI job downloads headless Linux builds of ParaView 6.0 and 5.13.1 (cached), runs
+    `nastran-pv setup`, then `tests/pv_smoke.py` on each, so CI enforces the ParaView decision.
   - `install_deps.py` gets aarch64 wheel tags, and shares one pvpython search with `locate.py`
     that also finds ParaView tarballs unpacked in the home folder.
   - Check where ParaView on macOS reads macros from, and fix `install_macros.py` if it is not the
@@ -73,9 +76,11 @@ skills that quote changed flags or workflows, the gallery when a view changes, a
 - Scope:
   - A publish workflow on tags using trusted publishing: TestPyPI for `v*rc*` tags, PyPI for
     `vX.Y.Z`.
-  - CHANGELOG catch-up (scene layers PR 1, #54 has no entry), then the version bump in
+  - CHANGELOG catch-up: every PR merged since 0.1.0 has an entry with its number (#51 and #54
+    have no entry; the #47, #48 and #52 entries lack their numbers). Then the version bump in
     `pyproject.toml` and the CHANGELOG.
-  - Review the classifiers and the CI Python matrix, adding 3.13 and 3.14 if they are green.
+  - Classifiers, and Python 3.13 and 3.14 in the CI matrix: 3.14 support shipped in #18 but CI
+    tests only 3.10 to 3.12 (3.13+ needs pyNastran main). Fix what fails rather than drop them.
 - Exit: on a clean Windows and a clean Linux machine,
   `pip install nastran-pv==0.2.0 && nastran-pv setup` opens a `tests/data` deck in ParaView.
 - Depends on: 1, 2, and part A of task 6.
@@ -136,9 +141,14 @@ skills that quote changed flags or workflows, the gallery when a view changes, a
     counts, a root table carries them in `.vtm`/VTKHDF, and the plugin shows them in its
     warnings. This covers CTRIAX/CTRIAX6/CQUADX, CBUSH1D/2D, CHBDY, GENEL, DMIG and
     superelements, which are dropped today without a word.
-  - Build the cheap ones: MPCADD, CELAS3/4, CDAMP3 to CDAMP5, PLOTEL, and the 9-node CQUAD as a
-    biquadratic cell.
-- Exit: uCRM-9 and the Linderholt models convert with every skipped card reported.
+  - Build the cheap ones: MPCADD, PLOTEL, and the 9-node CQUAD as a biquadratic cell (today it is
+    drawn, as a linear quad, so it is not a skipped card).
+  - CELAS3/4, CDAMP3 to CDAMP5 and CMASS3/4 connect scalar points, which have no coordinates:
+    report them as non-geometric (counted, not drawn) unless the spec finds a placement, and
+    `docs/model.md` says which.
+- Exit:
+  - synthetic decks in `tests/data` cover each newly built card and the report's counts;
+  - uCRM-9 and the Linderholt models convert with every skipped card reported (manual check).
 - Depends on: nothing.
 
 ### 0.4: Static results
@@ -151,7 +161,7 @@ skills that quote changed flags or workflows, the gallery when a view changes, a
   - The reader gets a result-type selector, and `convert` gets a flag to choose types.
 - Exit: today's outputs are unchanged on the parity harness (`tests/test_vtkhdf_parity.py`) and
   pv_smoke.
-- Depends on: nothing (scheduled after 0.2).
+- Depends on: nothing (runs in parallel with 0.2, per the Sequencing decision).
 
 **9. Element forces and full stress and strain**
 - Scope:
@@ -221,7 +231,11 @@ skills that quote changed flags or workflows, the gallery when a view changes, a
     - `topology.check`'s duplicate key per cell;
     - the per-row rotation of grids with a cylindrical or spherical CD.
   - A synthetic large-deck timing check in CI that fails on a large regression.
-- Exit: every stage is within the published budget on uCRM-9 fine.
+- Exit:
+  - the baseline is measured before any fix and recorded in the spec; the budget and each fix's
+    gain are stated against that baseline;
+  - the CI check runs on a synthetic deck in `tests/data` (or generated by a test) and fails beyond
+    a set factor of its recorded time, so the budget is enforced without the gitignored datasets.
 - Depends on: nothing; best done after 11.
 
 **15. 1.0 release**
