@@ -75,6 +75,12 @@ def _f32(rows) -> np.ndarray:
     return np.asarray(rows, dtype="float32").reshape(1, len(rows), -1)
 
 
+def _int32(args) -> tuple:
+    """Integer id arrays as int32, as read from an OP2: pyNastran's writer packs int64 ids
+    (numpy's default int on Linux and macOS) as two words."""
+    return tuple(a.astype(np.int32) if isinstance(a, np.ndarray) and a.dtype.kind in "iu" else a for a in args)
+
+
 def _oef(cls, element_name, element_type, num_wide, *args, case=None):
     """A real static force table (OEF1X): the force classes mostly lack ``add_static_case``."""
     from pyNastran.op2.tables.oef_forces.oef_force_objects import oef_data_code
@@ -83,7 +89,7 @@ def _oef(cls, element_name, element_type, num_wide, *args, case=None):
     dc = oef_data_code("OEF1X", is_sort1=True, is_random=False, random_code=0, title="", subtitle="", label="",
                        is_msc=True)
     dc.update(loadIDs=[0], data_names=[], element_name=element_name, element_type=element_type, num_wide=num_wide)
-    return set_static_case(cls, True, 1, dc, case or set_element_case, args)
+    return set_static_case(cls, True, 1, dc, case or set_element_case, _int32(args))
 
 
 def _oes(cls, element_name, num_wide, case, *args, s_code=1):
@@ -94,7 +100,7 @@ def _oes(cls, element_name, num_wide, case, *args, s_code=1):
 
     dc = cls._add_case("OSTR1X" if s_code >= 10 else "OES1X1", element_name, 1, True, False, True, 0, "", "", "")
     dc.update(num_wide=num_wide, s_code=s_code, stress_bits=[int(b) for b in f"{s_code:05b}"])
-    obj = set_static_case(cls, True, 1, dc, case, args)
+    obj = set_static_case(cls, True, 1, dc, case, _int32(args))
     obj.s_code, obj.stress_bits = dc["s_code"], dc["stress_bits"]
     return obj
 
@@ -181,8 +187,8 @@ def make_element_op2() -> OP2:
     # reported, not attached: composite plies (VonMisesMax takes their von Mises) and a spring stress
     plies = np.zeros((2, 9))
     plies[:, 8] = PLY_VON_MISES
-    comp = RealCompositePlateStressArray.add_static_case("OES1C", np.array([[3, 1], [3, 2]]), _f32(plies), 1,
-                                                         "CQUAD4")
+    layers = np.array([[3, 1], [3, 2]], dtype=np.int32)
+    comp = RealCompositePlateStressArray.add_static_case("OES1C", layers, _f32(plies), 1, "CQUAD4")
     comp.s_code = comp.data_code["s_code"] = 1
     comp.stress_bits = comp.data_code["stress_bits"] = [0, 0, 0, 0, 1]
     stress.cquad4_composite_stress[1] = comp
