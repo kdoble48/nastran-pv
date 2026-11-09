@@ -469,6 +469,7 @@ def converted_checks(pv, nv, reader):
             for name in nv.VIEWS:
                 model = nv.apply(name, reader=src, view=view)
             check(model.reader is src and "Shells" in model.names, f"{suffix}: every view builds")
+            nv.single(view)  # "diff" compared it with the deck; Show All below is about the file alone
             from nastran_pv.tree import as_multiblock
 
             check(nv.block_names(as_multiblock(nv.fetch(pv.NastranScope(Input=src))))
@@ -1438,7 +1439,9 @@ def parity_checks(pv, nv):
                 pv.Delete(fr)
                 pv.Delete(ff)
             kwargs = {"grow": {"seeds": f"EID {eid}"}}
-            skip = {"random", "randomsweep"} | (set() if results else {"results"})
+            # diff compares the two (its roles are the Diff's, so the file's view shows the deck as B):
+            # a diff of a deck and a converted file is diff_checks'
+            skip = {"random", "randomsweep", "diff"} | (set() if results else {"results"})
             for view_name in [v for v in nv.VIEWS if v not in skip]:
                 shown = []
                 for src in (r, f):
@@ -2084,7 +2087,8 @@ class _Cmp:
         views = list(pv.GetViews())
         if len(views) > 2:
             problems.append(f"{tag}: {len(views)} views (a third view)")
-        diffs = [s for s in pv.GetSources().values() if nv._xml_name(s) == nv.DIFF_XML]
+        diffs = [s for s in pv.GetSources().values() if nv._xml_name(s) == nv.DIFF_XML
+                 and any(x in (self.a, self.b) for x in nv.diff_sides(s))]  # this pair's (earlier checks leave others)
         if len(diffs) > 1 or any(nv.diff_sides(d) != (self.b, self.a) for d in diffs):
             problems.append(f"{tag}: {len(diffs)} Nastran Diff(s), roles {[nv.diff_sides(d) == (self.b, self.a) for d in diffs]}")
         names = {s.GetGlobalIDAsString(): k[0] for k, s in pv.GetSources().items()}
@@ -2477,6 +2481,8 @@ def main():
     for name in nv.VIEWS:
         nv.apply(name, reader=reader, view=view)
     check(True, f"all views build: {', '.join(nv.VIEWS)}")
+    nv.single(view)  # "diff" made the view a comparison (another model is open): one model again
+    check(not nv.scene_of(view).comparison and nv.subject(view) == reader, "NPV Single: the view shows one model")
     filter_property_checks(pv, nv, reader, view)
     with tempfile.TemporaryDirectory() as tmp:
         load_error_checks(pv, nv, tmp)
