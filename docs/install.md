@@ -1,13 +1,27 @@
 # Install
 
 ```bash
-pip install -e ".[vtk]"          # core + the vtk wheel, for the CLI and the tests
+pip install -e .                 # from a clone: the CLI, with the vtk wheel
 nastran-pv setup                 # ParaView-side dependencies + toolbar macros (finds pvpython)
 ```
 
+A wheel needs no clone: it carries the ParaView plugin, the views and the macros too, and
+`nastran-pv setup` finds them inside the installed package
+([Installed package or checkout](#installed-package-or-checkout)):
+
+```bash
+python -m build --outdir dist    # in a clone: the sdist and the wheel (pip install build)
+pip install dist/nastran_pv-*.whl
+nastran-pv setup
+```
+
+Install nastran-pv into a regular Python or a venv, never into ParaView's own Python: the plugin
+does not need it there, and the vtk wheel would shadow ParaView's VTK.
+
 Optional extras: `h5` (MSC/NX HDF5 results), `tables` (Excel files for `--map` and `--select`),
-`sql` (non-SQLite databases for `--map`), `all` (the four above), `gallery` (thumbnails for
-`docs/build_gallery.py`) and `test`.
+`sql` (non-SQLite databases for `--map`), `all` (the three above), `gallery` (thumbnails for
+`docs/build_gallery.py`) and `test`. `vtk` is a dependency now; the `vtk` extra is kept so that
+older install commands still work.
 
 ## pyNastran and Python versions
 
@@ -17,7 +31,7 @@ Python 3.13 and 3.14, install pyNastran's `main` branch first. nastran-pv works 
 
 ```bash
 pip install "pyNastran @ git+https://github.com/SteveDoyle2/pyNastran.git@main"
-pip install -e ".[vtk]"
+pip install -e .
 ```
 
 Python 3.14 has only VTK 9.6+ wheels. nastran-pv handles both VTK generations. The wedge
@@ -36,14 +50,41 @@ ParaView 5.x:
   the views report that and stop.
 * Convert with your own Python (`nastran-pv convert`), not from inside ParaView. Writing VTKHDF
   needs VTK 9.5 or newer (`pip install "vtk>=9.5"`), and ParaView 5.13 is built on an older VTK.
-* Run `install_deps.py` with that ParaView's `pvpython` (5.13 uses Python 3.10, 6.0 uses 3.12).
-  One checkout's `paraview/_vendor` serves one ParaView Python, so keep a separate checkout
+* Run `nastran-pv setup --pvpython <that ParaView's pvpython>` (5.13 uses Python 3.10, 6.0 uses
+  3.12). An installed nastran-pv keeps one vendor folder per ParaView Python, so it can serve
+  both. One checkout's `paraview/_vendor` serves one ParaView Python, so keep a separate checkout
   for each ParaView you use on a machine.
+
+## Installed package or checkout
+
+The plugin and the vendored packages live in different places for an installed wheel and for a
+clone. `nastran-pv setup` prints the plugin path and `install_deps.py` the vendor folder.
+
+| | Installed wheel | Clone (or `pip install -e .`) |
+|---|---|---|
+| Plugin, views, macros | `site-packages/nastran_pv/paraview/` | `paraview/` |
+| How the plugin finds `nastran_pv` | It imports the package it ships in, on its own, and keeps the rest of that site-packages off ParaView's path | `../src` |
+| Vendor folder (`install_deps.py`) | One per ParaView Python, per user: `%LOCALAPPDATA%\nastran-pv\vendor\py3.12` (Windows), `~/Library/Application Support/nastran-pv/vendor/py3.12` (macOS), `~/.local/share/nastran-pv/vendor/py3.12` (Linux, or under `$XDG_DATA_HOME`) | `paraview/_vendor`; the plugin also looks in the per-user folder |
+| Toolbar macros import from | the installed `nastran_pv/paraview/` | `paraview/` |
+
+`pip install -U nastran-pv` updates the plugin and the macros in place, and the vendor folder
+survives upgrades. After moving or recreating the environment, run `nastran-pv setup` again,
+because the macros and ParaView's *Auto Load* entry point at the old path. A regular
+(non-editable) `pip install .` from a clone uses the installed copy, not the clone's `paraview/`:
+`setup` then vendors into the per-user folder. A plugin loaded from the clone (`PV_PLUGIN_PATH`)
+looks there after its own `paraview/_vendor`, so it keeps working.
+
+On Windows, use a Python from python.org or conda, not one from the Microsoft Store. Windows
+redirects what a Store Python writes under AppData (the vendored packages, the toolbar macros)
+into the app's private folder, where ParaView does not look, so `nastran-pv setup` refuses to run
+with one.
 
 ## ParaView-side dependencies
 
-`setup` runs two scripts, which can also be run on their own:
-- `paraview/install_deps.py` fills `paraview/_vendor`, where the plugin finds them automatically:
+`setup` runs two scripts, which can also be run on their own (from a clone, or from the
+installed `nastran_pv/paraview/` folder):
+- `paraview/install_deps.py` fills the vendor folder (see the table above, or `--target`), where
+  the plugin finds them automatically:
   - pyNastran from its GitHub `main` branch. It is pure Python, so the wheel built by any Python
     works.
   - cpylog, docopt-ng, colorama and scipy, as wheels matching ParaView's own Python.
@@ -69,8 +110,13 @@ ParaView 5.x:
 |---|---|
 | `NASTRAN_PV_SITE_PACKAGES` | Instead of `install_deps.py`: the site-packages folder of a CPython with ParaView's Python version that has pyNastran installed. |
 | `NASTRAN_PV_PARAVIEW_BIN` | ParaView's `bin` folder, when it is not on `PATH` or in a standard install folder. |
-| `NASTRAN_PV_PARAVIEW_DIR` | This checkout's `paraview/` folder, when it cannot be found automatically. |
-| `PV_PLUGIN_PATH` | ParaView's own variable; set it to the `paraview/` folder to load the plugin at startup. |
+| `NASTRAN_PV_PARAVIEW_DIR` | A `paraview/` folder to use instead of the installed copy or the clone's (it must hold `nastran_bdf_reader.py`). |
+| `NASTRAN_PV_VENDOR_DIR` | The vendor folder, used as is by `install_deps.py` and the plugin, instead of the per-user folder or `paraview/_vendor`. Set it for both. |
+| `PV_PLUGIN_PATH` | ParaView's own variable; set it to the plugin folder that `nastran-pv setup` prints, to load the plugin at startup. |
+
+To try a setup without touching your own, redirect both folders: `NASTRAN_PV_VENDOR_DIR` (or
+`LOCALAPPDATA` on Windows, `XDG_DATA_HOME` on Linux) for the vendored packages, and `APPDATA` on
+Windows or `XDG_CONFIG_HOME` on Linux for the macros.
 
 ## Example datasets
 

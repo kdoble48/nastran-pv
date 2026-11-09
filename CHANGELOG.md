@@ -80,6 +80,14 @@ All notable changes to nastran-pv are listed here. The format follows
 - Model tools: grow, parts, path and model checks with per-card-type traversal rules (#5).
 - Project skills for using and extending nastran-pv (#4).
 - Interactive 3D gallery and docs site on GitHub Pages (#1).
+- The wheel carries the ParaView plugin, views, macros and installers (`nastran_pv/paraview/`), so
+  `pip install` of a wheel and `nastran-pv setup` work without a clone. For an installed package,
+  `install_deps.py` vendors into a per-user folder, one per ParaView Python (so ParaView 5.13 and
+  6.0 both work from one install), and `NASTRAN_PV_VENDOR_DIR` overrides it; `setup` prints the
+  plugin path, and `setup --dry-run` works without ParaView. A plugin loaded from a clone also
+  looks in the per-user folder; `setup` refuses a Microsoft Store Python, whose writes under AppData
+  ParaView cannot see. CI builds the wheel (from the sdist and from the tree) and checks it in a
+  fresh venv (#58).
 
 ### Changed
 
@@ -111,6 +119,9 @@ All notable changes to nastran-pv are listed here. The format follows
   without `--parts` or `--grow` is an error instead of being ignored; the run store's `elements`
   table holds the Connectors elements (not MPC equations; `pid` NULL where there is no property)
   and `n_elements` counts elements, not rigid-element legs (#57).
+- `vtk` is a dependency (the `vtk` extra still works), since every `nastran-pv` command imports it;
+  `import nastran_pv` no longer imports pyNastran (`Deck` and `load_deck` load on first use); a
+  `NASTRAN_PV_PARAVIEW_DIR` without the plugin is an error (#58).
 
 ### Fixed
 
