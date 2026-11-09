@@ -91,8 +91,9 @@ def test_forces_are_attached_by_default(results, deck):
 
 
 def test_every_type_is_available(results):
-    """Every type but the nodal SPC/MPC forces and applied loads, which the fixture lacks."""
-    loads = (rt.SPC_FORCE, rt.MPC_FORCE, rt.APPLIED_LOAD)
+    """Every type but the nodal SPC/MPC forces, applied loads and grid point forces, which the
+    fixture lacks."""
+    loads = (rt.SPC_FORCE, rt.MPC_FORCE, rt.APPLIED_LOAD, rt.GRID_POINT_FORCE)
     assert results.available == tuple(t.name for t in rt.REGISTRY if t not in loads)
     assert [t.name for t in results.attached()] == [t.name for t in rt.REGISTRY if t.default and t not in loads]
 

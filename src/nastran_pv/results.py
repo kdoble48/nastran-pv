@@ -235,7 +235,7 @@ class Op2Table(NamedTuple):
     header indices to take (``columns``; None: every column) or, for a type with picks, one tuple
     of indices per pick, the step kind (types that can define steps) and, with picks, the
     :class:`~nastran_pv.result_types.PickPlan` of its rows (made once: the rows do not change
-    between steps)."""
+    between steps); for a source with ``rows``, that function (``Op2Source.rows``)."""
 
     name: str
     key: object
@@ -243,6 +243,7 @@ class Op2Table(NamedTuple):
     columns: object
     kind: str | None
     plan: result_types.PickPlan | None = None
+    rows: object = None
 
 
 class Op2Results(_Results):
@@ -278,6 +279,17 @@ class Op2Results(_Results):
                     if getattr(obj, "is_complex", False):
                         if rtype.steps:
                             self.skipped.append(f"{kind} subcase {_subcase(key)}: complex results are not supported")
+                        continue
+                    if src.rows is not None:  # rows not one per id: the source reads them itself
+                        try:
+                            got = src.rows(obj, 0)
+                        except (AttributeError, IndexError, ValueError):
+                            got = None
+                        if got is None:
+                            continue
+                        if got[2]:
+                            self.skipped.append(f"{name}, subcase {_subcase(key)}: {got[2]}")
+                        found.append(Op2Table(name, key, obj, None, kind, rows=src.rows))
                         continue
                     ids = _ids(obj, rtype)
                     if not rtype.steps and ids is None:
@@ -315,7 +327,7 @@ class Op2Results(_Results):
 
     def _steps_of(self, rtype) -> list[Step]:
         steps = []
-        for name, key, res, _, kind, _ in self.tables[rtype.name]:
+        for name, key, res, _, kind, *_ in self.tables[rtype.name]:
             sc = _subcase(key)
             ntimes = res.data.shape[0]
             times = np.asarray(getattr(res, "_times", []), dtype=float)
@@ -349,6 +361,9 @@ class Op2Results(_Results):
                 itime = _time_index(table.obj, step)
                 if itime is None:
                     continue
+            if table.rows is not None:
+                yield table.rows(table.obj, itime)[:2]
+                continue
             data = table.obj.data[itime]
             if table.plan is not None:
                 yield table.plan.ids, result_types.pick_values(data, table.plan, table.columns)
@@ -398,6 +413,31 @@ def _write(mb, names, targets, rtype, got) -> None:
             if v.ndim == 2 and v.shape[1] == 1:
                 v = v[:, 0]
             vtkutil.add_array(attrs, spec.name, v, skip_all_nan=bool(np.isnan(rtype.fill)))
+
+
+def _write_table(mb, rtype, got) -> None:
+    """Root ``rtype.table_names`` from ``got`` (ids, values): the ids, then each array; rows with a
+    non-finite ``integer`` column are no rows of the table; sorted by id, then by those columns.
+    Dropped when ``got`` is None."""
+    fd = mb.GetFieldData()
+    names = rtype.table_names
+    for name in names:
+        fd.RemoveArray(name)
+    if got is None:
+        return
+    ids, vals = got
+    keys = [spec.columns[0] for spec in rtype.arrays if spec.integer]
+    keep = np.isfinite(vals[:, keys]).all(axis=1) if keys else np.ones(len(ids), bool)
+    ids, vals = ids[keep], vals[keep]
+    if not len(ids):
+        return
+    order = np.lexsort([vals[:, k] for k in reversed(keys)] + [ids]) if keys else np.argsort(ids, kind="stable")
+    ids, vals = ids[order], vals[order]
+    vtkutil.add_array(fd, names[0], ids.astype(np.int64))
+    for name, spec in zip(names[1:], rtype.arrays):
+        v = vals[:, _columns(spec.columns)]
+        v = v[:, 0] if v.shape[1] == 1 else v
+        vtkutil.add_array(fd, name, v.astype(np.int64) if spec.integer else v)
 
 
 def _attach_sections(mb, names) -> None:
@@ -485,7 +525,7 @@ def remove_result_arrays(mb, registry=result_types.REGISTRY) -> None:
                 attrs = rtype.attributes(get_block(mb, name))
                 for spec in rtype.arrays:
                     attrs.RemoveArray(spec.name)
-        for name in rtype.resultant_names:
+        for name in rtype.resultant_names + rtype.table_names:
             mb.GetFieldData().RemoveArray(name)
     _attach_sections(mb, names)
 
@@ -504,6 +544,9 @@ def attach_step(results, mb, step_index: int, deck=None) -> None:
         got = results.values(rtype, step) if rtype.name in wanted else None
         if got is not None and rtype.frame == "grid_cd" and deck is not None:
             got = (got[0], to_basic(deck, got[0], got[1]))
+        if rtype.location == "table":
+            _write_table(mb, rtype, got)
+            continue
         _write(mb, names, targets, rtype, got)
         _write_resultant(mb, names, rtype, got, deck)
 

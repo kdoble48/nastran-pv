@@ -164,7 +164,7 @@ def test_bad_rules_exit(tmp_path):
 
 
 def test_rules_without_parts_or_grow_exit(tmp_path):
-    with pytest.raises(SystemExit, match="--rules needs --parts or --grow"):
+    with pytest.raises(SystemExit, match="--rules needs --parts, --grow or --free-body"):
         main(["convert", TOPO, "--rules", "exclude=rigid", "-o", str(tmp_path / "x.vtm")])
 
 

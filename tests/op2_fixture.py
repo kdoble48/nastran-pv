@@ -47,6 +47,38 @@ def make_modes_op2(freqs=(30.0, 120.0)) -> OP2:
     return op2
 
 
+# ------------------------------------------------------------------ envelopes
+# Three static subcases on grids 1-7 of tiny_run.bdf (tests/test_envelope.py): per subcase, T1 and
+# T3 as multiples of the grid id, and CQUAD4/CQUADR von Mises (eids 1 and 2) in subcases 1 and 3
+# only (subcase 2 has no stress table).
+ENVELOPE_T1 = (0.1, -0.2, 0.05)
+ENVELOPE_T3 = (1.0, -2.0, 1.5)
+ENVELOPE_VM = ({1: 3.0, 2: 7.0}, None, {1: 9.0, 2: 4.0})
+
+
+def make_envelope_op2() -> OP2:
+    op2 = OP2(debug=None)
+    op2.set_mode("msc")
+    ng = np.column_stack([NIDS, np.ones(len(NIDS), dtype=int)])
+    for k, (t1, t3, vm) in enumerate(zip(ENVELOPE_T1, ENVELOPE_T3, ENVELOPE_VM)):
+        sc = k + 1
+        disp = np.zeros((1, len(NIDS), 6), dtype="float32")
+        disp[0, :, 0] = NIDS * t1
+        disp[0, :, 2] = NIDS * t3
+        op2.displacements[sc] = RealDisplacementArray.add_static_case("OUGV1", ng, disp, sc)
+        if vm is None:
+            continue
+        element_node = np.array([[e, 0] for e in sorted(vm) for _ in (0, 1)], dtype=np.int32)
+        fiber = np.array([-0.005, 0.005] * len(vm))
+        stress = np.zeros((1, len(element_node), 8), dtype="float32")
+        stress[0, :, 7] = [vm[e] for e in sorted(vm) for _ in (0, 1)]
+        plate = RealPlateStressArray.add_static_case("OES1X1", "CQUAD4", len(vm), element_node, fiber, stress, sc)
+        plate.s_code = plate.data_code["s_code"] = 1
+        plate.stress_bits = plate.data_code["stress_bits"] = [0, 0, 0, 0, 1]
+        op2.op2_results.stress.cquad4_stress[sc] = plate
+    return op2
+
+
 # ------------------------------------------------------------------ SPC/MPC forces and OLOAD
 # Load set 1 of tests/data/tiny_bulk.bdf as OLOAD, balanced by SPC forces at grids 1, 3 and 4, plus
 # the self-equilibrating MPC forces of RBE2 301 at grids 2 and 5 (grids: 1 (0,0,0), 2 (1,0,0),
@@ -106,6 +138,117 @@ def write_loads_h5(path):
         for table, dataset in H5_LOAD_DATASETS.items():
             rows = LOAD_ROWS[table]
             r[dataset] = np.array([(n, *rows[n], 1) for n in sorted(rows, reverse=True)], dtype=nod)
+    return path
+
+
+# ------------------------------------------------------------------ free bodies (GPFORCE)
+# tests/data/freebody.bdf, load set 10 (tests/test_freebody.py derives every number from statics):
+# a cantilever of CBARs clamped at grid 1 (bar 1 PID 1; bars 2-4 PID 2, bar 4 a branch from grid 3
+# to grid 5) and a pin-jointed CROD truss pinned at grids 11 and 12. Rows of the grid point force
+# balance in the MSC convention: the force (and moment) of each element on the grid, so that at
+# every grid the element rows, the applied load and the SPC force sum to zero.
+FREEBODY_GPFORCE = [  # (grid, element, source, F1 F2 F3 M1 M2 M3)
+    (1, 0, "F-OF-SPC", (-10, 0, -80, 15, 260, 10)), (1, 1, "BAR", (10, 0, 80, -15, -260, -10)),
+    (2, 1, "BAR", (-10, 0, -80, 15, 180, 10)), (2, 2, "BAR", (10, 0, 80, -15, -180, -10)),
+    (3, 2, "BAR", (-10, 0, -80, 15, 100, 10)), (3, 3, "BAR", (0, 0, 100, 5, -100, 0)),
+    (3, 4, "BAR", (10, 0, -20, -20, 0, -10)),
+    (4, 0, "APP-LOAD", (0, 0, 100, 5, 0, 0)), (4, 3, "BAR", (0, 0, -100, -5, 0, 0)),
+    (5, 0, "APP-LOAD", (10, 0, -20, 0, 0, 0)), (5, 4, "BAR", (-10, 0, 20, 0, 0, 0)),
+    (11, 0, "F-OF-SPC", (10, 0, 0, 0, 0, 0)), (11, 21, "ROD", (-10, 0, 0, 0, 0, 0)),
+    (12, 0, "F-OF-SPC", (-10, 10, 0, 0, 0, 0)), (12, 22, "ROD", (0, 0, 0, 0, 0, 0)),
+    (12, 23, "ROD", (10, -10, 0, 0, 0, 0)),
+    (13, 21, "ROD", (10, 0, 0, 0, 0, 0)), (13, 23, "ROD", (-10, 10, 0, 0, 0, 0)),
+    (13, 24, "ROD", (0, -10, 0, 0, 0, 0)),
+    (14, 0, "APP-LOAD", (0, -10, 0, 0, 0, 0)), (14, 22, "ROD", (0, 0, 0, 0, 0, 0)),
+    (14, 24, "ROD", (0, 10, 0, 0, 0, 0)),
+]
+FREEBODY_OLOAD = {4: (0, 0, 100, 5, 0, 0), 5: (10, 0, -20, 0, 0, 0), 14: (0, -10, 0, 0, 0, 0)}
+FREEBODY_SPC = {1: (-10, 0, -80, 15, 260, 10), 11: (10, 0, 0, 0, 0, 0), 12: (-10, 10, 0, 0, 0, 0)}
+FREEBODY_NIDS = np.array([1, 2, 3, 4, 5, 11, 12, 13, 14])
+
+
+def gpforce_rows(rows=None, flip=False):
+    """``FREEBODY_GPFORCE`` (or ``rows``) with a ``*TOTALS*`` row after each grid's rows, as Nastran
+    writes them: (node_element (n, 2), element names (n,), data (n, 6)). ``flip`` negates the
+    element rows (what MYSTRAN 19 writes in its OP2)."""
+    out = []
+    rows = FREEBODY_GPFORCE if rows is None else rows
+    for k, (nid, eid, name, values) in enumerate(rows):
+        sign = -1.0 if flip and eid else 1.0
+        out.append((nid, eid, name, [sign * v for v in values]))
+        if k + 1 == len(rows) or rows[k + 1][0] != nid:
+            out.append((nid, 0, "*TOTALS*", [0.0] * 6))
+    ne = np.array([[n, e] for n, e, _, _ in out], dtype=np.int32)
+    return ne, np.array([name for _, _, name, _ in out]), np.array([v for *_, v in out], dtype="float32")
+
+
+def _gpf_table(cls, data_code, is_sort1, isubcase, node_element, names, data, times):
+    obj = cls(data_code, is_sort1, isubcase, times[0])
+    n = len(names)
+    obj.ntimes, obj.ntotal, obj._ntotals, obj.is_unique = 1, n, [n], True
+    obj._times = np.array(times)
+    obj.node_element, obj.element_names, obj.data = node_element.reshape(1, n, 2), names.reshape(1, n), \
+        data.reshape(1, n, 6)
+    return obj
+
+
+def make_gpforce(isubcase=1, rows=None, flip=False):
+    """A real static grid point force balance table (OGPFB1), built by hand: pyNastran 1.4.1 has no
+    ``add_static_case`` for it."""
+    from pyNastran.op2.tables.ogf_gridPointForces.ogf_objects import RealGridPointForcesArray
+    from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import set_static_case
+
+    dc = {"nonlinear_factor": None, "sort_bits": [0, 0, 0], "sort_method": 1, "is_msc": True, "format_code": 1,
+          "table_code": 19, "tCode": 19, "sort_code": 0, "table_name": "OGPFB1", "device_code": 1,
+          "random_code": 0, "thermal": 0, "title": "", "subtitle": "", "label": "", "num_wide": 10}
+    return set_static_case(RealGridPointForcesArray, True, isubcase, dc, _gpf_table, gpforce_rows(rows, flip))
+
+
+def make_freebody_op2(gpforce=True, flip=False, oload=True, spc=True) -> OP2:
+    """Subcase 1 of tests/data/freebody.bdf: displacements (T3 = 0.01 x NID), the GPFORCE table
+    (``gpforce``; ``flip``: element rows negated, as MYSTRAN writes them), OLOAD and SPC forces."""
+    from pyNastran.op2.tables.opg_appliedLoads.opg_load_vector import RealLoadVectorArray
+    from pyNastran.op2.tables.oqg_constraintForces.oqg_spc_forces import RealSPCForcesArray
+
+    op2 = OP2(debug=None)
+    op2.set_mode("msc")
+    nids = FREEBODY_NIDS
+    ng = np.column_stack([nids, np.ones(len(nids), dtype=int)])
+    disp = np.zeros((1, len(nids), 6), dtype="float32")
+    disp[0, :, 2] = nids * 0.01
+    op2.displacements[1] = RealDisplacementArray.add_static_case("OUGV1", ng, disp, 1)
+    for on, table, cls, name, rows in ((oload, "load_vectors", RealLoadVectorArray, "OPG1", FREEBODY_OLOAD),
+                                       (spc, "spc_forces", RealSPCForcesArray, "OQG1", FREEBODY_SPC)):
+        if on:
+            grids = np.column_stack([sorted(rows), np.ones(len(rows), dtype=int)])
+            data = np.array([[rows[n] for n in sorted(rows)]], dtype="float32")
+            getattr(op2, table)[1] = cls.add_static_case(name, grids, data, 1)
+    if gpforce:
+        op2.grid_point_forces[1] = make_gpforce(1, flip=flip)
+    return op2
+
+
+def write_freebody_h5(path, gpforce=True):
+    """``make_freebody_op2`` in the MSC/NX HDF5 layout: NODAL/DISPLACEMENT, APPLIED_LOAD, SPC_FORCE
+    and GRID_FORCE (``ID EID ELNAME F1-M3 DOMAIN_ID``), subcase 1 in domain 1."""
+    import h5py
+
+    dom = np.dtype([("ID", "<i8"), ("SUBCASE", "<i8"), ("STEP", "<i8"), ("ANALYSIS", "<i8"),
+                    ("TIME_FREQ_EIGR", "<f8"), ("EIGI", "<f8"), ("MODE", "<i8")])
+    nod = np.dtype([("ID", "<i8"), ("X", "<f8"), ("Y", "<f8"), ("Z", "<f8"),
+                    ("RX", "<f8"), ("RY", "<f8"), ("RZ", "<f8"), ("DOMAIN_ID", "<i8")])
+    gpf = np.dtype([("ID", "<i8"), ("EID", "<i8"), ("ELNAME", "S8"), ("F1", "<f8"), ("F2", "<f8"), ("F3", "<f8"),
+                    ("M1", "<f8"), ("M2", "<f8"), ("M3", "<f8"), ("DOMAIN_ID", "<i8")])
+    with h5py.File(path, "w") as h5:
+        r = h5.create_group("/NASTRAN/RESULT")
+        r["DOMAINS"] = np.array([(1, 1, 0, 1, 0.0, 0.0, 0)], dtype=dom)
+        r["NODAL/DISPLACEMENT"] = np.array([(n, 0, 0, 0.01 * n, 0, 0, 0, 1) for n in FREEBODY_NIDS], dtype=nod)
+        r["NODAL/APPLIED_LOAD"] = np.array([(n, *v, 1) for n, v in FREEBODY_OLOAD.items()], dtype=nod)
+        r["NODAL/SPC_FORCE"] = np.array([(n, *v, 1) for n, v in FREEBODY_SPC.items()], dtype=nod)
+        if gpforce:
+            ne, names, data = gpforce_rows()
+            r["NODAL/GRID_FORCE"] = np.array([(n, e, s.encode(), *v, 1) for (n, e), s, v in zip(ne, names, data)],
+                                             dtype=gpf)
     return path
 
 
