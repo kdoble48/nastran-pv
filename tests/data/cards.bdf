@@ -74,9 +74,10 @@ DMIG,KAAX,1,1,,1,1,1.
 SUPORT,3,3
 SPCOFF,1,123
 FORCE,9,3,0,1.,0.,0.,1.
+SPC1,1,123,1
+$ drawn since the pressure faces (Pressures/SID_9), so not in the report
 PLOAD4,9,10,1.
 PLOAD4,9,11,2.
-SPC1,1,123,1
 $ not read: an unknown card, and CWELD (turned off: pyNastran 1.5 aborts on some forms)
 FOOBAR,1,2
 CWELD,80,9,1,,,PARTPAT,1,2
