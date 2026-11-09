@@ -14,7 +14,8 @@ one-click views on the Macros toolbar. For step-by-step walkthroughs, see
 3. In the Properties panel, switch blocks on or off and optionally set *OP2 File Name*, which
    takes an `.op2` or MSC/NX `.h5` file. Each result step (subcase, load step or mode) becomes a
    time step, and *Result Types* lists the [result types](model.md#result-types) the file has
-   (all checked: uncheck one to leave its arrays off). *NSMSet* picks the bulk nonstructural mass set
+   (each at its default: displacements, `VonMisesMax` and forces checked, the stress and strain
+   components not; check or uncheck one to add or leave off its arrays). *NSMSet* picks the bulk nonstructural mass set
    ([Nonstructural mass](model.md#nonstructural-mass)), *BushStiffnessReference* is `convert --k-ref`
    (0 = the softest stiffness), and *Random ASD* turns the modes into a random response
    ([Random vibration](random-vibration.md)).
