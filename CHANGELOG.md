@@ -53,6 +53,10 @@ All notable changes to nastran-pv are listed here. The format follows
   6.0 both work from one install), and `NASTRAN_PV_VENDOR_DIR` overrides it; `setup` prints the
   plugin path, and `setup --dry-run` works without ParaView. CI builds the wheel and checks it in
   a fresh venv (#58).
+- ParaView CI: `tests/pv_smoke.py` runs in headless ParaView 6.0.1 and 5.13.1 on Linux, after
+  installing the wheel and `nastran-pv setup`, on pull requests that touch `paraview/`, `src/` or
+  `tests/`. `setup`, `view` and `render` also find a ParaView unpacked in the home folder
+  (`~/ParaView-*`), and pick the newest ParaView by version rather than by name (#59).
 
 ### Changed
 
@@ -86,6 +90,10 @@ All notable changes to nastran-pv are listed here. The format follows
 - Physical mass glyphs keep their disc and rod shapes and warn on impossible inertia (#29).
 - Mode GIFs are captured with SaveScreenshot, and modes whose frames never change are reported (#28).
 - Empty 3D window on categorical gallery views (#2).
+- `install_deps.py` on macOS asked for scipy wheels for macOS 11, and scipy has none for Apple
+  silicon below macOS 12, so it found no scipy; it now asks for this Mac's version. Linux on
+  aarch64 gets aarch64 wheels, and `install_deps.py` uses the CLI's pvpython search. An empty
+  `XDG_CONFIG_HOME` put the macros in the current folder (#59).
 
 ## [0.1.0]
 

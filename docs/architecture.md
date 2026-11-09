@@ -108,7 +108,8 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   `node_values`), plus `<db>_vtm/run_<id>.vtm`.
 - `cli.py`: the `convert`, `stats`, `check`, `sections`, `diff` and `store` commands, with shared field options.
   `launch.py` provides `view`, `render` and `setup`, and `locate.py` (standard library only) finds
-  the ParaView executables, the plugin folder (`NASTRAN_PV_PARAVIEW_DIR`, then the wheel's
+  the ParaView executables (one search for the CLI and `install_deps.py`: env, `PATH`, then the newest
+  `ParaView*` by folder version in the install folders and the home folder), the plugin folder (`NASTRAN_PV_PARAVIEW_DIR`, then the wheel's
   `nastran_pv/paraview`, then the checkout's `paraview/`) and the vendor folder (`vendor_dir`:
   `paraview/_vendor` in a checkout, a per-user folder per ParaView Python for an installed package).
   `nastran_pv/__init__.py` loads `Deck`/`load_deck` lazily, so `nastran_pv.locate` imports without
