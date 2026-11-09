@@ -3242,8 +3242,9 @@ def play_mode(mode=None, frames=ANIMATE_FPS, reader=None, view=None):
     in the view as it is: every Nastran Deform of the model holds the mode's time step and turns
     the time steps into one looping cycle of ``frames`` phases, so whatever is shown (masses,
     groups, a show-only subset, ...) moves. The mode and its frequency are shown in the view, and
-    the view is left at the peak of the cycle (a complex step: its largest displacement). Any view, :func:`stop_mode_animation` or Animate All
-    Modes gives the time controls back to the modes. Returns the mode."""
+    the view is left at the peak of the cycle (a complex step: its largest displacement). Any
+    view, :func:`stop_mode_animation` or Animate All Modes gives the time controls back to the
+    modes. Returns the mode."""
     reader = reader or subject(view)
     view = view or pv.GetActiveViewOrCreate("RenderView")
     mode = mode or current_step(reader, view)
