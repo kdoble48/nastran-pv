@@ -66,15 +66,18 @@ def displacement_of(ds, grid_nids, grid_disp) -> np.ndarray | None:
 class Deformer:
     """Deformed copies of one model at any scale. The leaves' base points and displacements (with
     the NID lookup for blocks that follow their grids) are gathered once, so each :meth:`apply`
-    only computes ``points + scale x displacement``: cheap enough for every animation frame."""
+    only computes ``points + scale x displacement``: cheap enough for every animation frame.
 
-    def __init__(self, data):
+    ``grids`` (the whole model, when ``data`` is a cut of it) is where that NID lookup finds the grid
+    displacements, so a connector leg to a grid of a left-out element still moves."""
+
+    def __init__(self, data, grids=None):
         self.data = data
         self.moving = []  # (flat index, leaf, base xyz, displacement)
         if not isinstance(data, vtkDataObjectTree):
             return
         leaves = list(_leaves(data))
-        grid_nids, grid_disp = _grid_displacements(leaves)
+        grid_nids, grid_disp = _grid_displacements(leaves if grids is None else list(_leaves(grids)))
         for flat, ds in leaves:
             d = displacement_of(ds, grid_nids, grid_disp)
             if d is not None and np.any(d):

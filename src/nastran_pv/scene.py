@@ -51,15 +51,18 @@ class Scene:
     def empty(self) -> bool:
         return self.coloring is None and not self.overlays
 
-    def _layers(self, skip=None) -> list:
-        layers = [self.coloring] if self.coloring is not None else []
-        layers += [v for k, v in self.overlays.items() if k != skip]
-        return layers
+    def _layers(self) -> list:
+        return ([self.coloring] if self.coloring is not None else []) + list(self.overlays.values())
 
     def set_coloring(self, layer: Layer) -> list:
+        """Make ``layer`` the coloring; the objects of the old one that no layer shows now. The info
+        writer is forgotten when it was the old coloring (the view hides its text unless the new one
+        writes its own)."""
         old, self.coloring = self.coloring, layer
         if old is None:
             return []
+        if self.info == old.name:
+            self.info = None
         return _orphans(old.objects, self._layers())
 
     def add_overlay(self, layer: Layer) -> list:

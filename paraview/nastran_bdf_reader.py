@@ -510,6 +510,18 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         treating the empty output as a model without masses, bushes, ..."""
         return self._load_error
 
+    @smproperty.intvector(name="ScopeActive", information_only="1")
+    def GetScopeActive(self):
+        """1 when the visibility settings hide anything, as a read applies them: an EID list it cannot
+        parse or a Selection File it cannot read is ignored, so it is no scope; 0 after a failed read.
+        Worked out from the settings, so asking does not run the reader. The views read it."""
+        if not self._filename or self._load_error:
+            return 0
+        try:
+            return int(not self._visibility(quiet=True).everything)
+        except ImportError:  # RequestData reports it
+            return 0
+
     @smproperty.doublevector(name="TimestepValues", information_only="1", si_class="vtkSITimeStepsProperty")
     def GetTimestepValues(self):
         res = self._get_response(quiet=True)
@@ -646,7 +658,8 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
             self._listing = False
         self._listed_key = self._mb_key
 
-    def _visibility(self):
+    def _visibility(self, quiet=False):
+        """The Visibility of the settings; ``quiet``: report no unparseable list or unreadable file."""
         from nastran_pv.tree import Visibility, parse_ids
 
         hidden = {}
@@ -659,13 +672,14 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
             try:
                 ids[what] = parse_ids(text)
             except ValueError as exc:
-                _message(f"nastran-pv: {what}: {exc}; ignored", error=True)
+                if not quiet:
+                    _message(f"nastran-pv: {what}: {exc}; ignored", error=True)
                 ids[what] = set()
         show = frozenset(ids["ShowOnlyElements"]) if ids["ShowOnlyElements"] else None
-        return Visibility(hidden, show, frozenset(ids["HiddenElements"]), select=self._selection(),
+        return Visibility(hidden, show, frozenset(ids["HiddenElements"]), select=self._selection(quiet),
                           select_hide=self._sel_mode == 1, select_grids=("all", "any")[self._sel_grids % 2])
 
-    def _selection(self):
+    def _selection(self, quiet=False):
         """The SelectionFile's IdList (re-read when the file or the key changes), None when off."""
         if not self._sel_file or self._sel_mode == 2:
             return None
@@ -680,7 +694,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
                 self._sel_read = key
         except Exception as exc:
             problem = (key, str(exc))
-            if problem != self._sel_error:  # once per change of file, key or error
+            if problem != self._sel_error and not quiet:  # once per change of file, key or error
                 self._sel_error = problem
                 _message(f"nastran-pv: SelectionFile {self._sel_file}: {exc}; ignored", error=True)
             return None
@@ -1259,7 +1273,8 @@ class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
         out = vtkDataObject.GetData(outInfo, 0)
         key = (inp, inp.GetMTime())
         if self._deformer is None or self._deformer[:2] != key:  # new input or new time step
-            self._deformer = key + (Deformer(inp),)
+            whole = _registry_entry(inp)  # the reader's output: legs to grids of hidden elements move too
+            self._deformer = key + (Deformer(inp, grids=whole[0] if whole is not None else None),)
         scale, phase = self._scale, None
         if self._auto:
             if self._auto_scale is None or self._auto_scale[:3] != key + (self._peak,):
@@ -1296,7 +1311,9 @@ def _double_array(name, value):
 @smdomain.datatype(dataTypes=["vtkDataObject"], composite_data_supported=True)
 class NastranPVScope(_Settable, VTKPythonAlgorithmBase):
     """The overlays' copy of the reader's model: mesh blocks keep what the reader keeps, and masses,
-    connectors, SPCs and loads stay when they hang off a kept element (named EIDs win, hidden EIDs go).
+    connectors, SPCs and loads stay when they hang off a kept element or a kept rigid element or bush.
+    What Show Only names by EID wins in its block, what a Show only Selection File of grids, properties
+    or groups lists is added, and what the checklists, Hidden Elements or a Hide file hide always goes.
     It goes after Nastran Deform on the reader and moves by its scale; any other input passes through."""
 
     def __init__(self):
@@ -1343,8 +1360,8 @@ class NastranPVScope(_Settable, VTKPythonAlgorithmBase):
             if found is not None:
                 self._mark_diagonal(out, mb)
             return 1
-        if self._deformer is None or self._deformer[:3] != (mb, key, generation):
-            self._deformer = (mb, key, generation, Deformer(self._tree[2].output(mb)))
+        if self._deformer is None or self._deformer[:3] != (mb, key, generation):  # grids of hidden cells too
+            self._deformer = (mb, key, generation, Deformer(self._tree[2].output(mb), grids=mb))
         scale = inp.GetFieldData().GetArray(DEFORM_SCALE)
         out.ShallowCopy(self._deformer[3].apply(scale.GetValue(0) if scale is not None else 0.0))
         self._mark_diagonal(out, mb)
