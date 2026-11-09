@@ -346,13 +346,15 @@ class RandomResponse:
             vtkutil.add_array(pd, "AccelN0", pick(self.accel_n0), skip_all_nan=True)
             if self.disp_rms is not None:
                 vtkutil.add_array(pd, "DispRMS", pick(self.disp_rms), skip_all_nan=True)
+            else:  # none without g: not one from the solver's output either
+                pd.RemoveArray("DispRMS")
             vtkutil.add_array(pd, "DominantMode", np.where(ok, self.dominant_mode[j], 0).astype(np.int64))
             vtkutil.add_array(pd, "DominantModeShare", pick(self.dominant_share), skip_all_nan=True)
             vtkutil.add_array(pd, "AccelASD", pick(self.frame_asd[i]), skip_all_nan=True)
 
         fd = mb.GetFieldData()
         for arr_name in ("ResultLabel", "Frequency", "ResultStep", "RandomDrive", "RandomInputRMS",
-                         "RandomAccelASDRange", "RandomFrameFrequencies"):
+                         "RandomAccelASDRange", "RandomFrameFrequencies", SOURCE):
             fd.RemoveArray(arr_name)
         vtkutil.write_field_table(mb, "RANDOM_", self.modes)
         vtkutil.write_field_table(mb, "RANDOMIN_", [{"Frequency": float(a), "ASD": float(b)}
@@ -366,10 +368,154 @@ class RandomResponse:
         vtkutil.add_array(fd, "ResultStep", np.array([i]))
 
 
-def random_response(results, mb, asd, drive="Z", damping=0.05, g=None, frames=100, deck=None):
-    """:class:`RandomResponse` with every warning also sent to ``deck`` (when given)."""
-    rr = RandomResponse(results, mb, asd, drive, damping, g, frames, deck)
+def _warn_own(rr, results, deck):
+    """Send ``deck`` the messages the random response added to the results' own (``skipped``
+    starts with those, which ``attach_op2`` has already warned)."""
     if deck is not None:
-        for msg in rr.skipped:
+        for msg in rr.skipped[len(getattr(results, "skipped", [])):]:
             deck.warn(msg)
     return rr
+
+
+def random_response(results, mb, asd, drive="Z", damping=0.05, g=None, frames=100, deck=None):
+    """:class:`RandomResponse` with its own warnings also sent to ``deck`` (when given)."""
+    return _warn_own(RandomResponse(results, mb, asd, drive, damping, g, frames, deck), results, deck)
+
+
+# ------------------------------------------------------------------ the solver's own random output
+SOLVER = "SOL 111"  # root RandomSource of a random response read from the results file
+SOURCE = "RandomSource"
+SOLVER_TABLES = ("psd.accelerations", "rms.accelerations", "no.accelerations", "rms.displacements")
+RANDOM_FAMILIES = ("psd.*", "rms.*", "no.*", "crm.*", "ato.*")  # pyNastran's random result families
+
+
+class SolverRandom:
+    """The random response a SOL 111 run wrote, in the arrays and root fields of
+    :class:`RandomResponse`, so the ``random`` and ``randomsweep`` views show the solver's numbers:
+
+    * ``AccelRMS`` from ``rms.accelerations`` (OAGRMS), ``DispRMS`` from ``rms.displacements``
+      (OUGRMS), T1-T3;
+    * ``AccelN0`` from ``no.accelerations`` (OAGNO) with the RMS: the zero-crossing rate of the
+      three components together, ``sqrt(sum N0_k^2 RMS_k^2 / sum RMS_k^2)`` (exact: ``N0_k^2`` is
+      the ratio of the second to the zeroth spectral moment of component k);
+    * ``AccelASD`` per frequency frame from ``psd.accelerations`` (OAGPSD): T1 + T2 + T3, the sum
+      the modal response writes; the frames are its frequencies (one RMS-only frame without it).
+
+    The components stay in each grid's output (CD) system: an RMS or PSD of a component is not a
+    vector to rotate. One random subcase (the first); every other random table is reported. OP2
+    only (an HDF5 file's random output is not read yet)."""
+
+    def __init__(self, results, deck=None):
+        from .results import _op2_results, _subcase
+
+        op2 = getattr(results, "op2", None)
+        if op2 is None:
+            raise ValueError("SOL 111 random output is read from OP2 files only (the HDF5 random tables are "
+                             "not read yet)")
+        self.skipped: list[str] = list(getattr(results, "skipped", []))
+        self._replaces = getattr(results, "registry", REGISTRY)
+        found = {name: result for _, name, result in _op2_results(op2, RANDOM_FAMILIES) if result}
+        tables = {name: found[name] for name in SOLVER_TABLES if name in found}
+        if not tables:
+            raise ValueError("the results have no SOL 111 random output (" + ", ".join(SOLVER_TABLES) + ")")
+        for name in found:
+            if name not in tables:
+                self.skipped.append(f"{name}: SOL 111 random output not attached (the random views show "
+                                    "acceleration RMS, N0 and ASD and displacement RMS)")
+        subcases = sorted({int(_subcase(k)) for t in tables.values() for k in t})
+        self.subcase = subcases[0]
+        if len(subcases) > 1:
+            self.skipped.append(f"random output: subcase {self.subcase} attached, subcases "
+                                f"{', '.join(map(str, subcases[1:]))} not")
+        picked = {name: next(obj for key, obj in t.items() if int(_subcase(key)) == self.subcase)
+                  for name, t in tables.items() if any(int(_subcase(k)) == self.subcase for k in t)}
+        self.nids = np.unique(np.concatenate([obj.node_gridtype[:, 0] for obj in picked.values()])).astype(np.int64)
+        rms, n0 = self._rows(picked.get("rms.accelerations")), self._rows(picked.get("no.accelerations"))
+        self.accel_rms, self.disp_rms = rms, self._rows(picked.get("rms.displacements"))
+        self.accel_n0 = None
+        if rms is not None and n0 is not None:
+            ms = (rms ** 2).sum(axis=1)
+            self.accel_n0 = np.sqrt(np.divide((n0 ** 2 * rms ** 2).sum(axis=1), ms, out=np.full(len(ms), np.nan),
+                                              where=ms > 0))
+        psd = picked.get("psd.accelerations")
+        if psd is not None:
+            self.frame_freqs = np.asarray(psd._times, dtype=float)
+            self.frame_asd = np.stack([self._rows(psd, i).sum(axis=1) for i in range(len(self.frame_freqs))])
+        else:
+            self.frame_freqs, self.frame_asd = np.array([np.nan]), None
+        pos = self.frame_asd[np.isfinite(self.frame_asd) & (self.frame_asd > 0)] if self.frame_asd is not None \
+            else np.zeros(0)
+        self.asd_range = (float(pos.min()), float(pos.max())) if pos.size else (np.nan, np.nan)
+        self.tables = sorted(picked)
+        if deck is not None:
+            gidx = deck.lookup(self.nids)
+            in_cd = int(np.count_nonzero(deck.cd[gidx[gidx >= 0]] != 0))
+            if in_cd:
+                self.skipped.append(f"random output: the components of {in_cd} grid(s) are in their CD systems "
+                                    "(an RMS or PSD is not rotated)")
+        label = f"Random ({SOLVER}) " if psd is not None else f"Random ({SOLVER}) RMS"
+        self.steps = [Step(label + (f"{f:.4g} Hz" if np.isfinite(f) else ""), "random", None, i, float(f))
+                      for i, f in enumerate(self.frame_freqs)]
+
+    def _rows(self, obj, it=0):
+        """(n grids, 3) T1-T3 of a table at row ``it``, on ``self.nids`` (NaN where it has none)."""
+        if obj is None:
+            return None
+        out = np.full((len(self.nids), 3), np.nan)
+        idx = vtkutil.match_ids(obj.node_gridtype[:, 0].astype(np.int64), self.nids)
+        ok = idx >= 0
+        out[ok] = np.asarray(obj.data[it], dtype=float)[idx[ok], :3]
+        return out
+
+    @property
+    def times(self) -> list[float]:
+        return [float(i) for i in range(len(self.steps))]
+
+    modes: list = []  # no mode table: the solver's response is not superposed here
+
+    def summary(self) -> list[str]:
+        peak = float(np.nanmax(np.linalg.norm(self.accel_rms, axis=1))) if self.accel_rms is not None else np.nan
+        freqs = self.frame_freqs[np.isfinite(self.frame_freqs)]
+        span = f", {len(freqs)} frame(s) over {freqs.min():g}-{freqs.max():g} Hz" if freqs.size else ""
+        return [f"random ({SOLVER} output, subcase {self.subcase}): {', '.join(self.tables)}; "
+                f"{len(self.nids)} grid(s), peak acceleration {peak:.4g} RMS{span}"]
+
+    def attach(self, mb, step_index: int = 0, deck=None) -> None:
+        i = int(np.clip(step_index, 0, len(self.steps) - 1))
+        names = block_names(mb)
+        remove_result_arrays(mb, self._replaces)
+        arrays = (("AccelRMS", self.accel_rms), ("AccelN0", self.accel_n0), ("DispRMS", self.disp_rms),
+                  ("AccelASD", None if self.frame_asd is None else self.frame_asd[i]))
+        for name in RESULT_BLOCKS:
+            if name not in names:
+                continue
+            pd = get_block(mb, name).GetPointData()
+            for array in [a for a, _ in arrays] + ["DominantMode", "DominantModeShare"]:  # the modal response's too
+                pd.RemoveArray(array)
+            nid_arr = pd.GetArray("NID")
+            if nid_arr is None:
+                continue
+            idx = vtkutil.match_ids(self.nids, vtkutil.to_numpy(nid_arr))
+            ok = idx >= 0
+            for array, values in arrays:
+                if values is not None:
+                    v = np.full((len(idx),) + values.shape[1:], np.nan)
+                    v[ok] = values[idx[ok]]
+                    vtkutil.add_array(pd, array, v, skip_all_nan=True)
+        fd = mb.GetFieldData()
+        for arr_name in ("ResultLabel", "Frequency", "ResultStep", "RandomDrive", "RandomInputRMS", SOURCE,
+                         "RandomAccelASDRange", "RandomFrameFrequencies"):
+            fd.RemoveArray(arr_name)
+        for prefix in ("RANDOM_", "RANDOMIN_"):  # the modal response's mode and input tables
+            vtkutil.write_field_table(mb, prefix, [])
+        vtkutil.add_string_array(fd, SOURCE, [SOLVER])
+        vtkutil.add_array(fd, "RandomAccelASDRange", np.array(self.asd_range), skip_all_nan=True)
+        vtkutil.add_array(fd, "RandomFrameFrequencies", np.asarray(self.frame_freqs, dtype=float), skip_all_nan=True)
+        vtkutil.add_string_array(fd, "ResultLabel", [self.steps[i].label])
+        vtkutil.add_array(fd, "Frequency", np.array([self.steps[i].frequency]), skip_all_nan=True)
+        vtkutil.add_array(fd, "ResultStep", np.array([i]))
+
+
+def solver_random(results, deck=None) -> SolverRandom:
+    """:class:`SolverRandom` with its own warnings also sent to ``deck`` (when given)."""
+    return _warn_own(SolverRandom(results, deck), results, deck)

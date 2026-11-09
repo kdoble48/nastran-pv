@@ -15,6 +15,9 @@ and a modal damping ratio. nastran-pv superposes the modes and writes:
 - `AccelASD`: the response ASD at each *frequency frame* (summed over X, Y and Z). Frames are time
   steps, so the VCR controls sweep the frequency.
 
+A SOL 111 run that wrote its own PSD and RMS tables is shown the same way, with the solver's
+numbers ([SOL 111 output](#sol-111-output)).
+
 The response is only ever shown as colors on the model, never as XY plots. It has no deformed
 shape, because a random response has magnitude but no phase. Use the mode animations for shapes.
 
@@ -93,7 +96,39 @@ The tests check this against a direct frequency-domain solve of a two-mass chain
 1e-6) and against Miles' equation (within 3 %).
 
 Not covered yet: stresses (an RMS von Mises needs the stress cross-spectra), rotations, several
-drive axes at once, per-mode damping tables (TABDMP1), and reading SOL 111 PSD/RMS output.
+drive axes at once and per-mode damping tables (TABDMP1).
 
-The root field data holds the `RANDOM_` mode table, the `RANDOMIN_` input points, `RandomDrive`,
+The modal response's root field data holds the `RANDOM_` mode table, the `RANDOMIN_` input points, `RandomDrive`,
 `RandomInputRMS`, `RandomAccelASDRange` and `RandomFrameFrequencies` (see [Model blocks and arrays](model.md#derived-quantities)).
+
+## SOL 111 output
+
+When the run is a SOL 111 random analysis whose OP2 holds the PSD and RMS tables (Case Control
+`ACCELERATION(PSDF, RMS)`, `DISPLACEMENT(RMS)`), `--random-output` (the reader's *Random Output*)
+shows them instead of computing a response from modes. They fill the same arrays, so both views
+and a comparison with the modal response work on one scale:
+
+| Array | From (pyNastran table) |
+|---|---|
+| `AccelRMS` (3) | `rms.accelerations` (OAGRMS), T1-T3 |
+| `DispRMS` (3) | `rms.displacements` (OUGRMS), T1-T3 |
+| `AccelN0` | `no.accelerations` (OAGNO) with the RMS: the three components together, `√(Σ N0ₖ² RMSₖ² / Σ RMSₖ²)` (exact: `N0ₖ²` is the ratio of component k's second to zeroth spectral moment) |
+| `AccelASD` (per frame) | `psd.accelerations` (OAGPSD): T1 + T2 + T3, the sum the modal response writes |
+
+The frames are the PSD's frequencies (labels `Random (SOL 111) 52.3 Hz`); without an
+acceleration PSD there is one frame with the RMS arrays. Root fields: `RandomSource` (`SOL 111`,
+which the views name instead of a drive), `RandomFrameFrequencies` and `RandomAccelASDRange`.
+There is no mode table, `DominantMode` or input RMS: the solver did the superposition.
+
+* The components stay in each grid's output (CD) system: an RMS or a PSD of a component is not
+  a vector to rotate (the modal response computes in basic). `convert` warns about grids with a CD.
+* One random subcase, the first; the others and every other random table (velocities, CRM, ATO,
+  element stresses and forces) are listed in the warnings.
+* OP2 only: an MSC/NX HDF5 file's random output is not read yet.
+* In ParaView, switching between *Random Output* and *Random ASD* on one reader replaces the
+  other response's arrays and root fields (`DominantMode`, the `RANDOM_` tables, `RandomSource`).
+
+```bash
+nastran-pv convert run.bdf --results sol111.op2 --random-output --all-steps -o out/random.vtkhdf
+nastran-pv render run.bdf --results sol111.op2 --random-output --preset random randomsweep
+```

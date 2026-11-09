@@ -84,7 +84,8 @@ def load_reader(deck, op2=None, nsm_set=None, random=None):
     """The Nastran reader on ``deck``, or ParaView's own reader on a nastran-pv ``.vtm``/VTKHDF.
 
     ``random``: ``{"asd", "drive", "damping", "g", "frames"}`` (only ``asd`` is required) turns the
-    OP2 modes into a random response (the reader's Random* properties)."""
+    OP2 modes into a random response (the reader's Random* properties); ``{"output": True}`` shows
+    the OP2's own SOL 111 random output."""
     ensure_plugin()
     if os.path.splitext(deck)[1].lower() in MODEL_FILES:
         if op2 or nsm_set is not None or random:
@@ -117,9 +118,11 @@ def load_reader(deck, op2=None, nsm_set=None, random=None):
     return reader
 
 
-def set_random(reader, asd, drive="Z", damping=0.05, g=None, frames=100):
-    """Random response from the reader's OP2 modes (see nastran_pv.randvib)."""
-    reader.RandomASD = str(asd)
+def set_random(reader, asd="", drive="Z", damping=0.05, g=None, frames=100, output=False):
+    """Random response from the reader's OP2 modes, or with ``output`` the OP2's own SOL 111 PSD/RMS
+    tables (see nastran_pv.randvib)."""
+    reader.RandomOutput = int(bool(output))
+    reader.RandomASD = str(asd or "")
     reader.RandomDrive = "XYZ".index(str(drive).upper())
     reader.RandomDamping = float(damping)
     reader.RandomG = float(g or 0.0)
@@ -1831,15 +1834,31 @@ def _random_mesh(model, view, array, rng):
     return d
 
 
+SOLVER_SETTINGS = "From the results file's PSD/RMS tables: the reader's Random Output"
+
+
+def _random_source(model):
+    """'SOL 111' for the results file's own random output, else None (the modal response)."""
+    source = model.field_strings(None, "RandomSource")
+    return source[0] if source else None
+
+
 def _random_ready(model, view):
     blocks = [b for b in MESH if model.has(b)]
-    if not blocks or not model.field_strings(None, "RandomDrive"):
+    if not blocks or not (model.field_strings(None, "RandomDrive") or _random_source(model)):
         info_text(model, view, NO_RANDOM)
         return None
     return blocks
 
 
+def _random_settings(model):
+    return SOLVER_SETTINGS if _random_source(model) else RANDOM_SETTINGS
+
+
 def _random_header(model):
+    source = _random_source(model)
+    if source:
+        return f"Random response ({source} output)"
     drive = model.field_strings(None, "RandomDrive")
     rms = model.field("RandomInputRMS")
     frac = model.field("RANDOM_EffectiveMassFraction")
@@ -1864,7 +1883,7 @@ def view_random(model, view):
         info_text(model, view, "The random response is zero on the mesh (no eigenvector output there?).")
         return
     _random_mesh(model, view, "AccelRMS", rng)
-    info_text(model, view, f"{_random_header(model)}\nAcceleration RMS: peak {rng[1]:.4g}\n{RANDOM_SETTINGS}",
+    info_text(model, view, f"{_random_header(model)}\nAcceleration RMS: peak {rng[1]:.4g}\n{_random_settings(model)}",
               "Upper Center")
 
 
@@ -1885,7 +1904,8 @@ def view_randomsweep(model, view):
     label = _named(model, "frequency label", lambda: pv.PythonAnnotation(Input=model.reader))
     label.ArrayAssociation = "Field Data"
     # the frame labels from time_index: a temporal VTKHDF has no root field data to read per step
-    drive = (model.field_strings(None, "RandomDrive") or [""])[0]
+    source = _random_source(model)
+    drive = f"({source})" if source else (model.field_strings(None, "RandomDrive") or [""])[0]
     freqs = model.field("RandomFrameFrequencies")
     labels = [f"Random {drive} {float(f):.4g} Hz" for f in freqs] if freqs is not None else []
     # (min/max are numpy reductions in the annotation namespace: index directly)
@@ -1893,8 +1913,8 @@ def view_randomsweep(model, view):
     ld = _show(label, view)
     ld.WindowLocation = "Upper Right Corner"
     ld.FontSize = 14
-    info_text(model, view, f"{_random_header(model)}\n{RANDOM_SETTINGS}\nResponse ASD (sum of X, Y, Z): play the time steps "
-                           "to sweep frequency", "Upper Left Corner")
+    info_text(model, view, f"{_random_header(model)}\n{_random_settings(model)}\nResponse ASD (sum of X, Y, Z): play the "
+                           "time steps to sweep frequency", "Upper Left Corner")
 
 
 # ----------------------------------------------------------------- element forces and stress
@@ -3512,8 +3532,9 @@ def play_mode(mode=None, frames=ANIMATE_FPS, reader=None, view=None):
     groups, a show-only subset, ...) moves. In a comparison (rule R5) both models vibrate, B's mode
     and A's step of the same index, at B's amplitude, and both readers' time steps leave the time
     controls; in a pair each view shows its model's mode. The mode and its frequency are shown in
-    the view, and the view is left at the peak of the cycle. Any view, :func:`stop_mode_animation` or
-    Animate All Modes gives the time controls back to the modes. Returns the mode."""
+    the view, and the view is left at the peak of the cycle (a complex step: its largest
+    displacement). Any view, :func:`stop_mode_animation` or Animate All Modes gives the time controls
+    back to the modes. Returns the mode."""
     view = view or pv.GetActiveViewOrCreate("RenderView")
     lead, others = _layout_models(view, reader)
     mode = mode or current_step(lead, view)
@@ -3541,11 +3562,25 @@ def play_mode(mode=None, frames=ANIMATE_FPS, reader=None, view=None):
     scene.UpdateAnimationUsingDataTimeSteps()
     scene.PlayMode = "Snap To TimeSteps"
     scene.Loop = 1
-    _set_layout_time(view, round(frames / 4) / frames)  # sin = 1: the peak
+    _set_layout_time(view, _peak_time(model, frames))
     _mode_labels(view, lead, others, times, mode, model)
     _render_layout(view)
     _finish_deform(lead)
     return mode
+
+
+def _peak_time(model, frames):
+    """The phase time :func:`play_mode` leaves the view at: a quarter cycle (sin = 1) for a real
+    mode; for a complex step the frame nearest its largest displacement, since Nastran Deform turns
+    it through its PhaseAngle + Phase + 360 t (``deform.peak_phase``, ``reference_phase``)."""
+    from nastran_pv.deform import peak_phase, reference_phase
+
+    theta = peak_phase(model.data) if is_complex_step(model) else None
+    if theta is None:
+        return round(frames / 4) / frames
+    main = pv.FindSource(_name(model, "deform"))
+    start = reference_phase(model.data) + (float(main.Phase) if main is not None else 0.0)
+    return (round((((theta - start) / 360.0) % 0.5) * frames) % frames) / frames
 
 
 def stop_mode_animation(reader=None, view=None):
@@ -3602,28 +3637,66 @@ def _kept_view(reader, view, others=()):
     step and every NPV deform filter's scale of ``reader`` and ``others`` (0 in most views, Auto
     Scale in the results view). Auto Scale is off meanwhile, so the sweeps' Scale Factors act."""
     start = view.ViewTime
-    saved = [(f, f.ScaleFactor, f.AutoScale) for r in [reader, *others] for f in deform_filters(_ReaderOnly(r))]
-    for f, _, auto in saved:
+    saved = [(f, f.ScaleFactor, f.AutoScale, float(f.Phase))
+             for r in [reader, *others] for f in deform_filters(_ReaderOnly(r))]
+    for f, _, auto, _ in saved:
         if auto:
             f.AutoScale = 0
     try:
         yield
     finally:
         _set_layout_time(view, start)
-        for f, scale, auto in saved:
+        for f, scale, auto, phase in saved:
             if f.ScaleFactor != scale:
                 f.ScaleFactor = scale
             if f.AutoScale != auto:
                 f.AutoScale = auto
+            if float(f.Phase) != phase:
+                f.Phase = phase
         _render_layout(view)
+
+
+def is_complex_step(model):
+    """The model's step is complex (a frequency of a frequency response, a complex mode): its
+    mesh carries ``Displacement_Real``/``_Imag``, so it animates through phase, not by a sine."""
+    for b in MESH:
+        if model.has(b):
+            for name in ("Displacement_Real", "Displacement_Imag"):
+                v = model.array(b, name)
+                if v is not None and v.size and np.isfinite(v).any():
+                    return True
+    return False
+
+
+class _Deflect:
+    """One mode's frames for :func:`_mode_sweeps`: ``deflect(k, frames)`` moves every NPV deform
+    filter to frame ``k`` of a cycle and returns its key (equal keys, equal shapes). A real mode
+    swings by ``sin`` (key the rounded sine, so ``k`` and ``frames/2 - k`` share one); a complex
+    step turns through its phase at full amplitude (key ``k mod frames``)."""
+
+    def __init__(self, filters, amp, spin):
+        self.filters, self.amp, self.spin = filters, amp, spin
+
+    def key(self, k, frames):
+        return k % frames if self.spin else _phase(k, frames)
+
+    def __call__(self, k, frames):
+        for f in self.filters:
+            if self.spin:
+                f.ScaleFactor = self.amp
+                f.Phase = 360.0 * (k % frames) / frames
+            else:
+                f.ScaleFactor = self.amp * _phase(k, frames)
+        return self.key(k, frames)
 
 
 def _mode_sweeps(reader, view, times, modes, skipped, others=()):
     """For each mode with a displacement: go to its time step and yield ``(mode, deflect)``, where
-    ``deflect(u)`` sets every NPV deform filter of ``reader`` and of ``others`` (A of a comparison,
-    which follows by index) to ``u`` x the mode's peak scale (one scale for the layout). Modes whose
-    step has no displacement are appended to ``skipped``. The mode and its frequency are shown in
-    each view while it plays. Run it inside :func:`_kept_view`."""
+    ``deflect(k, frames)`` (:class:`_Deflect`) moves every NPV deform filter of ``reader`` and of
+    ``others`` (A of a comparison, which follows by index) to frame ``k`` of a cycle at the mode's
+    peak scale (one scale for the layout): by ``sin`` for a real mode, through its phase for a
+    complex step. Modes whose step has no displacement are appended to ``skipped``. The mode and its
+    frequency are shown in each view while it plays. Run it inside :func:`_kept_view`."""
     try:
         for mode in modes:
             _set_layout_time(view, times[mode - 1])
@@ -3634,12 +3707,7 @@ def _mode_sweeps(reader, view, times, modes, skipped, others=()):
                 skipped.append(mode)
                 continue
             _mode_labels(view, reader, others, times, mode, model)
-
-            def deflect(u, filters=filters, amp=amp):
-                for f in filters:
-                    f.ScaleFactor = amp * u
-
-            yield mode, deflect
+            yield mode, _Deflect(filters, amp, is_complex_step(model))
     finally:
         for v in _pair(view):
             for r in [reader, *others]:
@@ -3678,7 +3746,7 @@ def animate_modes(modes=None, cycles=1, frames=24, out=None, reader=None, view=N
         for mode, deflect in _mode_sweeps(reader, view, times, modes, skipped, others):
             for k in range(cycles * frames):
                 start = time.perf_counter()
-                deflect(_phase(k, frames))
+                deflect(k, frames)
                 _render_layout(view)
                 if out:
                     pv.SaveScreenshot(os.path.join(out, f"mode{mode:02d}_{k:03d}.png"), view)
@@ -3771,17 +3839,23 @@ def save_mode_animations(modes=None, cycles=1, frames=24, folder=None, fps=ANIMA
     written, still, skipped = [], [], []
     with _kept_view(reader, view, others):
         for mode, deflect in _mode_sweeps(reader, view, times, modes, skipped, others):
-            shots = {}  # phase -> image: equal shapes are rendered once
-            keys = [_phase(k, frames) for k in range(cycles * frames)]
-            for key in dict.fromkeys(keys):
-                deflect(key)
-                _render_layout(view)
-                shots[key] = capture_view(view, scratch)
-            peak, rest = shots[max(shots)], shots[min(shots, key=abs)]  # largest vs smallest swing
-            if len(shots) > 1 and np.array_equal(np.asarray(peak), np.asarray(rest)):
+            shots = {}  # frame key -> image: equal shapes are rendered once
+            keys = [deflect.key(k, frames) for k in range(cycles * frames)]
+            for k, key in enumerate(keys):
+                if key not in shots:
+                    deflect(k, frames)
+                    _render_layout(view)
+                    shots[key] = capture_view(view, scratch)
+            if deflect.spin:  # through its phase: still only when every frame is the first one
+                peak = shots[0]
+                moved = any(not np.array_equal(np.asarray(peak), np.asarray(im)) for im in shots.values())
+            else:
+                peak, rest = shots[max(shots)], shots[min(shots, key=abs)]  # largest vs smallest swing
+                moved = not np.array_equal(np.asarray(peak), np.asarray(rest))
+            if len(shots) > 1 and not moved:
                 still.append(mode)
                 continue
-            palette = shots[max(shots)].quantize(256, method=Image.Quantize.FASTOCTREE)
+            palette = peak.quantize(256, method=Image.Quantize.FASTOCTREE)
             indexed = {key: im.quantize(palette=palette, dither=Image.Dither.NONE) for key, im in shots.items()}
             images = [indexed[key] for key in keys]
             path = os.path.join(folder, f"{stem}_mode{mode:02d}.gif")

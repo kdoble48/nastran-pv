@@ -1,6 +1,6 @@
 """Batch screenshots of a Nastran deck through the nastran-pv reader plugin.
 
-    pvpython --force-offscreen-rendering paraview/render_model.py DECK [--op2 F.op2] [--step N] [--random ASD --drive Z --damping 0.05] [--against A]
+    pvpython --force-offscreen-rendering paraview/render_model.py DECK [--op2 F.op2] [--step N] [--random ASD --drive Z --damping 0.05 | --random-output] [--against A]
         [--preset masses bushes bushrotations beams loads spc rigid family group pid mid thickness elementtype results
                   random randomsweep diff]
         [--views iso top front side showcase] [--out shots/] [--size 1600 1000]
@@ -58,6 +58,8 @@ def main(argv=None):
     ap.add_argument("--damping", type=float, default=0.05)
     ap.add_argument("--g", type=float, default=None)
     ap.add_argument("--random-frames", type=int, default=100)
+    ap.add_argument("--random-output", action="store_true",
+                    help="the random response the --op2 file holds (SOL 111 PSD/RMS tables)")
     ap.add_argument("--against", help="reference model (A) for the diff preset")
     ap.add_argument("--preset", nargs="+", default=["family", "masses", "loads", "spc"], choices=PRESETS)
     ap.add_argument("--views", nargs="+", default=["iso"], choices=CAMERAS)
@@ -66,6 +68,8 @@ def main(argv=None):
     args = ap.parse_args(argv)
     random = dict(asd=args.random, drive=args.drive, damping=args.damping, g=args.g,
                   frames=args.random_frames) if args.random else None
+    if args.random_output:
+        random = {"output": True}
     try:
         written = render(os.path.abspath(args.deck), args.preset, args.views, args.out, args.size, args.op2,
                          args.step, args.nsm_set, random, args.against)

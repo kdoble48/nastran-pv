@@ -76,6 +76,18 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   *Result Types*) holds on the results object, so the series writers honour it. `open_results`
   dispatches on the file suffix. Design and the recipe for a new type:
   `docs/design/2026-11-08-result-registry.md`.
+  Complex tables (`docs/design/2026-11-09-dynamic-results.md`): a type's `complex` parts (all but
+  `VonMisesMax`) make `values` return complex rows; `_write` writes the plain arrays at
+  `results.phase` (`result_types.at_phase`, derived arrays included) and each copying array's
+  `_Real/_Imag/_Mag/_Phase` after the type's others, dropped at every step that does not write
+  them. An OP2 source's `form` and column alternatives cover complex headers; HDF5 `_CPLX`
+  datasets are derived from each source (`FR + i FI`, `results_h5._complex_paths`). Step kinds
+  come from the table and its analysis code (`result_types.step_kind`: `frequency`,
+  `complex_eigenvector`, `transient`), labels from `results.step_label`; root `PhaseAngle` and
+  `Time` exist only on complex and transient steps. A non-step table pairs with a step by subcase,
+  time value (HDF5: domain signature) and form (`results._same_form`: complex with complex,
+  transient with transient). `results.PhaseSweep` re-attaches one complex
+  step at N phases (the results interface, `convert --phase-sweep`).
 - `fields/`: `derived.py` (material, quality, size, cg, pidmass), `tables.py` (`read_table` and
   `map_table` by EID/PID/MID/NID/FAMILY/GROUP; text columns become codes plus a `<name>Names`
   table), `db.py` (SQLite or SQLAlchemy), and `calc.py` (`calculate` with a restricted-namespace
@@ -161,30 +173,38 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
 - `deform.py`: `deform(data, scale)` moves every block of a multiblock or model tree by
   `scale` x `Displacement` (blocks without one follow their grids by NID); `peak_scale` gives the
   8 %-of-the-model scale; `Deformer` gathers a model's moving points once and `apply(scale)` is
-  per frame (the plugin keeps one per input object + MTime). `matched_index`/`matched_time` match
-  steps by index (R5: A's step of the index of B's step at a time); `grid_displacements` is a whole
-  model's NID lookup, which `diff.removed_displacement` uses to give A's removed items A's
-  displacement. The views draw through the plugin's *Nastran Deform* (`NPV deform`),
-  so `nastran_views.animate_modes` vibrates whatever view is shown; analysis filters stay on the
-  undeformed model. `play_mode` (after Animate Mode) sets every Nastran Deform of the model
-  (`model_deforms`: the model source upstream, through a Nastran Diff its B) to *Vibrate Mode*: the
-  filter holds its input at *Mode Time* (`RequestUpdateExtent`) and publishes one cycle of phases
-  as `TimestepValues`, the reader's own time is suppressed in the time keeper, and the play button
-  loops the mode; `held_time` makes `Model()`/`current_step` read the held mode, and every view
-  (`apply`) and `_prepare_modes` call `stop_mode_animation` first. In a comparison B leads and A
-  vibrates too, at its own step of B's index and B's amplitude, both readers suppressed. *Match
-  Steps* (a held time per model, R5) makes a deform follow another model's steps by index: at
-  their n-th the input is read at its own n-th step, and without one it is not moved (the output is
-  stamped with the asked time, so a time change re-executes only the deform). The Nastran Diff
-  does the same for A on its own (`RequestUpdateExtent`: A's step of B's index) and gives the
-  Removed block A's displacement then (`diff.removed_displacement`), so A's removed items move
-  with A. The undeformed ghost goes through a scale-0 deform (`NPV undeformed model`) so nothing
-  reads the reader at a phase time.
+  per frame (the plugin keeps one per input object + MTime); a complex step's
+  `Displacement_Real/_Imag` (own or by grid) let `apply(scale, phase)` draw any phase,
+  `peak_scale` sizes it by `Displacement_Mag`, `reference_phase` finds the `PhaseAngle` its arrays
+  were attached at (root, or a VTKHDF block's copy) and `peak_phase` its largest swing.
+  `matched_index`/`matched_time` match steps by index (R5: A's step of the index of B's step at a
+  time); `grid_displacements` is a whole model's NID lookup, which `diff.removed_displacement` uses
+  to give A's removed items A's displacement. The views draw through the plugin's *Nastran Deform*
+  (`NPV deform`), so `nastran_views.animate_modes` vibrates whatever view is shown; analysis
+  filters stay on the undeformed model. `play_mode` (after Animate Mode) sets every Nastran Deform
+  of the model (`model_deforms`: the model source upstream, through a Nastran Diff its B) to
+  *Vibrate Mode*: the filter holds its input at *Mode Time* (`RequestUpdateExtent`) and publishes
+  one cycle of phases as `TimestepValues`, the reader's own time is suppressed in the time keeper,
+  and the play button loops the mode; `held_time` makes `Model()`/`current_step` read the held
+  mode, and every view (`apply`) and `_prepare_modes` call `stop_mode_animation` first. In a
+  comparison B leads and A vibrates too, at its own step of B's index and B's amplitude, both
+  readers suppressed. *Match Steps* (a held time per model, R5) makes a deform follow another
+  model's steps by index: at their n-th the input is read at its own n-th step, and without one it
+  is not moved (the output is stamped with the asked time, so a time change re-executes only the
+  deform). The Nastran Diff does the same for A on its own (`RequestUpdateExtent`: A's step of B's
+  index) and gives the Removed block A's displacement then (`diff.removed_displacement`), so A's
+  removed items move with A. The undeformed ghost goes through a scale-0 deform (`NPV undeformed
+  model`) so nothing reads the reader at a phase time. On a complex step (the Deformer's
+  `complex`) *Vibrate Mode* turns the shape through its phase at full *Amplitude* (from the input's
+  root `PhaseAngle` + *Phase*) instead of a sine, and the filter writes `DeformPhase` next to
+  `DeformScale` for *Nastran Scope*.
 - `randvib.py`: base-drive random vibration from normal modes (no SOL 111 needed). `RandomResponse`
   has the results interface (`steps`/`times`/`attach`): steps are frequency frames, every frame
   carries the static `AccelRMS AccelN0 DispRMS DominantMode*` and its own `AccelASD`. Participation
   uses a lumped mass from the built blocks (`lumped_mass`), so mode normalization does not matter.
-  CLI `--random/--drive/--damping/--g`; reader `Random*` properties; views `random`/`randomsweep`
+  `SolverRandom` reads a SOL 111 run's own `psd/rms/no` acceleration and displacement tables into
+  the same arrays (`--random-output`, reader *Random Output*; root `RandomSource`, components left
+  in CD). CLI `--random/--drive/--damping/--g`; reader `Random*` properties; views `random`/`randomsweep`
   (the sweep's frequency label indexes `RandomFrameFrequencies` by `time_index`: a temporal VTKHDF
   has no root field data, and `min`/`max` are numpy reductions in PythonAnnotation).
 - `labels.py`: `unique_labels(paths)`, the models' labels (scene layers R6): the file name, with as
@@ -285,9 +305,11 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
     visible representation (`_shown_rep`, which creates none), else the view's coloring layer.
   - Mode animation: `mode_times` (the reader's steps, or one step for a converted single-step
     file with a `Displacement`), `animate_modes`/`animate_mode` and `save_mode_animations`. They
-    run inside `_kept_view`, which puts back the view's time and every NPV deform scale, and
-    raise for modes whose step has no displacement. `save_mode_animations` renders each distinct
-    sine phase once, captures it with SaveScreenshot (`capture_view`; reading the render window
+    run inside `_kept_view`, which puts back the view's time and every NPV deform scale and
+    *Phase*, and raise for modes whose step has no displacement. Each frame goes through
+    `_Deflect` (a sine of the scale, or *Phase* stepped through 360 degrees on a complex step,
+    `is_complex_step`). `save_mode_animations` renders each distinct
+    sine phase (or complex frame) once, captures it with SaveScreenshot (`capture_view`; reading the render window
     directly gave stale frames on some drivers) and quantizes every frame of a mode to one
     palette; a mode whose frames never change is an error. It creates named, reused pipeline objects (`NPV <what> [<reader>]`).
   `render_model.py` is a thin batch wrapper around it.

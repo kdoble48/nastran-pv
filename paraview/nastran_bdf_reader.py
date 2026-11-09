@@ -434,8 +434,10 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         self._random_damping = 0.05
         self._random_g = 0.0
         self._random_frames = 100
+        self._random_output = 0
         self._random = None
         self._random_key = None
+        self._phase_angle = 0.0
         self._show_only = ""
         self._hidden = ""
         self._listing = False  # filling the checklists must not re-execute the reader
@@ -479,6 +481,14 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         checked ones are attached at each time step (convert --result-types)."""
         return self._result_types
 
+    @smproperty.doublevector(name="PhaseAngle", default_values=0.0)
+    @smdomain.doublerange(min=-360.0, max=360.0)
+    def SetPhaseAngle(self, value):
+        """Complex steps (frequency response, complex modes): the arrays are the response at this
+        phase angle in degrees, Re(U e^(i angle)) (0: the real part); the _Real, _Imag, _Mag and
+        _Phase arrays do not change (convert --phase)."""
+        self._set("_phase_angle", float(value))
+
     # ----------------------------------------------- random vibration
     def _set_random(self, attr, value):
         if getattr(self, attr) != value:
@@ -511,6 +521,13 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
     @smdomain.intrange(min=1)
     def SetRandomFrames(self, v):
         self._set_random("_random_frames", int(v))
+
+    @smproperty.intvector(name="RandomOutput", default_values=0)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetRandomOutput(self, v):
+        """The random response the OP2 holds (SOL 111 PSD/RMS tables) instead of one computed from
+        its modes; Random ASD is then ignored (convert --random-output)."""
+        self._set_random("_random_output", int(v))
 
     def _set_flag(self, key, value):
         self._set_key("_flags", key, bool(value))
@@ -716,7 +733,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         from nastran_pv.assemble import Options, build_multiblock
 
         key = (self._deck_key, tuple(sorted(self._flags.items())), self._k_ref, self._nodal, self._nsm_set,
-               self._op2name, bool(self._random_asd))  # random arrays and mode arrays never mix
+               self._op2name, bool(self._random_asd or self._random_output))  # random and mode arrays never mix
         if key != self._mb_key:
             deck.reset_warnings(self._base_warnings)
             opts = Options(k_ref=self._k_ref or None, nodal_arrays=self._nodal,
@@ -743,22 +760,29 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         return self._results
 
     def _get_response(self, quiet=False):
-        """The OP2 results, or the random response computed from their modes (RandomASD set)."""
+        """The OP2 results, the random response computed from their modes (RandomASD set), or the
+        file's own random output (RandomOutput)."""
         res = self._get_results(quiet)
-        if res is None or not self._random_asd or not self._filename:
+        if res is None or not (self._random_asd or self._random_output) or not self._filename:
             return res
         try:
             deck = self._get_deck()
             mb, _ = self._get_multiblock(deck)
-            key = (self._results_key, self._mb_key, self._random_asd, self._files_key([self._random_asd]),
-                   self._random_drive, self._random_damping, self._random_g, self._random_frames)
+            if self._random_output:
+                key = (self._results_key, self._mb_key, "output")
+            else:
+                key = (self._results_key, self._mb_key, self._random_asd, self._files_key([self._random_asd]),
+                       self._random_drive, self._random_damping, self._random_g, self._random_frames)
             if key != self._random_key:
-                from nastran_pv.randvib import DRIVES, RandomResponse
+                from nastran_pv.randvib import DRIVES, RandomResponse, SolverRandom
 
                 self._random = None
-                self._random = RandomResponse(res, mb, self._random_asd, DRIVES[self._random_drive % 3],
-                                              self._random_damping, self._random_g or None,
-                                              self._random_frames, deck=deck)
+                if self._random_output:
+                    self._random = SolverRandom(res, deck=deck)
+                else:
+                    self._random = RandomResponse(res, mb, self._random_asd, DRIVES[self._random_drive % 3],
+                                                  self._random_damping, self._random_g or None,
+                                                  self._random_frames, deck=deck)
                 self._random_key = key
         except Exception as exc:
             if not quiet:
@@ -816,6 +840,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         if hasattr(res, "select"):
             self._list_result_types()
             res.select([n for n in res.available if self._result_types.ArrayIsEnabled(n)])
+            res.phase = self._phase_angle  # complex steps: the instant the arrays show
 
     def _list_categories(self, mb, deck):
         """Checklist entries for the current multiblock; settings of labels that stay are kept."""
@@ -1452,6 +1477,10 @@ class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
     Vibrate Mode makes the play button vibrate one mode: the input is held at Mode Time (the
     reader's time step of that mode), the output's time steps become one cycle of Frames Per Cycle
     phases 0, 1/n, ... (n-1)/n, and the model moves by Amplitude x sin(2 pi phase) x Displacement.
+    A complex step (frequency response, complex mode: Displacement_Real/_Imag) turns through its
+    phase instead, Amplitude x Re(U e^(i(theta + 360 phase))), theta the step's Phase Angle; Phase
+    draws it at theta + Phase without vibrating (theta: the input's PhaseAngle, also on a converted
+    VTKHDF series' blocks; 0 without one).
 
     Match Steps (A's side of a comparison) follows another model's time steps by index: at its n-th
     step the input is read at its own n-th step, and with no n-th step it is not moved."""
@@ -1465,6 +1494,7 @@ class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
         self._frames = 24
         self._auto = 0
         self._peak = 0.08
+        self._phase = 0.0
         self._match = ()  # Match Steps: the time steps followed by index (empty: the time passes through)
         self._asked = None  # the time asked for while following them (the output is stamped with it)
         self._unmatched = False  # following them, and the input has no step of that index: not moved
@@ -1523,6 +1553,13 @@ class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
     def SetFramesPerCycle(self, value):
         self._set("_frames", max(int(value), 4))
 
+    @smproperty.doublevector(name="Phase", default_values=0.0)
+    @smdomain.doublerange(min=-360.0, max=360.0)
+    def SetPhase(self, value):
+        """Degrees added to a complex step's Phase Angle: the model is drawn at that phase of the
+        response (0: as the reader attached it; real steps ignore it)."""
+        self._set("_phase", float(value))
+
     @smproperty.stringvector(name="MatchSteps", default_values="", panel_visibility="advanced")
     def SetMatchSteps(self, value):
         """Time steps of the model this one is compared with (B's), space separated: at its n-th step
@@ -1579,7 +1616,7 @@ class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
         import math
 
         try:
-            from nastran_pv.deform import DEFORM_SCALE, Deformer, peak_scale
+            from nastran_pv.deform import DEFORM_PHASE, DEFORM_SCALE, Deformer, peak_scale, reference_phase
         except ImportError as exc:
             return _missing(exc)
         inp = vtkDataObject.GetData(inInfo[0], 0)
@@ -1588,27 +1625,38 @@ class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
         if self._deformer is None or self._deformer[:2] != key:  # new input or new time step
             whole = _registry_entry(inp)  # the reader's output: legs to grids of hidden elements move too
             self._deformer = key + (Deformer(inp, grids=whole[0] if whole is not None else None),)
-        scale, phase = self._scale, None
+        deformer = self._deformer[2]
+        scale, phase, angle = self._scale, None, None  # phase: the cycle's time step; angle: degrees
         if self._auto:
             if self._auto_scale is None or self._auto_scale[:3] != key + (self._peak,):
                 self._auto_scale = key + (self._peak, peak_scale(inp, self._peak))
             scale = self._auto_scale[3]
+        start = reference_phase(inp) if deformer.complex else 0.0  # the phase the arrays were attached at
         if self._vibrate:
             info = outInfo.GetInformationObject(0)
             key_t = vtkStreamingDemandDrivenPipeline.UPDATE_TIME_STEP()
             phase = info.Get(key_t) if info.Has(key_t) else 0.0
-            scale = self._amplitude * round(math.sin(2 * math.pi * phase), 9)
+            if deformer.complex:  # a complex step turns through its phase at full amplitude
+                scale, angle = self._amplitude, start + self._phase + 360.0 * phase
+            else:
+                scale = self._amplitude * round(math.sin(2 * math.pi * phase), 9)
         elif self._unmatched:  # no step of that index: stay as built
             scale = 0.0
-        out.ShallowCopy(self._deformer[2].apply(scale))
+        elif deformer.complex and self._phase:
+            angle = start + self._phase
+        out.ShallowCopy(deformer.apply(scale, angle))
         fd = vtkFieldData()  # a copy: the input's field data is the reader's (or the cached model's)
         fd.ShallowCopy(inp.GetFieldData())
         fd.RemoveArray(DEFORM_SCALE)
         fd.AddArray(_double_array(DEFORM_SCALE, scale))
+        fd.RemoveArray(DEFORM_PHASE)
+        if angle is not None:
+            fd.AddArray(_double_array(DEFORM_PHASE, angle))
         out.SetFieldData(fd)
         if phase is not None or self._asked is not None:  # the time asked for, not the input's held step
             out.GetInformation().Set(vtkDataObject.DATA_TIME_STEP(), phase if phase is not None else self._asked)
         return 1
+
 
 
 def _double_array(name, value):
@@ -1656,7 +1704,7 @@ class NastranPVScope(_Settable, VTKPythonAlgorithmBase):
 
     def RequestData(self, request, inInfo, outInfo):
         try:
-            from nastran_pv.deform import DEFORM_SCALE, Deformer
+            from nastran_pv.deform import DEFORM_PHASE, DEFORM_SCALE, Deformer
             from nastran_pv.selection import scope_masks
             from nastran_pv.tree import build_tree
         except ImportError as exc:
@@ -1685,7 +1733,9 @@ class NastranPVScope(_Settable, VTKPythonAlgorithmBase):
         if self._deformer is None or self._deformer[:3] != (mb, key, generation):  # grids of hidden cells too
             self._deformer = (mb, key, generation, Deformer(self._tree[2].output(mb), grids=mb))
         scale = inp.GetFieldData().GetArray(DEFORM_SCALE)
-        out.ShallowCopy(self._deformer[3].apply(scale.GetValue(0) if scale is not None else 0.0))
+        phase = inp.GetFieldData().GetArray(DEFORM_PHASE)  # the deform drew a complex step at that phase
+        out.ShallowCopy(self._deformer[3].apply(scale.GetValue(0) if scale is not None else 0.0,
+                                                phase.GetValue(0) if phase is not None else None))
         self._mark_diagonal(out, mb)
         info = inp.GetInformation()
         if info.Has(vtkDataObject.DATA_TIME_STEP()):
