@@ -17,7 +17,7 @@ All notable changes to nastran-pv are listed here. The format follows
   GENEL, DMIG, superelements, grounded springs, cards pyNastran rejected). New `Plotels` block
   (PLOTEL lines, `--no-plotels`, reader *Plotels*); CQUAD with nine grids is a biquadratic cell
   (quadratic without G9); CDAMP5 joins the Connectors; MPCADD is resolved into the root
-  `MPCADD_ID MPCADD_Set` table, with `ActiveMPCSets` from Case Control (#PR).
+  `MPCADD_ID MPCADD_Set` table, with `ActiveMPCSets` from Case Control (#61).
 - Include-file groups: a deck read from two or more files gets `FileId` (and `FileNames`,
   `FileParents`, root `FILE_Name FILE_Path FILE_Parent`), so each element, mass, rigid element and
   connector belongs to the INCLUDE file that holds its card. The reader gains a *Visible Files*
