@@ -102,7 +102,7 @@ array at the steps that lack it.
 | Option | built with the Loads option: `--no-loads` and the reader's *Loads* toggle drop both | Like Bushes and BushLines under `--no-bushes`: one kind of data, two blocks |
 | Combinations | LOAD scales and sums pressures like FORCE; the same face loaded twice in a set (directly or through a LOAD) is one face with the corner pressures summed | One arrow per face, and the face force is the sum Nastran applies |
 | Geometry | each face a polygon on its corner grids (points per face, so each corner keeps its own pressure; quadratic faces use their corners) | Varying PLOAD4 pressures colour smoothly; the faces follow the grids when the model deforms |
-| Cell arrays | `EID` (-1 for PLOAD), `LoadCard` (0 PLOAD, 1 PLOAD2, 2 PLOAD4; names in field `LoadCardNames`), `Pressure` (mean of the corners, signed as on the card), `PressureDirection` (unit direction of positive pressure, basic), `PressureForce` (the face's force, basic) | Colour by pressure, select by element, and the force each face contributes |
+| Cell arrays | `EID` (-1 for PLOAD), `LoadCard` (0 PLOAD, 1 PLOAD2, 2 PLOAD4, 3 `several` for a face two kinds of card load; names in field `LoadCardNames`), `Pressure` (mean of the corners, signed as on the card), `PressureDirection` (unit direction of positive pressure, basic), `PressureForce` (the face's force, basic) | Colour by pressure, select by element, and the force each face contributes |
 | Point arrays | `NID`, `CornerPressure` | The interpolated pressure for colouring |
 | Field data | `LoadSet`, `ResultantForce` (ΣPressureForce) | As on the Loads children |
 | Direction | shells: the element normal (right-hand rule on its grids); solids: inward, against the face's outward normal; PLOAD: right-hand rule on G1-G2-G3(-G4); PLOAD4 with N1-N3: that vector (CID to basic at the face centroid) | The MSC/NX rules for positive pressure |
@@ -111,6 +111,8 @@ array at the steps that lack it.
 | GRAV | one arrow per checked set with GRAV, tail at the model CG (root `ModelCG`), along the acceleration, its own scale (the largest \|a\| gets *Size*), *Show Gravity* (on by default), `LoadKind` 3; no new data: the root `GRAV_*` table and `ModelCG` exist already | Gravity is a uniform field: one arrow at the CG shows its direction and where the resultant acts, where per-mass arrows would be thousands of parallel arrows hiding the model. The view's text gives the inertial force, WTMASS × ModelMass × a |
 | Sets offered | the checklist lists every set with load points, pressure faces or GRAV; the default is still the first Case Control set (`ActiveLoadSets`) that has any, else the first set that has any | GRAV-only and pressure-only sets become drawable |
 | Nodal arrays | `F_<sid>`/`M_<sid>` stay FORCE/MOMENT only | Pressures are not converted to equivalent nodal loads (that is OLOAD, from the results) |
+| Scope | a face stays with its element in the reader's scope (`selection.scope_masks`); a PLOAD face, which has none, when all its grids are kept; EIDs named by Show Only win | The overlays follow the scope (R2); without a rule the faces of hidden shells would stay |
+| Card report | PLOAD/PLOAD2/PLOAD4 join `loads.LOAD_TYPES`, so they leave the card report (#61) | A card that is drawn is not reported |
 | Diff | pressures are not compared yet | Left for the diff's next round |
 
 ### Checks
@@ -120,8 +122,11 @@ array at the steps that lack it.
   grids, a PLOAD4 with N1-N3, and a LOAD combination. The expected face forces and set resultants
   are computed by hand in the test; the drawn resultant (ΣPressureForce, and the sum of the drawn
   arrows' directions times the face forces) matches them.
-- Manual: the same deck solved by MYSTRAN with `OLOAD=ALL`: the OLOAD resultant equals the
-  Pressures resultant.
+- pyNastran's own load summation (`mesh_utils.loads.sum_forces_moments`, 1.4.1 and main) gives
+  the same resultant for every set of the deck (a test). MYSTRAN 19 was tried as a solver check and
+  dropped: it rejects PLOAD and PLOAD4 on solid faces ("code not written yet") and its applied-force
+  totals for the shell pressures disagree with the hand values (28 against 20 for PLOAD2 10 on two
+  unit squares).
 
 ## No output change elsewhere
 
@@ -129,5 +134,5 @@ Files without SPC, MPC or OLOAD tables and decks without PLOAD* cards convert ex
 the PR #60 parity harness (12 cases, `.vtm` per step, `.pvd`, temporal VTKHDF compacted and not,
 snapshots after every step, stdout) is rerun on `origin/main` and on each branch. A deck with GRAV
 converts unchanged too (GRAV is drawn from data the files already hold); only the glyph filter's
-output and the Loads view change. A deck with PLOAD* gains the Pressures block and loses the
-"PLOAD4 card(s) not visualized" warning.
+output and the Loads view change. A deck with PLOAD* gains the Pressures block and loses its
+card-report rows.

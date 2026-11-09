@@ -110,8 +110,10 @@ Femap's "select connected" from a point, without crossing into the next group:
    `StructuralMass`, `NonstructuralMass`, `ConcentratedMass`, `ModelMass` and `ModelCG` are in the first row.
 3. To size the spheres, select *NPV mass glyphs* and change *Size* or *RadiusLaw*; *Minimum
    Mass* hides the light ones ([Glyph filters](paraview.md#glyph-filters)).
-4. **NPV Loads** draws the case control's `LOAD` set as arrows, with its resultant in the overlay.
-   To see another set, or moments, check it under *Load Sets* on *NPV load glyphs* and set *Show*.
+4. **NPV Loads** draws the case control's `LOAD` set as arrows (FORCE/MOMENT on their grids, PLOAD*
+   pressures on their faces, GRAV at the CG), with its resultant in the overlay. To see another
+   set, or moments, check it under *Load Sets* on *NPV load glyphs* and set *Show*; with results
+   loaded, its *Source* draws the SPC forces (the reactions), MPC forces or applied loads.
    **NPV SPC** colors the constrained grids by DOF; *DOFs* `123` on *NPV spc glyphs* keeps the
    grids that fix a translation. Every load set is also in the tree under `Model > Loads`, for
    example `LOAD_1001`.
