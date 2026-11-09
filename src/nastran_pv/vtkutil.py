@@ -316,6 +316,23 @@ def set_field_strings(obj: vtkDataObject, name: str, values: Sequence[str]) -> N
     add_string_array(obj.GetFieldData(), name, values)
 
 
+# Each algorithm's DeleteEvent observer until it runs (drop_state_on_delete): VTK reports a wrapper's
+# observers to Python's garbage collector (PyVTKObject_Traverse), so when the cyclic collector frees a
+# wrapper it would clear the observer too, before the deletion it waits for calls it (a crash).
+_DELETE_OBSERVERS: dict = {}
+
+
+class _DropState:
+    """The DeleteEvent observer of :func:`drop_state_on_delete`."""
+
+    def __init__(self, state: dict):
+        self.state = state
+
+    def __call__(self, obj, event):
+        _DELETE_OBSERVERS.pop(id(self.state), None)
+        self.state.clear()
+
+
 def drop_state_on_delete(algorithm) -> None:
     """Empty a Python algorithm's ``__dict__`` (its cached models, results, ...) when VTK deletes it.
 
@@ -328,7 +345,24 @@ def drop_state_on_delete(algorithm) -> None:
     ``VTKPythonAlgorithmBase`` subclass's ``__init__``."""
     state = algorithm.__dict__
     if "_npv_on_delete" not in state:
-        state["_npv_on_delete"] = algorithm.AddObserver("DeleteEvent", lambda obj, event: state.clear())
+        observer = _DELETE_OBSERVERS[id(state)] = _DropState(state)
+        state["_npv_on_delete"] = algorithm.AddObserver("DeleteEvent", observer)
+
+
+class _Reexecute:
+    """The ModifiedEvent observer of :func:`modified_callback`. A callable object, not a closure:
+    if the garbage collector clears it with its selection, a late call fails softly."""
+
+    def __init__(self, owner, skip: str):
+        self.ref = vtkWeakReference()
+        self.ref.Set(owner)
+        self.skip = skip
+
+    def __call__(self, obj, event):
+        ref = getattr(self, "ref", None)
+        alive = ref.Get() if ref is not None else None
+        if alive is not None and not getattr(alive, getattr(self, "skip", "_listing"), False):
+            alive.Modified()
 
 
 def modified_callback(owner, skip: str = "_listing"):
@@ -339,15 +373,7 @@ def modified_callback(owner, skip: str = "_listing"):
     its wrapper, and so the C++ algorithm, alive for good (the C++ observer is invisible to Python's
     garbage collector), so a deleted reader or filter would never be freed. Not a Python weakref
     either: ParaView drops the wrapper while the algorithm lives on, and ``Get()`` brings it back."""
-    ref = vtkWeakReference()
-    ref.Set(owner)
-
-    def callback(obj, event):
-        alive = ref.Get()
-        if alive is not None and not getattr(alive, skip, False):
-            alive.Modified()
-
-    return callback
+    return _Reexecute(owner, skip)
 
 
 __all__ = [

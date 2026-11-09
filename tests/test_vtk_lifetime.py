@@ -80,6 +80,52 @@ def test_modified_callback_reexecutes_and_lets_the_owner_go():
     assert ref.Get() is None and not state
 
 
+CYCLIC_GC = r"""
+import gc, sys
+from vtkmodules.util.vtkAlgorithm import VTKPythonAlgorithmBase
+from vtkmodules.vtkCommonCore import vtkDataArraySelection
+from vtkmodules.vtkCommonDataModel import vtkMultiBlockDataSet
+from nastran_pv import vtkutil
+
+class Algo(VTKPythonAlgorithmBase):
+    def __init__(self):
+        VTKPythonAlgorithmBase.__init__(self, nInputPorts=0, nOutputPorts=1, outputType="vtkPolyData")
+        self.cache = vtkMultiBlockDataSet()
+        self._listing = False
+        self.selection = vtkDataArraySelection()
+        self.selection.AddObserver("ModifiedEvent", vtkutil.modified_callback(self))
+        vtkutil.drop_state_on_delete(self)
+
+class Holder:
+    pass
+
+states = []
+for _ in range(20):
+    algo = Algo()
+    states.append(algo.__dict__)
+    holder = Holder()
+    holder.fn = lambda a=algo: a  # a closure that keeps the wrapper in a cycle only the cyclic GC frees
+    holder.me = holder
+    del algo, holder
+gc.collect()
+print("cleared" if not any(states) else "kept")
+"""
+
+
+def test_algorithms_freed_by_the_cyclic_gc():
+    """VTK reports a wrapper's observers to Python's garbage collector (PyVTKObject_Traverse), so
+    collecting a wrapper in a cycle could clear its DeleteEvent observer before the deletion ran it:
+    a crash (pvpython, then pv_smoke, after deleted readers started being freed)."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1] / "src"))
+    out = subprocess.run([sys.executable, "-c", CYCLIC_GC], capture_output=True, text=True, env=env)
+    assert out.returncode == 0 and out.stdout.strip() == "cleared", (out.returncode, out.stdout, out.stderr[-500:])
+
+
 def test_a_loaded_deck_does_not_keep_the_progress_callback():
     """The ParaView reader passes a progress whose callback captures the reader; the deck (kept
     by the reader) must not hold it, or the reader can never be freed."""

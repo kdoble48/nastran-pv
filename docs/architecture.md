@@ -261,6 +261,11 @@ Every gotcha found so far, by area. The few that bite on any change are also in 
   deleted reader or checklist filter was never freed, caches and all. Checklist observers use
   `vtkutil.modified_callback` (a `vtkWeakReference`), and `load_deck` lets go of the caller's
   progress when the read ends. pv_smoke deletes a reader and its filters and checks they are freed.
+- VTK reports the observers added through a wrapper to Python's garbage collector
+  (`PyVTKObject_Traverse`). When the cyclic collector frees a wrapper, it clears those observers
+  first, so a `DeleteEvent` observer would run cleared and crash. `vtkutil` keeps each
+  `DeleteEvent` observer in a module registry until it runs, and uses callable objects rather than
+  closures (`tests/test_vtk_lifetime.py` reproduces the crash in plain Python).
 - pyNastran quirks:
   - pyNastran main turns on its developer self-checks when `GITHUB_ACTOR` (or `TRAVIS`, `APPVEYOR`)
     is set (`pyNastran.IS_CI`). One of them, `_check_result_slice`, fails on the synthetic OP2
