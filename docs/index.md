@@ -6,8 +6,8 @@ you use.
 
 ## Gallery
 
-- [View gallery](gallery/index.md): every one-click view on the uCRM-9 wingbox and a demo model,
-  interactive in 3D in your browser.
+- [View gallery](gallery/index.md): every one-click view, and a scene for each static and composite
+  result, on the uCRM-9 wingbox and demo models, interactive in 3D in your browser.
 
 ## Getting started
 

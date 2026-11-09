@@ -91,11 +91,13 @@ def view_page(meta, version="") -> str:
                 f'````{{tab-item}} Static\n![{alt}](../{ASSETS}/{meta["png"]})\n````\n')
         side = _side(meta["legends"], meta["text"])
     reproduce = "\n".join(meta["reproduce"])
+    # a view's macro, or what to click for an entry that is a view's setting or a filter
+    gui = meta.get("gui") or f"click **NPV {title}** on the Macros toolbar"
+    results = " (with the results file as its *OP2 File Name*)" if meta.get("results") else ""
     return (f'# {title}: {meta["model_title"]}\n\n{meta["caption"]}\n\n'
             f'`````{{tab-set}}\n{tabs}`````\n\n{side}\n'
             f'## Reproduce\n\n```bash\n{reproduce}\n```\n\n'
-            f'In the ParaView GUI: open the deck with the nastran-pv reader and click **NPV {title}** '
-            f'on the Macros toolbar.\n\n'
+            f'In the ParaView GUI: open the deck with the nastran-pv reader{results} and {gui}.\n\n'
             f'```{{admonition}} Model credit\n:class: note\n{meta["credit"]}\n```\n')
 
 
@@ -117,11 +119,15 @@ def index_page(manifest) -> str:
         cards = [f'```{{grid-item-card}} {v["title"]}\n:link: {_doc(v)}\n:link-type: doc\n'
                  f':img-top: ../{ASSETS}/{v["thumb"]}\n\n{v["caption"]}\n```' for v in views]
         out.append("`````{grid} 1 1 2 2\n:gutter: 3\n\n" + "\n".join(cards) + "\n`````\n")
+    out.append(NOT_SHOWN)
     out.append(f'Generated {manifest["generated"][:10]} from commit `{manifest["commit"]}`.\n')
     out.append("```{toctree}\n:hidden:\n\n" + "\n".join(_doc(v) for v in manifest["views"]) + "\n```\n")
     return "\n".join(out)
 
 
+NOT_SHOWN = ("The results come from MYSTRAN, which solves no frequency response, transient or complex "
+             "eigenvalue run, so those results (and the `Velocity` and `Acceleration` types) have no scene "
+             "here. They load as a time series of the same arrays: see [Result types](../model.md#result-types).\n")
 PLACEHOLDER = ("# View gallery\n\nThe gallery hasn't been generated yet. Maintainers: see "
                "[Regenerating the gallery](../development.md#regenerating-the-gallery).\n")
 
