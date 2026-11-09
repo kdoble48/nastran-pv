@@ -8,6 +8,9 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Added
 
+- Scene layers (#54): the *NPV Clear* macro, the one full reset of a view (it hides every layer and
+  sets the deformation back to 0, deleting nothing), and the *Nastran Scope* filter, the overlays'
+  copy of the model cut by the reader's scope (`selection.scope_masks`).
 - Include-file groups: a deck read from two or more files gets `FileId` (and `FileNames`,
   `FileParents`, root `FILE_Name FILE_Path FILE_Parent`), so each element, mass, rigid element and
   connector belongs to the INCLUDE file that holds its card. The reader gains a *Visible Files*
@@ -50,6 +53,12 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Changed
 
+- Views combine instead of redrawing (#54): a coloring (PID, Thickness, Results, ...) replaces the
+  coloring and keeps the overlays, an overlay (Masses, Loads, SPC, ...) adds itself and a second
+  toolbar click removes it, and only NPV Clear (and Side by Side) resets the view. Overlays follow
+  the reader's scope: with a group, a Show Only list or a selection file, NPV Masses, Bushes, Rigid,
+  SPC and Loads draw what hangs off the kept elements (through RBE2/RBE3/CBUSH chains), and EIDs the
+  scope names win.
 - NPV Loads and NPV SPC draw through *NPV load glyphs* and *NPV spc glyphs* (Nastran filters)
   instead of ParaView Glyph objects; NPV Results scales each time step to 8 % of the model (Nastran
   Deform *Auto Scale*); Mass Glyphs' *RelativeSize* is now *Size* (saved states and scripts that set *RelativeSize* need *Size*);
@@ -67,6 +76,13 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Fixed
 
+- Overlays follow the scope as the reader applies it: a selection file of PIDs, MIDs, families,
+  groups or grids now applies to masses, bushes, SPCs and loads too; a hidden or unticked rigid
+  element or bush no longer carries the grid chain; one kept by Show Only keeps the masses on its
+  grids; beam sections follow their beams; connector and bush lines to grids of hidden elements
+  deform with them. A coloring that writes no text no longer leaves the previous coloring's text,
+  NPV Clear no longer acts on a deleted reader, and an EID list the reader cannot parse or a
+  selection file it cannot read no longer counts as a scope (#PR).
 - Deck vs converted file parity: a `.vtkhdf` gives the same model, tables, CLI output, filters and views as its deck. Root and block field data no longer mix on read, options that need the deck are refused instead of ignored, `--step` picks the step of a converted series, and the warnings and `store add` deck carry over.
 - Model Check on the deck reader reported every model-tree piece seam as a free edge or face; Parts numbering and Path no longer depend on cell order.
 - Decks with latin-1 characters (`$ Kräfte`) failed to load on Linux and macOS, because pyNastran reads the file header with the locale's encoding (#42).

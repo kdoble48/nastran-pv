@@ -266,17 +266,22 @@ def raise_load_error(reader):
         raise RuntimeError(f"cannot read {name}: {error} (full traceback in Output Messages)")
 
 
+def _model_time(reader, time=None):
+    """``time``, else the vibrating mode's (the view time is a phase then), else the active view's."""
+    if time is None:
+        time = held_time(reader)
+    if time is None:
+        view = pv.GetActiveView()
+        time = getattr(view, "ViewTime", 0.0) if view is not None else 0.0
+    return time
+
+
 class Model:
     """Reader plus a client-side copy of its output (block names, arrays, size)."""
 
     def __init__(self, reader, time=None):
         self.reader = reader
-        if time is None:
-            time = held_time(reader)  # the vibrating mode: the view time is a phase then
-        if time is None:
-            view = pv.GetActiveView()
-            time = getattr(view, "ViewTime", 0.0) if view is not None else 0.0
-        self.time = time
+        self.time = time = _model_time(reader, time)
         reader.UpdatePipeline(time)
         raise_load_error(reader)
         from nastran_pv.tree import as_multiblock
@@ -314,7 +319,7 @@ class Model:
     def scope_active(self):
         """:func:`scope_active` of the reader, asked once per Model."""
         if self._scope_active is None:
-            self._scope_active = scope_active(self.reader)
+            self._scope_active = scope_active(self.reader, self.time)
         return self._scope_active
 
     def _holder(self, block_name, name):
@@ -462,17 +467,17 @@ def _feed(proxy, src):
     return proxy
 
 
-def scope_active(reader):
-    """True when the deck reader hides anything: an EID list, an unchecked checklist entry, or a
-    Selection File in use. A converted file has no scope."""
+def scope_active(reader, time=None):
+    """True when the deck reader's read (at ``time``, default as :class:`Model`) hid anything: an EID
+    list, an unchecked checklist entry or a Selection File, as the reader applied them (its
+    *ScopeActive*), so an EID list it could not parse or a file it could not read is no scope. A
+    converted file has no scope."""
     if _xml_name(reader) != READER_XML:
         return False
-    if (reader.ShowOnlyElements or "").strip() or (reader.HiddenElements or "").strip():
-        return True
-    if reader.SelectionFile and enum_text(reader, "SelectionMode") != "Off":
-        return True
-    reader.UpdatePipelineInformation()
-    return any(set(_listed(reader, prop)) - set(getattr(reader, prop)) for prop in VISIBILITY_PROPS)
+    reader.UpdatePipeline(_model_time(reader, time))
+    reader.UpdatePropertyInformation()
+    prop = reader.GetProperty("ScopeActive")
+    return bool(prop.GetElement(0)) if prop is not None and len(prop) else False
 
 
 def _missing_text(model, what, note=""):
@@ -530,13 +535,17 @@ _INFO_WRITES = 0  # info_text calls so far: apply tells from it which layer wrot
 
 def scene_of(view):
     """The layers shown in ``view`` (a :class:`nastran_pv.scene.Scene`, made on first use). Scenes of
-    views that were closed are dropped."""
+    views that were closed are dropped, and a scene whose reader was deleted is emptied (its objects
+    went with the reader, or are hidden as strays by the next command)."""
     from nastran_pv.scene import Scene
 
     alive = {v.GetGlobalIDAsString() for v in pv.GetViews()}
     for key in [k for k in _SCENES if k not in alive]:
         del _SCENES[key]
-    return _SCENES.setdefault(view.GetGlobalIDAsString(), Scene())
+    scene = _SCENES.setdefault(view.GetGlobalIDAsString(), Scene())
+    if scene.model is not None and scene.model not in list(pv.GetSources().values()):
+        scene.clear()
+    return scene
 
 
 def _show(src, view):
@@ -2157,7 +2166,7 @@ def apply(name, reader=None, view=None, model=None, reset_camera=None, toggle=Fa
         if scene.coloring is None:
             objects, _ = _recorded(lambda: ghost_mesh(model, view, GHOST_OPACITY.get(name, 0.2)))
             _hide(scene.set_coloring(Layer(GHOST, objects)), view)
-    writes = _INFO_WRITES
+    writes, writer = _INFO_WRITES, scene.info
     objects, selected = _recorded(lambda: VIEWS[name](model, view, **kwargs))
     if kind(name) == "overlay":
         _hide(scene.add_overlay(Layer(name, objects, selected)), view)
@@ -2165,6 +2174,10 @@ def apply(name, reader=None, view=None, model=None, reset_camera=None, toggle=Fa
         _hide(scene.set_coloring(Layer(name, objects, selected)), view)
     if _INFO_WRITES != writes:
         scene.info = name
+    elif writer is not None and scene.info is None:  # the replaced coloring wrote it, this one writes none
+        info = pv.FindSource(_name(model, "info"))
+        if info is not None:
+            pv.Hide(info, view)
     if reset_camera or (reset_camera is None and fresh):
         view.ResetCamera(False)
     pv.Render(view)

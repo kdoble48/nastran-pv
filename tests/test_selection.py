@@ -383,3 +383,99 @@ def test_scope_follows_connector_chains_over_free_grids(tmp_path):
     assert kept(mb, m, "Masses", "point") == [12]       # wing 2 -> RBE2 10 -> 20 -> CBUSH 11 -> 21
     assert sorted(set(kept(mb, m, "Rigid"))) == [10]    # RBE2 14 hangs off the hidden shell 2
     assert kept(mb, m, "Bushes", "point") == [11, 13]   # 13 touches the wing; grid 5 carries nothing on
+
+
+@pytest.fixture(scope="module")
+def chain(tmp_path_factory):
+    p = tmp_path_factory.mktemp("chain") / "chain.bdf"
+    p.write_text(CHAIN)
+    deck = load_deck(p, echo=False)
+    return build_multiblock(deck), tree.names_from_deck(deck)
+
+
+def reader_keeps(mb, vis, path, names=None):
+    """What the reader's own output keeps of block ``path`` (tree.Visibility, the Femap rule)."""
+    ds = dict(iter_blocks(mb))[path]
+    kind = tree._item_kind(ds)
+    n = ds.GetNumberOfPoints() if kind == "point" else ds.GetNumberOfCells()
+    eid = selection.get_array(selection._attr(ds, kind), "EID")
+    keep = vis.mask(selection.item_labels(path, ds, names), eid, n)
+    return keep & vis.selection_masks(mb)[0].get(path, True)
+
+
+def test_scope_hide_file_of_bush_pids_hides_the_bushes_and_their_chain(chain):
+    """A Hide file listing PBUSH 51: the reader hides CBUSH 11 and 13, so the overlays do too, and
+    CBUSH 11 no longer carries the chain to CONM2 12 on free grid 21. RBE2 14 still carries 30."""
+    mb, names = chain
+    vis = tree.Visibility(select=selection.IdList("PID", frozenset({51})), select_hide=True)
+    m = selection.scope_masks(mb, vis, names)
+    assert kept(mb, m, "Bushes", "point") == [] and kept(mb, m, "BushLines") == []
+    assert not reader_keeps(mb, vis, "Bushes", names).any()
+    assert sorted(set(kept(mb, m, "Rigid"))) == [10, 14]
+    assert kept(mb, m, "Masses", "point") == [15]
+
+
+def test_scope_nid_file_keeps_the_points_it_lists(run_mb):
+    """A Show only file of grids 1 and 5 (no element has all its grids listed): the reader keeps
+    CONM2 201 on grid 5 and the SPC on grid 1, and so do the overlays."""
+    vis = tree.Visibility(select=selection.IdList("NID", frozenset({1, 5})))
+    m = selection.scope_masks(run_mb, vis)
+    assert kept(run_mb, m, "Shells") == [] and kept(run_mb, m, "Rigid") == []
+    assert kept(run_mb, m, "Masses", "point") == [201] and kept(run_mb, m, "MassOffsets") == [201]
+    assert kept(run_mb, m, "Constraints", "point", "NID") == [1]
+    for path in ("Masses", "Constraints"):
+        assert list(m[path]) == list(reader_keeps(run_mb, vis, path)), path
+
+
+@pytest.mark.parametrize("vis, rigid, bushes, masses", [
+    (tree.Visibility(hidden_eids=frozenset({10})), [14], [13], [15]),            # Hidden Elements 10
+    (tree.Visibility(hidden={"ElementTypes": frozenset({"RBE2"})}), [], [13], []),  # RBE2 unticked
+    (tree.Visibility(select=selection.IdList("EID", frozenset({10})), select_hide=True), [14], [13], [15]),
+])
+def test_scope_hidden_connector_carries_no_chain(chain, vis, rigid, bushes, masses):
+    """R2: a connector's grids count only when the connector is kept. Hidden RBE2 10 no longer
+    carries wing -> 20 -> CBUSH 11 -> 21 (CONM2 12); RBE2 14 still carries 30 (CONM2 15)."""
+    mb, names = chain
+    m = selection.scope_masks(mb, vis, names)
+    assert sorted(set(kept(mb, m, "Rigid"))) == rigid
+    assert kept(mb, m, "Bushes", "point") == bushes and kept(mb, m, "BushLines") == bushes
+    assert kept(mb, m, "Masses", "point") == masses
+
+
+@pytest.mark.parametrize("vis", [
+    tree.Visibility(show_only=frozenset({301})),
+    tree.Visibility(select=selection.IdList("EID", frozenset({301}))),
+], ids=["show-only", "eid-file"])
+def test_scope_named_connector_keeps_what_hangs_on_it(run_mb, vis):
+    """Show Only (or an EID file) naming RBE2 301 (5 -> 2 3 6): its grids count as kept, so CONM2 201
+    on its centre grid 5, the SPCs on 2 and 3 and the loads on 3 and 6 stay, as in the reader's own
+    output with the EID file. Its grids are all mesh grids, so they carry no chain (no bush)."""
+    m = selection.scope_masks(run_mb, vis)
+    assert sorted(set(kept(run_mb, m, "Rigid"))) == [301] and kept(run_mb, m, "Shells") == []
+    assert kept(run_mb, m, "Masses", "point") == [201] and kept(run_mb, m, "MassOffsets") == [201]
+    assert kept(run_mb, m, "Constraints", "point", "NID") == [2, 3]
+    assert kept(run_mb, m, "Loads/SID_1", "point", "NID") == [3, 6]
+    assert kept(run_mb, m, "Bushes", "point") == []
+    if vis.select is not None:
+        for path in ("Masses", "Constraints", "Loads/SID_1", "Loads/LOAD_1001"):
+            assert list(m[path]) == list(reader_keeps(run_mb, vis, path)), path
+
+
+@pytest.fixture(scope="module")
+def beams_mb():
+    from nastran_pv.assemble import Options
+
+    return build_multiblock(load_deck(DATA / "beams.bdf", echo=False), Options(beam_sections=True))
+
+
+@pytest.mark.parametrize("vis", [
+    tree.Visibility(show_only=frozenset({12})),                                  # the CROD: no section
+    tree.Visibility(select=selection.IdList("PID", frozenset({1})), select_hide=True),
+    tree.Visibility(hidden_eids=frozenset({2, 7})),
+], ids=["show-only-rod", "hide-pid-file", "hidden-eids"])
+def test_scope_beam_sections_follow_their_lines(beams_mb, vis):
+    m = selection.scope_masks(beams_mb, vis)
+    lines = set(kept(beams_mb, m, "Lines"))
+    sections = set(kept(beams_mb, m, "BeamSections"))
+    swept = set(eids(dict(iter_blocks(beams_mb))["BeamSections"]))  # beams 1-11 have a section
+    assert lines and sections == lines & swept

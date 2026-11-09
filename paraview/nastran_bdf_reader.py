@@ -308,6 +308,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         self._listed_key = None
         self._reported_key = None
         self._load_error = ""  # last RequestData failure, for LoadError (empty after a good read)
+        self._scope_active = 0  # the last read hid something, for ScopeActive
         self._names = {}
         self._tree = None
         self._tree_key = None
@@ -509,6 +510,12 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         """Why the last read failed ("" after a good read): scripts and views raise it instead of
         treating the empty output as a model without masses, bushes, ..."""
         return self._load_error
+
+    @smproperty.intvector(name="ScopeActive", information_only="1")
+    def GetScopeActive(self):
+        """1 when the last read hid anything: the visibility it applied, so an EID list it could not
+        parse or a Selection File it could not read (both ignored) is no scope. The views read it."""
+        return self._scope_active
 
     @smproperty.doublevector(name="TimestepValues", information_only="1", si_class="vtkSITimeStepsProperty")
     def GetTimestepValues(self):
@@ -717,6 +724,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
                 if rebuilt:
                     deck.warnings += res.skipped
             vis = self._visibility()
+            self._scope_active = int(not vis.everything)
             key = (self._mb_key, vis.key())
             if key != self._tree_key:
                 self._tree = build_tree(mb, vis, self._names)
@@ -1259,7 +1267,8 @@ class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
         out = vtkDataObject.GetData(outInfo, 0)
         key = (inp, inp.GetMTime())
         if self._deformer is None or self._deformer[:2] != key:  # new input or new time step
-            self._deformer = key + (Deformer(inp),)
+            whole = _registry_entry(inp)  # the reader's output: legs to grids of hidden elements move too
+            self._deformer = key + (Deformer(inp, grids=whole[0] if whole is not None else None),)
         scale, phase = self._scale, None
         if self._auto:
             if self._auto_scale is None or self._auto_scale[:3] != key + (self._peak,):
@@ -1343,8 +1352,8 @@ class NastranPVScope(_Settable, VTKPythonAlgorithmBase):
             if found is not None:
                 self._mark_diagonal(out, mb)
             return 1
-        if self._deformer is None or self._deformer[:3] != (mb, key, generation):
-            self._deformer = (mb, key, generation, Deformer(self._tree[2].output(mb)))
+        if self._deformer is None or self._deformer[:3] != (mb, key, generation):  # grids of hidden cells too
+            self._deformer = (mb, key, generation, Deformer(self._tree[2].output(mb), grids=mb))
         scale = inp.GetFieldData().GetArray(DEFORM_SCALE)
         out.ShallowCopy(self._deformer[3].apply(scale.GetValue(0) if scale is not None else 0.0))
         self._mark_diagonal(out, mb)
