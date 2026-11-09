@@ -8,6 +8,9 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Added
 
+- Result types: what results attach is declared per type in `result_types.py` (`Displacement`,
+  `VonMisesMax`, outputs unchanged), so new results are added by declaration. Choose them with
+  `--result-types` (`convert`, `stats`, `store add`) or the reader's *Result Types* checklist (#60).
 - Include-file groups: a deck read from two or more files gets `FileId` (and `FileNames`,
   `FileParents`, root `FILE_Name FILE_Path FILE_Parent`), so each element, mass, rigid element and
   connector belongs to the INCLUDE file that holds its card. The reader gains a *Visible Files*
