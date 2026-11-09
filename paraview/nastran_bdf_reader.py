@@ -2530,13 +2530,15 @@ class NastranPVModelCheck(_TopologyFilter):
 @_with_traversal
 class NastranPVFreeBody(_TopologyFilter):
     """The load a free body transmits to the rest of the model through its cut grids, about a point,
-    at the current time step: from the grid point force balance (GPFORCE) when the results have it,
-    else from the applied, SPC and MPC forces inside the body. The body is what Seed IDs reach
-    under the Traversal rules (a given set of elements: Limit Hops with Max Hops 0).
+    at the current time step: from the grid point force balance (the GridPointForce result type,
+    off by default in the reader's Result Types: nastran_views.free_body checks it) plus the MPC
+    forces of the body's rigid elements at the cut, else from the applied and SPC forces inside
+    the body. The body is what Seed IDs reach under the Traversal rules (Stay Within seed
+    properties for a property; Limit Hops with Max Hops 0 for exactly the seed elements).
 
     Output 0: the model with ``FreeBody`` (cells) and ``FreeBodyGrid`` (2 cut, 1 interior);
-    output 1: the table (Cut, Applied, SPC, MPC, Imbalance); output 2: the cut load as arrows at
-    the summation point (Size: their length as a fraction of the model diagonal)."""
+    output 1: the table (Cut, Elements, MPC, Applied, SPC, Imbalance); output 2: the cut load as
+    arrows at the summation point (Size: their length as a fraction of the model diagonal)."""
 
     LABEL = "Free Body"
 
