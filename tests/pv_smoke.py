@@ -357,6 +357,28 @@ def load_error_checks(pv, nv, tmp):
         pv.Delete(src)
 
 
+def result_type_checks(rm, nv, reader, times):
+    """The reader's ResultTypes checklist (nastran_pv.result_types): the file's types, all checked;
+    an unchecked type leaves the output at every step, a checked one comes back."""
+    listed = nv._listed(reader, "ResultTypes")
+    check(listed == ["Displacement", "VonMisesMax"], f"ResultTypes lists the file's types: {listed}")
+    states = list(reader.GetProperty("ResultTypesInfo"))[1::2]
+    check([int(x) for x in states] == [1, 1], f"every result type checked by default: {states}")
+
+    def arrays(t):
+        shells = rm.Model(reader, t).block("Shells")
+        return (shells.GetPointData().GetArray("Displacement") is not None,
+                shells.GetCellData().GetArray("VonMisesMax") is not None)
+
+    reader.ResultTypes = ["VonMisesMax"]
+    check(arrays(times[0]) == (False, True) and arrays(times[-1]) == (False, False),
+          "unchecked Displacement: no Displacement at any step, VonMisesMax stays")
+    reader.ResultTypes = ["Displacement"]
+    check(arrays(times[0]) == (True, False), "unchecked VonMisesMax: Displacement only")
+    reader.ResultTypes = listed
+    check(arrays(times[0]) == (True, True) and arrays(times[-1]) == (True, False), "both checked again")
+
+
 def beam_checks(pv, nv, view, tmp):
     """Nastran Beam Sections filter on tests/data/beams.bdf: sweep, tree visibility, deformation, view."""
     from vtkmodules.util.numpy_support import vtk_to_numpy
@@ -1945,6 +1967,7 @@ def main():
         later = rm.Model(reader, full[-1]).block("Shells").GetCellData().GetArray("VonMisesMax")
         check(len(full) > 1 and first is not None and later is None,
               f"VonMisesMax at step 1 only, not carried to step {len(full)} by the tree")
+        result_type_checks(rm, nv, reader, full)
         anim = pv.CreateRenderView()
         model = nv.apply("results", reader=reader, view=anim)  # the results view: peak deflection
         deform = pv.FindSource(nv._name(model, "deform"))
