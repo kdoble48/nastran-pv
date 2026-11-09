@@ -75,6 +75,10 @@ def _element_keys(card, eid, lead, dof, alone, mpc_card) -> np.ndarray:
 
 @dataclass
 class Graph:
+    """A multiblock's cells and grids as one bipartite graph (:meth:`from_multiblock`): build it
+    once and pass it as ``graph=`` to :func:`grow`, :func:`parts` and :func:`path`, which then skip
+    the build. The rows are the cells of every element, rigid-element and connector block."""
+
     nids: np.ndarray                 # (G,) sorted grid ids
     xyz: np.ndarray                  # (G, 3) grid coordinates
     incidence: sparse.csr_matrix     # (C, G): 1 where cell c uses grid g
@@ -116,6 +120,8 @@ class Graph:
 
     @classmethod
     def from_multiblock(cls, mb) -> "Graph":
+        """The graph of ``mb`` (a deck's multiblock or a converted file); a
+        :class:`NoElementsError` when no block has cells and a ``NID`` array."""
         rows, cols, nid_parts, xyz_parts = [], [], [], []
         eid, pid, card, group = [], [], [], []
         lead, dof, alone, warnings = [], [], [], []  # for the element keys
@@ -220,6 +226,11 @@ def _name(text: str) -> str:
 
 @dataclass(frozen=True)
 class Rules:
+    """Traversal rules (``docs/tools.md#traversal-rules``): the card types or groups a traversal
+    may enter (``include``) or not (``exclude``), PIDs it may not enter (``exclude_pids``), the
+    key it stays within (``within``: ``pid``, ``mid``, ``family`` or ``group`` of the seeds) and
+    ``max_hops``. :meth:`parse` reads the CLI's ``--rules`` text."""
+
     include: frozenset = frozenset()
     exclude: frozenset = frozenset()
     exclude_pids: frozenset = frozenset()
@@ -242,6 +253,8 @@ class Rules:
 
     @classmethod
     def parse(cls, text) -> "Rules":
+        """Rules from text such as ``exclude=rigid,CBUSH exclude_pids=7,10-20 within=pid
+        max_hops=3``; a ValueError names a bad token."""
         kw = {}
         for token in (text or "").replace(";", " ").split():
             key, eq, value = token.partition("=")
@@ -301,6 +314,8 @@ class Rules:
 
 @dataclass(frozen=True)
 class Seeds:
+    """Where a traversal starts: element ids, grid ids and PIDs (:meth:`parse`)."""
+
     eids: tuple = ()
     grids: tuple = ()
     pids: tuple = ()
@@ -310,6 +325,7 @@ class Seeds:
 
     @classmethod
     def parse(cls, text) -> "Seeds":
+        """Seeds from text such as ``EID 1001 1002; GRID 55; PID 7`` (``NID`` is ``GRID``)."""
         out = {"EID": [], "GRID": [], "PID": []}
         for part in re.split(r"[;\n]", text or ""):
             words = part.replace(",", " ").split()

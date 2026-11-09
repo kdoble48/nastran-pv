@@ -194,6 +194,11 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   `paraview/_vendor` in a checkout, a per-user folder per ParaView Python for an installed package).
   `nastran_pv/__init__.py` loads `Deck`/`load_deck` lazily, so `nastran_pv.locate` imports without
   pyNastran.
+- `deprecation.py`: the deprecated-alias helpers of the [deprecation policy](versioning.md#deprecation)
+  (`renamed_keywords`, `renamed_function`, and `rename_flags`, which `cli.main` runs over
+  `cli.DEPRECATED_FLAGS` before parsing). The public Python names are those on [Python API](api.md),
+  rendered by autodoc from their docstrings; `tests/test_api_docs.py` keeps the page and the
+  modules' `__all__` in step.
 - `progress.py`: stderr stages and throttled counters (`Progress`, silent `NULL`). `load_deck` hooks
   pyNastran's include opener and the model's `add_card` only for the read and removes the hooks
   afterward. The CLI's `-q` disables it; the reader passes a callback that drives ParaView's

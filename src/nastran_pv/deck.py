@@ -32,6 +32,15 @@ MAX_MESSAGE = 400
 
 @dataclass
 class Deck:
+    """A read deck (:func:`load_deck`): the pyNastran model and the grids in basic coordinates.
+
+    ``path`` is the deck's file and ``model`` the pyNastran ``BDF`` (read without
+    cross-referencing, then ``safe_cross_reference``). ``nids`` holds the grid ids, sorted, with
+    their basic coordinates in ``xyz`` (n, 3) and their displacement systems (CD) in ``cd``.
+    ``warnings`` lists what pyNastran and the builders reported, the mass-changing ones first;
+    ``includes`` is the tree of files read (which file each element came from).
+    """
+
     path: Path
     model: BDF
     nids: np.ndarray  # sorted node ids
@@ -58,6 +67,7 @@ class Deck:
         return idx
 
     def node_xyz(self, node_ids) -> np.ndarray:
+        """Basic coordinates (n, 3) of ``node_ids``; KeyError on unknown ids."""
         return self.xyz[self.index(node_ids)]
 
     # ------------------------------------------------------------ coordinates
@@ -353,3 +363,6 @@ def source_files(deck: Deck) -> list[str]:
     """Main file plus every INCLUDE pyNastran actually read."""
     files = list(getattr(deck.model, "active_filenames", []) or [])
     return files or [str(deck.path)]
+
+
+__all__ = ["Deck", "load_deck"]

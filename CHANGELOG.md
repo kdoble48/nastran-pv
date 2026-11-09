@@ -8,6 +8,17 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Added
 
+- The Python API on the docs site ([Python API](docs/api.md)): `load_deck`, `build_multiblock`
+  and `Options`, `open_results` and the results objects, the `.vtm` and VTKHDF writers, the
+  result types, fields, model tools, beam sections and results helpers, rendered by autodoc from
+  their docstrings (several written for it). Each of those modules lists its public names in
+  `__all__`, and the page defines the public Python API of the version policy. A deprecation
+  policy ([Deprecation](docs/versioning.md#deprecation)): a renamed or removed public name warns
+  (`DeprecationWarning`, or a line on stderr for a CLI flag), is listed under *Deprecated*, and
+  lives at least until the next minor release before 1.0 and the next major release after; the
+  helpers are in `nastran_pv.deprecation` (`cli.DEPRECATED_FLAGS` for flags). The docs build now
+  installs pyNastran, VTK and h5py, which autodoc imports (#TBD).
+
 - Composite plies in ParaView: the reader's *Ply* (`convert --ply`: a ply id, or 0 for each
   element's critical ply), the *Nastran Ply Axes* filter (a ply's fibre and 2-directions as lines
   through each shell, from the layup table, so on converted files too; ply 0 draws the reader's ply

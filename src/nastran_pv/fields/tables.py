@@ -35,6 +35,10 @@ TEXT_SUFFIXES = {".csv", ".tsv", ".txt", ".dat", ".tab"}
 
 @dataclass
 class MapReport:
+    """What :func:`map_table` did: the ``key`` it matched by, the columns ``added``, the
+    ``table_rows`` and how many of their keys the model has (``matched_keys``), and a sample of
+    those it lacks (``unmatched``). ``str()`` gives the line ``convert`` prints."""
+
     key: str
     added: list[str] = field(default_factory=list)
     table_rows: int = 0
@@ -219,3 +223,6 @@ def write_csv(rows: list[dict], path) -> Path:
         w.writeheader()
         w.writerows(rows)
     return path
+
+
+__all__ = ["MapReport", "map_table", "read_table"]

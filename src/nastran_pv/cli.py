@@ -40,6 +40,9 @@ from .vtkio import MODEL_SUFFIXES, read_model, write_series, write_vtm
 
 BLOCK_FLAGS = ("shells", "lines", "solids", "masses", "rigid", "connectors", "plotels", "bushes", "constraints",
                "loads")
+# renamed flags kept as deprecated aliases: {"--old": ("--new", "the release that removes --old")}
+# (docs/versioning.md#deprecation); main() rewrites them before parsing, with a line on stderr
+DEPRECATED_FLAGS: dict[str, tuple[str, str]] = {}
 
 __all__ = ["main", "write_vtm", "write_series", "summarize"]
 
@@ -889,6 +892,10 @@ def main(argv=None) -> int:
     from .launch import add_parsers
 
     add_parsers(sub)
+    if DEPRECATED_FLAGS:
+        from .deprecation import rename_flags
+
+        argv = rename_flags(sys.argv[1:] if argv is None else argv, DEPRECATED_FLAGS)
     args = p.parse_args(argv)
     return args.func(args)
 

@@ -145,7 +145,10 @@ def _chunk_for(mb) -> int:
 
 
 def write_vtkhdf(mb, path, compression: int = 4, chunk_size: int | None = None) -> Path:
-    """Write one snapshot of a nastran-pv multiblock."""
+    """Write one snapshot of a nastran-pv multiblock as VTKHDF (a partitioned dataset collection
+    named by block; ParaView 5.13+ reads it). ``compression``: the gzip level, 0 to 9;
+    ``chunk_size``: HDF5 chunk rows (default about the largest block). Needs VTK 9.5+. Returns
+    the path, given the ``.vtkhdf`` suffix."""
     w, path = _writer(path, compression, chunk_size or _chunk_for(mb))
     w.SetInputData(to_pdc(mb))
     if not w.Write():
@@ -555,3 +558,6 @@ def compact_static_arrays(path, compression: int = 0) -> dict[str, list[str]]:
                   compression)
     tmp.replace(path)
     return static
+
+
+__all__ = ["write_vtkhdf", "write_vtkhdf_series"]

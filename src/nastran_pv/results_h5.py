@@ -124,6 +124,9 @@ class H5Table(NamedTuple):
 
 
 class H5Results(_Results):
+    """An MSC/NX Nastran HDF5 file's results (``MDLPRM,HDF5``), by step: the same interface as
+    :class:`~nastran_pv.results.Op2Results`. Needs h5py (``pip install nastran-pv[h5]``)."""
+
     def __init__(self, path, registry=None):
         import h5py
 
