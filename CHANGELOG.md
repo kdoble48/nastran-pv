@@ -8,6 +8,16 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Added
 
+- Element forces, stresses and strains as result types (roadmap task 9). Attached by default when
+  the run wrote them: `ShellForce` (`MembraneForce BendingMoment TransverseShear`), `LineForce`
+  (bars, beams and rods: `AxialForce Torque ShearForce BendingMomentA BendingMomentB`),
+  `BushForce` (on the Bushes points) and `SpringForce` (CELAS1/2). Chosen with `--result-types` or
+  *Result Types*: `ShellStress` (per fibre: `StressBottom/Top`, principals, max shear, von Mises),
+  `SolidStress` (`Stress` tensor, `PrincipalStress`, `MaxShearStress`, `VonMises`), `LineStress`
+  (`AxialStress TorsionalStress MaxStress MinStress`) and the matching strains, from OP2 and
+  MSC/NX HDF5 alike, in the frame Nastran writes them in. Every force, stress or strain table no
+  type reads (composite plies, complex tables, STRCUR plate strains, CSHEAR, ...) is reported in the
+  warnings instead of dropped silently, and `convert` names the types it left out (#PR).
 - Result types: what results attach is declared per type in `result_types.py` (`Displacement`,
   `VonMisesMax`, outputs unchanged), so new results are added by declaration. Choose them with
   `--result-types` (`convert`, `stats`, `store add`) or the reader's *Result Types* checklist (#60).
@@ -87,6 +97,8 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Fixed
 
+- `VonMisesMax` reads MSC/NX HDF5 shell stress tables that spell the shear `TXY1`/`TXY2` (TRIA3
+  and the corner layouts), which it dropped before (#PR).
 - A random response with `--beam-sections` no longer leaves the first mode's `Displacement` on
   `BeamSections` (#60).
 - Overlays follow the scope as the reader applies it: a selection file of PIDs, MIDs, families,

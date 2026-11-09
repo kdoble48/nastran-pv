@@ -4,19 +4,23 @@ Reads the MSC schema under ``/NASTRAN/RESULT``:
 
 * ``DOMAINS`` - one row per subcase/step/mode (``ID SUBCASE STEP ANALYSIS
   TIME_FREQ_EIGR MODE ...``)
-* the tables each result type of :mod:`nastran_pv.result_types` names, today
+* the tables each result type of :mod:`nastran_pv.result_types` names:
   ``NODAL/DISPLACEMENT`` and ``NODAL/EIGENVECTOR`` (``ID X Y Z RX RY RZ
-  DOMAIN_ID``; real only, ``*_CPLX`` tables are reported as skipped) and
-  ``ELEMENTAL/STRESS/<TYPE>`` (any table with ``EID`` and ``DOMAIN_ID``;
+  DOMAIN_ID``; real only, ``*_CPLX`` tables are reported as skipped),
+  ``ELEMENTAL/STRESS/<TYPE>`` for ``VonMisesMax`` (any table with ``EID`` and ``DOMAIN_ID``;
   von Mises is computed from the components by ``result_types.von_mises_table``:
   plates from ``X1 Y1 XY1`` / ``X2 Y2 XY2`` (both fibres), solids from
-  ``X Y Z TXY TYZ TZX``; array-valued fields (corner/centre points) take the maximum).
+  ``X Y Z TXY TYZ TZX``; array-valued fields (corner/centre points) take the maximum), and
+  ``ELEMENTAL/{ELEMENT_FORCE,STRESS,STRAIN}/<TYPE>`` for the force, stress and strain types
+  (their ``picks``: :func:`pick_fields`). Every dataset of those groups no type reads is
+  reported in ``skipped``.
 
 Exposes the same interface as :class:`nastran_pv.results.Op2Results`
 (``steps``, ``times``, ``skipped``, ``available``, ``select``, ``values``, ``attach``).
 """
 from __future__ import annotations
 
+import fnmatch
 from pathlib import Path
 
 import numpy as np
@@ -28,7 +32,7 @@ from .results import Step, _mode_frequency, _Results
 __all__ = ["H5Results", "von_mises_table", "ROOT"]
 
 ROOT = "/NASTRAN/RESULT"
-ID_FIELDS = {"point": "ID", "cell": "EID"}
+ID_FIELDS = {"NID": "ID", "EID": "EID"}  # the id field of the tables of a type keyed by NID or EID
 
 
 def _paths(res, patterns):
@@ -41,6 +45,57 @@ def _paths(res, patterns):
                     yield pat, f"{group}/{name}"
         elif pat in res:
             yield pat, pat
+
+
+def _field(names, entry):
+    """The field a pick column names (the first of a tuple of alternatives the table has); None
+    when it has none."""
+    for n in (entry,) if isinstance(entry, str) else entry:
+        if n in names:
+            return n
+    return None
+
+
+def _picked_fields(names, picks) -> bool:
+    return all(c is None or _field(names, c) is not None for _, cols in picks for c in cols)
+
+
+def _slot(values, pos, used):
+    """Slot ``pos`` of each row of an array-valued field (scalar fields: the value itself);
+    negative positions count back from the last ``used`` slot when given; NaN beyond the slots."""
+    if values.ndim == 1:
+        return values
+    n, size = values.shape[:2]
+    out = np.full(n, np.nan)
+    if pos >= 0:
+        if pos < size:
+            out = values[:, pos].astype(float)
+        return out
+    if used is None:
+        if -pos <= size:
+            out = values[:, pos].astype(float)
+        return out
+    back = np.cumsum(used[:, ::-1], axis=1) >= -pos  # the (-pos)-th used slot from the end
+    ok = back.any(axis=1)
+    idx = size - 1 - back.argmax(axis=1)
+    out[ok] = values[np.nonzero(ok)[0], idx[ok]]
+    return out
+
+
+def pick_fields(rows, picks, slots="") -> np.ndarray:
+    """(n, k) values of an HDF5 table for a source's ``picks`` (see ``result_types.H5Source``)."""
+    names = rows.dtype.names
+    used = None
+    if slots and slots in names and rows[slots].ndim == 2:
+        used = rows[slots] != 0
+    cols = []
+    for pos, entries in picks:
+        for c in entries:
+            if c is None:
+                cols.append(np.full(len(rows), np.nan))
+            else:
+                cols.append(_slot(np.asarray(rows[_field(names, c)], dtype=float), pos, used))
+    return np.column_stack(cols) if cols else np.zeros((len(rows), 0))
 
 
 class H5Results(_Results):
@@ -56,6 +111,7 @@ class H5Results(_Results):
             res = h5[ROOT]
             self.domains = res["DOMAINS"][()] if "DOMAINS" in res else None
             self.tables = {t.name: self._read_tables(res, t) for t in self.registry}
+            self.skipped += self._unread(res)
         self._same_domain = self._domains_by_signature()
         self.steps = self._collect_steps()
         self.available = tuple(t.name for t in self.registry if self.tables[t.name])
@@ -63,30 +119,57 @@ class H5Results(_Results):
     def _read_tables(self, res, rtype) -> list:
         """(dataset path, ids, domain ids, values) of every table of ``rtype`` the file has."""
         found = []
-        id_field = ID_FIELDS[rtype.location]
-        for pat, path in _paths(res, rtype.h5.datasets):
+        id_field = ID_FIELDS[rtype.id_array]
+        for src in rtype.h5_sources:
+            for pat, path in _paths(res, src.datasets):
+                ds = res[path]
+                if not hasattr(ds, "dtype") or ds.dtype.names is None:
+                    continue
+                names = set(ds.dtype.names)
+                if not {id_field, "DOMAIN_ID"} <= names:
+                    continue
+                if src.picks and not _picked_fields(names, src.picks):
+                    continue  # checked before reading: several types look at every STRESS table
+                rows = ds[()]
+                if src.compute is not None:
+                    vals = src.compute(rows)
+                    if vals is None:
+                        continue  # a layout the type does not handle (bars, beams, composites...)
+                elif src.picks:
+                    vals = pick_fields(rows, src.picks, src.slots)
+                elif set(src.fields) <= names:
+                    vals = np.column_stack([rows[f].astype(float) for f in src.fields])
+                else:
+                    continue
+                found.append((path, rows[id_field].astype(np.int64), rows["DOMAIN_ID"].astype(np.int64),
+                              np.asarray(vals, dtype=float), src.kind(pat) if rtype.steps else None))
+            if rtype.steps:
+                for path in src.datasets:
+                    if f"{path}_CPLX" in res:
+                        self.skipped.append(f"{path.rsplit('/', 1)[-1]}_CPLX: complex results are not supported")
+        return found
+
+    def _unread(self, res) -> list[str]:
+        """One message per element force, stress or strain dataset that no type of the registry
+        reads (complex, composite plies, or a layout no type declares); a composite table is
+        reported even when ``VonMisesMax`` reads its von Mises."""
+        read = {entry[0] for tables in self.tables.values() for entry in tables}
+        out = []
+        for _, path in _paths(res, result_types.REPORTED_H5):
             ds = res[path]
             if not hasattr(ds, "dtype") or ds.dtype.names is None:
                 continue
-            names = set(ds.dtype.names)
-            if not {id_field, "DOMAIN_ID"} <= names:
+            name = path.rsplit("/", 1)[-1]
+            if "_CPLX" in name:
+                reason = result_types.COMPLEX
+            elif any(fnmatch.fnmatchcase(name, p) for p in result_types.PLY_TABLES):
+                reason = result_types.PLIES + (" (VonMisesMax has their largest von Mises)" if path in read else "")
+            elif path in read:
                 continue
-            rows = ds[()]
-            if rtype.h5.compute is not None:
-                vals = rtype.h5.compute(rows)
-                if vals is None:
-                    continue  # a layout the type does not handle (bars, beams, composites...)
-            elif set(rtype.h5.fields) <= names:
-                vals = np.column_stack([rows[f].astype(float) for f in rtype.h5.fields])
             else:
-                continue
-            found.append((path, rows[id_field].astype(np.int64), rows["DOMAIN_ID"].astype(np.int64),
-                          np.asarray(vals, dtype=float), rtype.h5.kind(pat) if rtype.steps else None))
-        if rtype.steps:
-            for path in rtype.h5.datasets:
-                if f"{path}_CPLX" in res:
-                    self.skipped.append(f"{path.rsplit('/', 1)[-1]}_CPLX: complex results are not supported")
-        return found
+                reason = result_types.NOT_READ
+            out.append(f"{path}: {reason}")
+        return out
 
     # ----------------------------------------------------------------- domains
     def _domain(self, did: int):

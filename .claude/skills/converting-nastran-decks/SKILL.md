@@ -35,7 +35,8 @@ the file skips deck parsing, which is much faster on large models. `summary.py` 
 | One snapshot for ParaView or VTK | `.vtm` (default) |
 | All result steps, or a large model | `.vtkhdf` with `--all-steps` (1/5 the size of a `.pvd` series on uCRM-9) |
 | One result step | `--results F --step N` |
-| Only some result types (e.g. stresses without displacements) | `--results F --result-types VonMisesMax` (names: `Displacement VonMisesMax`, or `all`; docs/model.md#result-types) |
+| Only some result types (e.g. stresses without displacements) | `--results F --result-types VonMisesMax` (names: `Displacement VonMisesMax ShellForce LineForce BushForce SpringForce` (the defaults), `ShellStress SolidStress LineStress ShellStrain SolidStrain LineStrain` (off by default), or `all`; docs/model.md#result-types) |
+| Element forces, stress or strain components | Forces come by default when the run wrote them (`MembraneForce`, `AxialForce`, `BushForce`, ...); components: `--result-types all` or `ShellStress,SolidStress,LineStress` → `StressTop/Bottom`, `VonMisesTop`, `PrincipalStress`, `MaxStress`, ... in the element frame. `convert` prints the types it left out; unread tables (composites, STRCUR strains, CSHEAR, ...) are in the warnings |
 | Random vibration (base drive) from SOL 103 modes: RMS, N0, dominant mode, response ASD per frequency frame | `--results modes.op2 --random "20:0.01,2000:0.01" [--drive Z --damping 0.05 --g 9806.65] --all-steps` (docs/random-vibration.md); check the printed captured-mass fraction |
 | Per-part mass breakdown | `--derive pidmass`, or `stats --by PID --field ElementMass` |
 | Mesh quality | `--derive quality` → `EdgeRatio ScaledJacobian Skew Warpage` |

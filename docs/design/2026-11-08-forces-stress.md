@@ -97,10 +97,32 @@ declared rows through `result_types.pick_rows` (OP2) or the slots of the array f
 ## No output change
 
 The parity harness of the registry change (`out/parity/parity.py`, not committed: it needs the
-uCRM-9 dataset and a MYSTRAN solve) ran its 12 cases on `origin/main` and on this branch:
-see the PR for the result. Expected and checked: every array, block and value identical; the
-only differences are the new messages (the MYSTRAN uCRM-9 run writes STRCUR plate strains, now
-reported) and the `result types not attached` line for files with stresses.
+uCRM-9 dataset and a MYSTRAN solve) ran its 12 cases on `origin/main` and on this branch: the
+synthesized OP2 and HDF5 fixtures, `beams.bdf` with beam sections, CD-rotated output, the field
+options, the demo modes, a random response, uCRM-9 coarse static (MYSTRAN: displacements, CQUAD4
+stress and STRCUR strain) and uCRM-9 medium with a 20-mode HDF5 file, each as `.vtm` per step,
+`.pvd` series, temporal VTKHDF (compacted and not) and a VTKHDF snapshot, plus the in-memory model
+after every step. None of these files has force tables, so the new default types add nothing.
+
+Result: 66 output files, 158 step snapshots (19 207 arrays) and 90 stdout texts compared exactly.
+Three intended additions differ, and nothing else (`parity.py compare-known`, which drops just
+those, reports every block, array name and order, dtype and value and every stdout identical):
+
+- the line `result types not attached: ShellStress` (`, SolidStress` for the HDF5 fixture) on
+  every conversion of a file with stresses;
+- the uCRM-9 run's new warning `strain.cquad4_strain, subcase 1: plate strains as mid-plane strain
+  and curvature (STRAIN(STRCUR)) are not attached; ...` in its stdout, `skipped` and root
+  `Warnings`.
+
+Every `.vtm`/`.vtu`/`.pvd` file is byte-identical except the uCRM-9 root `.vtm` files that carry
+that warning (VTKHDF files carry HDF5 timestamps, so their bytes differ between any two runs).
+
+A real solve checks the values: the uCRM-9 coarse static case solved again by MYSTRAN with
+`FORCE = ALL` gives, for CQUAD4 1, the F06's `Nxx Nyy Nxy` (-4.201361E+05 -6.473481E+04
+1.398323E+05), `Mxx Myy Mxy` and `Qx Qy` as `MembraneForce`, `BendingMoment` and
+`TransverseShear`, and the F06's fibre stresses, major and minor principal stresses
+(-2.04029E+07, -4.29858E+07 at Z2) and von Mises (3.72428E+07) as `StressTop`,
+`PrincipalStressTop` and `VonMisesTop`, the principals and von Mises computed by nastran-pv.
 
 ## Sketches for later (not built)
 
@@ -112,5 +134,6 @@ reported) and the `result types not attached` line for files with stresses.
   reported today.
 - **Complex results (task 11).** The force and stress types gain the complex parts with the
   registry sketch (`<name>_Real`/`_Imag`); the reports already name complex tables.
-- **More families.** CSHEAR (`max_shear avg_shear`), CBUSH stress, CGAP/CBEND/CFAST/CWELD forces
-  and CDAMP/CVISC dampers are reported today; each is one more source or type.
+- **More families.** CSHEAR (`max_shear avg_shear`), CBUSH and CELAS stresses, CGAP/CBEND/
+  CFAST/CWELD forces and CDAMP1/2 dampers are reported today; each is one more source or type.
+  (CVISC forces share the rods' columns and go into `LineForce`.)

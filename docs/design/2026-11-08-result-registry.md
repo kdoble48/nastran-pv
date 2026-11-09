@@ -165,14 +165,14 @@ vocabulary in `result_types.py` and the shared code in `results.py`, not one rea
   (`Step.kind = "frequency"`, label `Subcase 1 12.5 Hz`); a phase-angle animation deforms by
   `Re cos(phi) - Im sin(phi)` in *Nastran Deform*. Nothing in the reader split changes:
   `_find_tables` stops dropping complex tables for types that declare `complex`.
-- **Per-layer and per-ply data (tasks 9, 13).** New reductions: `reduce="fibre"` splits plate
-  rows into `Bottom`/`Top` (rows alternate per element and node) and `ArraySpec` gains a
-  `layer` (`"bottom"`, `"top"`, `"centre"`); `reduce="ply"` keeps the rows of one ply id
-  (`element_layer[:, 1]`; H5 `PLY`), the ply chosen with the selection
-  (`results.select(names, ply=3)`, a reader *Ply* property). `max` stays the envelope.
-- **Element frames (task 9).** `frame="element"` leaves forces and stresses in the element
-  system (as Nastran writes them) and a later `frame="element_basic"` rotates them with the
-  blocks' `Axis1-3` or material-axis arrays inside `_write`.
+- **Per-layer and per-ply data (tasks 9, 13).** Built for fibres in task 9 as source `picks`
+  (position and columns per element) rather than a reduction: see
+  [2026-11-08-forces-stress.md](2026-11-08-forces-stress.md). Still to come: `reduce="ply"`
+  keeps the rows of one ply id (`element_layer[:, 1]`; H5 `PLY`), the ply chosen with the
+  selection (`results.select(names, ply=3)`, a reader *Ply* property). `max` stays the envelope.
+- **Element frames (task 9).** Forces and stresses stay in the element system as Nastran writes
+  them (`frame="none"`, task 9); a later `frame="element_basic"` rotates them with the blocks'
+  `Axis1-3` or material-axis arrays inside `_write`.
 - **Time and frequency series (task 11).** Steps are already one time value each, and the VTKHDF
   series writer fills arrays a step lacks (`_fill_missing`), so new types need nothing there.
   Long transients may want a step range (`--steps`); the step-defining type could also come from

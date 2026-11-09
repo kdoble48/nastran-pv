@@ -309,6 +309,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
             self._lists[cat] = sel
         self._listed_key = None
         self._reported_key = None
+        self._reported_results = None  # the results whose skipped messages were shown
         self._load_error = ""  # last RequestData failure, for LoadError (empty after a good read)
         self._names = {}
         self._tree = None
@@ -769,6 +770,10 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
                 time_value = res.times[step]
                 if rebuilt:
                     deck.warnings += res.skipped
+                elif res.skipped and self._reported_results is not res:  # another results file, same model
+                    shown = "\n  ".join(res.skipped[:25])
+                    _message(f"nastran-pv: {os.path.basename(self._op2name)}: {len(res.skipped)} message(s)\n  {shown}")
+                self._reported_results = res
             vis = self._visibility()
             key = (self._mb_key, vis.key())
             if key != self._tree_key:

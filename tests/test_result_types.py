@@ -34,9 +34,17 @@ def _cell(block, name):
 
 
 # ------------------------------------------------------------------ the registry
+FORCE_TYPES = ("ShellForce", "LineForce", "BushForce", "SpringForce")
+STRESS_TYPES = ("ShellStress", "SolidStress", "LineStress", "ShellStrain", "SolidStrain", "LineStrain")
+ALL_TYPES = ("Displacement", "VonMisesMax") + FORCE_TYPES + STRESS_TYPES
+DEFAULTS = ("Displacement", "VonMisesMax") + FORCE_TYPES
+
+
 def test_registry_holds_todays_types_in_order():
-    assert [t.name for t in rt.REGISTRY] == ["Displacement", "VonMisesMax"]
-    disp, vm = rt.REGISTRY
+    """The first two types and their declarations are pinned (outputs unchanged); forces,
+    stresses and strains (roadmap task 9) are appended after them, forces on by default."""
+    assert [t.name for t in rt.REGISTRY] == list(ALL_TYPES)
+    disp, vm = rt.REGISTRY[:2]
     assert disp is rt.DISPLACEMENT and vm is rt.VON_MISES_MAX
     assert (disp.location, disp.frame, disp.steps, disp.fill) == ("point", "grid_cd", True, 0.0)
     assert [a.name for a in disp.arrays] == list(DISP_ARRAYS)
@@ -47,7 +55,7 @@ def test_registry_holds_todays_types_in_order():
     assert np.isnan(vm.fill) and "Masses" not in vm.blocks
     assert vm.op2.tables == ("stress.*",) and vm.op2.columns == ("von_mises",)
     assert vm.h5.datasets == ("ELEMENTAL/STRESS/*",) and vm.h5.compute is rt.von_mises_table
-    assert all(t.default for t in rt.REGISTRY)
+    assert tuple(t.name for t in rt.REGISTRY if t.default) == DEFAULTS
 
 
 def test_array_names_are_unique_across_types():
@@ -56,12 +64,13 @@ def test_array_names_are_unique_across_types():
 
 
 @pytest.mark.parametrize("spec, names", [
-    (None, ("Displacement", "VonMisesMax")),
+    (None, DEFAULTS),
     ("vonmisesmax", ("VonMisesMax",)),
     (["VONMISESMAX,displacement"], ("Displacement", "VonMisesMax")),  # registry order
     (["Displacement", "Displacement"], ("Displacement",)),
-    (["all"], ("Displacement", "VonMisesMax")),
-    ("all,vonmisesmax", ("Displacement", "VonMisesMax")),
+    (["all"], ALL_TYPES),
+    ("all,vonmisesmax", ALL_TYPES),
+    ("shellstress lineforce", ("LineForce", "ShellStress")),
 ])
 def test_parse(spec, names):
     assert rt.parse(spec) == names
@@ -99,9 +108,12 @@ def test_step_kinds_are_declared_with_the_tables():
 
 # ------------------------------------------------------------------ the readers
 def test_available_types_of_each_file(tmp_path):
-    assert Op2Results(make_op2()).available == ("Displacement", "VonMisesMax")
+    """The plate stress of the fixtures also gives ShellStress (off by default), the H5 hexa
+    SolidStress."""
+    assert Op2Results(make_op2()).available == ("Displacement", "VonMisesMax", "ShellStress")
     assert Op2Results(make_modes_op2()).available == ("Displacement",)
-    assert open_results(write_msc_h5(tmp_path / "r.h5")).available == ("Displacement", "VonMisesMax")
+    assert open_results(write_msc_h5(tmp_path / "r.h5")).available == (
+        "Displacement", "VonMisesMax", "ShellStress", "SolidStress")
 
 
 def test_values_are_sorted_and_reduced():

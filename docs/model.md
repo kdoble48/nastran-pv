@@ -67,9 +67,11 @@ A [selection file](cli.md#selection-from-an-id-file) (`--select`) adds the root 
 `SelectionInfo`, and with `--select-mode mark` an int8 `Selected` cell array on every block.
 With an OP2 or HDF5 file loaded, the mesh blocks, `Masses`, `Rigid` and `Constraints` get point
 `Displacement Rotation DisplacementMagnitude`, the mesh blocks cell `VonMisesMax` (when the results
-have stresses), `BeamSections` gets the rigid-section `Displacement` of its points, and the root
+have stresses), the element blocks their element forces (when the results have them),
+`BeamSections` gets the rigid-section `Displacement` of its points, and the root
 gets `ResultLabel ResultStep` and `Frequency` (modes only). Each comes from a
-[result type](#result-types), which `--result-types` and the reader's *Result Types* choose.
+[result type](#result-types), which `--result-types` and the reader's *Result Types* choose; the
+stress and strain components are there when chosen.
 
 The [field options](fields.md) add further arrays on top of these.
 
@@ -79,8 +81,37 @@ The [field options](fields.md) add further arrays on top of these.
 |---|---|---|
 | `Displacement` | point `Displacement` (T1-T3), `Rotation` (R1-R3), `DisplacementMagnitude`, rotated from each grid's CD into basic; 0 on grids without output | `displacements`, `eigenvectors` / `NODAL/DISPLACEMENT`, `NODAL/EIGENVECTOR`; these define the result steps |
 | `VonMisesMax` | cell `VonMisesMax` on the mesh blocks: the largest value over the element's layers, fibres and nodes; NaN without output | every stress table with a von Mises column / `ELEMENTAL/STRESS/*`, computed from the components |
+| `ShellForce` | Shells: `MembraneForce` (FX FY FXY), `BendingMoment` (MX MY MXY), `TransverseShear` (QX QY), per unit length at the centre | `force.c{tria3,tria6,triar,quad4,quad8,quadr}_force` / `ELEMENTAL/ELEMENT_FORCE/*` with `MX ... TY` |
+| `LineForce` | Lines: `AxialForce`, `Torque`, `ShearForce` (plane 1, 2), `BendingMomentA`, `BendingMomentB` (plane 1, 2: ends A and B); a CBEAM's shear, axial force and torque are at end A; rods have axial force and torque only | `force.cbar_force`, `force.cbeam_force`, `force.c{rod,onrod,tube,visc}_force` / `ELEMENT_FORCE/{BAR,BEAM,ROD,CONROD,TUBE,VISC}` |
+| `BushForce` | Bushes (point data, by `EID`): `BushForce` (FX FY FZ), `BushMoment` (MX MY MZ) | `force.cbush_force` / `ELEMENT_FORCE/BUSH` |
+| `SpringForce` | Connectors: `SpringForce` of CELAS1/2 (NaN on MPC legs, whose `EID` is a set id) | `force.celas{1,2}_force` / `ELEMENT_FORCE/ELAS{1,2}` |
+| `ShellStress` | Shells, per fibre (`Bottom` = Z1, `Top` = Z2) at the centre: `StressBottom`/`StressTop` (XX YY XY), `PrincipalStressBottom/Top` (major, minor), `MaxShearStressBottom/Top`, `VonMisesBottom/Top` | `stress.c{tria3,...,quadr}_stress` with fibre distances / `STRESS/*` with `X1 Y1 XY1` (or `TXY1`) `X2 Y2 XY2` |
+| `SolidStress` | Solids, at the centre: `Stress` (XX YY ZZ XY YZ ZX, a symmetric tensor), `PrincipalStress` (3, largest first), `MaxShearStress`, `VonMises` | `stress.c{tetra,penta,hexa,pyram}_stress` / `STRESS/*` with `X Y Z TXY TYZ TZX` |
+| `LineStress` | Lines: `AxialStress` (bars, rods), `TorsionalStress` (rods), `MaxStress`/`MinStress` (the largest S-MAX and smallest S-MIN of a bar's or beam's two ends; a rod's axial stress) | `stress.cbar_stress`, `stress.cbeam_stress`, `stress.c{rod,onrod,tube}_stress` / `STRESS/{BAR,BEAM,ROD,CONROD,TUBE}` |
+| `ShellStrain`, `SolidStrain`, `LineStrain` | as the stresses, with `Strain` for `Stress` (`StrainTop`, `PrincipalStrain`, `MaxShearStrainBottom`, `AxialStrain`, `MaxStrain`, ...) and no von Mises | the `strain.*` tables / `ELEMENTAL/STRAIN/*` |
 
-Both are attached by default. The types are declared in `src/nastran_pv/result_types.py`.
+`Displacement`, `VonMisesMax` and the forces are attached by default, the stresses and strains
+when chosen (`--result-types ShellStress,SolidStress` or `all`; `convert` prints the types it left
+out). The types are declared in `src/nastran_pv/result_types.py`.
+
+* **Frames.** Forces, stresses and strains are written as Nastran writes them, not rotated: in the
+  element system for shells (or the material system when the run asks for it), bars, beams and
+  bushes, and in the PSOLID `CORDM` system for solids. The blocks carry those frames: `Normal` and
+  `ElementXAxis` on Shells, `Axis1-3` on Lines and Bushes. Principal values, maximum shear and von
+  Mises do not depend on the frame.
+* **Where.** One value per element: shells and solids at the centre (corner output adds only to
+  `VonMisesMax`, the envelope), beams at end A and end B, the others from their single row.
+* **Derived values.** Principals, maximum shear and von Mises are computed from the components, for
+  OP2 and HDF5 alike. Shells: in-plane principals, maximum shear `(σ1 − σ2)/2`. Solids: the three
+  eigenvalues, `(σ1 − σ3)/2`. Shear strains are engineering strains (γ), as Nastran writes them:
+  the principals use γ/2 and the maximum shear strain is engineering (`ε1 − ε2`, `ε1 − ε3`). Halve
+  the shear components of `Strain` before treating it as a tensor.
+* **Reported, not attached.** Every force, stress and strain table no type reads is named in the
+  results' messages (the CLI's warnings, the reader's Output Messages), once per table with its
+  subcases: complex tables, composite plies (roadmap task 13; `VonMisesMax` still takes an OP2 ply
+  table's von Mises), plate strains written as mid-plane strain and curvature (`STRAIN(STRCUR)`;
+  ask for `STRAIN(FIBER)`), and the families no type covers yet (CSHEAR, CBUSH and CELAS stresses,
+  CGAP, CBEND, CFAST, CWELD and damper forces, ...).
 
 ## Derived quantities
 
@@ -117,10 +148,12 @@ Both are attached by default. The types are declared in `src/nastran_pv/result_t
 * **Random vibration.** Computed by nastran-pv from the normal modes and an input ASD, by modal
   superposition on a lumped mass (see [Random vibration](random-vibration.md#method)).
 * **MSC/NX HDF5.** The reader handles `/NASTRAN/RESULT/{DOMAINS, NODAL/DISPLACEMENT,
-  NODAL/EIGENVECTOR, ELEMENTAL/STRESS/*}`. Von Mises is computed from the components: plates use
-  `X1 Y1 XY1`/`X2 Y2 XY2` on both fibres, and solids use `X Y Z TXY TYZ TZX`, taking the maximum
-  over corner and centre points. It is tested against files written in that layout; please report
-  any real files it misreads.
+  NODAL/EIGENVECTOR, ELEMENTAL/ELEMENT_FORCE/*, ELEMENTAL/STRESS/*, ELEMENTAL/STRAIN/*}`. Von Mises
+  is computed from the components: plates use `X1 Y1 XY1`/`X2 Y2 XY2` (or `TXY1`/`TXY2`) on both
+  fibres, and solids use `X Y Z TXY TYZ TZX`, taking the maximum over corner and centre points.
+  Array-valued fields (corner layouts such as `QUAD4_CN`, solids, CBEAM stations) give the centre
+  from their first slot and a beam's end B from its last slot with a `GRID`. It is tested against
+  files written in that layout; please report any real files it misreads.
 
 ## Coordinate systems
 

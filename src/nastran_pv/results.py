@@ -7,17 +7,20 @@ modes) in the field data, so the VCR controls page through modes and
 ``Warp By Vector`` on ``Displacement`` animates them.
 
 What a step writes is declared by the result types of :mod:`nastran_pv.result_types`
-(``REGISTRY``). Today the mesh blocks receive
+(``REGISTRY``). By default the mesh blocks receive
 
 * point data ``Displacement`` (T1-T3), ``Rotation`` (R1-R3),
   ``DisplacementMagnitude``, rotated from each grid's CD system into basic
   when the deck is supplied (type ``Displacement``);
 * cell data ``VonMisesMax``: the largest von Mises value over all
   layers/nodes reported for the element in any stress table of that subcase
-  and time, only when stress output exists (type ``VonMisesMax``).
+  and time, only when stress output exists (type ``VonMisesMax``);
+* the element forces of shells, lines, bushes and springs (``ShellForce``, ``LineForce``,
+  ``BushForce``, ``SpringForce``); the stress and strain components are chosen with ``select``.
 
 The readers only yield a type's raw rows for a step (``_rows``); ``values`` joins, sorts and
-reduces them, and :func:`attach_step` rotates and writes them. ``select`` picks the types.
+reduces them, and :func:`attach_step` rotates and writes them. ``select`` picks the types. Each
+reader names the force, stress and strain tables no type reads in ``skipped``.
 """
 from __future__ import annotations
 
@@ -29,6 +32,7 @@ import numpy as np
 
 from . import result_types, vtkutil
 from .assemble import block_names, get_block
+from .fields.common import mpc_legs
 from .sections import sweep
 
 
@@ -156,24 +160,59 @@ def _op2_results(op2, patterns):
                 yield pat, name, result
 
 
-def _header_columns(obj, columns):
-    """Indices of ``columns`` in the table's headers, or None when one is missing."""
+def _headers(obj):
+    """The table's ``get_headers()``, or None (some OES classes do not implement headers)."""
     try:
         get = getattr(obj, "get_headers", None)
-        headers = list(get() if callable(get) else getattr(obj, "headers", []))
-    except Exception:  # some OES classes do not implement headers
+        return list(get() if callable(get) else getattr(obj, "headers", []))
+    except Exception:
         return None
-    if not hasattr(obj, "data") or any(c not in headers for c in columns):
+
+
+def _header_columns(obj, columns):
+    """Indices of ``columns`` in the table's headers, or None when one is missing."""
+    headers = _headers(obj)
+    if headers is None or not hasattr(obj, "data") or any(c not in headers for c in columns):
         return None
     return [headers.index(c) for c in columns]
 
 
+def _pick_columns(obj, picks):
+    """``picks`` with header names resolved to column indices (a tuple of alternatives: the first
+    the table has; None stays None), or None when the table lacks one."""
+    headers = _headers(obj)
+    if headers is None or not hasattr(obj, "data"):
+        return None
+    out = []
+    for pos, cols in picks:
+        idx = []
+        for c in cols:
+            names = (c,) if isinstance(c, str) else (c or ())
+            hit = [headers.index(n) for n in names if n in headers]
+            if c is not None and not hit:
+                return None
+            idx.append(hit[0] if hit else None)
+        out.append((pos, idx))
+    return tuple(out)
+
+
 def _ids(obj, rtype):
-    """Grid ids (point types) or element ids (cell types) of a pyNastran table's rows."""
-    if rtype.location == "point":
+    """Grid ids (types keyed by NID) or element ids (by EID) of a pyNastran table's rows."""
+    if rtype.id_array == "NID":
         ng = getattr(obj, "node_gridtype", None)
         return ng[:, 0] if ng is not None and np.ndim(ng) == 2 else None
     return _element_ids(obj)
+
+
+def _subcases(subcases) -> str:
+    """``subcase 1``, ``subcases 1, 2, 3``, or the first five and the count."""
+    u = sorted(set(int(s) for s in subcases))
+    shown = ", ".join(str(s) for s in u[:5]) + (f", ... ({len(u)} subcases)" if len(u) > 5 else "")
+    return f"subcase{'s' if len(u) > 1 else ''} {shown}"
+
+
+def _is_ply_table(name) -> bool:
+    return any(fnmatch.fnmatchcase(name, p) for p in result_types.PLY_TABLES)
 
 
 class Op2Results(_Results):
@@ -186,6 +225,7 @@ class Op2Results(_Results):
         self.tables = {t.name: self._find_tables(t) for t in self.registry}
         self.steps = self._collect_steps()
         self.available = tuple(t.name for t in self.registry if self.tables[t.name])
+        self.skipped += self._unread()
 
     @classmethod
     def read(cls, path, registry=None) -> "Op2Results":
@@ -197,33 +237,61 @@ class Op2Results(_Results):
 
     # ------------------------------------------------------------ discovery
     def _find_tables(self, rtype) -> list:
-        """(result name, subcase key, table, column indices or None, step kind) of every usable
-        table; the kind is None for a type that does not define steps."""
+        """(result name, subcase key, table, columns, step kind, picked) of every usable table:
+        the columns are header indices (None: all), or the source's picks with resolved indices
+        when ``picked``; the kind is None for a type that does not define steps."""
         found = []
-        for pat, name, result in _op2_results(self.op2, rtype.op2.tables):
-            kind = rtype.op2.kind(pat) if rtype.steps else None
+        for src in rtype.op2_sources:
+            for pat, name, result in _op2_results(self.op2, src.tables):
+                kind = src.kind(pat) if rtype.steps else None
+                for key, obj in result.items():
+                    if getattr(obj, "is_complex", False):
+                        if rtype.steps:
+                            sc = int(key) if np.isscalar(key) else key[0]
+                            self.skipped.append(f"{kind} subcase {sc}: complex results are not supported")
+                        continue
+                    if not rtype.steps and _ids(obj, rtype) is None:
+                        continue
+                    if src.requires and _header_columns(obj, src.requires) is None:
+                        continue
+                    cols = None
+                    if src.columns:
+                        cols = _header_columns(obj, src.columns)
+                    elif src.picks:
+                        cols = _pick_columns(obj, src.picks)
+                    if cols is None and (src.columns or src.picks):
+                        continue
+                    found.append((name, key, obj, cols, kind, bool(src.picks)))
+        return found
+
+    def _unread(self) -> list[str]:
+        """One message per force, stress or strain table that no type of the registry reads
+        (complex, composite plies, plate curvature, or a layout no type declares), with its
+        subcases; a composite table is reported even when ``VonMisesMax`` reads its von Mises."""
+        read = {(entry[0], entry[1]) for tables in self.tables.values() for entry in tables}
+        reasons = {}
+        for _, name, result in _op2_results(self.op2, result_types.REPORTED_OP2):
             for key, obj in result.items():
                 if getattr(obj, "is_complex", False):
-                    if rtype.steps:
-                        sc = int(key) if np.isscalar(key) else key[0]
-                        self.skipped.append(f"{kind} subcase {sc}: complex results are not supported")
+                    reason = result_types.COMPLEX
+                elif _is_ply_table(name):
+                    reason = result_types.PLIES + (" (VonMisesMax has their largest von Mises)"
+                                                   if (name, key) in read else "")
+                elif (name, key) in read:
                     continue
-                if not rtype.steps and _ids(obj, rtype) is None:
-                    continue
-                cols = None
-                if rtype.op2.columns:
-                    cols = _header_columns(obj, rtype.op2.columns)
-                    if cols is None:
-                        continue
-                found.append((name, key, obj, cols, kind))
-        return found
+                elif (_headers(obj) or [""])[0] == "fiber_curvature":
+                    reason = result_types.CURVATURE
+                else:
+                    reason = result_types.NOT_READ
+                reasons.setdefault((name, reason), []).append(int(key) if np.isscalar(key) else key[0])
+        return [f"{name}, {_subcases(scs)}: {reason}" for (name, reason), scs in reasons.items()]
 
     def _collect_steps(self) -> list[Step]:
         steps = []
         for rtype in self.registry:
             if not rtype.steps:
                 continue
-            for name, key, res, _, kind in self.tables[rtype.name]:
+            for name, key, res, _, kind, _ in self.tables[rtype.name]:
                 sc = int(key) if np.isscalar(key) else key[0]
                 ntimes = res.data.shape[0]
                 times = np.asarray(getattr(res, "_times", []), dtype=float)
@@ -246,7 +314,7 @@ class Op2Results(_Results):
     def _rows(self, rtype, step):
         """A step-defining type reads the step's own table at its index; the others every table
         of the step's subcase, at the row whose time value matches the step's."""
-        for name, key, obj, cols, _ in self.tables[rtype.name]:
+        for name, key, obj, cols, _, picked in self.tables[rtype.name]:
             if key != step.key:
                 continue
             if rtype.steps:
@@ -258,7 +326,10 @@ class Op2Results(_Results):
                 if itime is None:
                     continue
             data = obj.data[itime]
-            yield _ids(obj, rtype), (data if cols is None else data[:, cols])
+            if picked:
+                yield result_types.pick_rows(_ids(obj, rtype), data, cols)
+            else:
+                yield _ids(obj, rtype), (data if cols is None else data[:, cols])
 
 
 # ------------------------------------------------------------------ attaching
@@ -289,14 +360,20 @@ def _write(mb, names, targets, rtype, got) -> None:
         if not write or ids is None:
             continue
         idx = vtkutil.match_ids(got[0], vtkutil.to_numpy(ids))
+        if rtype.location == "cell" and rtype.id_array == "EID":
+            legs = mpc_legs(block)  # their EID is the MPC set id, not an element's
+            if legs is not None:
+                idx[legs] = -1
         ok = idx >= 0
         vals = np.full((len(idx), got[1].shape[1]), rtype.fill)
         vals[ok] = got[1][idx[ok]]
         for spec in rtype.arrays:
             v = vals[:, _columns(spec.columns)]
-            if spec.magnitude:
+            if spec.derive:
+                v = result_types.derive(spec, v)
+            elif spec.magnitude:
                 v = np.linalg.norm(v, axis=1)
-            elif v.shape[1] == 1:
+            if v.ndim == 2 and v.shape[1] == 1:
                 v = v[:, 0]
             vtkutil.add_array(attrs, spec.name, v, skip_all_nan=bool(np.isnan(rtype.fill)))
 

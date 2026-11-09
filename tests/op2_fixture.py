@@ -1,7 +1,7 @@
 """Synthesized OP2 results shared by test_results.py and pv_smoke.py (no pytest import)."""
 import numpy as np
 from pyNastran.op2.op2 import OP2
-from pyNastran.op2.tables.oes_stressStrain.real.oes_plates import RealPlateStressArray
+from pyNastran.op2.tables.oes_stressStrain.real.oes_plates import RealPlateStrainArray, RealPlateStressArray
 from pyNastran.op2.tables.oug.oug_displacements import RealDisplacementArray
 from pyNastran.op2.tables.oug.oug_eigenvectors import RealEigenvectorArray
 
@@ -44,4 +44,148 @@ def make_modes_op2(freqs=(30.0, 120.0)) -> OP2:
     op2.eigenvectors[1] = vec = RealEigenvectorArray.add_modal_case(
         "BOUGV1", ng, eig, 1, list(range(1, len(freqs) + 1)), lam, list(freqs))
     vec.table_code = vec.data_code["table_code"] = 7
+    return op2
+
+
+# ------------------------------------------------------------------ element forces, stress, strain
+# For tests/data/elements.bdf (tests/test_element_results.py, pv_smoke); tests/h5_fixture.py writes
+# the same values in the MSC HDF5 layout. Values per element, in the order of pyNastran's headers.
+ELEMENT_NIDS = np.array([1, 2, 3, 4, 5, 6, 7, 101, 102, 103, 104, 105, 106, 107, 108, 201, 202, 203, 204, 211])
+SHELL_FORCE = {1: [1, 2, 3, 4, 5, 6, 7, 8], 2: [10, 20, 30, 40, 50, 60, 70, 80]}  # mx my mxy bmx bmy bmxy tx ty
+BAR_FORCE = [1, 2, 3, 4, 5, 6, 7, 8]  # bending A1 A2 B1 B2, shear 1 2, axial, torque
+BEAM_FORCE = ([0, 11, 12, 13, 14, 15, 16, 17], [1, 21, 22, 23, 24, 25, 26, 27])  # ends A, B: sd bm1 bm2 ts1 ts2 af ttrq wtrq
+ROD_FORCE = [31, 32]  # axial, torsion
+BUSH_FORCE = {31: [1, 2, 3, 4, 5, 6], 32: [-1, -2, -3, -4, -5, -6]}  # fx fy fz mx my mz
+SPRING_FORCE = {41: 9.0, 42: -4.0}
+PLATE_STRESS = {1: ([100, 0, 0], [0, 0, 50]), 2: ([60, 20, 15], [-10, -10, 0])}  # (bottom, top) XX YY XY
+CORNER = 999.0  # every corner row of the CQUAD4 and CHEXA stresses: the centre is attached, not these
+SOLID_STRESS = [10, 20, 30, 0, 0, 0]
+BAR_STRESS = {"axial": 5, "smaxa": 15, "smina": -5, "smaxb": 25, "sminb": -15}
+BEAM_STRESS = ((10, -1), (20, -2))  # (smax, smin) at ends A and B
+ROD_STRESS = [7, 8]  # axial, torsion
+PLATE_STRAIN = ([1e-3, 0, 0], [0, 0, 2e-3])  # CQUAD4 1 (bottom, top), engineering shear
+SOLID_STRAIN = [1e-3, 2e-3, 3e-3, 0, 0, 0]
+ROD_STRAIN = [1e-4, 2e-4]
+PLY_VON_MISES = [40.0, 60.0]  # CQUAD4 3, plies 1 and 2
+SPRING_STRESS = 90.0
+
+
+def _f32(rows) -> np.ndarray:
+    """(1, n, k) float32 data of one static time from n rows."""
+    return np.asarray(rows, dtype="float32").reshape(1, len(rows), -1)
+
+
+def _oef(cls, element_name, element_type, num_wide, *args, case=None):
+    """A real static force table (OEF1X): the force classes mostly lack ``add_static_case``."""
+    from pyNastran.op2.tables.oef_forces.oef_force_objects import oef_data_code
+    from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import set_element_case, set_static_case
+
+    dc = oef_data_code("OEF1X", is_sort1=True, is_random=False, random_code=0, title="", subtitle="", label="",
+                       is_msc=True)
+    dc.update(loadIDs=[0], data_names=[], element_name=element_name, element_type=element_type, num_wide=num_wide)
+    return set_static_case(cls, True, 1, dc, case or set_element_case, args)
+
+
+def _oes(cls, element_name, num_wide, case, *args, s_code=1):
+    """A real static stress (OES1X1) or strain (``s_code`` >= 10: OSTR1X) table. ``num_wide`` is
+    set by hand: ``_add_case`` gets it wrong for several element types. ``s_code`` 1: stress with
+    von Mises at fibre distances; 15: strain per fibre; 11: strain as mid-plane strain and curvature."""
+    from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import set_static_case
+
+    dc = cls._add_case("OSTR1X" if s_code >= 10 else "OES1X1", element_name, 1, True, False, True, 0, "", "", "")
+    dc.update(num_wide=num_wide, s_code=s_code, stress_bits=[int(b) for b in f"{s_code:05b}"])
+    obj = set_static_case(cls, True, 1, dc, case, args)
+    obj.s_code, obj.stress_bits = dc["s_code"], dc["stress_bits"]
+    return obj
+
+
+def make_element_op2() -> OP2:
+    """Subcase 1 of tests/data/elements.bdf with a force, stress or strain table for every family
+    the force, stress and strain types read, plus tables they report: a composite stress, a plate
+    strain as curvature (STRCUR) and a spring stress. Grid z displacements are 0.01 * NID."""
+    from pyNastran.op2.tables.oef_forces import oef_force_objects as oef
+    from pyNastran.op2.tables.oes_stressStrain.real.oes_bars import RealBarStressArray
+    from pyNastran.op2.tables.oes_stressStrain.real.oes_beams import RealBeamStressArray
+    from pyNastran.op2.tables.oes_stressStrain.real.oes_composite_plates import RealCompositePlateStressArray
+    from pyNastran.op2.tables.oes_stressStrain.real.oes_objects import set_element_case, set_element_node_xxb_case
+    from pyNastran.op2.tables.oes_stressStrain.real.oes_plates import set_element_node_fiber_case as fibres
+    from pyNastran.op2.tables.oes_stressStrain.real.oes_rods import RealRodStrainArray, RealRodStressArray
+    from pyNastran.op2.tables.oes_stressStrain.real.oes_solids import (
+        RealSolidStrainArray, RealSolidStressArray, set_element_cid_case)
+    from pyNastran.op2.tables.oes_stressStrain.real.oes_springs import RealSpringStressArray
+
+    op2 = OP2(debug=None)
+    op2.set_mode("msc")
+    ng = np.column_stack([ELEMENT_NIDS, np.ones(len(ELEMENT_NIDS), dtype=int)])
+    disp = np.zeros((1, len(ELEMENT_NIDS), 6), dtype="float32")
+    disp[0, :, 2] = ELEMENT_NIDS * 0.01
+    op2.displacements[1] = RealDisplacementArray.add_static_case("OUGV1", ng, disp, 1)
+    force, stress, strain = op2.op2_results.force, op2.op2_results.stress, op2.op2_results.strain
+
+    force.cquad4_force[1] = _oef(oef.RealPlateForceArray, "CQUAD4", 33, 9, np.array([1]), _f32([SHELL_FORCE[1]]))
+    force.ctria3_force[1] = _oef(oef.RealPlateForceArray, "CTRIA3", 74, 9, np.array([2]), _f32([SHELL_FORCE[2]]))
+    force.cbar_force[1] = _oef(oef.RealCBarForceArray, "CBAR", 34, 9, np.array([21]), _f32([BAR_FORCE]))
+    force.cbeam_force[1] = _oef(oef.RealCBeamForceArray, "CBEAM", 2, 100, np.array([[22, 202], [22, 203]]),
+                                np.array([0.0, 1.0]), _f32(BEAM_FORCE), case=set_element_node_xxb_case)
+    force.crod_force[1] = _oef(oef.RealRodForceArray, "CROD", 1, 3, np.array([23]), _f32([ROD_FORCE]))
+    force.cbush_force[1] = _oef(oef.RealCBushForceArray, "CBUSH", 102, 7, np.array([31, 32]),
+                                _f32(list(BUSH_FORCE.values())))
+    for card, etype, eid in (("CELAS1", 11, 41), ("CELAS2", 12, 42)):
+        getattr(force, f"{card.lower()}_force")[1] = _oef(oef.RealSpringForceArray, card, etype, 2, np.array([eid]),
+                                                           _f32([[SPRING_FORCE[eid]]]))
+
+    # shell stress: CQUAD4 1 with corner output (the centre's two fibre rows first), CTRIA3 2 centre only
+    rows = np.full((10, 8), CORNER)
+    rows[:, 0] = [-0.005, 0.005] * 5
+    rows[:2, 1:4] = PLATE_STRESS[1]
+    rows[:2, 4:] = 0.0
+    en = np.column_stack([np.ones(10, dtype=int), np.repeat([0, 1, 2, 3, 4], 2)])
+    stress.cquad4_stress[1] = _oes(RealPlateStressArray, "CQUAD4-144", 87, fibres, 5, en, rows[:, 0], _f32(rows))
+    tri = np.zeros((2, 8))
+    tri[:, 0] = [-0.005, 0.005]
+    tri[:, 1:4] = PLATE_STRESS[2]
+    stress.ctria3_stress[1] = _oes(RealPlateStressArray, "CTRIA3", 17, fibres, 1, np.array([[2, 0], [2, 0]]),
+                                   tri[:, 0], _f32(tri))
+
+    hexa_nodes = np.column_stack([np.full(9, 11), [0, 101, 102, 103, 104, 105, 106, 107, 108]])
+    hexa = np.full((9, 10), CORNER)
+    hexa[0] = SOLID_STRESS + [0.0] * 4
+    stress.chexa_stress[1] = _oes(RealSolidStressArray, "CHEXA", 193, set_element_cid_case, hexa_nodes,
+                                  np.array([[11, 0]]), _f32(hexa))
+    bar = np.zeros(15)  # s1a s2a s3a s4a axial smaxa smina MS_tension s1b s2b s3b s4b smaxb sminb MS_compression
+    for name, value in BAR_STRESS.items():
+        bar[{"axial": 4, "smaxa": 5, "smina": 6, "smaxb": 12, "sminb": 13}[name]] = value
+    stress.cbar_stress[1] = _oes(RealBarStressArray, "CBAR", 16, set_element_case, np.array([21]), _f32([bar]))
+    beam = np.zeros((2, 8))
+    beam[:, 4:6] = BEAM_STRESS
+    stress.cbeam_stress[1] = _oes(RealBeamStressArray, "CBEAM", 111, set_element_node_xxb_case,
+                                  np.array([[22, 202], [22, 203]]), np.array([0.0, 1.0]), _f32(beam))
+    stress.crod_stress[1] = _oes(RealRodStressArray, "CROD", 5, set_element_case, np.array([23]),
+                                 _f32([[ROD_STRESS[0], 0.0, ROD_STRESS[1], 0.0]]))
+
+    # strain: CQUAD4 1 per fibre, CTRIA3 2 as mid-plane strain and curvature (reported), CHEXA 11, CROD 23
+    plate = np.zeros((2, 8))
+    plate[:, 0] = [-0.005, 0.005]
+    plate[:, 1:4] = PLATE_STRAIN
+    strain.cquad4_strain[1] = _oes(RealPlateStrainArray, "CQUAD4", 17, fibres, 1, np.array([[1, 0], [1, 0]]),
+                                   plate[:, 0], _f32(plate), s_code=15)
+    strain.ctria3_strain[1] = _oes(RealPlateStrainArray, "CTRIA3", 17, fibres, 1, np.array([[2, 0], [2, 0]]),
+                                   np.zeros(2), _f32(np.zeros((2, 8))), s_code=11)
+    hexa = np.zeros((9, 10))
+    hexa[0, :6] = SOLID_STRAIN
+    strain.chexa_strain[1] = _oes(RealSolidStrainArray, "CHEXA", 193, set_element_cid_case, hexa_nodes,
+                                  np.array([[11, 0]]), _f32(hexa), s_code=15)
+    strain.crod_strain[1] = _oes(RealRodStrainArray, "CROD", 5, set_element_case, np.array([23]),
+                                 _f32([[ROD_STRAIN[0], 0.0, ROD_STRAIN[1], 0.0]]), s_code=15)
+
+    # reported, not attached: composite plies (VonMisesMax takes their von Mises) and a spring stress
+    plies = np.zeros((2, 9))
+    plies[:, 8] = PLY_VON_MISES
+    comp = RealCompositePlateStressArray.add_static_case("OES1C", np.array([[3, 1], [3, 2]]), _f32(plies), 1,
+                                                         "CQUAD4")
+    comp.s_code = comp.data_code["s_code"] = 1
+    comp.stress_bits = comp.data_code["stress_bits"] = [0, 0, 0, 0, 1]
+    stress.cquad4_composite_stress[1] = comp
+    stress.celas1_stress[1] = _oes(RealSpringStressArray, "CELAS1", 2, set_element_case, np.array([41]),
+                                   _f32([[SPRING_STRESS]]))
     return op2

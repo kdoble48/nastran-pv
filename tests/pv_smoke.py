@@ -358,25 +358,92 @@ def load_error_checks(pv, nv, tmp):
 
 
 def result_type_checks(rm, nv, reader, times):
-    """The reader's ResultTypes checklist (nastran_pv.result_types): the file's types, all checked;
-    an unchecked type leaves the output at every step, a checked one comes back."""
+    """The reader's ResultTypes checklist (nastran_pv.result_types): the file's types, each at its
+    registry default (the plate stress also gives ShellStress, off); an unchecked type leaves the
+    output at every step, a checked one comes back."""
     listed = nv._listed(reader, "ResultTypes")
-    check(listed == ["Displacement", "VonMisesMax"], f"ResultTypes lists the file's types: {listed}")
+    check(listed == ["Displacement", "VonMisesMax", "ShellStress"], f"ResultTypes lists the file's types: {listed}")
     states = list(reader.GetProperty("ResultTypesInfo"))[1::2]
-    check([int(x) for x in states] == [1, 1], f"every result type checked by default: {states}")
+    check([int(x) for x in states] == [1, 1, 0], f"result types at their defaults: {states}")
 
     def arrays(t):
         shells = rm.Model(reader, t).block("Shells")
         return (shells.GetPointData().GetArray("Displacement") is not None,
-                shells.GetCellData().GetArray("VonMisesMax") is not None)
+                shells.GetCellData().GetArray("VonMisesMax") is not None,
+                shells.GetCellData().GetArray("StressTop") is not None)
 
+    check(arrays(times[0]) == (True, True, False), "ShellStress off by default")
     reader.ResultTypes = ["VonMisesMax"]
-    check(arrays(times[0]) == (False, True) and arrays(times[-1]) == (False, False),
+    check(arrays(times[0]) == (False, True, False) and arrays(times[-1]) == (False, False, False),
           "unchecked Displacement: no Displacement at any step, VonMisesMax stays")
     reader.ResultTypes = ["Displacement"]
-    check(arrays(times[0]) == (True, False), "unchecked VonMisesMax: Displacement only")
+    check(arrays(times[0]) == (True, False, False), "unchecked VonMisesMax: Displacement only")
     reader.ResultTypes = listed
-    check(arrays(times[0]) == (True, True) and arrays(times[-1]) == (True, False), "both checked again")
+    check(arrays(times[0]) == (True, True, True) and arrays(times[-1]) == (True, False, False),
+          "every type checked: StressTop at the static step only")
+    reader.ResultTypes = ["Displacement", "VonMisesMax"]
+    check(arrays(times[0]) == (True, True, False), "the defaults again")
+
+
+def element_result_checks(pv, nv):
+    """Forces, stresses and strains (roadmap task 9) through the reader, from the synthesized OP2
+    and the MSC-layout H5 of tests/data/elements.bdf, and from a converted VTKHDF series: named
+    arrays with the fixture's values; unread tables reported in the reader's messages."""
+    from h5_fixture import write_element_h5
+    from op2_fixture import make_element_op2
+
+    from nastran_pv.result_types import REGISTRY
+
+    deck = os.path.join(HERE, "data", "elements.bdf")
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        op2 = os.path.join(tmp, "elements.op2")
+        make_element_op2().write_op2(op2)
+        h5 = write_element_h5(os.path.join(tmp, "elements.h5"))
+        reader = rm.load_reader(deck)
+        for path, kind in ((op2, "OP2"), (str(h5), "H5")):
+            reader.OP2FileName = path
+            text = _messages(reader.UpdatePipelineInformation)
+            reader.ResultTypes = [t.name for t in REGISTRY if t.default]  # a new file: back to the defaults
+            t0 = rm.timesteps(reader)[0]
+            text += _messages(lambda: reader.UpdatePipeline(t0))
+            check(nv._listed(reader, "ResultTypes") == [t.name for t in REGISTRY], f"{kind}: every type listed")
+            check(_by_eid(reader, "Lines", "AxialForce") == {21: 7.0, 22: 15.0, 23: 31.0},
+                  f"{kind}: LineForce AxialForce of CBAR, CBEAM, CROD by default")
+            check(_by_eid(reader, "Shells", "MembraneForce")[2] == [10.0, 20.0, 30.0], f"{kind}: ShellForce")
+            conn = rm.Model(reader, t0).block("Connectors")
+            names = [conn.GetFieldData().GetAbstractArray("ConnectorTypeNames").GetValue(i)
+                     for i in range(conn.GetFieldData().GetAbstractArray("ConnectorTypeNames").GetNumberOfValues())]
+            cd = conn.GetCellData()
+            legs = {(names[int(cd.GetArray("ConnectorType").GetValue(i))],
+                     None if np.isnan(cd.GetArray("SpringForce").GetValue(i)) else cd.GetArray("SpringForce").GetValue(i))
+                    for i in range(conn.GetNumberOfCells())}
+            check(legs == {("MPC", None), ("CELAS1", 9.0), ("CELAS2", -4.0)},
+                  f"{kind}: SpringForce on CELAS1/2, none on the MPC leg of set 41: {legs}")
+            check(_ids(reader, "Bushes", name="EID") == {31, 32} and
+                  rm.Model(reader, t0).block("Bushes").GetPointData().GetArray("BushForce") is not None,
+                  f"{kind}: BushForce on the Bushes points")
+            check(rm.Model(reader, t0).block("Shells").GetCellData().GetArray("StressTop") is None,
+                  f"{kind}: stress components off by default")
+            unread = "ELEMENTAL/STRESS/ELAS1" if kind == "H5" else "stress.celas1_stress"
+            check(f"{unread}" in text and "no result type reads this table" in text,
+                  f"{kind}: the reader reports the tables no type reads")
+            reader.ResultTypes = [t.name for t in REGISTRY]
+            reader.UpdatePipeline(t0)
+            check(np.allclose(_by_eid(reader, "Shells", "VonMisesTop")[1], np.sqrt(3) * 50),
+                  f"{kind}: ShellStress VonMisesTop when checked")
+            check(_by_eid(reader, "Solids", "PrincipalStress")[11] == [30.0, 20.0, 10.0], f"{kind}: SolidStress")
+            check(_by_eid(reader, "Lines", "MaxStress") == {21: 25.0, 22: 20.0, 23: 7.0}, f"{kind}: LineStress")
+            check(np.isclose(_by_eid(reader, "Shells", "MaxShearStrainTop")[1], 2e-3), f"{kind}: ShellStrain")
+        series = os.path.join(tmp, "elements.vtkhdf")
+        convert(["convert", deck, "--results", op2, "--result-types", "all", "--all-steps", "-o", series, "-q"])
+        src = nv.load_reader(series)
+        model = nv.Model(src)
+        cells = model.block("Lines").GetCellData()
+        check(cells.GetArray("BendingMomentB") is not None and cells.GetArray("MaxStress") is not None
+              and model.block("Shells").GetCellData().GetArray("PrincipalStressBottom") is not None,
+              "a converted VTKHDF series carries the forces and stresses")
+        for s in (src, reader):
+            pv.Delete(s)
 
 
 def beam_checks(pv, nv, view, tmp):
@@ -1932,6 +1999,7 @@ def main():
         check(len(full) > 1 and first is not None and later is None,
               f"VonMisesMax at step 1 only, not carried to step {len(full)} by the tree")
         result_type_checks(rm, nv, reader, full)
+        element_result_checks(pv, nv)
         anim = pv.CreateRenderView()
         model = nv.apply("results", reader=reader, view=anim)  # the results view: peak deflection
         deform = pv.FindSource(nv._name(model, "deform"))
