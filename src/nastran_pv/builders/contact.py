@@ -42,6 +42,8 @@ PAIR_TABLE = "CONTACT_"
 _SURFACE_SLOTS = ("bsurf", "bsurfs")  # pyNastran's containers, {ID: card}
 _PAIR_SLOTS = ("bctsets", "bgsets")
 _OTHER_ELEMENTS = ("masses", "rigid_elements", "plotels")  # elements pyNastran keeps out of model.elements
+_REGION_SLOTS = _SURFACE_SLOTS + ("blseg",)  # what a pair may name, of what pyNastran reads
+_UNREAD_REGIONS = ("BCPROP", "BCPROPS")  # regions by property: pyNastran rejects the cards
 
 
 def _cards(deck: Deck, card_type: str, slot: str) -> list:
@@ -152,11 +154,27 @@ def build_contact(deck: Deck) -> vtkPolyData | None:
 
 def contact_pairs(deck: Deck) -> list[dict]:
     """The region pairs of the BCTSET (contact) and BGSET (glue) cards: rows ``{Card, Set, Source,
-    Target}``, the region IDs as the cards give them (a BSURF, BSURFS, BCPROP or BCPROPS)."""
+    Target}``, the region IDs as the cards give them (a BSURF, BSURFS, BCPROP or BCPROPS).
+
+    A pair that names a region no BSURF, BSURFS or BLSEG defines is a warning, one per set; an
+    ``info:`` line when the deck has BCPROP or BCPROPS cards, whose IDs pyNastran does not read (the
+    region may be one of them). pyNastran's own messages about the pairs are dropped by
+    ``deck.load_deck``: this check replaces them."""
+    model = deck.model
+    regions = {int(i) for slot in _REGION_SLOTS for i in (getattr(model, slot, None) or {})}
+    counts = getattr(model, "card_count", None) or {}
+    unread = [t for t in _UNREAD_REGIONS if counts.get(t)]
     rows = []
     for card_type, slot in zip(PAIR_TYPES, _PAIR_SLOTS):
         for card in _cards(deck, card_type, slot):
             set_id = int(card.csid if card_type == "BCTSET" else card.glue_id)
-            rows += [{"Card": card_type, "Set": set_id, "Source": int(s), "Target": int(t)}
-                     for s, t in zip(card.sids, card.tids)]
+            pairs = [(int(s), int(t)) for s, t in zip(card.sids, card.tids)]
+            rows += [{"Card": card_type, "Set": set_id, "Source": s, "Target": t} for s, t in pairs]
+            unknown = {r for pair in pairs for r in pair} - regions
+            if unknown and unread:
+                deck.warn(f"info: {card_type} {set_id}: {ids_text('region', unknown)} is no BSURF, BSURFS or BLSEG; "
+                          f"it may be a {' or '.join(unread)}, which pyNastran does not read")
+            elif unknown:
+                deck.warn(f"{card_type} {set_id}: {ids_text('region', unknown)} is not in the deck "
+                          f"(no BSURF, BSURFS or BLSEG has that ID)")
     return rows

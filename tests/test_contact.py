@@ -280,3 +280,64 @@ def test_faces_carry_the_include_file_of_their_element(tmp_path):
     assert arr(ds, "EID", "cell").tolist() == [10, 11, 1]
     assert arr(ds, "FileId", "cell").tolist() == [0, 0, 1]
     assert field_names(ds, "FileNames") == ["main_bdf", "solids_bdf"]
+
+
+# ------------------------------------------------------------------ the pairs' regions, on any pyNastran
+def test_pairs_of_defined_regions_give_no_message_on_any_pynastran(deck):
+    """pyNastran main cross-references the pairs and logs "cross-reference not supported for BCTSET"
+    and, for every pair, a false "missing target contact surface for BCTSET=<set id>" (it looks the
+    set id up as a region); 1.4.1 logs nothing. nastran-pv checks the pairs itself, so neither
+    reaches the warnings: contact.bdf pairs regions 10, 20 and 30, which all exist."""
+    build_multiblock(deck)
+    text = "\n".join(deck.warnings)
+    assert "cross-reference not supported" not in text
+    assert "contact surface" not in text
+    assert "BCTSET" not in text and "BGSET" not in text
+    assert [w for w in deck.warnings if "reordered" not in w] == []
+
+
+def test_a_pair_naming_a_region_the_deck_lacks_warns(tmp_path):
+    """BCTSET 1 pairs 200 (a BSURF) with 999 and BGSET 2 pairs 888 with 777: none of them a region.
+    One nastran-pv warning per set, the same on pyNastran 1.4.1 and main, and none of pyNastran's."""
+    mb, deck = _build(tmp_path, HEX + "BSURF,200,10\nBSURFS,100,,,,1,5,6,7\nBCTSET,1,200,999\nBGSET,2,888,777\n"
+                      "BGSET,3,100,200\n")
+    assert [(r["Set"], r["Source"], r["Target"]) for r in vtkutil.read_field_table(mb, "CONTACT_")] == [
+        (1, 200, 999), (2, 888, 777), (3, 100, 200)]  # the table keeps the IDs as given
+    about = [w for w in deck.warnings if "BCTSET" in w or "BGSET" in w or "contact surface" in w]
+    assert about == ["BCTSET 1: region 999 is not in the deck (no BSURF, BSURFS or BLSEG has that ID)",
+                     "BGSET 2: region 777 888 is not in the deck (no BSURF, BSURFS or BLSEG has that ID)"]
+
+
+def test_a_pair_that_may_name_a_bcprop_is_an_info_line(tmp_path):
+    """pyNastran rejects BCPROP, so its ID is unknown: region 300 may be that card."""
+    mb, deck = _build(tmp_path, HEX + "BSURF,200,10\nBCPROP,300,2\nBCTSET,1,200,300\n")
+    about = [w for w in deck.warnings if "BCTSET" in w or "contact surface" in w]
+    assert about == ["info: BCTSET 1: region 300 is no BSURF, BSURFS or BLSEG; it may be a BCPROP, "
+                     "which pyNastran does not read"]
+
+
+def test_load_deck_keeps_other_pynastran_messages(tmp_path):
+    """Only the contact pairs' cross-reference messages are dropped: a deck's other pyNastran
+    warnings (here a property that does not exist) still reach the warnings."""
+    from nastran_pv.deck import _REPLACED
+
+    assert _REPLACED.search("cross-reference not supported for BCTSET")
+    assert _REPLACED.search("missing target contact surface for BCTSET=1\nbsurf: [30]")
+    assert _REPLACED.search("missing source contact surface for BGSET=200\nbsurf: []")
+    assert not _REPLACED.search("cross-reference not supported for BCBODY")
+    assert not _REPLACED.search("missing target contact surface for BCONP=3")
+    _, deck = _build(tmp_path, HEX.replace("PSHELL,2,1,0.1\n", "") + "BSURF,200,10\nBCTSET,1,200,200\n")
+    assert any("2" in w and ("PSHELL" in w or "property" in w.lower() or "pid" in w.lower()) for w in deck.warnings), \
+        deck.warnings
+
+
+def test_a_deck_pynastran_rejects_still_fails_with_its_own_error(tmp_path):
+    """The message filter sees everything pyNastran logs, and main logs the card object itself when
+    a card fails to parse (integer CORD2R fields): the read must end in pyNastran's error, which
+    names the field, not in a TypeError from the filter."""
+    path = tmp_path / "bad.bdf"
+    path.write_text("SOL 101\nCEND\nBEGIN BULK\nGRID,1,,0.,0.,0.\nGRID,2,,1.,0.,0.\nCORD2R,10,,0,0,0,0,0,1\n,1,0,0\n"
+                    "ENDDATA\n")
+    with pytest.raises(Exception) as caught:
+        load_deck(path, echo=False)
+    assert "e1x" in str(caught.value) and "bytes-like" not in str(caught.value)

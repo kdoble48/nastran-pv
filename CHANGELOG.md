@@ -16,7 +16,9 @@ All notable changes to nastran-pv are listed here. The format follows
   CONTACT_Source CONTACT_Target`. The block adds no mass and follows its grids when the model
   deforms; `--no-contact` and the reader's *Contact Surfaces* toggle leave it out (`Options.contact`,
   the last field). Entries that name no face, or an element of the wrong kind, are card-report
-  rows; a repeated region or pair ID is a warning (pyNastran keeps the last card); BCPROP/BCPROPS
+  rows; a repeated region or pair ID is a warning (pyNastran keeps the last card), and so is a
+  pair that names a region the deck lacks (nastran-pv's own check, the same on pyNastran 1.4.1
+  and main, whose false `missing target contact surface` messages are not shown); BCPROP/BCPROPS
   (not read by pyNastran), BCBODY and line contact stay in the card report
   ([Contact surfaces](docs/model.md#contact-surfaces)).
 - Faces follow their elements everywhere: a contact face and a pressure face (`Pressures/*`) are

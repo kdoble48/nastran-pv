@@ -1570,6 +1570,8 @@ def contact_checks(pv, nv):
           and model.field_strings(None, "CONTACT_Card") == ["BCTSET", "BGSET"]
           and model.field("CONTACT_Source").tolist() == [10, 30] and model.field("CONTACT_Target").tolist() == [20, 10],
           "contact: the card names and the pair table")
+    noise = [w for w in model.field_strings(None, "Warnings") if "BCTSET" in w or "BGSET" in w or "contact surface" in w]
+    check(not noise, f"contact: pairs of regions that exist give no message (pyNastran main's are dropped): {noise}")
     reader.HiddenElements = "1"
     check(cells(rm.Model(reader), "ContactRegion") == [30, 30, 30, 10, 20, 20, 20],
           "contact: the faces follow the reader's scope (hex 1 hidden)")

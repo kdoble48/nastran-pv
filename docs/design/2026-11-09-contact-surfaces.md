@@ -51,10 +51,19 @@ Cards pyNastran rejects are not hand-parsed.
 | Element of the wrong kind (a solid or a line on a BSURF, a shell on a BSURFS; a mass, rigid or plot element, which pyNastran keeps outside `model.elements`) | card-report row `element type the region cannot hold`, once per card |
 | Element not in the deck | one warning per card with the count and the first IDs (a broken deck). A BSURF that still draws at least one face gets an `info:` line instead: pyNastran expands THRU ranges, and a range may span IDs that do not exist |
 | A face on a grid the deck lacks | one warning for the block (count, regions) |
+| A pair (BCTSET, BGSET) that names a region no BSURF, BSURFS or BLSEG defines | one warning per set naming the regions; an `info:` line when the deck has BCPROP/BCPROPS cards (not read, so the region may be one). The check is `contact_pairs`' own. pyNastran main's cross-reference messages about the pairs are dropped in `load_deck` (`deck._REPLACED`): `cross-reference not supported for BCTSET`, and `missing target contact surface for BCTSET=<csid>`, which main raises for every pair because it looks the set ID up as a region; 1.4.1 logs nothing, so both versions now say the same |
 | Two cards of one type with the same ID (BSURF, BSURFS, BCTSET, BGSET) | pyNastran 1.4.1 and main both keep the last card and say nothing; one warning per card type, from `card_count` against the cards kept: only the last card of a repeated ID is used |
 
 The other entries of the card are drawn. The card-report rows are identified by the region ID
 (`cards.ID_CARDS`), and counted per card, not per entry, so `Count` stays a number of cards.
+
+## Display limitation
+
+The faces are exactly coincident with the Shells cells and the Solids outer faces. The NPV views draw
+extracted mesh blocks, so they are not affected, but the reader's raw representation colored by
+`ContactRegion` or by `PID` z-fights where a face and its element overlap (which one wins varies by
+face; a quadratic solid's face shows it most). `Pressures` has the same pattern. A view that extracts
+`ContactSurfaces` with its own categorical map would avoid it; none is added here.
 
 ## Not covered
 

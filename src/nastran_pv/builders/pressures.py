@@ -77,13 +77,14 @@ def merge(faces: dict, face: Face) -> None:
 
 
 def shell_corners(elem) -> list[int]:
-    """The corner grids of a shell element, in its own order (the element normal by the right hand)."""
-    return [int(n) for n in elem.node_ids[:SHELLS[elem.type][0]]]
+    """The corner grids of a shell element, in its own order (the element normal by the right hand).
+    From the raw ``nodes``: pyNastran main's ``node_ids`` raises when a grid is not in the deck."""
+    return [int(n) for n in elem.nodes[:SHELLS[elem.type][0]]]
 
 
 def solid_faces(elem) -> tuple[list[tuple], list[int]]:
     """(the corner grids of each face of a solid element, its corner grids)."""
-    nids = [int(n) for n in elem.node_ids[:SOLIDS[elem.type][0]]]
+    nids = [int(n) for n in elem.nodes[:SOLIDS[elem.type][0]]]
     return [tuple(nids[i] for i in f) for f in _FACES[elem.type]], nids
 
 

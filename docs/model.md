@@ -343,7 +343,12 @@ the pair table.
 
 The pairs are the root table `CONTACT_Card CONTACT_Set CONTACT_Source CONTACT_Target`: one row
 per source and target region of each BCTSET (contact) and BGSET (glue) card. A pair may name a
-region nastran-pv does not draw (a BCPROP or BCPROPS).
+region nastran-pv does not draw (a BCPROP or BCPROPS). A pair that names a region no BSURF, BSURFS
+or BLSEG defines is a warning (`BCTSET 1: region 999 is not in the deck ...`), or an `info:` line
+when the deck has BCPROP or BCPROPS cards, which pyNastran does not read: the region may be one of
+them. This check is nastran-pv's own, the same with pyNastran 1.4.1 and main; main's messages about
+the pairs (`cross-reference not supported for BCTSET`, `missing target contact surface`) are not
+shown, because they are raised for pairs whose regions exist.
 
 Entries that cannot be drawn do not stop the rest of the region. An element that is not of the
 card's kind (a solid on a BSURF, a shell on a BSURFS, a mass, rigid or plot element on either) and BSURFS grids that are not three corners
