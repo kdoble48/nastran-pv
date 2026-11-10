@@ -1,0 +1,140 @@
+"""Contact regions (BSURFS, BSURF) -> the element faces they hold (``ContactSurfaces``).
+
+A BSURFS names solid faces: an element and three corner grids of one of its faces. The face that
+holds the three grids is drawn whole (a triangle or a quadrilateral, on the corner grids of linear
+and quadratic solids alike), wound so that its right-hand normal points out of the element. A BSURF
+lists shell elements: each is drawn on its corner grids in its own order. One polygon per entry,
+on its own points, so a face in two regions is two cells.
+
+Cell ``ContactRegion`` (the card's ID) ``EID ContactCard`` (0 BSURF, 1 BSURFS: the field
+``ContactCardNames``), point ``NID`` (the faces follow their grids when the model is deformed).
+The block is display geometry on top of Shells and Solids: it is in no mesh-block list, so it adds
+no mass and no element count.
+
+The pairs (BCTSET contact, BGSET glue) are the root table ``CONTACT_Card Set Source Target``
+(:func:`contact_pairs`); a pair may name a region by property (BCPROP, BCPROPS), which pyNastran
+does not read: those cards are in the card report.
+
+Not drawn, a card-report row per card (``Deck.skip`` with the region ID): entries whose element is
+not of the card's kind (a solid on a BSURF, a shell on a BSURFS) and BSURFS entries whose three
+grids are not three corners of one face. An element or a grid the deck lacks is a warning.
+"""
+from __future__ import annotations
+
+from collections import defaultdict
+
+import numpy as np
+from vtkmodules.vtkCommonDataModel import vtkPolyData
+
+from .. import vtkutil
+from ..cards import CONTACT_ELEMENT, MAX_IDS, NO_CONTACT_FACE
+from ..deck import Deck
+from .pressures import shell_corners, solid_faces, winds_outward
+from .shells import SHELLS
+from .solids import SOLIDS
+
+SURFACE_TYPES = ("BSURF", "BSURFS")  # ContactCard codes
+PAIR_TYPES = ("BCTSET", "BGSET")  # the CONTACT_ root table
+CONTACT_TYPES = SURFACE_TYPES + PAIR_TYPES
+PAIR_TABLE = "CONTACT_"
+
+
+def _region_faces(deck: Deck, card) -> list[tuple]:
+    """``(region, EID, card code, face grids, the element's corner grids or None for a shell)`` per
+    entry of one BSURF/BSURFS that names a face; the others are reported."""
+    elements = deck.model.elements
+    solid = card.type == "BSURFS"
+    code = SURFACE_TYPES.index(card.type)
+    rid = int(card.id if solid else card.sid)
+    grids = zip(card.g1s, card.g2s, card.g3s) if solid else [None] * len(card.eids)
+    faces, missing, reasons = [], [], set()
+    for eid, named in zip(card.eids, grids):
+        elem = elements.get(int(eid))
+        if elem is None:
+            missing.append(int(eid))
+        elif not solid:
+            if elem.type in SHELLS:
+                faces.append((rid, int(eid), code, tuple(shell_corners(elem)), None))
+            else:
+                reasons.add(CONTACT_ELEMENT)
+        elif elem.type not in SOLIDS:
+            reasons.add(CONTACT_ELEMENT)
+        else:
+            named = {int(g) for g in named}
+            all_faces, corners = solid_faces(elem)
+            found = [f for f in all_faces if named <= set(f)]
+            if len(named) == 3 and len(found) == 1:  # three corners are on one face at most
+                faces.append((rid, int(eid), code, found[0], tuple(corners)))
+            else:
+                reasons.add(NO_CONTACT_FACE)
+    for reason in sorted(reasons):
+        deck.skip(card.type, reason, rid)
+    if missing:
+        ids = " ".join(map(str, missing[:MAX_IDS])) + (" ..." if len(missing) > MAX_IDS else "")
+        # a BSURF may be a THRU range, which pyNastran expands: ids between elements are no error
+        info = "info: " if not solid and len(missing) < len(card.eids) else ""
+        deck.warn(f"{info}{card.type} {rid}: {len(missing)} of {len(card.eids)} element(s) are not in the deck, "
+                  f"skipped (EID {ids})")
+    return faces
+
+
+def _point_rows(deck: Deck, faces: list[tuple]) -> list:
+    """The deck point indices of each face's corners, in drawing order (a solid's face turned
+    outward), None for a face with a grid the deck lacks. A numpy pass per face shape."""
+    groups = defaultdict(list)
+    for i, (_, _, _, nids, corners) in enumerate(faces):
+        groups[len(nids), len(corners or ())].append(i)
+    rows = [None] * len(faces)
+    for (nface, nelem), members in groups.items():
+        points = deck.lookup(np.array([faces[i][3] for i in members]).ravel()).reshape(-1, nface)
+        ok = (points >= 0).all(axis=1)
+        if nelem:
+            element = deck.lookup(np.array([faces[i][4] for i in members]).ravel()).reshape(-1, nelem)
+            ok &= (element >= 0).all(axis=1)
+            inward = ~winds_outward(deck.xyz[points], deck.xyz[element])
+            points[inward] = points[inward][:, ::-1]
+        for i, row, good in zip(members, points, ok.tolist()):
+            rows[i] = row if good else None
+    return rows
+
+
+def build_contact(deck: Deck) -> vtkPolyData | None:
+    """The faces of every BSURF and BSURFS region as polydata (BSURF regions first, each kind by
+    region ID, a region's faces in card order), None when the deck has none to draw."""
+    model = deck.model
+    faces = []
+    for slot in ("bsurf", "bsurfs"):
+        for _, card in sorted((getattr(model, slot, None) or {}).items()):
+            faces += _region_faces(deck, card)
+    rows = _point_rows(deck, faces)
+    unknown = sorted({f"{SURFACE_TYPES[f[2]]} {f[0]}" for f, row in zip(faces, rows) if row is None})
+    if unknown:
+        deck.warn(f"contact surfaces: {sum(r is None for r in rows)} face(s) on unknown grids, skipped "
+                  f"({', '.join(unknown[:MAX_IDS])}{' ...' if len(unknown) > MAX_IDS else ''})")
+    faces = [f for f, row in zip(faces, rows) if row is not None]
+    rows = [row for row in rows if row is not None]
+    if not faces:
+        return None
+    points = np.concatenate(rows)
+    pd = vtkPolyData()
+    pd.SetPoints(vtkutil.make_points(deck.xyz[points]))
+    pd.SetPolys(vtkutil.make_cell_array(np.array([len(row) for row in rows]), np.arange(len(points))))
+    cd = pd.GetCellData()
+    vtkutil.add_array(cd, "ContactRegion", np.array([f[0] for f in faces], dtype=np.int64))
+    vtkutil.add_array(cd, "EID", np.array([f[1] for f in faces], dtype=np.int64))
+    vtkutil.add_array(cd, "ContactCard", np.array([f[2] for f in faces], dtype=np.int64))
+    vtkutil.add_array(pd.GetPointData(), "NID", deck.nids[points].astype(np.int64))
+    vtkutil.add_string_array(pd.GetFieldData(), "ContactCardNames", list(SURFACE_TYPES))
+    return pd
+
+
+def contact_pairs(deck: Deck) -> list[dict]:
+    """The region pairs of the BCTSET (contact) and BGSET (glue) cards: rows ``{Card, Set, Source,
+    Target}``, the region IDs as the cards give them (a BSURF, BSURFS, BCPROP or BCPROPS)."""
+    model = deck.model
+    rows = []
+    for card_type, slot in zip(PAIR_TYPES, ("bctsets", "bgsets")):
+        for set_id, card in sorted((getattr(model, slot, None) or {}).items()):
+            rows += [{"Card": card_type, "Set": int(set_id), "Source": int(s), "Target": int(t)}
+                     for s, t in zip(card.sids, card.tids)]
+    return rows

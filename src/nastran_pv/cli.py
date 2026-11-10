@@ -39,7 +39,7 @@ from .progress import Progress
 from .vtkio import MODEL_SUFFIXES, read_model, write_series, write_vtm
 
 BLOCK_FLAGS = ("shells", "lines", "solids", "masses", "rigid", "connectors", "plotels", "bushes", "constraints",
-               "loads")
+               "loads", "contact")
 # a renamed flag keeps its old spelling on its own subcommand's parser, after the new one:
 # deprecation.flag_alias(c, "--old", "--new", "1.0.0") (docs/versioning.md#deprecation)
 

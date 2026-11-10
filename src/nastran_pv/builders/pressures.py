@@ -76,8 +76,23 @@ def merge(faces: dict, face: Face) -> None:
         faces[face.key] = Face(old.eid, old.nids, old.pressures + face.pressures, card, old.direction)
 
 
-def _corners(elem) -> list[int]:
+def shell_corners(elem) -> list[int]:
+    """The corner grids of a shell element, in its own order (the element normal by the right hand)."""
     return [int(n) for n in elem.node_ids[:SHELLS[elem.type][0]]]
+
+
+def solid_faces(elem) -> tuple[list[tuple], list[int]]:
+    """(the corner grids of each face of a solid element, its corner grids)."""
+    nids = [int(n) for n in elem.node_ids[:SOLIDS[elem.type][0]]]
+    return [tuple(nids[i] for i in f) for f in _FACES[elem.type]], nids
+
+
+def winds_outward(face_xyz: np.ndarray, element_xyz: np.ndarray):
+    """True when the right-hand normal of a solid's face (its corners ``face_xyz``, in order) points
+    away from the element's centroid (the mean of its corners ``element_xyz``). One face, or a
+    stack of faces of one shape with their elements (a leading axis): a bool per face."""
+    out = face_xyz.mean(axis=-2) - element_xyz.mean(axis=-2)
+    return np.sum(_vector_area(face_xyz) * out, axis=-1) > 0
 
 
 def _xyz(deck: Deck, nids) -> np.ndarray:
@@ -115,8 +130,7 @@ def _solid_face(deck: Deck, elem, g1, g34, pressures) -> tuple[list[int], np.nda
     by the right-hand rule on the outward normal; the orientation comes from the geometry, so the
     element's own numbering does not matter."""
     face, nids = _solid_corners(elem, g1, g34)
-    xyz = _xyz(deck, face)
-    if np.dot(_vector_area(xyz), xyz.mean(axis=0) - _xyz(deck, nids).mean(axis=0)) > 0:
+    if winds_outward(_xyz(deck, face), _xyz(deck, nids)):
         face = face[::-1]  # its right-hand normal points out: turn it inward
     k = face.index(g1)
     face = face[k:] + face[:k]  # inward from G1: P1, then P4 P3 P2 (the outward order backwards)
@@ -125,10 +139,11 @@ def _solid_face(deck: Deck, elem, g1, g34, pressures) -> tuple[list[int], np.nda
 
 
 def _vector_area(xyz: np.ndarray) -> np.ndarray:
-    """Half the cross product of the diagonals (a quad) or of two edges (a triangle)."""
-    if len(xyz) == 3:
-        return 0.5 * np.cross(xyz[1] - xyz[0], xyz[2] - xyz[0])
-    return 0.5 * np.cross(xyz[2] - xyz[0], xyz[3] - xyz[1])
+    """Half the cross product of the diagonals (a quad) or of two edges (a triangle); ``xyz`` is
+    (corner, 3), or (face, corner, 3) for a stack of faces."""
+    if xyz.shape[-2] == 3:
+        return 0.5 * np.cross(xyz[..., 1, :] - xyz[..., 0, :], xyz[..., 2, :] - xyz[..., 0, :])
+    return 0.5 * np.cross(xyz[..., 2, :] - xyz[..., 0, :], xyz[..., 3, :] - xyz[..., 1, :])
 
 
 def face_force(xyz: np.ndarray, pressures: np.ndarray, direction=None) -> np.ndarray:
@@ -189,7 +204,7 @@ def pressure_faces(deck: Deck, card) -> list[Face]:
         def shell(elem):
             if elem.type not in SHELLS:
                 raise Unsupported(WRONG_ELEMENT, f"PLOAD2 loads shell elements, not {elem.type} {elem.eid}")
-            nids = _corners(elem)
+            nids = shell_corners(elem)
             deck.index(nids)  # KeyError for an unknown grid
             return Face(int(elem.eid), tuple(nids), np.full(len(nids), float(card.pressure)), code)
 
@@ -200,7 +215,7 @@ def pressure_faces(deck: Deck, card) -> list[Face]:
 
     def face(elem):
         if elem.type in SHELLS:
-            nids = _corners(elem)
+            nids = shell_corners(elem)
             deck.index(nids)  # KeyError for an unknown grid
             pressures = np.asarray(card.pressures, dtype=float)[:len(nids)].copy()
         elif elem.type in SOLIDS:

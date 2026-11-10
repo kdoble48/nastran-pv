@@ -359,3 +359,66 @@ def test_failed_cross_reference_is_listed_first_and_stays_first(monkeypatch, cap
         main(cmd)
         out = capsys.readouterr()
         assert first in out.err and first not in out.out, cmd
+
+
+CONTACT_EDGE_CASES = """\
+GRID,1,,0.,0.,0.
+GRID,2,,1.,0.,0.
+GRID,3,,1.,1.,0.
+GRID,4,,0.,1.,0.
+GRID,5,,0.,0.,1.
+GRID,6,,1.,0.,1.
+GRID,7,,1.,1.,1.
+GRID,8,,0.,1.,1.
+MAT1,1,7.e10,,0.3,2.
+PSOLID,1,1
+PSHELL,2,1,0.1
+CHEXA,1,1,1,2,3,4,5,6,
+,7,8
+CQUAD4,10,2,1,2,3,4
+CQUAD4,11,2,5,6,7,777
+CONROD,30,1,2,1,0.5
+BSURFS,100,,,,1,5,6,7,
+,999,1,2,3,1,1,2,7,
+,10,1,2,3
+BSURFS,101,,,,1,1,1,2
+BSURF,200,10,THRU,12
+BSURF,201,1,30
+BSURF,202,500,501
+BCPROP,300,2
+BCTSET,1,100,300
+"""
+
+
+def test_contact_regions_with_bad_entries_report_and_skip(tmp_path):
+    """BSURFS 100: the hex's top face; element 999 is not in the deck (a warning), 1 2 7 are not on
+    one face and 1 1 2 (region 101) are not three corners, a shell is no solid (card-report rows).
+    BSURF 200 = 10 THRU 12: 10 is drawn, 11 has an unknown grid, 12 does not exist (a range may span
+    gaps: an info line); 201 lists a solid and a rod; 202 only elements the deck lacks. BCPROP is
+    not read by pyNastran, and stays a region the pair table can name."""
+    from nastran_pv import cards, vtkutil
+
+    deck = load_deck(write(tmp_path, "contact.bdf", CONTACT_EDGE_CASES), echo=False)
+    mb = build_multiblock(deck)
+    ds = get_block(mb, "ContactSurfaces")
+    assert arr(ds, "ContactRegion", "cell").tolist() == [200, 100]
+    assert arr(ds, "EID", "cell").tolist() == [10, 1]
+    assert arr(ds, "NID").tolist() == [1, 2, 3, 4, 5, 6, 7, 8]
+    text = "\n".join(deck.warnings)
+    assert "BSURFS 100: 1 of 4 element(s) are not in the deck, skipped (EID 999)" in text
+    assert "info: BSURF 200: 1 of 3 element(s) are not in the deck, skipped (EID 12)" in text
+    assert "contact surfaces: 1 face(s) on unknown grids, skipped (BSURF 200)" in text
+    assert "BSURF 202: 2 of 2 element(s) are not in the deck, skipped (EID 500 501)" in text
+    assert "info: BSURF 202" not in text
+    report = {(r["Card"], r["Reason"]): (r["Count"], r["IDs"]) for r in cards.read(mb)}
+    assert report == {("BSURFS", cards.NO_CONTACT_FACE): (2, "ID 100 101"),
+                      ("BSURFS", cards.CONTACT_ELEMENT): (1, "ID 100"),
+                      ("BSURF", cards.CONTACT_ELEMENT): (1, "ID 201"),
+                      ("BCPROP", cards.NOT_READ): (1, "")}
+    assert vtkutil.read_field_table(mb, "CONTACT_") == [{"Card": "BCTSET", "Set": 1, "Source": 100, "Target": 300}]
+
+
+def test_contact_cards_that_draw_nothing_give_no_block(tmp_path):
+    bulk = CONTACT_EDGE_CASES.split("BSURFS,100")[0] + "BSURFS,101,,,,1,1,1,2\nBSURF,202,500,501\n"
+    mb = build_multiblock(load_deck(write(tmp_path, "none.bdf", bulk), echo=False))
+    assert get_block(mb, "ContactSurfaces") is None

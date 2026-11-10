@@ -1,0 +1,72 @@
+# Contact surfaces: BSURFS and BSURF regions as a block
+
+Status: built, 2026-11-09.
+
+## Intent
+
+A deck's contact regions were not drawn: BSURFS and BSURF were card-report rows ("not drawn").
+After this change the faces of each region are geometry in the output and in ParaView, with the
+region ID on every face, so an analyst can see which faces are in each contact region.
+
+## What pyNastran reads
+
+Checked on pyNastran 1.4.1 (system Python) and on main (1.5.0 dev, the plugin's vendored copy);
+both give the same answer.
+
+| Card | pyNastran | Here |
+|---|---|---|
+| BSURFS | `model.bsurfs[id]`: `id`, `eids`, `g1s`, `g2s`, `g3s` | drawn |
+| BSURF | `model.bsurf[sid]`: `sid`, `eids` (THRU/BY expanded) | drawn (shell elements) |
+| BCTSET | `model.bctsets[csid]`: `sids`, `tids`, `frictions`, ... | root table `CONTACT_` |
+| BGSET | `model.bgsets[glue_id]`: `sids`, `tids`, ... | root table `CONTACT_` |
+| BCPROP, BCPROPS | rejected (`reject_count`) | card report, `not read` |
+| BCONTACT, BCTABLE | rejected | card report, `not read` |
+| BCBODY, BCONP, BLSEG | read | card report, `not drawn` |
+| BCTADD, BGADD, BCTPARA, BCRPARA, BCTPARM, BGPARM, BFRIC | read | control data, quiet (as before) |
+
+Cards pyNastran rejects are not hand-parsed.
+
+## Decisions
+
+| Topic | Decision | Why |
+|---|---|---|
+| Block | One flat `ContactSurfaces` polydata (a valid XML name), a polygon per entry on its own corner points, after every other block | One block colored by `ContactRegion` shows every region at once; a block per region would need a selector per region and scatter the legend. Last, so no existing block order changes |
+| Arrays | cell `ContactRegion` (the card's ID), `EID`, `ContactCard` (0 BSURF, 1 BSURFS; field `ContactCardNames`); point `NID` | Region for coloring and picking, the element and card for tracing a face back to the deck. `NID` makes the faces follow their grids when the model is deformed (`deform` looks grids up by NID), as the Pressures faces do |
+| BSURFS face | The face of the element that holds the entry's three grids, drawn whole (tri or quad). Linear and quadratic solids alike, on the corner grids. CHEXA, CPENTA, CTETRA, CPYRAM | Three different corners are on one face at most, so the lookup needs no rule per element type. It uses the face table of the PLOAD4 code (`pressures.solid_faces`) |
+| Winding | Solid faces outward (right-hand normal away from the element's centroid, from the geometry: `pressures.winds_outward`); shells in the element's own order | A consistent normal for lighting and for anything that later needs the contact side. The Pressures block winds inward because pressure pushes in; the test is the same function |
+| Speed | Entries are gathered in Python, grids are looked up and faces turned in one numpy pass per face shape | A region can hold 100k faces; `Deck.lookup` per face costs more than the face |
+| BSURF | Shell elements only (every type of `shells.SHELLS`) | That is the NX card. MSC's BSURF may list solid elements as a contact body; drawing it needs the free faces of the listed set, which is a different operation: reported, not drawn (follow-up) |
+| Same face in two regions | Two coincident cells | Each keeps its region ID; a region is never missing a face |
+| Mesh-block lists | None of `assemble.MESH_BLOCKS`, `fields/common.MESH`, `nastran_views.MESH`, `result_types.RESULT_BLOCKS` | Display geometry on top of Shells/Solids: no mass, no element count, no derived fields, no results. Not in the topology graph either |
+| Scope | `selection.scope_masks`: a face follows its element (the rule the Pressures faces have) | Hiding a property hides the regions on it |
+| Pairs | Root table `CONTACT_Card CONTACT_Set CONTACT_Source CONTACT_Target`, a row per source/target of each BCTSET and BGSET | Which regions meet is one cheap table; no friction or distances (parameters, not geometry). IDs are kept as the card gives them, so a pair may name a BCPROP region that is not drawn |
+| Switch | `Options.contact` (on), `--no-contact`, the reader's *Contact Surfaces* | The pattern of every block. It drops the block and the pair table |
+| View, macro, glyphs | None | Out of scope; the block shows with the model and is colored by `ContactRegion` like any array |
+
+## What is skipped and how it is reported
+
+| Case | Report |
+|---|---|
+| BSURFS entry whose three grids are not three different corners of one face | card-report row `G1-G3 are not three corners of one face`, `Deck.skip("BSURFS", ..., region ID)`, once per card |
+| Element of the wrong kind (a solid or a line on a BSURF, a shell on a BSURFS) | card-report row `element type the region cannot hold`, once per card |
+| Element not in the deck | one warning per card with the count and the first IDs (a broken deck). A BSURF that still draws some elements gets an `info:` line instead: pyNastran expands THRU ranges, and a range may span IDs that do not exist |
+| A face on a grid the deck lacks | one warning for the block (count, regions) |
+
+The other entries of the card are drawn. The card-report rows are identified by the region ID
+(`cards.ID_CARDS`), and counted per card, not per entry, so `Count` stays a number of cards.
+
+## Not covered
+
+- BCPROP/BCPROPS regions (pyNastran rejects the cards), BCBODY, BCONP/BLSEG line contact,
+  BCONTACT/BCTABLE: card report.
+- A BSURF of solid elements (the MSC contact body): its free faces.
+- Which side of a shell is in contact (BCRPARA SURF), friction, search distances.
+- A view, a toolbar macro, contact results (contact pressure and status from the OP2).
+
+## Tests
+
+`tests/data/contact.bdf` and `tests/test_contact.py`: nine faces worked out by hand (which grids,
+in which order, outward normals) on a CHEXA, a CTETRA, a CPENTA, a 20-grid CHEXA and three shells;
+the pair table; no mass added; the switch; `.vtm` and VTKHDF round trips; the scope.
+`tests/test_robustness.py`: every skipped case above. `tests/pv_smoke.py`: the block and the toggle
+in ParaView.

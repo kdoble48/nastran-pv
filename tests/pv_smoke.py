@@ -1547,6 +1547,45 @@ def pressure_checks(pv, nv):
     pv.Delete(src)
 
 
+def contact_checks(pv, nv):
+    """BSURFS/BSURF regions on tests/data/contact.bdf (the hand-worked faces are in test_contact.py):
+    the ContactSurfaces block and its arrays, the pair table, the scope, the toggle, a converted file."""
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    path = os.path.join(HERE, "data", "contact.bdf")
+    regions = [30, 30, 30, 10, 10, 10, 20, 20, 20]
+
+    def cells(model, name):
+        if not model.has("ContactSurfaces"):
+            return None
+        return vtk_to_numpy(model.block("ContactSurfaces").GetCellData().GetArray(name)).tolist()
+
+    reader = rm.load_reader(path)
+    model = rm.Model(reader)
+    check(model.names == ["Shells", "Solids", "Constraints", "ContactSurfaces"], f"contact: blocks {model.names}")
+    check(cells(model, "ContactRegion") == regions and cells(model, "EID") == [101, 102, 103, 1, 1, 2, 3, 3, 4]
+          and cells(model, "ContactCard") == [0, 0, 0, 1, 1, 1, 1, 1, 1],
+          f"contact: a face per BSURF/BSURFS entry with its region, element and card: {cells(model, 'ContactRegion')}")
+    check(model.field_strings("ContactSurfaces", "ContactCardNames") == ["BSURF", "BSURFS"]
+          and model.field_strings(None, "CONTACT_Card") == ["BCTSET", "BGSET"]
+          and model.field("CONTACT_Source").tolist() == [10, 30] and model.field("CONTACT_Target").tolist() == [20, 10],
+          "contact: the card names and the pair table")
+    reader.HiddenElements = "1"
+    check(cells(rm.Model(reader), "ContactRegion") == [30, 30, 30, 10, 20, 20, 20],
+          "contact: the faces follow the reader's scope (hex 1 hidden)")
+    reader.HiddenElements = ""
+    reader.ContactSurfaces = 0
+    off = rm.Model(reader)
+    check("ContactSurfaces" not in off.names and off.field("CONTACT_Source") is None,
+          "Contact Surfaces toggle removes the block and the pair table")
+    pv.Delete(reader)
+    out = os.path.join(tempfile.mkdtemp(), "contact.vtkhdf")
+    convert(["convert", path, "-o", out, "-q"])
+    src = nv.load_reader(out)
+    check(cells(rm.Model(src), "ContactRegion") == regions, "contact: the block on a converted .vtkhdf")
+    pv.Delete(src)
+
+
 def random_checks(pv, nv):
     """Random response from synthesized modes: reader properties, both views, a converted series."""
     from op2_fixture import make_modes_op2
@@ -3825,6 +3864,7 @@ def main():
     result_load_checks(pv, nv, reader)
     results_helper_checks(pv, nv)
     pressure_checks(pv, nv)
+    contact_checks(pv, nv)
     dynamic_result_checks(pv, nv)
     topology_checks(pv, nv)
     diff_checks(pv, nv)

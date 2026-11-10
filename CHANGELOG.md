@@ -8,6 +8,16 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Added
 
+- Contact surfaces: the new `ContactSurfaces` block draws the faces of the contact regions, BSURFS
+  (solid faces named by an element and three corner grids: the whole face, triangle or
+  quadrilateral, of CHEXA, CPENTA, CTETRA and CPYRAM, wound outward) and BSURF (shell elements,
+  THRU/BY ranges), with cell `ContactRegion` (the region ID), `EID` and `ContactCard`, and point
+  `NID`. The BCTSET (contact) and BGSET (glue) pairs are the root table `CONTACT_Card CONTACT_Set
+  CONTACT_Source CONTACT_Target`. The block adds no mass, follows its elements in the reader's
+  scope and its grids when the model deforms; `--no-contact` and the reader's *Contact Surfaces*
+  toggle leave it out. Entries that name no face, or an element of the wrong kind, are card-report
+  rows; BCPROP/BCPROPS (not read by pyNastran), BCBODY and line contact stay in the card report
+  ([Contact surfaces](docs/model.md#contact-surfaces)).
 - The Python API on the docs site ([Python API](docs/api.md)): `load_deck`, `build_multiblock`
   and `Options`, `open_results` and the results objects, the `.vtm` and VTKHDF writers, the
   result types, fields, model tools, beam sections and results helpers, rendered by autodoc from

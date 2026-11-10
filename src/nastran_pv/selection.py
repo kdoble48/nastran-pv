@@ -511,7 +511,7 @@ def scope_masks(mb, vis, names=None):
             masks[path] = allowed[path] & elem_kept[item_elem[path]]
         elif named[path].any():
             masks[path] = named[path]
-        elif path.startswith("Pressures/") and eid is not None:  # a face follows its element
+        elif (path.startswith("Pressures/") or path == "ContactSurfaces") and eid is not None:  # a face follows its element
             masks[path] = allowed[path] & (np.isin(eid, kept_eids)
                                            | (eid < 0) & _all_grids_kept(ds, kept_grids)) | extra[path]
         elif kind == "point" and (nid := get_array(ds.GetPointData(), "NID")) is not None:
