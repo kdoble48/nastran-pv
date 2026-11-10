@@ -14,7 +14,7 @@ Models (``--data`` is the folder holding the gitignored datasets, default the re
 Stages per model: ``load`` (``deck.load_deck``), ``build`` (``assemble.build_multiblock``),
 ``vtm`` and ``vtkhdf`` (writing the built model), ``check`` (``topology.check``), ``to_basic``
 (``results.to_basic`` of one result step, every grid in a cylindrical CD) and, with ``--pvpython``,
-``pv_open`` (the plugin reader's first update), ``pv_masses`` (NPV Masses, rendered) and
+``pv_open`` (the plugin reader's first update), ``pv_masses`` (NPV Overlay Masses, rendered) and
 ``pv_scope`` (Show Only half of the elements, rendered with the masses shown). ``diff`` times
 ``diff.diff_models`` on the uCRM-9 A/B pair of ``docs/build_diff_example.py`` and ``diff_cli`` the
 whole ``nastran-pv diff`` command. Each stage runs ``-n`` times and the best time is reported (the
@@ -237,7 +237,7 @@ def pv_stages(pvpython, path, scope, n, prof=None):
 
 
 def in_paraview(deck, scope, json_path, prof=None):
-    """One pvpython run: open the deck, NPV Masses, then a scope change (both rendered)."""
+    """One pvpython run: open the deck, NPV Overlay Masses, then a scope change (both rendered)."""
     sys.path.insert(0, str(ROOT / "paraview"))
     import numpy as np
     from paraview import simple as pv

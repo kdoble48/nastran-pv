@@ -176,7 +176,7 @@ and from the HDF5 `*_CPLX` datasets (each field `F` as `FR + i FI`):
   points, composite plies, ...). pyNastran's complex bar stresses have no S-MAX/S-MIN, so
   `MaxStress`/`MinStress` of a bar are NaN on a complex step (rods keep theirs).
 
-*Nastran Deform* animates a complex step through its phase (NPV Animate Mode and the mode
+*Nastran Deform* animates a complex step through its phase (NPV Mode Animate and the mode
 animations, [ParaView](paraview.md#glyph-filters)), and `convert --phase-sweep N` writes the
 phases of one frequency as a series ([CLI](cli.md#converting)). The SOL 111 PSD and RMS tables
 are the random views' input ([Random vibration](random-vibration.md#sol-111-output)). Design:

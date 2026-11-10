@@ -34,13 +34,13 @@ Femap-style visibility commands: they set the reader's visibility checklists and
 so they need the deck (:func:`deck_reader`). ``show_only_file``, ``hide_file`` and
 ``highlight_file`` do the same from a CSV/text file of IDs (the reader's ``SelectionFile``);
 highlight makes a real ParaView selection.
-``clear`` (NPV Clear) is the reset: it empties the view of every layer, sets the deformation
+``clear`` (NPV Clear View) is the reset: it empties the view of every layer, sets the deformation
 back to 0 and deletes nothing.
 ``diff`` makes the view a comparison: the active model (B) against a second open model (A) through
 the Nastran Diff filter (an existing one whichever of the two is selected). In a comparison every
 layer of B's view is drawn from the diff's output (colored by DiffStatus, cut by both models' scope),
 with A's removed items in red; the visibility commands write both models, by ID; :func:`side_by_side`
-puts A and B in two linked views and every command then draws in both; :func:`single` (NPV Single)
+puts A and B in two linked views and every command then draws in both; :func:`single` (NPV Diff End)
 ends the comparison. Which model a command acts on follows the view (:func:`subject`).
 Plus :func:`index_colors`, which turns whatever integer array the active representation is
 coloured by into an indexed lookup table with names.
@@ -850,7 +850,7 @@ def subject(view=None, reader=None):
     if own is not None:
         if reader is not None and reader != own and reader not in _sides(scene):
             raise RuntimeError(f"This view compares {_label(_sides(scene)[0])} with {_label(_sides(scene)[1])}: "
-                               "click NPV Single first to look at another model here, or use another view.")
+                               "click NPV Diff End first to look at another model here, or use another view.")
         return own
     if reader is not None:
         return reader
@@ -911,7 +911,7 @@ def _hide(objects, view):
 
 def _hide_strays(view, reader, fresh):
     """Hide what no layer holds: ``reader``'s own representation always (the model source is never a
-    layer; Highlight File shows it), and in a ``fresh`` (empty) scene every model source and every
+    layer; Highlight Listed shows it), and in a ``fresh`` (empty) scene every model source and every
     ``NPV ...`` object shown in ``view``: left by another model's scene, a reopened state or a
     pre-scene nastran-pv. An empty scene has no layers, so this resets nothing."""
     names = {v.GetGlobalIDAsString(): k[0] for k, v in pv.GetSources().items()} if fresh else {}
@@ -932,8 +932,8 @@ def _clear_view(view):
 
 @_command
 def clear(view=None):
-    """NPV Clear: empty ``view`` (default: active) of every layer, with the model undeformed (scale 0);
-    in a side-by-side pair both views. Deletes nothing and keeps the comparison (NPV Single ends it);
+    """NPV Clear View: empty ``view`` (default: active) of every layer, with the model undeformed (scale 0);
+    in a side-by-side pair both views. Deletes nothing and keeps the comparison (NPV Diff End ends it);
     ends with the model's reader selected (None when no model is open)."""
     view = view or pv.GetActiveViewOrCreate("RenderView")
     first = None
@@ -1185,7 +1185,7 @@ def index_colors(source=None, view=None):
         layer = _coloring_reps(view)[1] if view is not None else []
         rep, source = layer[0] if layer else (None, source)
     if rep is None:
-        raise RuntimeError("Nothing shown in this view is coloured by an array: color it first (e.g. NPV PID), "
+        raise RuntimeError("Nothing shown in this view is coloured by an array: color it first (e.g. NPV Color PID), "
                            "or select the colored object.")
     assoc, array = rep.ColorArrayName
     data = fetch(source)
@@ -1819,7 +1819,7 @@ def peak_deformation(model):
 
 
 def _share_scale(views, models):
-    """One deformation scale for NPV Results in a pair (rule R5): A's deforms at the scale B's view
+    """One deformation scale for NPV Result Displacement in a pair (rule R5): A's deforms at the scale B's view
     applied (its Auto Scale peak at this step, or the Scale Factor typed on B), the scale B's diff
     layers and A's removed items in them move with, so A's mesh and its removed items stay together."""
     lead, others = _layout_models(views[0])
@@ -2777,7 +2777,7 @@ def show_all(reader=None):
     for reader in readers:
         reader.ShowOnlyElements = ""
         reader.HiddenElements = ""
-        reader.SelectionMode = "Off"  # keeps the SelectionFile for NPV Show Only/Hide/Highlight File
+        reader.SelectionMode = "Off"  # keeps the SelectionFile for NPV Show Only Listed, Hide Listed and Highlight Listed
         reader.UpdatePipelineInformation()
         for prop in VISIBILITY_PROPS:
             setattr(reader, prop, _listed(reader, prop))
@@ -2828,7 +2828,7 @@ def reached_eids(reader=None):
 
 @_command
 def show_only_reached():
-    """Femap-style isolate: show only what NPV Grow reached (e.g. grown from a grid within a group)."""
+    """Femap-style isolate: show only what NPV Grow from Selection reached (e.g. grown from a grid within a group)."""
     from nastran_pv.tree import format_ids
 
     reader, eids = reached_eids()
@@ -2843,7 +2843,7 @@ def show_only_reached():
 
 @_command
 def hide_reached():
-    """Add everything NPV Grow reached to the reader's Hidden Elements."""
+    """Add everything NPV Grow from Selection reached to the reader's Hidden Elements."""
     from nastran_pv.tree import format_ids, parse_ids
 
     reader, eids = reached_eids()
@@ -2930,13 +2930,13 @@ def _file_mode(path, key, reader, mode, what):
 def show_only_file(path=None, key=None, reader=None):
     """Show only what an ID file lists, with the masses, SPCs and loads on its grids (the reader's
     Selection File unless ``path`` is given). Combines with the checklists and ID boxes."""
-    return _file_mode(path, key, reader, "Show only", "Show Only File")[1]
+    return _file_mode(path, key, reader, "Show only", "Show Only Listed")[1]
 
 
 @_command
 def hide_file(path=None, key=None, reader=None):
     """Hide what an ID file lists (masses, SPCs and loads stay unless the file names them)."""
-    return _file_mode(path, key, reader, "Hide", "Hide File")[1]
+    return _file_mode(path, key, reader, "Hide", "Hide Listed")[1]
 
 
 def _vertex_cell_ids(reader, array, runs):
@@ -2963,7 +2963,7 @@ def _vertex_cell_ids(reader, array, runs):
     return out
 
 
-HIGHLIGHT_RGB = [1.0, 0.0, 1.0]  # NPV highlight: what Highlight File selected
+HIGHLIGHT_RGB = [1.0, 0.0, 1.0]  # NPV highlight: what Highlight Listed selected
 
 
 @_command
@@ -2973,7 +2973,7 @@ def highlight_file(path=None, key=None, reader=None, view=None):
     (magenta) as ``NPV highlight``, extracted from the model as the view draws it (moved with it): the
     reader itself is not shown (rule R7). In a side-by-side pair each view highlights its own model;
     the active view's reader ends selected."""
-    reader, ids = _file_mode(path, key, reader, "Off", "Highlight File")
+    reader, ids = _file_mode(path, key, reader, "Off", "Highlight Listed")
     view = view or pv.GetActiveViewOrCreate("RenderView")
     pair = _pair(view)
     targets = [(v, subject(v)) for v in pair] if len(pair) > 1 else [(view, reader)]
@@ -3386,7 +3386,7 @@ def side_by_side(array=None, reference=None, view=None):
     else:
         b, a = sides
         if reference is not None and reference != a:
-            raise RuntimeError(f"This pair compares {_label(b)} with {_label(a)}: click NPV Single first to "
+            raise RuntimeError(f"This pair compares {_label(b)} with {_label(a)}: click NPV Diff End first to "
                                "compare with another model.")
     if a is None or b is None:
         raise RuntimeError("Side by side needs two models: open the reference model (A) too, then select "
@@ -3427,7 +3427,7 @@ def side_by_side(array=None, reference=None, view=None):
 
 @_command
 def single(view=None):
-    """NPV Single: end the comparison in ``view`` (default: active), which shows B as one model again
+    """NPV Diff End: end the comparison in ``view`` (default: active), which shows B as one model again
     with the same overlays and coloring (DiffStatus becomes PID). In a side-by-side pair the right view
     closes and the left one shows B. Deletes nothing: NPV Diff starts the comparison again with the
     same Nastran Diff. A view of one model is left as it is. Ends with B selected."""
@@ -3843,7 +3843,7 @@ def play_mode(mode=None, frames=ANIMATE_FPS, reader=None, view=None):
     and A's step of the same index, at B's amplitude, and both readers' time steps leave the time
     controls; in a pair each view shows its model's mode. The mode and its frequency are shown in
     the view, and the view is left at the peak of the cycle (a complex step: its largest
-    displacement). Any view, :func:`stop_mode_animation` or Animate All Modes gives the time controls
+    displacement). Any view, :func:`stop_mode_animation` or NPV Mode Animate All gives the time controls
     back to the modes. Returns the mode."""
     view = view or pv.GetActiveViewOrCreate("RenderView")
     lead, others = _layout_models(view, reader)
@@ -3931,7 +3931,7 @@ def stop_mode_animation(reader=None, view=None):
 
 def _prepare_modes(reader, view, modes, camera):
     """(times, 1-based modes) of the layout's leading model after checking them. Nothing drawn is
-    replaced (rule R5): only a view (pair) with no layers at all gets NPV Results first."""
+    replaced (rule R5): only a view (pair) with no layers at all gets NPV Result Displacement first."""
     stop_mode_animation(reader, view)
     times = mode_times(reader, view)
     if not times:
@@ -4102,8 +4102,9 @@ def _shows_deform(reader, view):
 @_command
 def animate_mode(cycles=2, frames=ANIMATE_FPS):
     """Vibrate the mode the time controls are on (``cycles`` cycles), then leave the play button
-    set up to loop it (:func:`play_mode`). Stop Mode Animation (or any view) gives the time controls
-    back to the modes: step to another mode and click again."""
+    set up to loop it (:func:`play_mode`). :func:`stop_mode_animation` (a second click on NPV Mode
+    Animate, or any view) gives the time controls back to the modes: step to another mode and click
+    again."""
     view = pv.GetActiveViewOrCreate("RenderView")
     reader = _layout_models(view)[0]  # B in a comparison: A follows by index
     step = current_step(reader, view)
@@ -4187,7 +4188,7 @@ def save_mode_animations(modes=None, cycles=1, frames=24, folder=None, fps=ANIMA
     if still:
         raise RuntimeError(f"mode(s) {still}: the view did not change while deforming, so no GIF was "
                            f"saved for them ({len(written)} other(s) saved in {folder}). Show an NPV "
-                           "view of the model (e.g. NPV Masses) and check that the mode has displacements.")
+                           "view of the model (e.g. NPV Overlay Masses) and check that the mode has displacements.")
     return written
 
 
@@ -4202,8 +4203,27 @@ def save_mode_animations_macro():
     return paths
 
 
-ACTIONS = {"animate_mode": animate_mode, "animate_modes": animate_modes, "stop_mode_animation": stop_mode_animation,
-           "save_mode_animations": save_mode_animations_macro, "index_colors": index_colors, "grow_from_selection": grow_from_selection,
+@_command
+def animate_mode_macro():
+    """NPV Mode Animate: vibrate the mode the time controls are on; clicked while a mode vibrates,
+    give the time controls back to the modes instead (:func:`stop_mode_animation`)."""
+    if not stop_mode_animation():
+        animate_mode()
+
+
+@_command
+def grow_macro():
+    """NPV Grow from Selection: seed the grow from the selection; with nothing selected, show the
+    grow as it is seeded again, or the text that says what to select."""
+    if selected_source() is None:
+        return apply("grow")
+    return grow_from_selection()
+
+
+# what a toolbar button runs, by the name in its stub. "stop_mode_animation" and "grow" have no
+# button of their own any more: stubs installed before the buttons were merged still run them.
+ACTIONS = {"animate_mode": animate_mode_macro, "animate_modes": animate_modes, "stop_mode_animation": stop_mode_animation,
+           "save_mode_animations": save_mode_animations_macro, "index_colors": index_colors, "grow_from_selection": grow_macro,
            "path_from_selection": path_from_selection, "show_only_selected": show_only_selected,
            "hide_selected": hide_selected, "show_all": show_all, "show_only_property": show_only_property,
            "show_only_material": show_only_material, "show_only_reached": show_only_reached,

@@ -4,7 +4,7 @@ nastran-pv draws every CBAR and CBEAM as its cross section swept along the eleme
 check orientation vectors, OFFT, offsets, tapers and the shear-center/neutral-axis offset by eye.
 It also tabulates the section properties it computes from the geometry next to the card values.
 
-* ParaView: the **Nastran Beam Sections** filter and the `beams` view (toolbar macro *NPV Beams*), see
+* ParaView: the **Nastran Beam Sections** filter and the `beams` view (toolbar macro *NPV Overlay Beams*), see
   [ParaView](paraview.md#glyph-filters).
 * CLI: `nastran-pv convert DECK --beam-sections` adds a `BeamSections` block, and
   `nastran-pv sections DECK [--pid ...] [--csv FILE]` prints the table (see [CLI](cli.md#beam-sections)).

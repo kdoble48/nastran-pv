@@ -15,8 +15,21 @@ from pathlib import Path
 from urllib.parse import quote
 
 GALLERY = "gallery"
+INSTALL_MACROS = Path(__file__).resolve().parents[2] / "paraview" / "install_macros.py"
 ASSETS = "_static/gallery"
 COLLAPSE_OVER = 12
+
+
+def macro_label(view: str, default: str) -> str:
+    """The toolbar label of a view's macro (``install_macros.MACROS``, read without importing it:
+    the docs build has no ParaView), or ``default`` for a view without a button."""
+    import ast
+
+    tree = ast.parse(INSTALL_MACROS.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", None) == "MACROS":
+            return {v: k for k, v in ast.literal_eval(node.value).items()}.get(view, default)
+    return default
 
 
 def hexrgb(rgb) -> str:
@@ -92,7 +105,7 @@ def view_page(meta, version="") -> str:
         side = _side(meta["legends"], meta["text"])
     reproduce = "\n".join(meta["reproduce"])
     # a view's macro, or what to click for an entry that is a view's setting or a filter
-    gui = meta.get("gui") or f"click **NPV {title}** on the Macros toolbar"
+    gui = meta.get("gui") or f"click **NPV {macro_label(meta['view'], title)}** on the Macros toolbar"
     results = " (with the results file as its *OP2 File Name*)" if meta.get("results") else ""
     return (f'# {title}: {meta["model_title"]}\n\n{meta["caption"]}\n\n'
             f'`````{{tab-set}}\n{tabs}`````\n\n{side}\n'

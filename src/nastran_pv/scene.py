@@ -38,7 +38,7 @@ class Layer:
     name: str
     objects: list
     selected: object = None
-    args: dict = field(default_factory=dict)  # the view's arguments, to draw it again (a pair, NPV Single)
+    args: dict = field(default_factory=dict)  # the view's arguments, to draw it again (a pair, NPV Diff End)
     summary: str | None = None  # what the view says about this layer (its info text), or None
     where: str = "Upper Left Corner"  # where it put that text: the view's info text goes there when it leads
 

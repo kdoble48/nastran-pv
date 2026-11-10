@@ -18,7 +18,7 @@ body:
       label: What happened
       description: What you did, what you expected to see and what you saw instead.
       placeholder: |
-        Opened model.bdf in ParaView and clicked NPV Masses.
+        Opened model.bdf in ParaView and clicked NPV Overlay Masses.
         Expected: a mass ellipsoid at the CONM2 on grid 1001.
         Saw: no masses, and "ElementMass (partial)" in the array list.
     validations:
@@ -32,7 +32,7 @@ body:
         used).
       placeholder: |
         nastran-pv convert model.bdf --results model.op2 -o out/model.vtm
-        or: open model.bdf, set OP2 File Name to model.op2, Apply, click NPV Stress
+        or: open model.bdf, set OP2 File Name to model.op2, Apply, click NPV Result Stress
     validations:
       required: true
   - type: textarea

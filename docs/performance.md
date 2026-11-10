@@ -21,13 +21,13 @@ Times on two large public models, on the reference machine (AMD Ryzen 9 9950X3D,
 | Results rotation | one result step from CD to basic, every grid in a cylindrical CD | 0.02 s | 0.07 s | 0.05 s / 0.15 s |
 | `diff` | the model diff of two built models; the whole `nastran-pv diff` command | 0.27 s; 1.7 s | | 0.4 s; 2.6 s |
 | Open in ParaView | the reader's first update: load, build and the model tree | 4.1 s | 8.2 s | 6 s / 12.5 s |
-| NPV Masses | the Masses view on an empty view, rendered | 2.2 s | 0.20 s | 3.2 s / 0.3 s |
+| NPV Overlay Masses | the Masses view on an empty view, rendered | 2.2 s | 0.20 s | 3.2 s / 0.3 s |
 | Scope change | Show Only half of the elements with the masses shown, rendered | 0.91 s | 0.04 s | 1.4 s / 0.1 s |
 
 `convert` is load, build and one write: about 4 s for uCRM-9 fine and 7.5 s for Linderholt. The
 budget is the time a stage may take on that machine, about 1.5x the measured time. The diff row
 is the uCRM-9 coarse A/B pair of `docs/build_diff_example.py` (25k shells each). Linderholt has no
-concentrated masses, so NPV Masses only writes its "no masses" text there and a scope change has
+concentrated masses, so NPV Overlay Masses only writes its "no masses" text there and a scope change has
 nothing to redraw. A modal series rotates its results once per step, so with every grid in a
 cylindrical or spherical CD a 40-mode Linderholt series now spends about 3 s rotating, where it
 spent nearly 2 minutes ([what changed](#what-changed)).
@@ -39,7 +39,7 @@ spent nearly 2 minutes ([what changed](#what-changed)).
 - **Building** is a few numpy passes per block. Shells and solids no longer do Python work per
   element beyond reading it, and element masses are vectorized.
 - **Writing** is VTK's: the `.vtm` writer compresses each array with zlib, VTKHDF with gzip.
-- **NPV Masses** on a large model is mostly ParaView: gathering the model tree's data information,
+- **NPV Overlay Masses** on a large model is mostly ParaView: gathering the model tree's data information,
   copying the model to the client and rendering.
 - **A scope change** in ParaView (Show Only, Hide, the visibility checklists) cuts the model tree
   again, in the reader and in *Nastran Scope*, then renders.
@@ -57,7 +57,7 @@ alternately):
 | Open in ParaView | 5.44 s to 4.09 s (1.3x) | 10.11 s to 8.24 s (1.2x) | the build, and the model tree's pieces grouped without sorting every label |
 | Scope change | 1.35 s to 0.91 s (1.5x) | | the model tree cut in half the time |
 
-Load, the writes, the diff and NPV Masses are unchanged. The outputs did not change: the same blocks, arrays (names, order, types and values), warnings,
+Load, the writes, the diff and NPV Overlay Masses are unchanged. The outputs did not change: the same blocks, arrays (names, order, types and values), warnings,
 card report, checks, model trees and CLI output, compared on 32 decks, and byte-identical `.vtm`
 files.
 

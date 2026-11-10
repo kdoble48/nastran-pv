@@ -69,7 +69,7 @@ def test_clear_macro_installed():
     spec = importlib.util.spec_from_file_location("install_macros", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    assert mod.MACROS["Clear"] == "clear" and mod.MACROS["Single"] == "single"
+    assert mod.MACROS["Clear View"] == "clear" and mod.MACROS["Diff End"] == "single"
 
 
 def test_clear_keeps_the_comparison_and_end_comparison_drops_it():

@@ -35,9 +35,9 @@ python -m nastran_pv render $DECK --preset loads  --views showcase     --out sho
    (*Nastran Deform* *Phase*; `nv.is_complex_step(model)`). `nv.play_mode(mode,
    frames=24)` makes the time steps one cycle of phases (`nv._set_time(view, k / frames)` then
    shows phase k; don't call `scene.Play()` with Loop on from a script, it never returns);
-   `nv.stop_mode_animation()` or any `nv.apply` undoes it. The GUI buttons are *NPV Animate Mode*
-   (vibrates, then leaves Play looping it) / *NPV Stop Mode Animation* / *NPV Animate All Modes* /
-   *NPV Save Mode Animations*. They never redraw the view (only an empty one gets `results`). In a
+   `nv.stop_mode_animation()` or any `nv.apply` undoes it. The GUI buttons are *NPV Mode Animate*
+   (vibrates, then leaves Play looping it; a second click stops) / *NPV Mode Animate All* /
+   *NPV Mode Save GIFs*. They never redraw the view (only an empty one gets `results`). In a
    comparison they move both models, B's mode and A's step of the same index at B's amplitude
    (`docs/paraview.md#comparing-two-models`).
    Each view has one text, `NPV info [RenderView1]` (`nv.info_of(view)` reads it): its layers' summaries,

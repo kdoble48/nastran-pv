@@ -55,6 +55,12 @@ How long a deprecated name lives:
 | a 0.x release | the next minor release: deprecated in 0.4.0, removed in 0.5.0 |
 | 1.0.0 or later | the next major release: deprecated in 1.2.0, removed in 2.0.0 |
 
+A toolbar macro's label is the name of a file in ParaView's Macros folder, so it cannot be an
+alias either: a second file would be a second button. A renamed button is replaced when the macros
+are installed again (`nastran-pv setup` removes the stubs of the old labels), the CHANGELOG lists
+the old and new labels under *Changed*, and the view name behind it (`--view`, `nv.apply`,
+`run_macro`) stays what it was, so stubs installed earlier keep working until then.
+
 Arrays, blocks and table columns in the output files cannot warn. A renamed one is written under
 both names for the deprecation period when the copy is cheap, and the CHANGELOG says so; when it
 is not, the rename waits for a release that may break.

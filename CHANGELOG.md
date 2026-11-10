@@ -6,6 +6,35 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The NPV toolbar macros are renamed so that the toolbar, which lists them by name, groups them
+  by what they do (*Check*, *Clear*, *Color*, *Diff*, *Grow*, *Hide*, *Highlight*, *Mode*,
+  *Overlay*, *Path*, *Result*, *Show*) instead of scattering them alphabetically. Run
+  `nastran-pv setup` (or `paraview/install_macros.py`) again and restart ParaView: it writes the
+  new buttons and removes the old stubs (only files it wrote; a file of yours named `NPV ....py`
+  is neither removed nor written over). View names (`--view`, `--preset`, `nv.apply`) do not
+  change, and buttons installed earlier keep working until then. The entries below use the new
+  labels. Old label -> new label:
+  - Masses, Bushes, Bush Rotations, Beams, Loads, SPC, Rigid -> *Overlay* Masses, Bushes, Bush
+    Rotations, Beams, Loads, SPC, Rigid;
+  - Family, Group, PID, MID, Element Type, Thickness, NSM -> *Color* Family, Group, PID, MID,
+    Element Type, Thickness, NSM; Index Colors -> Color Indexed;
+  - Results -> Result Displacement; Forces, Stress, Plies, Random RMS, Random Sweep -> *Result*
+    Forces, Stress, Plies, Random RMS, Random Sweep;
+  - Animate Mode -> Mode Animate; Animate All Modes -> Mode Animate All; Save Mode Animations ->
+    Mode Save GIFs;
+  - Model Check -> Check Model; Parts -> Check Parts; Clear -> Clear View;
+  - Show Only -> Show Only Selected; Hide -> Hide Selected; Only Property -> Show Only Property;
+    Only Material -> Show Only Material; Show Only File -> Show Only Listed; Hide File -> Hide
+    Listed; Highlight File -> Highlight Listed;
+  - Side by Side -> Diff Side by Side; Single -> Diff End.
+
+  Two buttons are merged into their partner, 44 buttons becoming 42: *Stop Mode Animation* is a
+  second click on *NPV Mode Animate*, and *Grow* is *NPV Grow from Selection* clicked with nothing
+  selected (it shows the grow as it is seeded again). From Python, `nv.stop_mode_animation()` and
+  `nv.apply("grow")` are unchanged.
+
 ### Added
 
 - The Python API on the docs site ([Python API](docs/api.md)): `load_deck`, `build_multiblock`
@@ -32,12 +61,12 @@ All notable changes to nastran-pv are listed here. The format follows
 - Composite plies in ParaView: the reader's *Ply* (`convert --ply`: a ply id, or 0 for each
   element's critical ply), the *Nastran Ply Axes* filter (a ply's fibre and 2-directions as lines
   through each shell, from the layup table, so on converted files too; ply 0 draws the reader's ply
-  or the element material axes) and the NPV Plies view and macro (`view`/`render --preset plies`:
+  or the element material axes) and the NPV Result Plies view and macro (`view`/`render --preset plies`:
   the shells by `PlyFailureIndexMax`, `PlyVonMises` or the ply's layup, grey where an element has
   no such ply, with the ply axes; `nv.apply("plies", ply=, quantity=, component=, size=, both=)`:
   it turns on only the result types the quantity needs, and a bad argument changes nothing).
   Ply ids may be -N, the mirrored copy of a symmetric PCOMPG ply.
-  The views that recolor a reused block (NPV Forces, NPV Stress, NPV Plies) now hide the legend
+  The views that recolor a reused block (NPV Result Forces, NPV Result Stress, NPV Result Plies) now hide the legend
   of the array they replace (#74).
 - Composite layups and ply results (roadmap task 13). A deck whose shells use a PCOMP or PCOMPG
   gets Shells `PlyCount` and the field table `PLY_PID PLY_Index PLY_ID PLY_MID PLY_Thickness
@@ -77,13 +106,13 @@ All notable changes to nastran-pv are listed here. The format follows
   MSC/NX HDF5 `*_CPLX` datasets: each array that copies columns gets `<array>_Real`, `_Imag`,
   `_Mag` and `_Phase` (degrees, Nastran's convention), and the plain arrays, derived ones included,
   are the response at the phase angle `convert --phase` / the reader's *Phase Angle* (default 0,
-  the real part; root `PhaseAngle`). New default types `Velocity` and `Acceleration`. NPV Animate
-  Mode, Animate All Modes and Save Mode Animations turn a complex step through its phase
+  the real part; root `PhaseAngle`). New default types `Velocity` and `Acceleration`. NPV Mode
+  Animate, Mode Animate All and Mode Save GIFs turn a complex step through its phase
   (*Nastran Deform* *Phase*), and `convert --phase-sweep N --step K` writes N phases of one
   frequency as a series. `--random-output` (reader *Random Output*) shows a SOL 111 run's own PSD,
   RMS and zero-crossing tables in the random arrays and views (`AccelRMS`, `DispRMS`, `AccelN0`,
   `AccelASD`; root `RandomSource`). Existing outputs are unchanged (#72).
-- NPV Forces and NPV Stress views (`view`/`render --preset forces stress`): each block colored by its
+- NPV Result Forces and NPV Result Stress views (`view`/`render --preset forces stress`): each block colored by its
   element forces (shells `MembraneForce`, lines `AxialForce`, bushes, springs) or by von Mises stress
   (shells at the top fibre, solids, lines `MaxStress`); `nv.apply("stress", quantity=, fibre=,
   strain=, component=)` chooses the array (each block over its exact range; lines and springs draw
@@ -105,26 +134,26 @@ All notable changes to nastran-pv are listed here. The format follows
   the view draws from the diff (colorings by their array, overlays by `DiffStatus` with A's removed
   items of their kind in red), cut by both models' scope; the visibility macros write A's and B's
   readers by ID, picks on A's removed items are A's, and the model a macro acts on follows the view.
-  *NPV Side by Side* draws every later macro in both views and is drawn again in place from either
-  view; the new *NPV Single* macro ends a comparison. The Nastran Diff compares again only when a
+  *NPV Diff Side by Side* draws every later macro in both views and is drawn again in place from either
+  view; the new *NPV Diff End* macro ends a comparison. The Nastran Diff compares again only when a
   model's content changes, not on a scope change or a time step (uCRM-9 coarse: a scope change after
-  NPV Diff 2.1 s -> 0.75 s, NPV Masses 0.9 s -> 0.14 s). The mass, bush, load and SPC glyphs and beam
+  NPV Diff 2.1 s -> 0.75 s, NPV Overlay Masses 0.9 s -> 0.14 s). The mass, bush, load and SPC glyphs and beam
   sections carry `DiffStatus`, and the diff's Removed block knows the grid of a removed mass or bush.
   `tests/data/same_name/` holds a same-named pair (#67).
 - Time and texts follow the scene (scene layers PR 3, rules R5 to R7). A comparison's steps match by
   index: A shows its own step of B's index (mode 3 with mode 3), also when the time controls step,
-  and stays undeformed without one (*Nastran Deform* gains *Match Steps*, which NPV Side by Side sets
+  and stays undeformed without one (*Nastran Deform* gains *Match Steps*, which NPV Diff Side by Side sets
   on A's side, and shows none of A's results there; the Nastran Diff reads A at that step and moves
-  A's removed items with A, complex steps too; NPV Results draws a pair at one scale). NPV Animate
-  Mode, Animate All Modes, Save Mode Animations and the play button move both models, at one
+  A's removed items with A, complex steps too; NPV Result Displacement draws a pair at one scale). NPV Mode
+  Animate, Mode Animate All, Mode Save GIFs and the play button move both models, at one
   amplitude, with both readers out of the time controls while playing; they never redraw the view
-  (only an empty view still gets NPV Results). Each view has one text, `NPV info [<view>]`, listing
+  (only an empty view still gets NPV Result Displacement). Each view has one text, `NPV info [<view>]`, listing
   its layers (the one clicked last in full, the others by their first line), after the diff summary
   in B's view of a comparison and `A: <label>` in A's (`nv.info_of(view)`). Two open models with one
   file name are labelled by folder (`a/model.bdf`, `b/model.bdf`, `labels.unique_labels`) in texts
-  and `NPV ...` names, which are renamed with a label (once per command). NPV Highlight File no longer
+  and `NPV ...` names, which are renamed with a label (once per command). NPV Highlight Listed no longer
   shows the reader: it draws the selection as *NPV highlight* (in each view of a pair that has the
-  ids); NPV Index Colors with a hidden
+  ids); NPV Color Indexed with a hidden
   source selected colors the view's coloring instead of showing that source (#75).
 - Pressure loads and GRAV drawn: PLOAD, PLOAD2 and PLOAD4 (shells, THRU ranges, solid faces, corner
   pressures, N1-N3 directions) become the `Pressures/SID_n`/`LOAD_n` blocks, a polygon per loaded
@@ -160,7 +189,7 @@ All notable changes to nastran-pv are listed here. The format follows
   `--result-types` (`convert`, `stats`, `store add`) or the reader's *Result Types* checklist (#60).
 - A roadmap to 1.0 (`docs/design/roadmap.md`): what shipped since October, the decisions, and 15
   tasks from the 0.2 release to 1.0 (#55).
-- Scene layers: the *NPV Clear* macro, the one full reset of a view (it hides every layer and
+- Scene layers: the *NPV Clear View* macro, the one full reset of a view (it hides every layer and
   sets the deformation back to 0, deleting nothing), and the *Nastran Scope* filter, the overlays'
   copy of the model cut by the reader's scope (`selection.scope_masks`) (#54).
 - Include-file groups: a deck read from two or more files gets `FileId` (and `FileNames`,
@@ -183,7 +212,7 @@ All notable changes to nastran-pv are listed here. The format follows
   `--abs-floor` (#50).
 - Test CI: pytest and pyflakes on Linux, Windows and macOS with Python 3.10 to 3.12 (#42).
 - This changelog and a written [version policy](docs/versioning.md) (#42).
-- Selection from a CSV/ID file: `convert --select`, the reader's Selection File, and NPV Show Only/Hide/Highlight File (#43).
+- Selection from a CSV/ID file: `convert --select`, the reader's Selection File, and NPV Show Only Listed, Hide Listed and Highlight Listed (#43).
 - Model diff v2: rigid elements, connectors, bushes, loads (with per-set resultants), SPCs and
   coordinate systems are compared too, on the mesh and in the report; models gain the `CORD_*`,
   `GRIDCS_*` and `GRAV_*` root tables and the `SPCEnforced` array (#48).
@@ -192,9 +221,9 @@ All notable changes to nastran-pv are listed here. The format follows
 - Play button vibrates the current mode; mode animations show the mode's frequency (#40).
 - `auditing-nastran-pv` project skill for reviewing merged code (#39).
 - Bush Rotations view and clearer CBUSH stiffness glyphs (#34).
-- NPV Save Mode Animations: one looping GIF per mode (#26).
+- NPV Mode Save GIFs: one looping GIF per mode (#26).
 - ParaView 5.13 support for the views, macros and mode animation (#25).
-- NPV Animate Mode / Animate All Modes buttons that animate modes in any view (#23).
+- NPV Mode Animate / NPV Mode Animate All buttons that animate modes in any view (#23).
 - Views recognize converted result series (temporal VTKHDF, `.pvd`) (#22).
 - Views and the `view`/`render` launchers work on converted `.vtm`/VTKHDF files (#21).
 - Convert progress on stderr (#19).
@@ -246,12 +275,12 @@ All notable changes to nastran-pv are listed here. The format follows
   opts out, and `--dry-run` quotes the command it prints (#62).
 - Views combine instead of redrawing (#54): a coloring (PID, Thickness, Results, ...) replaces the
   coloring and keeps the overlays, an overlay (Masses, Loads, SPC, ...) adds itself and a second
-  toolbar click removes it, and only NPV Clear resets the view. Overlays follow
-  the reader's scope: with a group, a Show Only list or a selection file, NPV Masses, Bushes, Rigid,
+  toolbar click removes it, and only NPV Clear View resets the view. Overlays follow
+  the reader's scope: with a group, a Show Only list or a selection file, NPV Overlay Masses, Bushes, Rigid,
   SPC and Loads draw what hangs off the kept elements (through RBE2/RBE3/CBUSH chains), and EIDs the
   scope names win.
-- NPV Loads and NPV SPC draw through *NPV load glyphs* and *NPV spc glyphs* (Nastran filters)
-  instead of ParaView Glyph objects; NPV Results scales each time step to 8 % of the model (Nastran
+- NPV Overlay Loads and NPV Overlay SPC draw through *NPV load glyphs* and *NPV spc glyphs* (Nastran filters)
+  instead of ParaView Glyph objects; NPV Result Displacement scales each time step to 8 % of the model (Nastran
   Deform *Auto Scale*); Mass Glyphs' *RelativeSize* is now *Size* (saved states and scripts that set *RelativeSize* need *Size*);
   rerunning a macro keeps the settings changed on its filter (#50).
 - NPV macros and `nastran_views.apply` end with the filter they are about selected (mass glyphs, NPV grow, the Nastran Diff, NPV deform, ...), or the reader for coloring and visibility macros (#46).
@@ -305,7 +334,7 @@ All notable changes to nastran-pv are listed here. The format follows
   by Show Only keeps the masses on its grids; MPC legs match the EID lists by their set id, as in
   the reader; beam sections follow their beams; connector and bush lines to grids of hidden
   elements deform with them. A coloring that writes no text no longer leaves the previous
-  coloring's text, NPV Clear no longer acts on a deleted reader (nor leaves its text shown), and an
+  coloring's text, NPV Clear View no longer acts on a deleted reader (nor leaves its text shown), and an
   EID list the reader cannot parse, a selection file it cannot read or a failed read no longer
   counts as a scope, which is worked out without running the reader (#56).
 - Model tools follow-ups: Parts' link table is computed in numpy (1.5 s to 19 ms on a 271k-cell

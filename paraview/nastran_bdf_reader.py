@@ -639,12 +639,12 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
 
     @smproperty.stringvector(name="ShowOnlyElements", default_values="")
     def SetShowOnlyElements(self, v):
-        """Element IDs to show, e.g. 1001 1002 2000-2010; empty shows all (NPV Show Only fills it)."""
+        """Element IDs to show, e.g. 1001 1002 2000-2010; empty shows all (NPV Show Only Selected fills it)."""
         self._set("_show_only", v or "")
 
     @smproperty.stringvector(name="HiddenElements", default_values="")
     def SetHiddenElements(self, v):
-        """Element IDs to hide (NPV Hide adds the selected elements)."""
+        """Element IDs to hide (NPV Hide Selected adds the selected elements)."""
         self._set("_hidden", v or "")
 
     # ------------------------------------------------- selection from an ID file
@@ -667,7 +667,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
                   '<Entry value="2" text="Off"/></EnumerationDomain>')
     def SetSelectionMode(self, v):
         """Show only the selection (with masses, SPCs and loads on its grids), hide it, or neither
-        (Off: NPV Highlight File selects it instead)."""
+        (Off: NPV Highlight Listed selects it instead)."""
         self._set("_sel_mode", int(v))
 
     @smproperty.intvector(name="SelectionGrids", default_values=0)
@@ -679,7 +679,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
 
     @smproperty.intvector(name="SelectionReload", default_values=0, panel_visibility="never")
     def SetSelectionReload(self, v):
-        """Bumped by NPV Show Only/Hide/Highlight File: re-execute, so an edited file is read again."""
+        """Bumped by NPV Show Only Listed, Hide Listed and Highlight Listed: re-execute, so an edited file is read again."""
         self._set("_sel_reload", int(v))
 
     @smproperty.stringvector(name="LoadError", information_only="1")
@@ -1195,7 +1195,7 @@ class NastranPVMassGlyphs(_GlyphFilter):
     @smproperty.intvector(name="ColorBy", default_values=0)
     @smdomain.xml(_enum_xml(_MASS_COLORS))
     def SetColorBy(self, v):
-        """The output's active scalars: what the NPV Masses view (and a plain Show) colours by."""
+        """The output's active scalars: what the NPV Overlay Masses view (and a plain Show) colours by."""
         self._set("_color", int(v))
 
     def _glyphs(self, block, diag, model):
@@ -1607,7 +1607,7 @@ class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
     @smdomain.xml('<BooleanDomain name="bool"/>')
     def SetAutoScale(self, value):
         """Scale every time step so its largest displacement is Auto Scale Peak of the model size
-        (Scale Factor is ignored; the NPV Results view turns it on)."""
+        (Scale Factor is ignored; the NPV Result Displacement view turns it on)."""
         self._set("_auto", int(value))
 
     @smproperty.doublevector(name="AutoScalePeak", default_values=0.08, panel_visibility="advanced")
@@ -1648,7 +1648,7 @@ class NastranPVDeform(_Settable, VTKPythonAlgorithmBase):
     def SetMatchSteps(self, value):
         """Time steps of the model this one is compared with (B's), space separated: at its n-th step
         the input is read at its own n-th step (mode 3 with mode 3), and with no n-th step the model
-        is not moved. NPV Side by Side sets it on A's side; empty: the time passes through."""
+        is not moved. NPV Diff Side by Side sets it on A's side; empty: the time passes through."""
         try:
             steps = tuple(float(x) for x in str(value or "").split())
         except ValueError:

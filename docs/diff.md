@@ -4,7 +4,7 @@
 reports the grids, elements, concentrated masses, properties, materials, rigid elements, connectors,
 bushes, loads, SPCs and coordinate systems that were added, removed or changed, and what that did
 to the mass and the CG. The same diff can be written onto B's mesh,
-shown in ParaView with the *NPV Diff* view, and shown next to A with *NPV Side by Side*.
+shown in ParaView with the *NPV Diff* view, and shown next to A with *NPV Diff Side by Side*.
 
 A and B can each be a deck, or a `.vtm` or VTKHDF file written by `nastran-pv convert`. The diff
 works on the built models (the [arrays](model.md) every nastran-pv model carries), so a deck and a
@@ -184,22 +184,22 @@ one when more than two are open. To pick A yourself, apply the filter (below) fi
 uses it. With A selected, NPV Diff reuses the Nastran Diff that compares the two models instead of
 making a reversed one.
 
-The view is then a **comparison** until *NPV Single* (or until the Nastran Diff is deleted): every
+The view is then a **comparison** until *NPV Diff End* (or until the Nastran Diff is deleted): every
 NPV macro in it draws from the diff ([Comparing two models](paraview.md#comparing-two-models)).
-NPV PID, Thickness and the other colorings color B's mesh by their array, with A's removed elements
-staying red; NPV Masses, Bushes, Loads, SPC, Rigid and Beams color B's items by `DiffStatus` and add
+NPV Color PID, Thickness and the other colorings color B's mesh by their array, with A's removed elements
+staying red; NPV Overlay Masses, Bushes, Loads, SPC, Rigid and Beams color B's items by `DiffStatus` and add
 A's removed items of their kind in red. The visibility macros (Show Only, Hide, Show All, the
 Selection File ones) write the same IDs to both readers, and the drawn layers follow them: B's items
 by B's scope, A's removed items by A's. Cells picked on the removed items are A's.
 
-The view's one text starts with the diff summary whatever you add: NPV Masses after NPV Diff lists
+The view's one text starts with the diff summary whatever you add: NPV Overlay Masses after NPV Diff lists
 the counts and the mass change, then the masses' summary below them. When the two models have the
 same file name (`A/run.bdf` and `B/run.bdf`), the summary, the texts and the `NPV ...` objects name
 each by its folder too (`B/run.bdf vs A/run.bdf`).
 
 The time controls step through B's steps, and A shows its own step of the same index (mode 3 with
-mode 3, whatever their frequencies), or stays undeformed when it has none. NPV Results deforms B's
-layers by B's displacement and A's removed items by A's; NPV Animate Mode and the play button
+mode 3, whatever their frequencies), or stays undeformed when it has none. NPV Result Displacement deforms B's
+layers by B's displacement and A's removed items by A's; NPV Mode Animate and the play button
 vibrate both models, B's mode and A's step of that index at one amplitude, with neither reader's own
 steps left in the time controls while they loop.
 
@@ -242,18 +242,18 @@ says so.
 
 ### Side by side
 
-**NPV Side by Side** shows A in the active view and B in a second view beside it, cameras linked.
+**NPV Diff Side by Side** shows A in the active view and B in a second view beside it, cameras linked.
 Both views get the active view's coloring and overlays, each from its own model: A's side as a
 single model with its removed items in red, B's side from the diff when there is one. The coloring
 has one legend (PID, MID, ...) or one range (Thickness, ...) over both; with no coloring it is
 `DiffStatus` when B has a diff (A's removed items on the left, B's changes on the right), else
-`PID`. From then on **every macro run in either view is drawn in both**: NPV Masses in the left view
+`PID`. From then on **every macro run in either view is drawn in both**: NPV Overlay Masses in the left view
 adds the masses to A's side and the changed masses to B's. Each view has its own text: the left
 one starts with `A: <label> (the reference)`, the right one with the diff summary, then each lists
 its own layers. A mode animated from either view moves both sides, each by its own model's
 displacement at the step of the same index (the left side stays still where A has no such step,
-and says so). Running NPV Side by Side again, from either view, draws the same pair again in place
-and keeps the camera link; it never makes a third view. *NPV Single* closes the right view and shows
+and says so). Running NPV Diff Side by Side again, from either view, draws the same pair again in place
+and keeps the camera link; it never makes a third view. *NPV Diff End* closes the right view and shows
 B alone in the left one.
 
 ```python
