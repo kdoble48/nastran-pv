@@ -6,6 +6,8 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - YYYY-MM-DD
+
 ### Added
 
 - The Python API on the docs site ([Python API](docs/api.md)): `load_deck`, `build_multiblock`
@@ -304,6 +306,8 @@ All notable changes to nastran-pv are listed here. The format follows
   without `tests/data`; `license` is an SPDX expression (built by setuptools 77 or newer); the
   version is written once, as `nastran_pv.__version__`, which `pyproject.toml` reads; the
   README's links are absolute, so they work on PyPI (#69).
+- The README and the Install page lead with `pip install nastran-pv`; installing from a clone
+  moves to *From a clone* (#70).
 
 ### Deprecated
 
@@ -370,4 +374,6 @@ All notable changes to nastran-pv are listed here. The format follows
 - First version: deck to VTK conversion, derived and mapped fields, the run store and the ParaView
   plugin with views and toolbar macros.
 
-[Unreleased]: https://github.com/kdoble48/nastran-pv/compare/5932d5e...HEAD
+[Unreleased]: https://github.com/kdoble48/nastran-pv/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/kdoble48/nastran-pv/compare/5932d5e...v0.2.0
+[0.1.0]: https://github.com/kdoble48/nastran-pv/tree/5932d5e

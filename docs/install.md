@@ -1,38 +1,56 @@
 # Install
 
 ```bash
-pip install -e .                 # from a clone: the CLI, with the vtk wheel
+pip install nastran-pv           # the CLI and the ParaView plugin, with the vtk wheel
 nastran-pv setup                 # ParaView-side dependencies + toolbar macros (finds pvpython)
 ```
 
-A wheel needs no clone: it carries the ParaView plugin, the views and the macros too, and
-`nastran-pv setup` finds them inside the installed package
-([Installed package or checkout](#installed-package-or-checkout)):
-
-```bash
-python -m build --outdir dist    # in a clone: the sdist and the wheel (pip install build)
-pip install dist/nastran_pv-*.whl
-nastran-pv setup
-```
+The package carries the ParaView plugin, the views and the macros, and `nastran-pv setup` finds
+them inside it ([Installed package or checkout](#installed-package-or-checkout)). Python 3.10 to
+3.14 work; on 3.13 and 3.14, install pyNastran's `main` branch first
+([pyNastran and Python versions](#pynastran-and-python-versions)).
 
 Install nastran-pv into a regular Python or a venv, never into ParaView's own Python: the plugin
 does not need it there, and the vtk wheel would shadow ParaView's VTK.
 
-Optional extras: `h5` (h5py: MSC/NX HDF5 results, VTKHDF series of several steps and reading VTKHDF
-files back), `tables` (Excel files for `--map` and `--select`),
-`sql` (non-SQLite databases for `--map`), `all` (the three above), `gallery` (thumbnails for
-`docs/build_gallery.py`) and `test`. `vtk` is a dependency now; the `vtk` extra is kept so that
-older install commands still work.
+Optional extras (`pip install "nastran-pv[h5]"`): `h5` (h5py: MSC/NX HDF5 results, VTKHDF
+series of several steps and reading VTKHDF files back), `tables` (Excel files for `--map` and
+`--select`), `sql` (non-SQLite databases for `--map`), `all` (the three above), `gallery`
+(thumbnails for `docs/build_gallery.py`) and `test`. `vtk` is a dependency now; the `vtk` extra is
+kept so that older install commands still work.
+
+`pip install -U nastran-pv` upgrades in place. What changed in each release is in the
+[CHANGELOG](https://github.com/kdoble48/nastran-pv/blob/main/CHANGELOG.md).
+
+## From a clone
+
+For development, or to run `main` between releases, install the clone in editable mode. It uses
+the clone's `src/` and `paraview/` directly:
+
+```bash
+git clone https://github.com/kdoble48/nastran-pv.git
+cd nastran-pv
+pip install -e ".[test]"         # the CLI, with the vtk wheel and the test tools
+nastran-pv setup
+```
+
+A wheel built from the clone carries the plugin like the one on PyPI:
+
+```bash
+python -m build --outdir dist    # the sdist and the wheel (pip install build)
+pip install dist/nastran_pv-*.whl
+nastran-pv setup
+```
 
 ## pyNastran and Python versions
 
 pyNastran 1.4.1, the last release, needs numpy < 2, so it installs only up to Python 3.12. On
-Python 3.13 and 3.14, install pyNastran's `main` branch first. nastran-pv works with both and
-`pip install -e .` keeps a pyNastran that is already installed:
+Python 3.13 and 3.14, install pyNastran's `main` branch first. nastran-pv works with both, and pip
+keeps a pyNastran that is already installed:
 
 ```bash
 pip install "pyNastran @ git+https://github.com/SteveDoyle2/pyNastran.git@main"
-pip install -e .
+pip install nastran-pv           # or, in a clone: pip install -e .
 ```
 
 Python 3.14 has only VTK 9.6+ wheels. nastran-pv handles both VTK generations. The wedge

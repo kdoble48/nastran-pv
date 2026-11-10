@@ -25,13 +25,14 @@ It has two front ends that share one core, built on [pyNastran](https://github.c
 ## Install
 
 ```bash
-pip install -e .                 # from a clone: the CLI, with the vtk wheel
+pip install nastran-pv           # the CLI and the ParaView plugin, with the vtk wheel
 nastran-pv setup                 # ParaView-side dependencies + toolbar macros (finds pvpython)
 ```
 
-A wheel built from the clone carries the plugin too, so it needs no clone. See
-[Install](https://kdoble48.github.io/nastran-pv/install.html) for the wheel, extras, environment
-variables and the example datasets.
+Install it into a regular Python or a venv (3.10 to 3.14), not into ParaView's own Python. On
+Python 3.13 and 3.14, install pyNastran's `main` branch first. See
+[Install](https://kdoble48.github.io/nastran-pv/install.html) for that, the extras, ParaView 5.13,
+environment variables, the example datasets and installing from a clone.
 
 ## Quickstart
 
