@@ -4213,11 +4213,15 @@ def animate_mode_macro():
 
 @_command
 def grow_macro():
-    """NPV Grow from Selection: seed the grow from the selection; with nothing selected, show the
-    grow as it is seeded again, or the text that says what to select."""
-    if selected_source() is None:
+    """NPV Grow from Selection: seed the grow from the selection, which the button then clears; with
+    nothing selected, show the grow as it is seeded again (Seed IDs typed on NPV grow are kept), or
+    the text that says what to select."""
+    held = selected_source()
+    if held is None:
         return apply("grow")
-    return grow_from_selection()
+    grown = grow_from_selection()
+    pv.ClearSelection(held)  # used up: the next click redraws instead of seeding from it again
+    return grown
 
 
 # what a toolbar button runs, by the name in its stub. "stop_mode_animation" and "grow" have no

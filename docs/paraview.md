@@ -142,8 +142,8 @@ too. Set these on the reader, in the *Selection File* properties:
 
 It combines with the checklists and ID lists (AND) and survives Apply and time steps. The file is
 read again when the reader next runs; after editing it, click the macro again (ParaView does not
-notice a file change by itself). IDs that match nothing are listed in Output Messages. The *NPV Show Only Selected
-File*, *NPV Hide Listed* and *NPV Highlight Listed* macros below use the same file; Highlight makes a
+notice a file change by itself). IDs that match nothing are listed in Output Messages. The *NPV Show Only
+Listed*, *NPV Hide Listed* and *NPV Highlight Listed* macros below use the same file; Highlight makes a
 real ParaView selection (masses and bushes included), so *NPV Grow from Selection*, *NPV Show Only Selected* and the other selection
 commands work on it. From Python: `nv.show_only_file("failing.csv")`, `nv.hide_file(...)`,
 `nv.highlight_file("grids.txt", key="NID")`.
@@ -208,7 +208,7 @@ The buttons are named by what they do, so the toolbar, which sorts them by name,
 | NPV Diff | Makes the view a comparison of the active model (B) with a second open model (A): B's elements, rigid elements, connectors, bushes, SPCs and loads by `DiffStatus` (same, added, changed, property), A's removed items red and translucent, the counts and the mass change. Every later macro in the view draws from the diff ([Comparing two models](#comparing-two-models)); the Nastran Diff's *Compare*, *Show* and *Tolerances* settings tune it ([Model diff](diff.md#paraview)) |
 | NPV Diff End | Ends the comparison: the view shows B as one model again, with the same overlays (DiffStatus becomes PID); in a pair the right view closes. Deletes nothing: NPV Diff starts the comparison again |
 | NPV Diff Side by Side | A in the view and B in a second view beside it, cameras linked, with the view's coloring (over one legend or range) and overlays; every later macro draws in both. Run from either view of the pair, it draws the same pair again ([Side by side](diff.md#side-by-side)) |
-| NPV Grow from Selection | Seeds *NPV grow* with the selected cells (EIDs) or grids and shows the elements reached from the seeds, colored by element hops. With nothing selected it shows the grow as it is seeded again, or says what to select |
+| NPV Grow from Selection | Seeds *NPV grow* with the selected cells (EIDs) or grids and shows the elements reached from the seeds, colored by element hops. It clears the selection it used, so with nothing selected (a second click, or after typing *Seed IDs* on *NPV grow*) it shows the grow as it is seeded again, or says what to select |
 | NPV Hide Selected | Adds the selected elements to the reader's *Hidden Elements* |
 | NPV Highlight Listed | Selects what the *Selection File* lists, as a ParaView selection on the reader (grids for a GRID file, elements otherwise), without hiding anything, and draws it in magenta as *NPV highlight*, moved with the view's deformation; the reader itself stays hidden. In a pair each view highlights its own model |
 | NPV Mode Animate | Vibrates the mode the time controls are on, in the view as it is (masses, PID, loads, results, a show-only subset, anything you switched on): two cycles at 24 frames/s. It then leaves the **play button** looping that mode: the time steps become the 24 phases of one cycle (the time widget reads *Phase*), and the mode and its frequency stay in the upper right corner. A converted single-step file (`convert --results` without `--all-steps`) has one mode. In a comparison both models vibrate, B's mode and A's step of the same index ([Comparing two models](#comparing-two-models)). A complex step (a frequency of a frequency response, a complex mode) turns through one cycle of its phase at full amplitude instead of swinging by a sine; NPV Mode Animate All and NPV Mode Save GIFs do the same. Clicked again while the mode vibrates, it gives the time controls back to the modes, on the mode that vibrated (any NPV view, NPV Mode Animate All and NPV Mode Save GIFs do this too): step to another mode and click it again. From Python: `nv.play_mode(3, frames=36)` and `nv.stop_mode_animation()` |
@@ -269,7 +269,7 @@ What a render view shows is a *scene* made of layers, and each macro edits one l
   view: the first model's layers are hidden.
 - **One text per view** lists its layers, the coloring first and the overlays in the order they
   were added: the layer clicked last in full, the others by their first line (NPV Overlay Masses after NPV
-  Loads lists the loads' first line, then the masses' summary). Removing an overlay drops its line; a
+  Overlay Loads lists the loads' first line, then the masses' summary). Removing an overlay drops its line; a
   coloring without a text (PID) drops the replaced coloring's. Each view has its own text, so two
   views of one model, or the two views of a pair, never overwrite each other's.
 - **Labels tell same-named models apart.** A model's objects are named after it, `NPV <what>

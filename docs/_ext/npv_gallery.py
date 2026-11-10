@@ -7,7 +7,9 @@ placeholder page. The page functions don't import Sphinx, so the tests can call 
 """
 from __future__ import annotations
 
+import functools
 import html
+import importlib.util
 import json
 import re
 import shutil
@@ -20,16 +22,21 @@ ASSETS = "_static/gallery"
 COLLAPSE_OVER = 12
 
 
-def macro_label(view: str, default: str) -> str:
-    """The toolbar label of a view's macro (``install_macros.MACROS``, read without importing it:
-    the docs build has no ParaView), or ``default`` for a view without a button."""
-    import ast
+MERGED = {"grow": "grow_from_selection"}  # views drawn by another view's button
 
-    tree = ast.parse(INSTALL_MACROS.read_text(encoding="utf-8"))
-    for node in tree.body:
-        if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", None) == "MACROS":
-            return {v: k for k, v in ast.literal_eval(node.value).items()}.get(view, default)
-    return default
+
+@functools.lru_cache(maxsize=None)
+def _macro_labels() -> dict:
+    """{view: toolbar label} from ``paraview/install_macros.py`` (it imports no ParaView)."""
+    spec = importlib.util.spec_from_file_location("npv_install_macros", INSTALL_MACROS)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return {view: label for label, view in module.MACROS.items()}
+
+
+def macro_label(view: str, default: str) -> str:
+    """The toolbar label of the button that draws ``view``, or ``default`` for a view without one."""
+    return _macro_labels().get(MERGED.get(view, view), default)
 
 
 def hexrgb(rgb) -> str:

@@ -292,7 +292,7 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
     overlay layers, each the objects `_recorded` saw shown through `_show` (with the view's
     arguments, `Layer.args`, to draw it again). `apply` replaces the coloring or adds/toggles an
     overlay and hides only what the dropped layer owned (`_hide`, per lookup table); `clear` (NPV
-    Clear) is the full reset of the layers.
+    Clear View) is the full reset of the layers.
   - Which model (R4): `subject(view)` is a comparison side's model by its role (from the Diff's
     sides, `diff_sides`, else `Scene.side` for a pair without a diff), else the scene's model unless
     the user selected another model's object since the last command (`_FINISHED`), else the active

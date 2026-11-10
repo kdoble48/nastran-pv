@@ -2267,12 +2267,16 @@ def active_source_checks(pv, nv):
     pv.SetActiveSource(pv.FindSource(expected("grow")))
     nv.grow_from_selection()
     check(active_name() == expected("grow") and set(pv.GetSources()) == sources, "Grow from Selection again: same objects")
-    for src in nv._sources_with_selection().values():
-        pv.ClearSelection(src)
+    _select(pv, reader, "(EID == 2)")
+    nv.run_macro("grow_from_selection")  # the button seeds from the selection and uses it up
+    grow_src = pv.FindSource(expected("grow"))
+    check(grow_src.SeedIDs == "EID 2" and not nv._sources_with_selection(),
+          f"the NPV Grow from Selection button seeds the grow and clears the selection ({grow_src.SeedIDs!r})")
+    grow_src.SeedIDs = "EID 1"  # typed on NPV grow
     pv.SetActiveSource(reader)
-    nv.run_macro("grow_from_selection")  # the button, nothing selected: the grow as it is seeded
-    check(active_name() == expected("grow") and pv.FindSource(expected("grow")).SeedIDs == "EID 1"
-          and set(pv.GetSources()) == sources, "the NPV Grow from Selection button with nothing selected shows the grow again")
+    nv.run_macro("grow_from_selection")  # nothing selected: the grow as it is seeded
+    check(active_name() == expected("grow") and grow_src.SeedIDs == "EID 1" and set(pv.GetSources()) == sources,
+          "the NPV Grow from Selection button with nothing selected shows the grow again, typed seeds kept")
     pv.SetActiveSource(reader)
     pv.QuerySelect(QueryString="(NID == 1) | (NID == 6)", FieldType="POINT", InsideOut=False)
     nv.path_from_selection()

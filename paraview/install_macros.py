@@ -10,18 +10,20 @@ Each macro is a short stub in ParaView's user macro folder that imports
 installed again. Restart ParaView (or use Macros > Import) after installing.
 
 ParaView lists the macros by file name, so a label starts with the word for what the button does
-(Check, Color, Overlay, Result, ...) and the toolbar keeps each kind together. Installing also
+(Check, Color, Overlay, Result, ...) and the toolbar keeps each kind together (within a kind the
+order is ParaView's: a label that is the start of another, like Diff, may come after it). Installing also
 removes the stubs this script wrote under labels it no longer has (a renamed or merged button);
 a file that does not start with the stub's first line is never written over or removed.
 """
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 PREFIX = "NPV "
-MACROS = {  # label -> the name nastran_views.run_macro takes; in toolbar order
+MACROS = {  # label -> the name nastran_views.run_macro takes; sorted, so each kind is together
     "Check Model": "check", "Check Parts": "parts",
     "Clear View": "clear",
     "Color Element Type": "elementtype", "Color Family": "family", "Color Group": "group",
@@ -72,12 +74,14 @@ def macro_dir() -> Path:
 
 
 def is_generated(path: Path) -> bool:
-    """True for a stub this script wrote (its first line), whatever its label."""
+    """True for a stub this script wrote, whatever its label: its first line, and the ``run_macro``
+    call as its last (a copy edited to do something else is the user's file)."""
     try:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            return f.readline().startswith(MARKER)
+        lines = path.read_text(encoding="utf-8", errors="replace").strip().splitlines()
     except OSError:
         return False
+    return bool(lines) and lines[0].startswith(MARKER) and re.fullmatch(
+        r'nastran_views\.run_macro\("\w+"\)', lines[-1].strip()) is not None
 
 
 def generated(folder: Path) -> list[Path]:

@@ -6,35 +6,6 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ## [Unreleased]
 
-### Changed
-
-- The NPV toolbar macros are renamed so that the toolbar, which lists them by name, groups them
-  by what they do (*Check*, *Clear*, *Color*, *Diff*, *Grow*, *Hide*, *Highlight*, *Mode*,
-  *Overlay*, *Path*, *Result*, *Show*) instead of scattering them alphabetically. Run
-  `nastran-pv setup` (or `paraview/install_macros.py`) again and restart ParaView: it writes the
-  new buttons and removes the old stubs (only files it wrote; a file of yours named `NPV ....py`
-  is neither removed nor written over). View names (`--view`, `--preset`, `nv.apply`) do not
-  change, and buttons installed earlier keep working until then. The entries below use the new
-  labels. Old label -> new label:
-  - Masses, Bushes, Bush Rotations, Beams, Loads, SPC, Rigid -> *Overlay* Masses, Bushes, Bush
-    Rotations, Beams, Loads, SPC, Rigid;
-  - Family, Group, PID, MID, Element Type, Thickness, NSM -> *Color* Family, Group, PID, MID,
-    Element Type, Thickness, NSM; Index Colors -> Color Indexed;
-  - Results -> Result Displacement; Forces, Stress, Plies, Random RMS, Random Sweep -> *Result*
-    Forces, Stress, Plies, Random RMS, Random Sweep;
-  - Animate Mode -> Mode Animate; Animate All Modes -> Mode Animate All; Save Mode Animations ->
-    Mode Save GIFs;
-  - Model Check -> Check Model; Parts -> Check Parts; Clear -> Clear View;
-  - Show Only -> Show Only Selected; Hide -> Hide Selected; Only Property -> Show Only Property;
-    Only Material -> Show Only Material; Show Only File -> Show Only Listed; Hide File -> Hide
-    Listed; Highlight File -> Highlight Listed;
-  - Side by Side -> Diff Side by Side; Single -> Diff End.
-
-  Two buttons are merged into their partner, 44 buttons becoming 42: *Stop Mode Animation* is a
-  second click on *NPV Mode Animate*, and *Grow* is *NPV Grow from Selection* clicked with nothing
-  selected (it shows the grow as it is seeded again). From Python, `nv.stop_mode_animation()` and
-  `nv.apply("grow")` are unchanged.
-
 ### Added
 
 - The Python API on the docs site ([Python API](docs/api.md)): `load_deck`, `build_multiblock`
@@ -263,6 +234,32 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Changed
 
+- The NPV toolbar macros are renamed so that the toolbar, which lists them by name, groups them
+  by what they do (*Check*, *Clear*, *Color*, *Diff*, *Grow*, *Hide*, *Highlight*, *Mode*,
+  *Overlay*, *Path*, *Result*, *Show*) instead of scattering them alphabetically. Run
+  `nastran-pv setup` (or `paraview/install_macros.py`) again and restart ParaView: it writes the
+  new buttons and removes the old stubs (only files it wrote; a file of yours named `NPV ....py`
+  is neither removed nor written over). View names (`--view`, `--preset`, `nv.apply`) do not
+  change, and buttons installed earlier keep working until then. The other entries use the new
+  labels. Old label -> new label:
+  - Masses, Bushes, Bush Rotations, Beams, Loads, SPC, Rigid -> *Overlay* Masses, Bushes, Bush
+    Rotations, Beams, Loads, SPC, Rigid;
+  - Family, Group, PID, MID, Element Type, Thickness, NSM -> *Color* Family, Group, PID, MID,
+    Element Type, Thickness, NSM; Index Colors -> Color Indexed;
+  - Results -> Result Displacement; Forces, Stress, Plies, Random RMS, Random Sweep -> *Result*
+    Forces, Stress, Plies, Random RMS, Random Sweep;
+  - Animate Mode -> Mode Animate; Animate All Modes -> Mode Animate All; Save Mode Animations ->
+    Mode Save GIFs;
+  - Model Check -> Check Model; Parts -> Check Parts; Clear -> Clear View;
+  - Show Only -> Show Only Selected; Hide -> Hide Selected; Only Property -> Show Only Property;
+    Only Material -> Show Only Material; Show Only File -> Show Only Listed; Hide File -> Hide
+    Listed; Highlight File -> Highlight Listed;
+  - Side by Side -> Diff Side by Side; Single -> Diff End.
+
+  Two buttons are merged into their partner, 44 buttons becoming 42: *Stop Mode Animation* is a
+  second click on *NPV Mode Animate*, and *Grow* is *NPV Grow from Selection* clicked with nothing
+  selected (it shows the grow as it is seeded again; the button now clears the selection it seeded from). From Python, `nv.stop_mode_animation()` and
+  `nv.apply("grow")` are unchanged.
 - Faster on large models, with a [performance budget](docs/performance.md) per stage: building
   the model is 1.8x faster (Linderholt's 270k solids 1.7 s to 0.9 s, uCRM-9 fine 1.3 s to 0.7 s),
   results rotate from cylindrical and spherical CDs about 40x faster per step (2.7 s to 0.07 s on

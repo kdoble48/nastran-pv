@@ -72,14 +72,16 @@ def _run(monkeypatch, *argv):
 
 
 def test_labels_group_on_the_toolbar():
-    """ParaView lists macros by file name: the table is in that order, whatever the case rule, and
-    every label starts with the word of its group."""
+    """ParaView lists macros by file name. Whether it compares the label or the file name with its
+    ".py", with or without case, the buttons of a kind (a label's first word) stay together and the
+    kinds come in the same order."""
     labels = list(install_macros.MACROS)
-    assert labels == sorted(labels) == sorted(labels, key=str.lower)
-    assert len(set(install_macros.MACROS.values())) == len(labels) == 42
-    groups = list(dict.fromkeys(label.split()[0] for label in labels))
-    assert groups == ["Check", "Clear", "Color", "Diff", "Grow", "Hide", "Highlight", "Mode", "Overlay", "Path",
-                      "Result", "Show"]
+    assert labels == sorted(labels) and len(set(install_macros.MACROS.values())) == len(labels) == 42
+    kinds = ["Check", "Clear", "Color", "Diff", "Grow", "Hide", "Highlight", "Mode", "Overlay", "Path", "Result",
+             "Show"]
+    for key in (str, str.lower, lambda s: s + ".py", lambda s: (s + ".py").lower()):
+        order = [label.split()[0] for label in sorted(labels, key=key)]
+        assert [k for i, k in enumerate(order) if i == 0 or order[i - 1] != k] == kinds
 
 
 def test_install_replaces_the_stubs_of_old_labels(tmp_path, monkeypatch, capsys):
@@ -90,6 +92,8 @@ def test_install_replaces_the_stubs_of_old_labels(tmp_path, monkeypatch, capsys)
     (tmp_path / "NPV Stop Mode Animation.py").write_text(install_macros.STUB.format(path="x", view="stop_mode_animation"))
     mine = tmp_path / "NPV My Macro.py"
     mine.write_text("print('mine')\n")
+    edited = tmp_path / "NPV Masses Big.py"  # a copy of a stub the user changed: theirs
+    edited.write_text(old.read_text().replace('run_macro("masses")', 'apply("masses", size=2)'))
     taken = tmp_path / "NPV Diff.py"
     taken.write_text("print('my diff')\n")
     _run(monkeypatch, "--dir", str(tmp_path))
@@ -98,9 +102,10 @@ def test_install_replaces_the_stubs_of_old_labels(tmp_path, monkeypatch, capsys)
     assert "NPV Masses.py (its button was renamed or merged)" in out
     assert mine.read_text() == "print('mine')\n" and taken.read_text() == "print('my diff')\n"
     assert "not written by nastran-pv, so the Diff button is not installed" in out
-    assert len(list(tmp_path.glob("NPV *.py"))) == len(install_macros.MACROS) + 1  # every button but Diff, + 2 files
+    assert edited.exists()
+    assert len(list(tmp_path.glob("NPV *.py"))) == len(install_macros.MACROS) + 2  # every button but Diff, + 3 files
     _run(monkeypatch, "--dir", str(tmp_path), "--remove")
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["NPV Diff.py", "NPV My Macro.py"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["NPV Diff.py", "NPV Masses Big.py", "NPV My Macro.py"]
 
 
 def test_remove_in_a_folder_that_does_not_exist(tmp_path, monkeypatch):
