@@ -118,7 +118,8 @@ def _bootstrap():
 
 _bootstrap()
 
-_FLAGS = ("shells", "lines", "solids", "masses", "rigid", "connectors", "plotels", "bushes", "constraints", "loads")
+_FLAGS = ("shells", "lines", "solids", "masses", "rigid", "connectors", "plotels", "bushes", "constraints", "loads",
+          "contact")
 # model tree checklists (reader property -> nastran_pv.tree category)
 _VISIBILITY = {"VisibleProperties": "Properties", "VisibleMaterials": "Materials",
                "VisibleElementTypes": "ElementTypes", "VisibleFamilies": "Families", "VisibleGroups": "Groups",
@@ -591,6 +592,12 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
     @smdomain.xml('<BooleanDomain name="bool"/>')
     def SetLoads(self, v):
         self._set_flag("loads", v)
+
+    @smproperty.intvector(name="ContactSurfaces", default_values=1)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetContactSurfaces(self, v):
+        """The ContactSurfaces block (the faces of the BSURF and BSURFS regions) and the CONTACT_ pair table."""
+        self._set_flag("contact", v)
 
     @smproperty.intvector(name="NodalArrays", default_values=1)
     @smdomain.xml('<BooleanDomain name="bool"/>')

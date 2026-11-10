@@ -32,7 +32,7 @@ from vtkmodules.vtkCommonDataModel import vtkMultiBlockDataSet
 
 from . import vtkutil
 from .fields.common import MESH, field_strings, get_array, iter_blocks, load_set_id, mpc_legs
-from .tree import _cut, _item_kind, format_ids, item_labels, parse_ids
+from .tree import _cut, _item_kind, format_ids, is_face_block, item_labels, parse_ids
 
 KEYS = ("EID", "NID", "PID", "MID", "FAMILY", "GROUP")
 NAME_KEYS = ("FAMILY", "GROUP")
@@ -326,6 +326,8 @@ def item_masks(mb, ids: IdList, grids: str = "all", attach: bool = True):
                 on = np.isin(nid.astype(np.int64), listed)
                 found.update(np.unique(nid[on]).astype(np.int64).tolist())
                 m = on if kind == "point" else _per_cell(ds, on, grids)
+        if is_face_block(path) and (face_eid := _element_eids(ds, kind)) is not None:
+            m = m & (face_eid < 0)  # a face on an element is selected with that element (the EID closure below)
         masks[path] = m
 
     if attach:  # masses, SPCs and loads on the grids of what is selected
@@ -347,7 +349,7 @@ def item_masks(mb, ids: IdList, grids: str = "all", attach: bool = True):
                 if kind == "point" and nid is not None:
                     masks[path] |= np.isin(nid.astype(np.int64), used_arr)
 
-    chosen = set()  # EID closure: offsets of selected masses, glyphs of selected bushes
+    chosen = set()  # EID closure: offsets of selected masses, glyphs of selected bushes, faces of selected elements
     eids = {}
     for path, ds, kind, n in blocks:
         eids[path] = _element_eids(ds, kind)
@@ -509,11 +511,11 @@ def scope_masks(mb, vis, names=None):
             continue
         if path in item_elem:
             masks[path] = allowed[path] & elem_kept[item_elem[path]]
-        elif named[path].any():
-            masks[path] = named[path]
-        elif path.startswith("Pressures/") and eid is not None:  # a face follows its element
+        elif is_face_block(path) and eid is not None:  # a face follows its element, named or not
             masks[path] = allowed[path] & (np.isin(eid, kept_eids)
                                            | (eid < 0) & _all_grids_kept(ds, kept_grids)) | extra[path]
+        elif named[path].any():
+            masks[path] = named[path]
         elif kind == "point" and (nid := get_array(ds.GetPointData(), "NID")) is not None:
             masks[path] = allowed[path] & np.isin(np.asarray(nid).astype(np.int64), kept_grids) | extra[path]
         else:

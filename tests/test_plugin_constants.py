@@ -57,3 +57,14 @@ def test_reader_results_helper_choices_match_nastran_pv():
     found = _assignments("nastran_bdf_reader.py")
     assert ast.literal_eval(found["_ENVELOPE_KINDS"]) == envelope.KINDS
     assert ast.literal_eval(found["_AVERAGE_WITHIN"]) == tuple(average.WITHIN)
+
+
+def test_reader_block_flags_match_the_cli_and_options():
+    from dataclasses import fields
+
+    from nastran_pv.assemble import Options
+    from nastran_pv.cli import BLOCK_FLAGS
+
+    flags = ast.literal_eval(_assignments("nastran_bdf_reader.py")["_FLAGS"])
+    assert flags == BLOCK_FLAGS
+    assert set(flags) <= {f.name for f in fields(Options)}

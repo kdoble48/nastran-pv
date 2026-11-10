@@ -61,7 +61,7 @@ The reader outputs a model tree, in the spirit of Femap's Model Info tree. Open 
 *View > MultiBlock Inspector*:
 
 ```
-Model/         Shells  Solids  Lines  Masses  Rigid  Connectors  Plotels  Bushes  Constraints  Loads/LOAD_1001 …
+Model/         Shells  Solids  Lines  Masses  Rigid  Connectors  Plotels  Bushes  Constraints  Loads/LOAD_1001  ContactSurfaces …
 Properties/    PSHELL_101  PCOMP_7  PBUSH_3 …        (PID_<n> when the card is missing)
 Materials/     MAT1_1  MAT8_2 …                      (MID_<n> when the card is missing)
 ElementTypes/  CQUAD4  CTRIA3  CHEXA  RBE2  CBUSH …
@@ -78,8 +78,11 @@ For Femap's AND visibility, use these lists in the reader's Properties panel:
 
 * **Visible Properties / Materials / Element Types / Families / Groups / Files**: an element stays only if
   every category it has is checked. An element without a category passes that test; for example,
-  CBUSH elements have no material, so the Materials list never hides them. Loads and SPCs are
-  switched by their block toggles only.
+  CBUSH elements have no material, so the Materials list never hides them. Nodal loads and SPCs are
+  switched by their block toggles only. A face drawn on an element (a pressure face of
+  `Pressures/*`, a contact face of `ContactSurfaces`) has no category of its own: it is shown and
+  hidden with its element, by these lists and by the element ID lists below. Color the contact
+  regions by `ContactRegion` ([Contact surfaces](model.md#contact-surfaces)).
 * **Show Only Elements** and **Hidden Elements**: element ID lists such as `1001 1002 2000-2010`.
   They apply to everything that has an `EID`: elements, rigid elements, connectors and masses.
 

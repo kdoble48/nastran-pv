@@ -407,3 +407,26 @@ def test_set_resultants_match_pynastran(mb, sid):
         if ds is not None:
             got += arr(ds, "ResultantForce", "field").reshape(-1)
     np.testing.assert_allclose(got, want, atol=1e-9)
+
+
+def test_faces_follow_their_elements_in_the_reader_cut_and_in_a_selection(mb, deck):
+    """Pressures is a face block (tree.FACE_BLOCKS), like ContactSurfaces. The reader's checklists
+    reach a face through its element: LOAD_100 (quads 1 2, hex 11, tetra 21, tria 3) loses the two
+    solid faces with PSOLID_2; a PLOAD face (SID_30, no element) is not theirs to hide. A grid list
+    of the hex's top face selects no element (not all of its grids), so no face either."""
+    from nastran_pv import selection, tree
+
+    def kept(vis, name):
+        built = tree.build_tree(mb, vis, tree.names_from_deck(deck))
+        return sorted(int(c) for p in built.pieces if p.path == f"Pressures/{name}"
+                      for c in (range(p.template.GetNumberOfCells()) if p.cell_ids is None else p.cell_ids))
+
+    assert kept(tree.Visibility(hidden={"Properties": frozenset({"PSOLID_2"})}), "LOAD_100") == [0, 1, 4]
+    assert kept(tree.Visibility(hidden={"ElementTypes": frozenset({"CQUAD4"})}), "LOAD_100") == [2, 3, 4]
+    assert kept(tree.Visibility(hidden={"Properties": frozenset({"PSHELL_1"})}), "SID_30") == [0]
+    masks, _ = selection.item_masks(mb, selection.IdList("NID", {105, 106, 107, 108}), "all")
+    assert not masks["Solids"].any() and not masks["Pressures/SID_20"].any()
+    masks, _ = selection.item_masks(mb, selection.IdList("EID", {11}), "all")
+    assert masks["Pressures/SID_20"].tolist() == [True, False, False]
+    masks, _ = selection.item_masks(mb, selection.IdList("NID", {301, 302, 303}), "all")
+    assert masks["Pressures/SID_30"].tolist() == [True, False]  # the PLOAD face on its own grids

@@ -61,7 +61,7 @@ the `SPC_DOF`/`F_<sid>` point arrays off the mesh blocks, and `--ascii` writes A
 debugging.
 
 `--no-<block>` skips a block (`shells`, `lines`, `solids`, `masses`, `rigid`, `connectors`, `plotels`,
-`bushes`, `constraints`, `loads`), and `--k-ref` sets the reference translational stiffness for the bush bars (see
+`bushes`, `constraints`, `loads`, `contact`), and `--k-ref` sets the reference translational stiffness for the bush bars (see
 [Model blocks and arrays](model.md#derived-quantities)). `--nsm-set ID` picks the bulk NSM set
 (default: Case Control `NSM=`; `0` = none; see [Nonstructural mass](model.md#nonstructural-mass));
 `view` and `render` take it too. An output ending in `.vtkhdf`, or

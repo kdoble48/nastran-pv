@@ -8,6 +8,7 @@ show it.
 """
 from __future__ import annotations
 
+import re
 import sys
 import time
 import warnings
@@ -283,6 +284,14 @@ def _read_progress(model: BDF, progress: Progress):
         progress.timed(f"parsed {state['cards']:,} cards: {took:.1f}s", took)
 
 
+# pyNastran messages that nastran-pv replaces with a check of its own, so they are not collected.
+# pyNastran main's cross-reference of the contact pairs: BCTSET says it is not supported and then
+# looks its own *set* id up as a region, so every pair is "missing"; BGSET looks the regions up but
+# knows no BCPROP/BCPROPS. builders/contact.py checks the pairs against the regions (1.4.1 says nothing).
+_REPLACED = re.compile(r"cross-reference not supported for (BCTSET|BGSET)\b"
+                       r"|missing (source|target) contact surface for (BCTSET|BGSET)=")
+
+
 def load_deck(path, punch: bool | None = None, encoding: str = "latin-1", echo: bool = True,
               progress: Progress = NULL) -> Deck:
     """Read a run deck (with INCLUDEs) or a bare bulk-data file.
@@ -300,6 +309,8 @@ def load_deck(path, punch: bool | None = None, encoding: str = "latin-1", echo: 
 
     def log_func(typ, filename, lineno, msg):
         if "skipping directly to bulk data" in msg:  # pyNastran 1.4 on a bulk-only file: expected
+            return
+        if isinstance(msg, str) and _REPLACED.search(msg):  # pyNastran main also logs card objects
             return
         text = f"{typ}: {msg}"
         if len(text) > MAX_MESSAGE:  # pyNastran may list every element id

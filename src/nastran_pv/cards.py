@@ -44,7 +44,11 @@ HEAT = "heat transfer"
 EDGE_LOAD = "edge load (SORL=LINE or LDIR)"  # PLOAD4 forms that load an edge, not a face
 NO_FACE = "G1 and G3/G4 name no face"  # PLOAD4 on a solid
 WRONG_ELEMENT = "element type it cannot load"  # PLOAD2 on a non-shell, PLOAD4 on a non-shell non-solid
+NO_CONTACT_FACE = "G1-G3 are not three corners of one face"  # BSURFS
+# a solid on a BSURF, a shell on a BSURFS, a mass, rigid or plot element on either
+CONTACT_ELEMENT = "element type the region cannot hold"
 SID_CARDS = frozenset({"MPC", "PLOAD", "PLOAD2", "PLOAD4"})  # Deck.skip rows identified by their set id
+ID_CARDS = frozenset({"BSURF", "BSURFS"})  # ... by their region ID
 
 DRAWN_SLOTS = frozenset({"rigid_elements"})  # build_rigid draws every card in it
 # connect (or are) scalar points only: SPOINT/EPOINT have no coordinates, so nothing to place
@@ -73,7 +77,7 @@ QUIET_SLOTS = frozenset({
     "aero", "aeros", "gusts", "flutters", "flfacts", "mkaeros", "aelinks", "aeparams", "aestats",
     "trims", "divergs", "csschds", "aefacts", "aelists", "aecomps", "aedw", "aeforce", "aepress",
     "pafoils", "paeros", "aesurf", "aesurfs", "panlsts",
-    # contact and bolt parameters (the contact bodies, surfaces and bolts are reported)
+    # contact and bolt parameters (BSURF/BSURFS are drawn; the bodies, line contact and bolts are reported)
     "bcparas", "bctparas", "bcrparas", "bctparms", "bfric", "bctadds", "bgadds", "bgparm", "boltseq",
 })
 SLOT_REASONS = {
@@ -90,12 +94,12 @@ SCALAR_POINT_SLOTS = {"SPOINT": "spoints", "EPOINT": "epoints"}  # pyNastran kee
 def drawn_types() -> frozenset:
     """Card types some builder draws or resolves, from the builders' own type tables (imported here:
     the builders import the reasons above). A builder that learns a card takes it off the report."""
-    from .builders import bushes, connectors, constraints, lines, loads, masses, plotels, shells, solids
+    from .builders import bushes, connectors, constraints, contact, lines, loads, masses, plotels, shells, solids
     from .categories import CONNECTOR_TYPES
 
     tables = (shells.SHELLS, solids.SOLIDS, lines.LINE_TYPES, CONNECTOR_TYPES, connectors.RESOLVED_TYPES,
               masses.MASS_TYPES, bushes.BUSH_TYPES, plotels.PLOTEL_TYPES, constraints.SPC_TYPES,
-              loads.LOAD_TYPES, loads.COMBINATION_TYPES, ("GRID",))
+              loads.LOAD_TYPES, loads.COMBINATION_TYPES, contact.CONTACT_TYPES, ("GRID",))
     return frozenset(t for table in tables for t in table)
 
 
@@ -110,7 +114,8 @@ def _id_order(v):
     return (0, int(v), "") if isinstance(v, (int, np.integer)) else (1, 0, str(v))
 
 
-def _ids_text(label: str, ids) -> str:
+def ids_text(label: str, ids) -> str:
+    """``"EID 3 7 9 ..."``: up to ``MAX_IDS`` of ``ids``, sorted and without repeats; "" for none."""
     uniq = sorted({i for i in ids if i is not None}, key=_id_order)
     if not uniq:
         return ""
@@ -194,9 +199,10 @@ def report(deck) -> list[dict]:
             ids = found.get(t)
             reason = (SCALAR if t in SCALAR_CARDS else HEAT if t in HEAT_CARDS
                       else SLOT_REASONS.get(slot, NOT_DRAWN))
-            add(t, reason, len(ids) if ids else model.card_count[t], _ids_text(_label(slot, model), ids or ()))
+            add(t, reason, len(ids) if ids else model.card_count[t], ids_text(_label(slot, model), ids or ()))
     for (card, reason), ids in sorted(getattr(deck, "skipped", {}).items()):
-        add(card, reason, len(ids), _ids_text("SID" if card in SID_CARDS else "EID", ids))  # MPC, loads: set ids
+        label = "SID" if card in SID_CARDS else "ID" if card in ID_CARDS else "EID"  # MPC, loads: set ids
+        add(card, reason, len(ids), ids_text(label, ids))
     _superelements(model, type_slot, add)
     return sorted(rows.values(), key=lambda r: (-r["Count"], r["Card"], r["Reason"]))
 
@@ -211,7 +217,7 @@ def _superelements(model, type_slot, add) -> None:
             if _counted(t) and type_slot.get(t, "") not in QUIET_SLOTS:
                 per_type[t].append((seid, n))
     for t, found in sorted(per_type.items()):
-        add(t, SUPERELEMENT, sum(n for _, n in found), _ids_text("SE", [s for s, _ in found]))
+        add(t, SUPERELEMENT, sum(n for _, n in found), ids_text("SE", [s for s, _ in found]))
 
 
 def write_table(mb, rows: list[dict]) -> None:

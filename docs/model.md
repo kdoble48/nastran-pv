@@ -22,6 +22,7 @@ out when the deck has nothing for it.
 | `Constraints` | SPC/SPC1/SPCADD/GRID PS points per set | point: `NID SPCSet SPC_DOF DOFCode CD`, plus `SPCEnforced` (6: the SPC enforced value per DOF) when a value is not 0 |
 | `Loads/SID_n`, `Loads/LOAD_n` | FORCE/MOMENT(1,2) per set, LOAD combinations resolved | point: `NID Force Moment ForceMagnitude MomentMagnitude`; field: `LoadSet ResultantForce GravityAcceleration` (GRAV only) |
 | `Pressures/SID_n`, `Pressures/LOAD_n` | the faces PLOAD, PLOAD2 and PLOAD4 load, per set as for `Loads` (LOAD combinations scale and sum them); see [Pressure loads](#pressure-loads) | cell: `EID LoadCard Pressure PressureDirection PressureForce`; point: `NID CornerPressure`; field: `LoadSet ResultantForce LoadCardNames` |
+| `ContactSurfaces` | the faces of the contact regions: BSURFS (solid faces by element and three corner grids) and BSURF (shell elements); see [Contact surfaces](#contact-surfaces) | cell: `ContactRegion EID ContactCard`; point: `NID`; field: `ContactCardNames` |
 | `Removed` | the reference model's removed items (only with `convert --diff-against` or the Nastran Diff filter) | cell: `EID PID ElementType ElementMass DiffStatus DiffReason DeltaElementMass ItemType SID`; point: `NID`; see [Model diff](diff.md#diff-on-the-mesh) |
 | `Averaged/Shells`, `Averaged/Solids`, `Averaged/Lines` | cell arrays averaged to the grids without crossing PIDs (only with `convert --average`): the block's cells on points duplicated per (grid, PID); see [Results helpers](results-helpers.md#nodal-averaging-within-properties) | point: `NID PID Displacement` and the averaged arrays (named as the cell arrays); cell: `EID PID ElementType` |
 | `BeamSections` | CBAR/CBEAM cross sections swept in 3D (only with `--beam-sections`) | cell: `EID PID MID ElementType BeamPart Face`; point: `GA GB StationT`, with results `Displacement DisplacementMagnitude` |
@@ -33,7 +34,7 @@ Categorical arrays keep their names in block field data: `ElementTypeNames`, `Ri
 
 A deck that reads more than one file (INCLUDEs, nested or not) gets `FileId` on every block with
 an `EID`: Shells, Solids, Lines, Masses (point array), MassOffsets, Rigid, Connectors, Plotels, Bushes
-(point array), BushLines and BeamSections. `FileId` is the file that holds the element's own card,
+(point array), BushLines, ContactSurfaces and BeamSections. `FileId` is the file that holds the element's own card,
 in read order (0 is the main file); it is -1 where the file is unknown (a card made by `=`
 replication) and on MPC legs, whose `EID` is the MPC set id. Grids, SPCs and loads have no file,
 so the file of a GRID or FORCE card groups nothing. The same blocks carry, in field data, `FileNames` (the labels `FileId` indexes) and
@@ -55,7 +56,8 @@ of each MPCADD, nested MPCADDs expanded; decks with MPCADD),
 (one row per material card), the coordinate systems `CORD_ID CORD_Type CORD_RID CORD_Origin CORD_Axes`
 and `CoordSystemCount` (see [Coordinate systems](#coordinate-systems)), the grid systems
 `GRIDCS_NID GRIDCS_CP GRIDCS_CD`, the gravity per load set `GRAV_Set GRAV_Name GRAV_Acceleration`
-(decks with GRAV), plus `ActiveNSMSet PropertyNSMMass BulkNSMMass NonstructuralMass`, `DefinedNSMSets` (the top-level
+(decks with GRAV), the contact and glue pairs `CONTACT_Card CONTACT_Set CONTACT_Source CONTACT_Target`
+(decks with BCTSET or BGSET; see [Contact surfaces](#contact-surfaces)), plus `ActiveNSMSet PropertyNSMMass BulkNSMMass NonstructuralMass`, `DefinedNSMSets` (the top-level
 bulk sets, when the deck has any) and, when there is NSM, the
 `NSM_SET NSM_SetType NSM_SetMass NSM_SetCount` (per NSM set) and `NSM_PID NSM_PIDMass` tables
 (see [Nonstructural mass](#nonstructural-mass)). Decks with CBAR/CBEAM also get the
@@ -299,8 +301,10 @@ face loaded by two kinds of card). `--no-loads` and the reader's *Loads* toggle 
   face), along the direction; with N1-N3, the integral of the pressure over the actual area along
   N. `ResultantForce` on the block is the sum over the set, which is what the faces contribute to
   the OLOAD resultant.
-* The faces follow their elements in the reader's scope (a PLOAD face follows its grids) and their
-  grids when the model deforms. They are not equivalent nodal forces: `F_<sid>` holds FORCE/MOMENT
+* A face belongs to its element, as a [contact face](#contact-surfaces) does: the reader's
+  visibility lists, a selection file and the overlays' scope show, hide and select it with that
+  element (a PLOAD face has no element: it follows its grids in the scope and is not hidden by the
+  lists). The faces follow their grids when the model deforms. They are not equivalent nodal forces: `F_<sid>` holds FORCE/MOMENT
   only.
 
 Solid faces follow the QRG's PLOAD4 rules: G3 diagonally opposite G1 names a quadrilateral face
@@ -313,6 +317,46 @@ type the card cannot load, are skipped with one warning per card and the rest ar
 nothing draws is a [card report](#cards-not-drawn) row: a PLOAD4 edge load (SORL=LINE or an LDIR
 other than NORM), G1 and G3/G4 that name no face, a PLOAD2 on an element that is not a shell. PLOAD1
 (beam loads) and the axisymmetric PLOADX1 stay in the card report too.
+
+## Contact surfaces
+
+The contact regions of a deck become the `ContactSurfaces` block: one polygon per face, on its
+corner grids, with the region it belongs to in `ContactRegion` (the card's ID), the element in
+`EID` and the kind of card in `ContactCard` (0 `BSURF`, 1 `BSURFS`; names in `ContactCardNames`).
+Color by `ContactRegion` to see which faces each region holds.
+
+* **BSURFS** (solid faces): each entry is an element and three corner grids of one of its faces.
+  The face that holds the three grids is drawn whole, a triangle or a quadrilateral, for CHEXA,
+  CPENTA, CTETRA and CPYRAM; a quadratic solid's face is drawn on its corners. The points of a
+  face run so that its right-hand normal points out of the element.
+* **BSURF** (shell elements, lists and THRU/BY ranges): each shell is drawn on its corner grids in
+  its own order, so the normal is the element's.
+
+The block is display geometry on top of `Shells` and `Solids`: it adds no mass and no element, and
+the derived fields, `stats` and the [model tools](tools.md) do not see it. A face belongs to its
+element: the reader's visibility lists, the element ID lists, a selection file (`--select`) and
+the overlays' scope show, hide and select it with that element, and a face never selects its
+element (a list of the grids of one face of a solid selects nothing). The faces follow their
+grids when the model deforms. A face that two regions
+hold is two cells. `--no-contact` and the reader's *Contact Surfaces* toggle drop the block and
+the pair table.
+
+The pairs are the root table `CONTACT_Card CONTACT_Set CONTACT_Source CONTACT_Target`: one row
+per source and target region of each BCTSET (contact) and BGSET (glue) card. A pair may name a
+region nastran-pv does not draw (a BCPROP or BCPROPS). A pair that names a region no BSURF, BSURFS
+or BLSEG defines is a warning (`BCTSET 1: region 999 is not in the deck ...`), or an `info:` line
+when the deck has BCPROP or BCPROPS cards, which pyNastran does not read: the region may be one of
+them. This check is nastran-pv's own, the same with pyNastran 1.4.1 and main; main's messages about
+the pairs (`cross-reference not supported for BCTSET`, `missing target contact surface`) are not
+shown, because they are raised for pairs whose regions exist.
+
+Entries that cannot be drawn do not stop the rest of the region. An element that is not of the
+card's kind (a solid on a BSURF, a shell on a BSURFS, a mass, rigid or plot element on either) and BSURFS grids that are not three corners
+of one face give a [card report](#cards-not-drawn) row with the region's ID. An element or a grid
+the deck lacks gives a warning (an `info:` line for a BSURF that still draws at least one face: pyNastran
+expands a THRU range, and a range may span ids that do not exist). Two cards of one type with the
+same ID are a warning too: pyNastran keeps the last one, and only that one is drawn (or listed in
+the pair table).
 
 ## Coordinate systems
 
@@ -394,6 +438,8 @@ more. The reasons:
 | `edge load (SORL=LINE or LDIR)` | PLOAD4 that loads an element's edge, not its face (IDs: the load set) |
 | `G1 and G3/G4 name no face` | PLOAD4 on a solid whose G1 and G3/G4 name none of its faces, such as a CPYRAM's apex (IDs: the load set) |
 | `element type it cannot load` | PLOAD2 on an element that is not a shell, PLOAD4 on one that is neither a shell nor a solid (IDs: the load set) |
+| `G1-G3 are not three corners of one face` | BSURFS with an entry whose three grids are not three different corners of one face of its element (IDs: the region) |
+| `element type the region cannot hold` | BSURF that lists an element that is not a shell, BSURFS with an entry on an element that is not a solid; a mass, rigid or plot element on either (IDs: the region) |
 | `matrix input` | DMIG, DMI, DMIJ, DMIJI, DMIK, DMIAX |
 | `superelement` | the cards of a `BEGIN SUPER` section (data and control cards left out) and the superelement cards (SEBULK, SECONCT, SELOC, ...) |
 | `not read` | cards pyNastran rejected (unknown to it), and CWELD, which nastran-pv turns off because pyNastran 1.5 aborts the read on some of its forms |
@@ -409,7 +455,9 @@ every card is drawn or used); a file without it predates the report. The design 
 
 Everything in the [card report](#cards-not-drawn) (beam and axisymmetric loads PLOAD1/PLOADX1,
 axisymmetric and heat-transfer elements, CBUSH1D/2D, GENEL, DMIG, superelements, grounded springs,
-CFAST patch forms, CWELD, PLOTEL3/4/6/8 and the 3D plot elements). Scalar-point cards stay in the
+CFAST patch forms, CWELD, PLOTEL3/4/6/8 and the 3D plot elements, and the contact cards other than BSURF and BSURFS:
+regions by property (BCPROP, BCPROPS: pyNastran does not read them), contact bodies (BCBODY), line
+contact (BCONP, BLSEG) and BCONTACT/BCTABLE; a BSURF of solid elements is not drawn either). Scalar-point cards stay in the
 report: they have no location to draw at. GRAV is drawn as one arrow at the model CG (at the
 centre of the model's bounds when it has no mass) ([Nastran Load Glyphs](paraview.md#filter-properties)),
 not as nodal forces; the results' applied

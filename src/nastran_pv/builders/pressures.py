@@ -76,8 +76,24 @@ def merge(faces: dict, face: Face) -> None:
         faces[face.key] = Face(old.eid, old.nids, old.pressures + face.pressures, card, old.direction)
 
 
-def _corners(elem) -> list[int]:
-    return [int(n) for n in elem.node_ids[:SHELLS[elem.type][0]]]
+def shell_corners(elem) -> list[int]:
+    """The corner grids of a shell element, in its own order (the element normal by the right hand).
+    From the raw ``nodes``: pyNastran main's ``node_ids`` raises when a grid is not in the deck."""
+    return [int(n) for n in elem.nodes[:SHELLS[elem.type][0]]]
+
+
+def solid_faces(elem) -> tuple[list[tuple], list[int]]:
+    """(the corner grids of each face of a solid element, its corner grids)."""
+    nids = [int(n) for n in elem.nodes[:SOLIDS[elem.type][0]]]
+    return [tuple(nids[i] for i in f) for f in _FACES[elem.type]], nids
+
+
+def winds_outward(face_xyz: np.ndarray, element_xyz: np.ndarray):
+    """True when the right-hand normal of a solid's face (its corners ``face_xyz``, in order) points
+    away from the element's centroid (the mean of its corners ``element_xyz``). One face, or a
+    stack of faces of one shape with their elements (a leading axis): a bool per face."""
+    out = face_xyz.mean(axis=-2) - element_xyz.mean(axis=-2)
+    return np.sum(_vector_area(face_xyz) * out, axis=-1) > 0
 
 
 def _xyz(deck: Deck, nids) -> np.ndarray:
@@ -89,24 +105,22 @@ def _solid_corners(elem, g1, g34) -> list[int]:
     CTETRA, the face without G4; a quadrilateral face, G3 diagonally opposite G1; CPENTA with G3
     blank, its triangle holding G1; CPYRAM with G1 and G3 adjacent base corners, the triangle they
     make with the apex (the QRG's PLOAD4 remarks)."""
-    nids = [int(n) for n in elem.node_ids[:SOLIDS[elem.type][0]]]
-    on = lambda f: [nids[i] for i in f]  # noqa: E731
+    every, nids = solid_faces(elem)
     if g1 not in nids:
         raise Unsupported(NO_FACE, f"G1 {g1} is not a corner of {elem.type} {elem.eid}")
     if elem.type == "CTETRA":  # G4: the corner not on the face
-        faces = [f for f in _FACES["CTETRA"] if g1 in on(f) and g34 not in on(f)]
+        faces = [f for f in every if g1 in f and g34 not in f]
     elif elem.type == "CPYRAM" and g1 in nids[:4] and g34 in nids[:4] and g34 != g1 and (nids.index(g1) - nids.index(g34)) % 2:
-        faces = [f for f in _FACES["CPYRAM"] if len(f) == 3 and g1 in on(f) and g34 in on(f)]  # adjacent: a side
+        faces = [f for f in every if len(f) == 3 and g1 in f and g34 in f]  # adjacent: a side
     elif g34:  # a quadrilateral face with G3 diagonally opposite G1
-        faces = [f for f in _FACES[elem.type] if len(f) == 4 and g1 in on(f) and g34 in on(f)
-                 and abs(on(f).index(g1) - on(f).index(g34)) == 2]
+        faces = [f for f in every if len(f) == 4 and g1 in f and g34 in f and abs(f.index(g1) - f.index(g34)) == 2]
     elif elem.type == "CPENTA":  # its triangle holding G1
-        faces = [f for f in _FACES["CPENTA"] if len(f) == 3 and g1 in on(f)]
+        faces = [f for f in every if len(f) == 3 and g1 in f]
     else:
         faces = []
     if len(faces) != 1:
         raise Unsupported(NO_FACE, f"G1 {g1} and G3/G4 {g34 or 'blank'} name no face of {elem.type} {elem.eid}")
-    return on(faces[0]), nids
+    return list(faces[0]), nids
 
 
 def _solid_face(deck: Deck, elem, g1, g34, pressures) -> tuple[list[int], np.ndarray]:
@@ -115,8 +129,7 @@ def _solid_face(deck: Deck, elem, g1, g34, pressures) -> tuple[list[int], np.nda
     by the right-hand rule on the outward normal; the orientation comes from the geometry, so the
     element's own numbering does not matter."""
     face, nids = _solid_corners(elem, g1, g34)
-    xyz = _xyz(deck, face)
-    if np.dot(_vector_area(xyz), xyz.mean(axis=0) - _xyz(deck, nids).mean(axis=0)) > 0:
+    if winds_outward(_xyz(deck, face), _xyz(deck, nids)):
         face = face[::-1]  # its right-hand normal points out: turn it inward
     k = face.index(g1)
     face = face[k:] + face[:k]  # inward from G1: P1, then P4 P3 P2 (the outward order backwards)
@@ -125,10 +138,11 @@ def _solid_face(deck: Deck, elem, g1, g34, pressures) -> tuple[list[int], np.nda
 
 
 def _vector_area(xyz: np.ndarray) -> np.ndarray:
-    """Half the cross product of the diagonals (a quad) or of two edges (a triangle)."""
-    if len(xyz) == 3:
-        return 0.5 * np.cross(xyz[1] - xyz[0], xyz[2] - xyz[0])
-    return 0.5 * np.cross(xyz[2] - xyz[0], xyz[3] - xyz[1])
+    """Half the cross product of the diagonals (a quad) or of two edges (a triangle); ``xyz`` is
+    (corner, 3), or (face, corner, 3) for a stack of faces."""
+    if xyz.shape[-2] == 3:
+        return 0.5 * np.cross(xyz[..., 1, :] - xyz[..., 0, :], xyz[..., 2, :] - xyz[..., 0, :])
+    return 0.5 * np.cross(xyz[..., 2, :] - xyz[..., 0, :], xyz[..., 3, :] - xyz[..., 1, :])
 
 
 def face_force(xyz: np.ndarray, pressures: np.ndarray, direction=None) -> np.ndarray:
@@ -189,7 +203,7 @@ def pressure_faces(deck: Deck, card) -> list[Face]:
         def shell(elem):
             if elem.type not in SHELLS:
                 raise Unsupported(WRONG_ELEMENT, f"PLOAD2 loads shell elements, not {elem.type} {elem.eid}")
-            nids = _corners(elem)
+            nids = shell_corners(elem)
             deck.index(nids)  # KeyError for an unknown grid
             return Face(int(elem.eid), tuple(nids), np.full(len(nids), float(card.pressure)), code)
 
@@ -200,7 +214,7 @@ def pressure_faces(deck: Deck, card) -> list[Face]:
 
     def face(elem):
         if elem.type in SHELLS:
-            nids = _corners(elem)
+            nids = shell_corners(elem)
             deck.index(nids)  # KeyError for an unknown grid
             pressures = np.asarray(card.pressures, dtype=float)[:len(nids)].copy()
         elif elem.type in SOLIDS:

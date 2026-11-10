@@ -8,6 +8,24 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Added
 
+- Contact surfaces: the new `ContactSurfaces` block draws the faces of the contact regions, BSURFS
+  (solid faces named by an element and three corner grids: the whole face, triangle or
+  quadrilateral, of CHEXA, CPENTA, CTETRA and CPYRAM, wound outward) and BSURF (shell elements,
+  THRU/BY ranges), with cell `ContactRegion` (the region ID), `EID` and `ContactCard`, and point
+  `NID`. The BCTSET (contact) and BGSET (glue) pairs are the root table `CONTACT_Card CONTACT_Set
+  CONTACT_Source CONTACT_Target`. The block adds no mass and follows its grids when the model
+  deforms; `--no-contact` and the reader's *Contact Surfaces* toggle leave it out (`Options.contact`,
+  the last field). Entries that name no face, or an element of the wrong kind, are card-report
+  rows; a repeated region or pair ID is a warning (pyNastran keeps the last card), and so is a
+  pair that names a region the deck lacks (nastran-pv's own check, the same on pyNastran 1.4.1
+  and main, whose false `missing target contact surface` messages are not shown); BCPROP/BCPROPS
+  (not read by pyNastran), BCBODY and line contact stay in the card report
+  ([Contact surfaces](docs/model.md#contact-surfaces)).
+- Faces follow their elements everywhere: a contact face and a pressure face (`Pressures/*`) are
+  shown and hidden with their element by the reader's visibility lists (unchecking a property used
+  to leave its pressure faces drawn), selected with it by a selection file, and never select it: a
+  grid list holding the grids of one loaded face of a solid no longer selects that solid. One
+  declaration, `tree.FACE_BLOCKS`, serves the reader's cut, `--select` and the overlays' scope.
 - The Python API on the docs site ([Python API](docs/api.md)): `load_deck`, `build_multiblock`
   and `Options`, `open_results` and the results objects, the `.vtm` and VTKHDF writers, the
   result types, fields, model tools, beam sections and results helpers, rendered by autodoc from

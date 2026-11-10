@@ -10,6 +10,7 @@ from . import vtkutil
 from .builders.bushes import build_bushes
 from .builders.connectors import build_connectors, mpcadd_sets
 from .builders.constraints import build_constraints, nodal_spc_mask, spc_enforced, spc_sets
+from .builders.contact import PAIR_TABLE, build_contact, contact_pairs
 from .builders.lines import build_lines
 from .builders.loads import build_load_block, load_sets, nodal_load_arrays
 from .builders.pressures import build_pressure_block
@@ -35,9 +36,10 @@ class Options:
     """What :func:`build_multiblock` builds.
 
     The block switches (``shells``, ``lines``, ``solids``, ``masses``, ``rigid``, ``connectors``,
-    ``plotels``, ``bushes``, ``constraints``, ``loads``; all on by default, the CLI's ``--no-*``
-    flags turn them off) leave a block out when False; ``bushes`` covers Bushes and BushLines,
-    ``loads`` covers Loads and Pressures. The other fields: ``k_ref`` (``--k-ref``), the stiffness
+    ``plotels``, ``bushes``, ``constraints``, ``loads`` and, the last field, ``contact``; all on by
+    default, the CLI's ``--no-*`` flags turn them off) leave a block out when False; ``bushes``
+    covers Bushes and BushLines, ``loads`` covers Loads and Pressures, ``contact`` is
+    ContactSurfaces and the ``CONTACT_`` pair table. The other fields: ``k_ref`` (``--k-ref``), the stiffness
     the bush glyphs' log scale starts at (None: the softest bush); ``nodal_arrays`` (on;
     ``--no-nodal-arrays``), the ``SPC_DOF`` and ``F_<sid>``/``M_<sid>`` point arrays on the mesh
     blocks, for at most ``max_nodal_load_sets`` load sets (8; no flag); ``nsm_set``
@@ -61,6 +63,7 @@ class Options:
     max_nodal_load_sets: int = 8
     nsm_set: int | None = None  # bulk NSM set (None = Case Control NSM=, 0 = none)
     beam_sections: bool = False  # swept CBAR/CBEAM sections as the BeamSections block
+    contact: bool = True  # ContactSurfaces and the CONTACT_ pair table (a block switch, added last)
 
 
 def case_control_ids(model, key: str) -> list[int]:
@@ -132,7 +135,7 @@ def _add_nodal_arrays(deck, mesh, opts, spc, active_spc, lsets, active_loads) ->
 
 def build_multiblock(deck: Deck, opts: Options | None = None, progress: Progress = NULL) -> vtkMultiBlockDataSet:
     """The model as a ``vtkMultiBlockDataSet`` of named blocks (``Shells``, ``Lines``,
-    ``Solids``, ``Masses``, ``Rigid``, ``Bushes``, ``Loads``, ...) with the root field data and
+    ``Solids``, ``Masses``, ``Rigid``, ``Bushes``, ``Loads``, ``ContactSurfaces``, ...) with the root field data and
     ``*_`` tables: masses and CG, materials, coordinate systems, beam sections, include files,
     the card report and ``Warnings``. The blocks and arrays are listed in ``docs/model.md``.
 
@@ -209,9 +212,13 @@ def build_multiblock(deck: Deck, opts: Options | None = None, progress: Progress
             blocks.add("Loads", loads.mb)
         if pressures.mb.GetNumberOfBlocks():
             blocks.add("Pressures", pressures.mb)
+    if opts.contact:
+        with step("ContactSurfaces"):
+            blocks.add("ContactSurfaces", build_contact(deck))
 
     mb = blocks.mb
     vtkutil.write_field_table(mb, "GRAV_", grav)
+    vtkutil.write_field_table(mb, PAIR_TABLE, contact_pairs(deck) if opts.contact else [])
     fd = mb.GetFieldData()
     vtkutil.add_string_array(fd, "DeckPath", [str(deck.path)])
     vtkutil.add_array(fd, "SOL", np.array([deck.sol if isinstance(deck.sol, int) else -1]))

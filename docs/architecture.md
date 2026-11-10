@@ -46,6 +46,14 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   face loaded twice sums), LOAD combinations scaling all three. `pressures.face_force` integrates
   the interpolated corner pressures (2 × 2 Gauss on quads); solid faces are found from PLOAD4 G1 and
   G3/G4 and oriented from the geometry (inward), so an element's own winding does not matter.
+- `builders/contact.py`: the BSURF/BSURFS regions as `ContactSurfaces` (a polygon per face with
+  `ContactRegion EID ContactCard`) and the BCTSET/BGSET pairs as the root `CONTACT_` table. A BSURFS
+  face is the element face that holds the entry's three grids (`pressures.solid_faces`, the face table
+  PLOAD4 uses), turned outward with `pressures.winds_outward` in one numpy pass per face shape. The
+  block is in no mesh-block list. It and `Pressures` are the face blocks (`tree.FACE_BLOCKS`): a
+  face with an `EID` is kept, hidden and selected with its element, in the reader's cut
+  (`tree._faces_follow`), `selection.item_masks` (it never brings its element in) and
+  `selection.scope_masks`. Design: `docs/design/2026-11-09-contact-surfaces.md`.
 - `assemble.py`: runs the builders according to `Options` and copies nodal SPC/load arrays onto the
   mesh blocks. It adds root field data: masses from `massprops.py` (numpy volumes when every solid is linear, else VTK cell sizes for the block; never
   pyNastran's slow `mass_properties`) and a `MAT_*` material table from `materials.py`. Derived
@@ -480,3 +488,11 @@ Every gotcha found so far, by area. The few that bite on any change are also in 
   - `CBUSH.Ga()` fails after a partial xref, so use `elem.nodes`.
   - It aborts the read on CWELD ALIGN, so CWELD is disabled.
   - It reports some problems through `warnings.warn`, which `load_deck` captures.
+  - `elem.node_ids` raises (`AttributeError`) on an element with a grid the deck lacks, after the
+    safe cross-reference; read the raw `elem.nodes` (`pressures.shell_corners`, `solid_faces`).
+  - Its cross-reference of the contact pairs logs `cross-reference not supported for BCTSET` and,
+    per pair, `missing target contact surface for BCTSET=<set id>` (it looks the set id up as a
+    region, so the error is false), and for BGSET a missing-region error that knows no
+    BCPROP/BCPROPS; 1.4.1 logs nothing. `load_deck` drops exactly these (`deck._REPLACED`) and
+    `builders/contact.contact_pairs` checks the pairs' regions itself, the same on both.
+    Both versions keep the last card of a repeated BSURF/BSURFS/BCTSET/BGSET ID without a word.
