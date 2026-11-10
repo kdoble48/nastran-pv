@@ -463,6 +463,11 @@ def sync_labels():
     return labels
 
 
+def in_command():
+    """True while a command runs (nastran_panel does not draw into a view a command is editing)."""
+    return _LABEL_CACHE[0] is not None
+
+
 def _command(fn):
     """A command (a view, a macro): the labels are synced once when it starts and read from that map
     while it runs (commands open, close or rename no model); nested commands share it."""
@@ -477,6 +482,9 @@ def _command(fn):
             return fn(*args, **kwargs)
         finally:
             _LABEL_CACHE[0] = None
+            panel = sys.modules.get("nastran_panel")  # the reader's View properties follow the view
+            if panel is not None:
+                panel.reflect()
 
     return run
 

@@ -8,6 +8,12 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Added
 
+- Views from the reader's Properties panel: a *View* section with *Color By* (PID, MID, Element
+  type, Thickness, Family, Group, NSM, Displacement, Stress, Model check, Parts) and an *Overlays*
+  checklist (Masses, Bushes, Beam axes, Loads, SPC, Rigid elements). Apply draws them in the active
+  view with the code the toolbar macros run, so the macros need not be installed for these views;
+  the section and the macros follow each other, and *NPV Clear View* unticks it. Deck reader and
+  built-in server only ([Views from the reader panel](docs/paraview.md#views-from-the-reader-panel)).
 - Contact surfaces: the new `ContactSurfaces` block draws the faces of the contact regions, BSURFS
   (solid faces named by an element and three corner grids: the whole face, triangle or
   quadrilateral, of CHEXA, CPENTA, CTETRA and CPYRAM, wound outward) and BSURF (shell elements,
@@ -252,6 +258,10 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Changed
 
+- The reader's Properties panel is shorter: the random vibration settings, the block switches (with
+  *NodalArrays*, *BushStiffnessReference* and *NSMSet*) and the ID-file selection settings are each
+  folded behind a check box (*Random Vibration*, *Blocks And Options*, *Selection From An ID File*).
+  The properties themselves, scripts and state files are unchanged.
 - The NPV toolbar macros are renamed so that the toolbar, which lists them by name, groups them
   by what they do (*Check*, *Clear*, *Color*, *Diff*, *Grow*, *Hide*, *Highlight*, *Mode*,
   *Overlay*, *Path*, *Result*, *Show*) instead of scattering them alphabetically. Run

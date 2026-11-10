@@ -116,6 +116,9 @@ with `cannot read DECK: <error>` and writes no PNG.
   (`nv.show_all(reader)` resets them); `docs/paraview.md#model-tree-and-visibility`. Per INCLUDE file
   on a converted `.vtm`/`.vtkhdf`: `pv.NastranFiles(Input=src)` and its `VisibleFiles`
   (`docs/paraview.md#include-files`).
+- The reader's *View* section (`reader.ColorBy = "PID"`, `reader.Overlays = ["Masses"]`) draws the
+  same views when the next render ends, and follows every `nv.apply`; scripts use `nv.apply`
+  (`docs/paraview.md#views-from-the-reader-panel`).
 - From an ID file: the reader's `SelectionFile`/`SelectionKey`/`SelectionMode` (Show only, Hide, Off)/
   `SelectionGrids`, or `nv.show_only_file(path)`, `nv.hide_file(path)`, `nv.highlight_file(path)` (a real
   ParaView selection, so `nv.grow_from_selection()` works on it); read enum values back with

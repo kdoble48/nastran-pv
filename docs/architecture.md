@@ -289,6 +289,15 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
     built multiblock by its options, so changing the time step only re-attaches results. The cut
     model tree is cached by the visibility settings too; its checklists are filled in
     `RequestInformation`, before the first Apply.
+- `paraview/nastran_panel.py`: the reader's *View* properties (`ViewColorBy`, `Overlays`; the reader
+  stores them and never reads them). The reader's constructor installs it in a process with a client
+  session: it observes each reader proxy's `UpdatePropertyEvent`, and when the next render ends
+  (inside the event ParaView's Apply is not done, and its default display would land on top) calls
+  `nastran_views.apply` for what changed (only when the View properties themselves changed, and never
+  while a view command runs: commands render mid-edit). `reflect()`, called after every view command, writes the
+  view's coloring and overlays back to the properties. The reader's foldable groups (`_module_hint`)
+  are a boolean property plus a visibility `GenericDecorator` on each member, because ParaView has
+  no collapsible property group; the booleans never call `Modified()`.
 - `paraview/nastran_views.py`: view functions (`apply(name)`) on the deck reader or a converted
   `.vtm`/VTKHDF (`subject(view)`: the model follows the view; `find_reader`, `is_model_file`: root
   field `DeckPath` or `ModelMass`; `deck_reader` guards the commands that need the deck),
