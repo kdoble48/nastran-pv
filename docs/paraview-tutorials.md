@@ -10,7 +10,7 @@ filters, or the *NPV* toolbar buttons. [ParaView](paraview.md) is the reference 
 * Load the plugin once: *Tools > Manage Plugins > Load New...*, pick
   `paraview/nastran_bdf_reader.py`, and tick *Auto Load*.
 * Install the toolbar buttons with `python paraview/install_macros.py`, then restart ParaView.
-  They appear on the *Macros* toolbar as *NPV Masses*, *NPV Show Only* and so on.
+  They appear on the *Macros* toolbar as *NPV Overlay Masses*, *NPV Show Only Selected* and so on.
 * Most tutorials use the uCRM-9 wingbox
   ([Install](install.md#example-datasets)), coarse mesh:
   `gpk4zn73xn-1/uCRM9/uCRM9/Mesh/Coarse/FEM/run_uCRM-9_static_cruise_coarse.bdf`. The mode-shape
@@ -23,10 +23,10 @@ filters, or the *NPV* toolbar buttons. [ParaView](paraview.md) is the reference 
 1. *File > Open*, choose the run deck, and pick **Nastran Bulk Data (nastran-pv)** in the reader
    list (*Set reader as default* saves the question next time).
 2. In the Properties panel, leave all blocks on and click **Apply**.
-3. Click **NPV PID**. The mesh gets one color per property, with the property IDs in the legend.
+3. Click **NPV Color PID**. The mesh gets one color per property, with the property IDs in the legend.
 
    By hand: select the reader in the Pipeline Browser, pick `PID` in the *Coloring* list, then
-   click **NPV Index Colors** to turn the color bar into one color per ID.
+   click **NPV Color Indexed** to turn the color bar into one color per ID.
 
 ![uCRM-9 colored by property](images/paraview-tutorials-pid.png)
 
@@ -67,9 +67,9 @@ logic lives in the reader's Properties panel.
    material, so *Visible Materials* never hides them.
 3. Select some elements: press `S` (*Select Cells On*) and drag a box, or use *Edit > Find Data*
    with a query such as `EID >= 1000`. Then:
-   * **NPV Hide** adds them to the reader's *Hidden Elements*.
-   * **NPV Show Only** shows only them (loads and SPCs stay).
-   * **NPV Only Property** / **NPV Only Material** untick every property (or material) except
+   * **NPV Hide Selected** adds them to the reader's *Hidden Elements*.
+   * **NPV Show Only Selected** shows only them (loads and SPCs stay).
+   * **NPV Show Only Property** / **NPV Show Only Material** untick every property (or material) except
      the selected elements' ones.
 4. **NPV Show All** ticks everything again and clears both ID lists.
 
@@ -100,7 +100,7 @@ Femap's "select connected" from a point, without crossing into the next group:
 
 ## 5. Check mass, CG and loads
 
-1. Click **NPV Masses**. Each concentrated mass becomes a sphere (or an inertia ellipsoid) colored
+1. Click **NPV Overlay Masses**. Each concentrated mass becomes a sphere (or an inertia ellipsoid) colored
    by mass, the model CG is a black sphere, and the overlay text gives the totals.
 
    ![uCRM-9 engine, 20 % fuel and leading/trailing-edge masses with the model CG](images/paraview-tutorials-masses.png)
@@ -110,11 +110,11 @@ Femap's "select connected" from a point, without crossing into the next group:
    `StructuralMass`, `NonstructuralMass`, `ConcentratedMass`, `ModelMass` and `ModelCG` are in the first row.
 3. To size the spheres, select *NPV mass glyphs* and change *Size* or *RadiusLaw*; *Minimum
    Mass* hides the light ones ([Glyph filters](paraview.md#glyph-filters)).
-4. **NPV Loads** draws the case control's `LOAD` set as arrows (FORCE/MOMENT on their grids, PLOAD*
+4. **NPV Overlay Loads** draws the case control's `LOAD` set as arrows (FORCE/MOMENT on their grids, PLOAD*
    pressures on their faces, GRAV at the CG), with its resultant in the overlay. To see another
    set, or moments, check it under *Load Sets* on *NPV load glyphs* and set *Show*; with results
    loaded, its *Source* draws the SPC forces (the reactions), MPC forces or applied loads.
-   **NPV SPC** colors the constrained grids by DOF; *DOFs* `123` on *NPV spc glyphs* keeps the
+   **NPV Overlay SPC** colors the constrained grids by DOF; *DOFs* `123` on *NPV spc glyphs* keeps the
    grids that fix a translation. Every load set is also in the tree under `Model > Loads`, for
    example `LOAD_1001`.
 
@@ -123,20 +123,20 @@ Femap's "select connected" from a point, without crossing into the next group:
 1. Open `docs/models/demo.bdf`. In the reader's Properties panel, set **OP2 File Name** to the
    solved `.op2` (or MSC/NX `.h5`) and click **Apply**. Every mode (or subcase, or load step)
    becomes a time step.
-2. Click **NPV Results**: the deformed shape colored by displacement over a gray outline of the
+2. Click **NPV Result Displacement**: the deformed shape colored by displacement over a gray outline of the
    undeformed mesh. The overlay names the mode and its frequency.
 3. Step through the modes with the *VCR* toolbar (or the time field next to it); *Auto Scale* on
    *NPV deform* draws each one's largest displacement at 8 % of the model. To pick the
    amplification yourself, uncheck *Auto Scale* and change *Scale Factor*.
-4. Click **NPV Animate Mode** to see the mode vibrate (two cycles), or **NPV Animate All Modes**
+4. Click **NPV Mode Animate** to see the mode vibrate (two cycles), or **NPV Mode Animate All**
    to play every mode in turn; the mode and its frequency show in the upper right corner. The
-   animation works in whatever is shown: click *NPV Group* (or *NPV PID*, ...), switch on
+   animation works in whatever is shown: click *NPV Color Group* (or *NPV Color PID*, ...), switch on
    *NPV mass glyphs* with its eye, uncheck groups on the reader to keep a small subset, and the
    subset's mesh, its masses and everything else shown move with the mode.
-5. After NPV Animate Mode, the **play button** loops that mode (the macro turns on *Loop* and
+5. After NPV Mode Animate, the **play button** loops that mode (the macro turns on *Loop* and
    puts it back afterwards): the time steps are now the phases of one vibration. Click
-   **NPV Stop Mode Animation** (or any NPV view) to step through the modes again.
-6. Click **NPV Save Mode Animations** to keep them: one looping GIF per mode, saved next to the
+   **NPV Mode Animate** again (or any NPV view) to step through the modes again.
+6. Click **NPV Mode Save GIFs** to keep them: one looping GIF per mode, saved next to the
    model file (`demo_mode01.gif`, ...), in the same view and camera.
 
 ![Mode 2 of the demo tray at 11.0 Hz](images/paraview-tutorials-results.png)
@@ -147,7 +147,7 @@ strain components in the reader's *Result Types* ([Result types](model.md#result
 
 ## 7. Find mesh problems
 
-1. Click **NPV Model Check**. Free edges, free faces, coincident grids, duplicate elements,
+1. Click **NPV Check Model**. Free edges, free faces, coincident grids, duplicate elements,
    dangling connectors and floating parts are drawn on a translucent mesh, and the overlay counts
    each check.
 
@@ -155,7 +155,7 @@ strain components in the reader's *Result Types* ([Result types](model.md#result
 
 2. Select *NPV check* to turn single checks off or change *Tolerance*. Its second output (open it
    in a SpreadSheet View) lists the counts.
-3. **NPV Parts** colors each connected part. Select *NPV parts* and untick `RBE2`/`RBE3` under
+3. **NPV Check Parts** colors each connected part. Select *NPV parts* and untick `RBE2`/`RBE3` under
    *Card Types* to see what the rigid elements hold together.
 
 ## 8. Color the model by your own table

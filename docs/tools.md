@@ -136,8 +136,7 @@ The graph is built once per model, so moving the slider or a checkbox only rerun
   duplicates, dangling connectors) and leaves out free edges and faces and floating parts; the
   table still lists every check run.
 
-The *Traversal* and *Show Only* groups sit below each filter's own settings. Running NPV Grow,
-Path or Model Check again keeps what you set on *NPV grow*, *NPV path* or *NPV check*.
+The *Traversal* and *Show Only* groups sit below each filter's own settings. Running NPV Grow from Selection, NPV Path from Selection or NPV Check Model again keeps what you set on *NPV grow*, *NPV path* or *NPV check*.
 
 The toolbar macros (see [ParaView](paraview.md#one-click-views-toolbar-macros)) drive them:
 
@@ -152,7 +151,7 @@ to *seed groups* (or families, properties, materials). Then **NPV Show Only Reac
 was reached, through the reader's *Show Only Elements*, and **NPV Hide Reached** hides it. Masses
 and bushes on reached grids count as reached. **NPV Show All** brings everything back.
 
-**NPV Parts** and **NPV Model Check** show the parts and the findings without seeds.
+**NPV Check Parts** and **NPV Check Model** show the parts and the findings without seeds.
 
 ## Python
 

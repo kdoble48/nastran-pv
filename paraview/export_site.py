@@ -78,11 +78,11 @@ VIEW_INFO = {
 }
 # gallery entries that a view draws with fixed arguments: entry -> (view, its arguments, the GUI step)
 VARIANTS = {
-    "spcforces": ("loads", {"source": "SPC forces"}, "click **NPV Loads**, then set *Source* to SPC forces on "
+    "spcforces": ("loads", {"source": "SPC forces"}, "click **NPV Overlay Loads**, then set *Source* to SPC forces on "
                                                      "*NPV load glyphs*"),
-    "mpcforces": ("loads", {"source": "MPC forces"}, "click **NPV Loads**, then set *Source* to MPC forces on "
+    "mpcforces": ("loads", {"source": "MPC forces"}, "click **NPV Overlay Loads**, then set *Source* to MPC forces on "
                                                      "*NPV load glyphs*"),
-    "oload": ("loads", {"source": "Applied loads (OLOAD)"}, "click **NPV Loads**, then set *Source* to Applied "
+    "oload": ("loads", {"source": "Applied loads (OLOAD)"}, "click **NPV Overlay Loads**, then set *Source* to Applied "
                                                             "loads (OLOAD) on *NPV load glyphs*"),
 }
 # the entries that show results: their pages say to give the reader the results file

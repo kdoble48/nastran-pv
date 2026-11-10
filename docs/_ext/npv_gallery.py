@@ -7,7 +7,9 @@ placeholder page. The page functions don't import Sphinx, so the tests can call 
 """
 from __future__ import annotations
 
+import functools
 import html
+import importlib.util
 import json
 import re
 import shutil
@@ -15,8 +17,26 @@ from pathlib import Path
 from urllib.parse import quote
 
 GALLERY = "gallery"
+INSTALL_MACROS = Path(__file__).resolve().parents[2] / "paraview" / "install_macros.py"
 ASSETS = "_static/gallery"
 COLLAPSE_OVER = 12
+
+
+MERGED = {"grow": "grow_from_selection"}  # views drawn by another view's button
+
+
+@functools.lru_cache(maxsize=None)
+def _macro_labels() -> dict:
+    """{view: toolbar label} from ``paraview/install_macros.py`` (it imports no ParaView)."""
+    spec = importlib.util.spec_from_file_location("npv_install_macros", INSTALL_MACROS)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return {view: label for label, view in module.MACROS.items()}
+
+
+def macro_label(view: str, default: str) -> str:
+    """The toolbar label of the button that draws ``view``, or ``default`` for a view without one."""
+    return _macro_labels().get(MERGED.get(view, view), default)
 
 
 def hexrgb(rgb) -> str:
@@ -92,7 +112,7 @@ def view_page(meta, version="") -> str:
         side = _side(meta["legends"], meta["text"])
     reproduce = "\n".join(meta["reproduce"])
     # a view's macro, or what to click for an entry that is a view's setting or a filter
-    gui = meta.get("gui") or f"click **NPV {title}** on the Macros toolbar"
+    gui = meta.get("gui") or f"click **NPV {macro_label(meta['view'], title)}** on the Macros toolbar"
     results = " (with the results file as its *OP2 File Name*)" if meta.get("results") else ""
     return (f'# {title}: {meta["model_title"]}\n\n{meta["caption"]}\n\n'
             f'`````{{tab-set}}\n{tabs}`````\n\n{side}\n'

@@ -283,10 +283,10 @@ def play_checks(pv, nv, reader, view, full, deform, glyphs, mesh, bounds, m0, g0
     """The play button vibrates one mode: phases as time steps, the mode held upstream, the
     frequency shown, every shown object moving, a show-only subset too; views undo it."""
     tk = pv.GetTimeKeeper()
-    phases = [k / 24 for k in range(24)]  # Animate Mode just set mode 3 up with 24 frames
+    phases = [k / 24 for k in range(24)]  # Mode Animate just set mode 3 up with 24 frames
     check(nv.held_time(reader) == full[2] and nv.current_step(reader, view) == 3
           and np.allclose(list(tk.TimestepValues), phases),
-          f"Animate Mode leaves the play button on mode 3: {len(list(tk.TimestepValues))} phases")
+          f"Mode Animate leaves the play button on mode 3: {len(list(tk.TimestepValues))} phases")
     # the fixture's modes come back from write_op2 as displacement steps without a frequency
     label = pv.FindSource(nv._name(nv._ReaderOnly(reader), "mode label"))
     check(label is not None and label.Text == "Subcase 2 step 2" and label in nv.shown_sources(view),
@@ -471,7 +471,7 @@ def _model_sources(pv, nv, reader):
 
 
 def force_stress_view_checks(pv, nv):
-    """NPV Forces and NPV Stress (roadmap task 9) on tests/data/elements.bdf with the synthesized
+    """NPV Result Forces and NPV Result Stress (roadmap task 9) on tests/data/elements.bdf with the synthesized
     OP2: the array each block is colored by and its range, the views' arguments, the Result Types
     they turn on (and off again), and a converted file without stress components (the VonMisesMax
     fallback)."""
@@ -498,7 +498,7 @@ def force_stress_view_checks(pv, nv):
         text = _info(nv, model)
         check(colored(model, "Lines")[0] == "AxialForce" and colored(model, "Shells") == ("MembraneForce", ("Magnitude", 0))
               and colored(model, "Bushes")[0] == "BushForce" and colored(model, "Connectors")[0] == "SpringForce",
-              "NPV Forces: shells by MembraneForce, lines by AxialForce, bushes and springs by their force")
+              "NPV Result Forces: shells by MembraneForce, lines by AxialForce, bushes and springs by their force")
         check(text.startswith("Subcase 1 element forces") and "Lines: AxialForce" in text and "element frame" in text
               and "Turned on" not in text, f"forces info (the forces were on already): {text!r}")
         springs = pv.FindSource(nv._name(model, "Connectors with values"))
@@ -521,14 +521,14 @@ def force_stress_view_checks(pv, nv):
         model = nv.apply("stress", reader=reader, view=view)
         on = list(reader.ResultTypes)
         check(on[:2] == ["Displacement", "ShellForce"] and set(on[2:]) == {"ShellStress", "SolidStress", "LineStress"},
-              f"NPV Stress adds the stress types to the script's choice, nothing else: {on}")
+              f"NPV Result Stress adds the stress types to the script's choice, nothing else: {on}")
         check(model.array("Shells", "VonMisesTop", "cell") is not None,
               "apply returns the model with the arrays the view turned on")
         text = _info(nv, model)
         check("Turned on in the reader's Result Types: ShellStress, SolidStress, LineStress" in text
               and "shells at the top fibre" in text, f"stress info: {text!r}")
         check(colored(model, "Shells")[0] == "VonMisesTop" and colored(model, "Solids")[0] == "VonMises"
-              and colored(model, "Lines")[0] == "MaxStress", "NPV Stress: von Mises at the top fibre, lines MaxStress")
+              and colored(model, "Lines")[0] == "MaxStress", "NPV Result Stress: von Mises at the top fibre, lines MaxStress")
         model = nv.apply("stress", reader=reader, view=view, quantity="principal", fibre="bottom")
         check(colored(model, "Shells") == ("PrincipalStressBottom", ("Component", 0))
               and colored(model, "Solids") == ("PrincipalStress", ("Component", 0)),
@@ -571,7 +571,7 @@ def force_stress_view_checks(pv, nv):
 def ply_view_checks(pv, nv):
     """Composite plies (roadmap task 13) on tests/data/composites.bdf with the synthesized OP2 (its
     values by hand: tests/test_composites.py): the reader's Ply (critical ply, a chosen ply, a PCOMPG
-    global ply, a ply no property has), the layup it lays on the shells, NPV Plies (the array, the
+    global ply, a ply no property has), the layup it lays on the shells, NPV Result Plies (the array, the
     Result Types it turns on, its arguments) and Nastran Ply Axes (count, ply, Both Axes kept on a
     rerun), and a file converted with --ply."""
     from op2_fixture import make_composite_op2
@@ -594,7 +594,7 @@ def ply_view_checks(pv, nv):
         model = nv.apply("plies", reader=reader, view=view)
         disp = pv.GetDisplayProperties(pv.FindSource(nv._name(model, "Shells")), view)
         check(disp.ColorArrayName[1] == "PlyVonMises" and "PlyStress" in list(reader.ResultTypes),
-              f"NPV Plies turns PlyStress on and colors by PlyVonMises: {disp.ColorArrayName[1]}")
+              f"NPV Result Plies turns PlyStress on and colors by PlyVonMises: {disp.ColorArrayName[1]}")
         check(same(_by_eid(reader, "Shells", "PlyStressPly"), {1: 1, 2: 3, 3: 4, 4: 103, 5: 102, 6: nan}),
               "the critical ply of each element (its id in PlyStressPly)")
         axes = pv.FindSource(nv._name(model, "ply axes"))
@@ -748,7 +748,7 @@ def beam_checks(pv, nv, view, tmp):
     nv.apply("beams", reader=r, view=view, toggle=True)
     check(pv.GetScalarBar(lut, view).Visibility, "beams overlay on again: its legend is back")
     nv.clear(view)
-    check(not pv.GetScalarBar(lut, view).Visibility, "NPV Clear: no beams legend left")
+    check(not pv.GetScalarBar(lut, view).Visibility, "NPV Clear View: no beams legend left")
 
 
 def converted_checks(pv, nv, reader):
@@ -966,9 +966,9 @@ def stray_checks(pv, nv, reader):
     nv.apply("loads", reader=reader, view=view, toggle=True)
     check(not vis(info), "Loads off: no layer has anything to say, the text goes")
     nv.apply("loads", reader=reader, view=view)
-    pv.Show(reader, view)                           # as Highlight File does
+    pv.Show(reader, view)                           # as Highlight Listed does
     nv.apply("pid", reader=reader, view=view)
-    check(not vis(reader), "a coloring hides the reader Highlight File showed")
+    check(not vis(reader), "a coloring hides the reader Highlight Listed showed")
     twin = rm.load_reader(DECK)
     check(vis(info) and not vis(reader), "PID over Loads keeps the Loads summary")
     nv.apply("pid", reader=twin, view=view)
@@ -1050,7 +1050,7 @@ RBE2,10,3,123456,9
 
 
 def group_scope_checks(pv, nv):
-    """The user's case: untick a group in Visible Groups, then NPV Masses shows only the masses of the
+    """The user's case: untick a group in Visible Groups, then NPV Overlay Masses shows only the masses of the
     groups left (CONM2 101 on WING_SKIN's grid 1 and CONM2 103 on its RBE2), not CONM2 102 on WING_SPARS."""
     keep = set(pv.GetSources().values())
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
@@ -1112,20 +1112,20 @@ def tree_checks(pv, nv, reader):
     _select(pv, reader, "(EID == 1)")
     nv.show_only_selected()
     check(reader.ShowOnlyElements == "1" and _cells(reader, "Shells") == 1 and _cells(reader, "Solids") == 0
-          and _cells(reader, "Constraints") == 4, "NPV Show Only: EID 1 alone (SPCs stay)")
+          and _cells(reader, "Constraints") == 4, "NPV Show Only Selected: EID 1 alone (SPCs stay)")
     nv.show_all(reader)
     _select(pv, reader, "(EID == 2)")
     nv.hide_selected()
-    check(reader.HiddenElements == "2" and _cells(reader, "Shells") == 2, "NPV Hide: EID 2 hidden")
+    check(reader.HiddenElements == "2" and _cells(reader, "Shells") == 2, "NPV Hide Selected: EID 2 hidden")
     nv.show_all(reader)
     _select(pv, reader, "(EID == 11)")
     keep = nv.show_only_property()
     check(keep == ["PSOLID_11"] and _cells(reader, "Shells") == 0 and _cells(reader, "Solids") == 2,
-          f"NPV Only Property -> {keep}")
+          f"NPV Show Only Property -> {keep}")
     nv.show_all(reader)
     _select(pv, reader, "(EID == 13)")
     keep = nv.show_only_material()
-    check(keep == ["MAT1_3"] and _cells(reader, "Solids") == 1, f"NPV Only Material -> {keep}")
+    check(keep == ["MAT1_3"] and _cells(reader, "Solids") == 1, f"NPV Show Only Material -> {keep}")
     nv.show_all(reader)
     # GUI flow: the view shows an NPV extract; the selection sits on it while the reader is active
     nv.apply("family", reader=reader, view=view)
@@ -1134,7 +1134,7 @@ def tree_checks(pv, nv, reader):
     pv.SetActiveSource(reader)
     nv.hide_selected()
     check(reader.HiddenElements == "3" and _cells(reader, "Shells") == 2 and nv.selected_source() is None,
-          "NPV Hide takes the selection from the view's extract, then clears it")
+          "NPV Hide Selected takes the selection from the view's extract, then clears it")
     nv.show_all(reader)
     # grow from a grid without leaving the seed's family, then isolate what it reached
     pv.SetActiveSource(reader)
@@ -1167,7 +1167,7 @@ def tree_checks(pv, nv, reader):
     _select(pv, reader, "(EID == 1) | (EID == 201)")  # a shell and a CONM2 (EID on mass points)
     nv.show_only_selected()
     check(reader.ShowOnlyElements == "1 201" and _cells(reader, "Masses") == 1,
-          f"NPV Show Only keeps a selected mass: {reader.ShowOnlyElements!r}")
+          f"NPV Show Only Selected keeps a selected mass: {reader.ShowOnlyElements!r}")
     nv.show_all(reader)
     pv.Delete(view)
 
@@ -1185,13 +1185,13 @@ def selection_file_checks(pv, nv, reader):
         f.write("$ grids from a test\nGRID\n4 THRU 5\n7\n")
     try:
         nv.show_only_file()
-        check(False, "Show Only File without a Selection File should be refused")
+        check(False, "Show Only Listed without a Selection File should be refused")
     except RuntimeError as exc:
-        check("Selection File" in str(exc), "NPV Show Only File asks for the reader's Selection File")
+        check("Selection File" in str(exc), "NPV Show Only Listed asks for the reader's Selection File")
     ids = nv.show_only_file(eids, reader=reader)
     check(ids.key == "EID" and _cells(reader, "Shells") == 2 and _cells(reader, "Solids") == 0
           and _cells(reader, "Masses") == 1 and _cells(reader, "Constraints") == 4,
-          "NPV Show Only File: EIDs 1 2 with the mass and SPCs on their grids")
+          "NPV Show Only Listed: EIDs 1 2 with the mass and SPCs on their grids")
     edited = os.path.join(tmp, "edited.csv")
     with open(edited, "w") as f:
         f.write("EID\n1\n")
@@ -1200,7 +1200,7 @@ def selection_file_checks(pv, nv, reader):
         f.write("EID\n1\n2\n3\n")
     os.utime(edited, (os.path.getmtime(edited) + 5,) * 2)
     nv.show_only_file(edited, reader=reader)  # same file and mode: the edited file is read again
-    check(_cells(reader, "Shells") == 3, "NPV Show Only File again reads the edited file")
+    check(_cells(reader, "Shells") == 3, "NPV Show Only Listed again reads the edited file")
     nv.show_only_file(eids, reader=reader)
     op2_path = os.path.join(tmp, "sel.op2")
     make_op2().write_op2(op2_path)
@@ -1213,7 +1213,7 @@ def selection_file_checks(pv, nv, reader):
     reader.OP2FileName = ""
     nv.hide_file(reader=reader)
     check(nv.enum_text(reader, "SelectionMode") == "Hide" and _cells(reader, "Shells") == 1 and _cells(reader, "Masses") == 2,
-          "NPV Hide File: EID 3 left, both masses stay")
+          "NPV Hide Listed: EID 3 left, both masses stay")
     reader.SelectionFile = grids
     reader.SelectionMode = "Show only"
     check(_cells(reader, "Shells") == 1 and _cells(reader, "Rigid") == 2, "GRID file: elements on listed grids only")
@@ -1225,19 +1225,19 @@ def selection_file_checks(pv, nv, reader):
     pv.SetActiveView(view)
     ids = nv.highlight_file(reader=reader, view=view)
     check(nv.enum_text(reader, "SelectionMode") == "Off" and _cells(reader, "Shells") == 3 and nv.selected_ids() == ("GRID", [4, 5, 7]),
-          "NPV Highlight File: a grid selection, nothing hidden")
+          "NPV Highlight Listed: a grid selection, nothing hidden")
     nv.grow_from_selection()
     grow_src = pv.FindSource(nv._name(nv.Model(reader), "grow"))
     check(grow_src.SeedIDs == "GRID 4 5 7", f"Grow from Selection on a highlighted file: {grow_src.SeedIDs!r}")
     pv.Delete(grow_src)
     pv.SetActiveSource(reader)
     nv.highlight_file(eids, reader=reader, view=view)
-    check(nv.selected_ids() == ("EID", [1, 2]), "NPV Highlight File: an element selection from an EID file")
+    check(nv.selected_ids() == ("EID", [1, 2]), "NPV Highlight Listed: an element selection from an EID file")
     points_only = os.path.join(tmp, "bush.csv")
     with open(points_only, "w") as f:
         f.write("EID\n3\n502\n")  # a shell and the grounded CBUSH 502 (EID on its glyph point only)
     nv.highlight_file(points_only, reader=reader, view=view)
-    check(nv.selected_ids() == ("EID", [3, 502]), f"NPV Highlight File: point-only EIDs too: {nv.selected_ids()}")
+    check(nv.selected_ids() == ("EID", [3, 502]), f"NPV Highlight Listed: point-only EIDs too: {nv.selected_ids()}")
     missing = os.path.join(tmp, "missing.csv")
     with open(missing, "w") as f:
         f.write("EID\n999\n")
@@ -1245,7 +1245,7 @@ def selection_file_checks(pv, nv, reader):
         nv.highlight_file(missing, reader=reader, view=view)
         check(False, "highlighting IDs the model lacks should be reported")
     except RuntimeError as exc:
-        check("Nothing to highlight" in str(exc), "NPV Highlight File reports a file that matches nothing")
+        check("Nothing to highlight" in str(exc), "NPV Highlight Listed reports a file that matches nothing")
     nv.show_all(reader)
     check(nv.enum_text(reader, "SelectionMode") == "Off" and reader.SelectionFile == missing and _cells(reader, "Shells") == 3,
           "Show All turns the file selection off and keeps the file")
@@ -2189,7 +2189,7 @@ VIEW_SELECTS = {"masses": "mass glyphs", "bushes": "bush glyphs", "bushrotations
 
 
 def clear_checks(pv, nv, reader):
-    """NPV Clear empties the active view and its scene, sets the model undeformed and deletes nothing;
+    """NPV Clear View empties the active view and its scene, sets the model undeformed and deletes nothing;
     _recorded lists what _show showed."""
     view = pv.CreateRenderView()
     pv.SetActiveView(view)
@@ -2204,7 +2204,7 @@ def clear_checks(pv, nv, reader):
     nv.run_macro("clear")
     check(nv.shown_sources(view) == [] and nv.scene_of(view).empty and set(pv.GetSources()) == sources
           and deform.ScaleFactor == 0.0 and pv.GetActiveSource() is reader,
-          "NPV Clear: empty view and scene, nothing deleted, undeformed, reader selected")
+          "NPV Clear View: empty view and scene, nothing deleted, undeformed, reader selected")
     pv.Delete(view)
 
 
@@ -2240,18 +2240,23 @@ def active_source_checks(pv, nv):
         nv.apply(name, view=view)
         check(active_name() == first and set(pv.GetSources()) == sources, f"{name} again from {first!r}: same objects")
     nv.run_macro("masses")
-    check(active_name() == expected("mass glyphs"), "the NPV Masses macro selects the mass glyphs")
+    check(active_name() == expected("mass glyphs"), "the NPV Overlay Masses macro selects the mass glyphs")
 
     steps = rm.timesteps(reader)
     nv._set_time(view, steps[1])
     deform = expected("deform")
-    check(nv.animate_mode(cycles=1) == [2] and active_name() == deform, "Animate Mode selects NPV deform")
+    check(nv.animate_mode(cycles=1) == [2] and active_name() == deform, "Mode Animate selects NPV deform")
     check(nv.stop_mode_animation() and active_name() == deform, "Stop Mode Animation (from NPV deform)")
+    nv.run_macro("animate_mode")
+    check(nv.held_time(reader) is not None, "the NPV Mode Animate button leaves the mode vibrating")
+    nv.run_macro("animate_mode")
+    check(nv.held_time(reader) is None and active_name() == deform,
+          "NPV Mode Animate clicked while a mode vibrates stops it and plays nothing")
     sources = set(pv.GetSources())
     nv.animate_modes([2], frames=2, out=os.path.join(tmp, "frames"))
-    check(active_name() == deform and set(pv.GetSources()) == sources, "Animate All Modes from NPV deform: same objects")
+    check(active_name() == deform and set(pv.GetSources()) == sources, "Mode Animate All from NPV deform: same objects")
     nv.save_mode_animations([2], frames=4, folder=os.path.join(tmp, "gifs"))
-    check(active_name() == deform and set(pv.GetSources()) == sources, "Save Mode Animations selects NPV deform")
+    check(active_name() == deform and set(pv.GetSources()) == sources, "Mode Save GIFs selects NPV deform")
 
     pv.Show(reader, view)
     _select(pv, reader, "(EID == 1)")
@@ -2262,6 +2267,16 @@ def active_source_checks(pv, nv):
     pv.SetActiveSource(pv.FindSource(expected("grow")))
     nv.grow_from_selection()
     check(active_name() == expected("grow") and set(pv.GetSources()) == sources, "Grow from Selection again: same objects")
+    _select(pv, reader, "(EID == 2)")
+    nv.run_macro("grow_from_selection")  # the button seeds from the selection and uses it up
+    grow_src = pv.FindSource(expected("grow"))
+    check(grow_src.SeedIDs == "EID 2" and not nv._sources_with_selection(),
+          f"the NPV Grow from Selection button seeds the grow and clears the selection ({grow_src.SeedIDs!r})")
+    grow_src.SeedIDs = "EID 1"  # typed on NPV grow
+    pv.SetActiveSource(reader)
+    nv.run_macro("grow_from_selection")  # nothing selected: the grow as it is seeded
+    check(active_name() == expected("grow") and grow_src.SeedIDs == "EID 1" and set(pv.GetSources()) == sources,
+          "the NPV Grow from Selection button with nothing selected shows the grow again, typed seeds kept")
     pv.SetActiveSource(reader)
     pv.QuerySelect(QueryString="(NID == 1) | (NID == 6)", FieldType="POINT", InsideOut=False)
     nv.path_from_selection()
@@ -2619,9 +2634,9 @@ def scope_deform_checks(pv, nv):
 
 def scene_review_checks(pv, nv, reader):
     """Scene layers PR 1 review: a coloring that writes no text takes the replaced coloring's text along;
-    a view whose reader was deleted forgets it (NPV Clear selects a live one); scope_active follows the
+    a view whose reader was deleted forgets it (NPV Clear View selects a live one); scope_active follows the
     visibility the reader applied (unparseable EID lists and unreadable files are ignored); a Show only
-    file of grids keeps the masses on them in NPV Masses."""
+    file of grids keeps the masses on them in NPV Overlay Masses."""
     view = pv.CreateRenderView()
     m = nv.apply("family", reader=reader, view=view)
     info = pv.FindSource(nv.info_name(view))
@@ -2645,7 +2660,7 @@ def scene_review_checks(pv, nv, reader):
     pv.SetActiveSource(None)
     nv.clear(view)
     check(pv.GetActiveSource() is reader,
-          "NPV Clear after the scene's reader was deleted selects an open reader, not the deleted one")
+          "NPV Clear View after the scene's reader was deleted selects an open reader, not the deleted one")
     for src in [s for s in pv.GetSources().values() if s not in keep]:
         pv.Delete(src)
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
@@ -2680,7 +2695,7 @@ def scene_review_checks(pv, nv, reader):
         m = nv.apply("masses", reader=reader, view=view)
         g = pv.FindSource(nv._name(m, "mass glyphs"))
         check(_point_values(g, "EID") == {201} and "1 items in the reader's scope" in _info(nv, m),
-              f"a Show only file of grids 1 and 5: NPV Masses draws CONM2 201 ({_info(nv, m)!r})")
+              f"a Show only file of grids 1 and 5: NPV Overlay Masses draws CONM2 201 ({_info(nv, m)!r})")
         reader.SelectionMode = "Show only"
         reader.SelectionFile = ""
     nv.clear(view)
@@ -2729,7 +2744,7 @@ class _Cmp:
             pass
         for v in list(pv.GetViews()):
             if v != view:
-                nv._close_view(v)  # out of its layout cell first, as NPV Single does
+                nv._close_view(v)  # out of its layout cell first, as NPV Diff End does
         for src in nv._sources_with_selection().values():
             pv.ClearSelection(src)
         nv._SCENES.clear()
@@ -2913,7 +2928,7 @@ def comparison_detail_checks(pv, nv):
     glyphs = pv.FindSource(nv._name(m, "diff mass glyphs"))
     check(_point_values(glyphs, "EID") == {201} and _point_values(glyphs, "DiffStatus") == {2}
           and pv.GetDisplayProperties(glyphs, view).ColorArrayName[1] == "DiffStatus",
-          "NPV Masses in a comparison: CONM2 201 changed (orange), colored by DiffStatus")
+          "NPV Overlay Masses in a comparison: CONM2 201 changed (orange), colored by DiffStatus")
     gone = pv.FindSource(nv._name(m, "diff removed mass"))
     check(gone is not None and nv._gather(nv.fetch(gone), "EID", "CELLS").tolist() == [202]
           and "1 removed (red)" in _info(nv, m), "A's removed CONM2 202 red in the masses overlay")
@@ -2929,7 +2944,7 @@ def comparison_detail_checks(pv, nv):
     except AttributeError:
         left_out = []
     check(a in held and b in held and a not in left_out and b not in left_out,
-          f"Animate Mode in one comparison view takes both readers out of the time controls and Stop gives "
+          f"Mode Animate in one comparison view takes both readers out of the time controls and Stop gives "
           f"both back (A with {a_deforms} deform(s))")
     pv.SetActiveSource(a)  # roles are the Diff's: A selected changes nothing
     sources = set(pv.GetSources())
@@ -2985,10 +3000,10 @@ def comparison_detail_checks(pv, nv):
     names = {s.GetGlobalIDAsString(): k[0] for k, s in pv.GetSources().items()}
     shown_left = [names.get(s.GetGlobalIDAsString(), "") for s in nv.shown_sources(left)]
     check(nv._name(nv._ReaderOnly(a), "bush glyphs") in shown_left and "bushes" in nv.scene_of(left).overlays,
-          f"NPV Bushes in B's view draws A's bushes in A's view too ({sorted(shown_left)})")
+          f"NPV Overlay Bushes in B's view draws A's bushes in A's view too ({sorted(shown_left)})")
     nv.single(view=right)
     check(right not in pv.GetViews() and nv.scene_of(left).role is None and nv.subject(left) == b,
-          "NPV Single in a pair: one view, B as one model")
+          "NPV Diff End in a pair: one view, B as one model")
     pv.Delete(left)
     nv._SCENES.clear()
     cmp.keep -= {a, b}
@@ -3115,9 +3130,9 @@ def scene_time_checks(pv, nv):
     """Scene layers R5 to R7 on the same-named pair (tests/data/same_name: A -> B removes shell 3 on grids
     3 8 9 6, CONM2 202 and CBUSH 501). Labels by folder, A's objects renamed when B opens; one info text
     per view, the diff summary first; A follows B's steps by index (A has the static step only, at twice
-    B's displacement): Animate Mode in a pair vibrates both readers at one amplitude, Animate All Modes
+    B's displacement): Mode Animate in a pair vibrates both readers at one amplitude, Mode Animate All
     moves both sides, a step A lacks leaves A (and its removed items) where they are, which otherwise
-    move with A; Highlight File and Index Colors show no reader."""
+    move with A; Highlight Listed and Color Indexed show no reader."""
     from op2_fixture import make_op2
 
     keep = set(pv.GetSources().values())
@@ -3149,7 +3164,7 @@ def scene_time_checks(pv, nv):
     nv.apply("masses", view=view)
     text = nv.info_of(view)
     check(text.startswith("b/model.bdf vs a/model.bdf") and "elements: 1 added, 1 removed" in text
-          and "Concentrated mass: 3  (1 items)" in text, f"NPV Masses after NPV Diff: the diff summary first ({text!r})")
+          and "Concentrated mass: 3  (1 items)" in text, f"NPV Overlay Masses after NPV Diff: the diff summary first ({text!r})")
     left, right = nv.side_by_side(view=view)
     nv.apply("bushes", view=right)
     texts = [nv.info_of(v) for v in (left, right)]
@@ -3188,7 +3203,7 @@ def scene_time_checks(pv, nv):
     peak = [bounds(s, v) for s, v in ((a_mesh, left), (b_mesh, right), (gone, left))]
     label = pv.FindSource(nv._name(nv._ReaderOnly(a), "mode label")).Text
     check(all(f.VibrateMode for f in list(a_deforms) + list(b_deforms)) and a in suppressed and b in suppressed,
-          "Animate Mode in a pair: every deform of both readers vibrates, both readers' steps leave the time controls")
+          "Mode Animate in a pair: every deform of both readers vibrates, both readers' steps leave the time controls")
     check(peak[1][5] > rest[1][5] + 1e-6 and abs(peak[0][5] - 2 * peak[1][5]) < 1e-6 and abs(peak[2][5] - peak[0][5]) < 1e-6,
           f"a mode played in a pair moves both models at one amplitude (A twice as far), A's removed shell with A: "
           f"top z {[p[5] for p in peak]}")
@@ -3212,14 +3227,14 @@ def scene_time_checks(pv, nv):
     finally:
         nv.pv.Render = real
     check(len(seen["A"]) > 1 and len(seen["B"]) > 1 and right.ViewTime == steps[0],
-          f"Animate All Modes in a pair moves both models: top z of A {sorted(seen['A'])}, of B {sorted(seen['B'])}")
+          f"Mode Animate All in a pair moves both models: top z of A {sorted(seen['A'])}, of B {sorted(seen['B'])}")
     paths, real_path = [], nv._model_path
     nv._model_path = lambda r: paths.append(r) or real_path(r)
     try:
         nv.save_mode_animations([1], frames=4, folder=os.path.join(tmp, "gifs"), view=left)
     finally:
         nv._model_path = real_path
-    check(paths and paths[0] == a, "Save Mode Animations in A's view of a pair names the GIF after A, which it shows")
+    check(paths and paths[0] == a, "Mode Save GIFs in A's view of a pair names the GIF after A, which it shows")
 
     nv.apply("results", view=right)
     moved = [bounds(s, v) for s, v in ((a_mesh, left), (b_mesh, right), (gone, left))]
@@ -3227,7 +3242,7 @@ def scene_time_checks(pv, nv):
     b_layers = pv.FindSource(nv._name(nv._ReaderOnly(b), f"deform {nv._diff_what(d, '')}"))
     check(not a_main.AutoScale and abs(a_main.ScaleFactor - b_layers.ScaleFactor) < 1e-12
           and abs(moved[2][5] - moved[0][5]) < 1e-6 and moved[0][5] > rest[0][5] + 1e-6,
-          f"NPV Results in a pair: one scale (A {a_main.ScaleFactor:.4g}, B's layers {b_layers.ScaleFactor:.4g}), so "
+          f"NPV Result Displacement in a pair: one scale (A {a_main.ScaleFactor:.4g}, B's layers {b_layers.ScaleFactor:.4g}), so "
           f"A's removed shell stays on A's mesh (top z {moved[2][5]:.4g}, {moved[0][5]:.4g})")
     nv._set_layout_time(right, steps[2])  # the time controls on B's mode 2 (T2 = NID): A has no third step
     later = [bounds(s, v) for s, v in ((a_mesh, left), (b_mesh, right), (gone, left))]
@@ -3240,12 +3255,12 @@ def scene_time_checks(pv, nv):
           f"a step A lacks shows none of A's results (not its nearest step's): {sorted(a_mesh.PointData.keys())}")
     nv.apply("results", view=right)
     check("no step 3 here (it has 1): not moved" in nv.info_of(left) and "Subcase" in nv.info_of(right),
-          f"NPV Results on a step A lacks: A's text says so ({nv.info_of(left)!r})")
+          f"NPV Result Displacement on a step A lacks: A's text says so ({nv.info_of(left)!r})")
     nv._set_layout_time(right, steps[0])  # back to a step A has, with the time controls only
     back = bounds(a_mesh, left)
     color = pv.GetDisplayProperties(a_mesh, left).ColorArrayName[1]
     check(back[5] > rest[0][5] + 1e-6 and color == "DisplacementMagnitude" and "DisplacementMagnitude" in a_mesh.PointData.keys(),
-          f"NPV Results clicked on a step A lacks: back on one it has, A is deformed and colored again (top z {back[5]:.3g})")
+          f"NPV Result Displacement clicked on a step A lacks: back on one it has, A is deformed and colored again (top z {back[5]:.3g})")
 
     nv.apply("pid", view=right)
     ids = os.path.join(tmp, "ids.csv")
@@ -3258,14 +3273,14 @@ def scene_time_checks(pv, nv):
     check(a not in shown[0] and b not in shown[1] and lit[0] in shown[0] and lit[1] in shown[1]
           and lit[1].GetDataInformation().GetNumberOfCells() == 2 and pv.GetActiveSource() == b
           and nv.selected_ids() == ("EID", [1, 2]),
-          "Highlight File in a pair: each view draws its model's highlight, no reader shown, B's selection active")
+          "Highlight Listed in a pair: each view draws its model's highlight, no reader shown, B's selection active")
     only_b = os.path.join(tmp, "only_b.csv")
     with open(only_b, "w") as f:
         f.write("EID\n4\n")  # the shell B added
     nv.highlight_file(only_b, view=right)
     shown = [nv.shown_sources(v) for v in (left, right)]
     check(lit[0] not in shown[0] and lit[1] in shown[1] and lit[1].GetDataInformation().GetNumberOfCells() == 1,
-          "Highlight File of an element only B has: B's view highlights it, A's highlight goes, no error")
+          "Highlight Listed of an element only B has: B's view highlights it, A's highlight goes, no error")
     nothing = os.path.join(tmp, "nothing.csv")
     with open(nothing, "w") as f:
         f.write("EID\n999\n")
@@ -3273,14 +3288,14 @@ def scene_time_checks(pv, nv):
         nv.highlight_file(nothing, view=right)
         check(False, "a file neither model has should be reported")
     except RuntimeError as exc:
-        check("match nothing in either model" in str(exc), f"Highlight File, ids in neither model: {exc}")
+        check("match nothing in either model" in str(exc), f"Highlight Listed, ids in neither model: {exc}")
     for r in (a, b):
         pv.ClearSelection(r)
     pv.SetActiveView(left)
     pv.SetActiveSource(a)  # a model the view does not show, selected in the Pipeline Browser
     lut = nv.index_colors(view=left)
     check(a not in nv.shown_sources(left) and "PID 1" in list(lut.Annotations),
-          "Index Colors with an unshown reader selected: the view's coloring, no reader shown")
+          "Color Indexed with an unshown reader selected: the view's coloring, no reader shown")
 
     nv.single(view=right)
     pv.Delete(left)
@@ -3483,7 +3498,7 @@ def main():
         check(nv.current_step(reader, anim) == 3, "current_step follows the view time")
         pv.SetActiveSource(reader)
         pv.SetActiveView(anim)
-        check(nv.animate_mode(cycles=1) == [3], "Animate Mode plays the mode the view is on")
+        check(nv.animate_mode(cycles=1) == [3], "Mode Animate plays the mode the view is on")
         play_checks(pv, nv, reader, anim, full, deform, glyphs, mesh, bounds, m0, g0)
         real_peak = nv.peak_deformation
         nv.peak_deformation = lambda model: 0.0  # a step without displacements
@@ -3510,7 +3525,7 @@ def main():
               and anim.ViewTime == full[0] and any("mass glyphs" in n for n in
                                                    [k[0] for k, v in pv.GetSources().items()
                                                     if v in nv.shown_sources(anim)]),
-              f"Save Mode Animations: {names}, frames {counts}, no leftovers, time back, still the masses view")
+              f"Mode Save GIFs: {names}, frames {counts}, no leftovers, time back, still the masses view")
         # a capture that never changes (a stale render-window buffer) must not give still GIFs
         real_capture = nv.capture_view
         frozen = {}
@@ -3563,7 +3578,7 @@ def main():
         nv.apply(name, reader=reader, view=view)
     check(True, f"all views build: {', '.join(nv.VIEWS)}")
     nv.single(view)  # "diff" made the view a comparison (another model is open): one model again
-    check(not nv.scene_of(view).comparison and nv.subject(view) == reader, "NPV Single: the view shows one model")
+    check(not nv.scene_of(view).comparison and nv.subject(view) == reader, "NPV Diff End: the view shows one model")
     filter_property_checks(pv, nv, reader, view)
     with tempfile.TemporaryDirectory() as tmp:
         load_error_checks(pv, nv, tmp)

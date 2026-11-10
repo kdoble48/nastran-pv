@@ -43,7 +43,10 @@ def test_view_page_tabs_iframe_and_escaped_text():
     assert page.index("{tab-item} Interactive") < page.index("{tab-item} Static")
     assert 'src="../_static/viewer.html?fileURL=gallery/ucrm9-pid.vtksz"' in page
     assert "&lt;sampled&gt;" in page and "nastran-pv view deck.bdf --view pid" in page
-    assert "**NPV PID**" in page and "CC BY 4.0." in page
+    assert "**NPV Color PID**" in page and "CC BY 4.0." in page  # the macro's label, not the view's title
+    assert "**NPV Result Displacement**" in g.view_page(_view("results"))
+    assert "**NPV Grow from Selection**" in g.view_page(_view("grow"))  # the Grow button was merged into it
+    assert set(g.MERGED.values()) <= set(g._macro_labels())
 
 
 def test_view_page_gui_step_and_results_file():

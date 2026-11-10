@@ -183,7 +183,7 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   output with it by B's scope and its Removed block by A's (`removed_mask`: A's kept items by EID,
   loads and SPCs by set and grid); `ScopedCopy` holds such a cut and re-slices only the arrays a new
   time step replaced. Used by `--select` (applied after the field options) and, through
-  `tree.Visibility`, by the reader's *Selection File* and the NPV Show Only/Hide/Highlight File macros.
+  `tree.Visibility`, by the reader's *Selection File* and the NPV Show Only Listed, Hide Listed and Highlight Listed macros.
 - `store.py`: SQLite in long format (`runs`, `elements`, `nodes`, `element_values`,
   `node_values`), plus `<db>_vtm/run_<id>.vtm`.
 - `cli.py`: the `convert`, `stats`, `check`, `sections`, `diff` and `store` commands, with shared field options.
@@ -216,7 +216,7 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   time); `grid_displacements` is a whole model's NID lookup, which `diff.removed_displacement` uses
   to give A's removed items A's displacement. The views draw through the plugin's *Nastran Deform*
   (`NPV deform`), so `nastran_views.animate_modes` vibrates whatever view is shown; analysis
-  filters stay on the undeformed model. `play_mode` (after Animate Mode) sets every Nastran Deform
+  filters stay on the undeformed model. `play_mode` (after NPV Mode Animate) sets every Nastran Deform
   of the model (`model_deforms`: the model source upstream, through a Nastran Diff its B) to
   *Vibrate Mode*: the filter holds its input at *Mode Time* (`RequestUpdateExtent`) and publishes
   one cycle of phases as `TimestepValues`, the reader's own time is suppressed in the time keeper,
@@ -292,7 +292,7 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
     overlay layers, each the objects `_recorded` saw shown through `_show` (with the view's
     arguments, `Layer.args`, to draw it again). `apply` replaces the coloring or adds/toggles an
     overlay and hides only what the dropped layer owned (`_hide`, per lookup table); `clear` (NPV
-    Clear) is the full reset of the layers.
+    Clear View) is the full reset of the layers.
   - Which model (R4): `subject(view)` is a comparison side's model by its role (from the Diff's
     sides, `diff_sides`, else `Scene.side` for a pair without a diff), else the scene's model unless
     the user selected another model's object since the last command (`_FINISHED`), else the active
@@ -336,14 +336,14 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
     `_apply_view`) puts B's time steps in the *Match Steps* of A's deforms while A is the left side
     of a pair (`_followed`), and empties every other's; `Model` of that A reads A's step of B's index
     (`Model.step`, `Model.unmatched`; without one its data drops the step's arrays, as A's deforms do).
-    NPV Results in a pair draws A at B's scale (`_share_scale`, after both views). `_prepare_modes`
-    never redraws: only a view with no layers gets NPV Results. A's mode label comes from the reader's
+    NPV Result Displacement in a pair draws A at B's scale (`_share_scale`, after both views). `_prepare_modes`
+    never redraws: only a view with no layers gets NPV Result Displacement. A's mode label comes from the reader's
     *StepLabels* (an information property: each step's name, without reading A at it). `play_mode`
     records the readers it took out of the time keeper (`_SUPPRESSED`), so Stop gives back A even with
     no deform of its own (one comparison view).
-  - Pipeline Browser (R7): no command shows a raw reader. *Highlight File* sets its selection on the
+  - Pipeline Browser (R7): no command shows a raw reader. *Highlight Listed* sets its selection on the
     reader directly (`pv.SelectThresholds` would show the reader) and draws `NPV highlight`, an
-    ExtractSelection of `NPV deform` by that selection; *Index Colors* uses the active source's
+    ExtractSelection of `NPV deform` by that selection; *Color Indexed* uses the active source's
     visible representation (`_shown_rep`, which creates none), else the view's coloring layer.
   - Mode animation: `mode_times` (the reader's steps, or one step for a converted single-step
     file with a `Displacement`), `animate_modes`/`animate_mode` and `save_mode_animations`. They

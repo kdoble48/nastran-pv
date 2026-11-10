@@ -133,7 +133,7 @@ The docs describe behavior that lives in code. Update them in the same change wh
 | `sections/` (shapes, properties, frames, sweep) | [beam-sections.md](beam-sections.md), [model.md](model.md) (figure: `python docs/build_section_figure.py`) |
 | `topology/`, the topology proxies, selection macros | [tools.md](tools.md), [model.md](model.md) |
 | `diff.py`, the Nastran Diff proxy, the `diff` view, `side_by_side` | [diff.md](diff.md), [model.md](model.md), [paraview.md](paraview.md), [cli.md](cli.md) |
-| `selection.py`, the reader's *Selection* properties, the NPV *File* macros | [cli.md](cli.md#selection-from-an-id-file), [paraview.md](paraview.md#selection-from-an-id-file) |
+| `selection.py`, the reader's *Selection* properties, the NPV *Listed* macros | [cli.md](cli.md#selection-from-an-id-file), [paraview.md](paraview.md#selection-from-an-id-file) |
 | `vtkio.py`, `vtkhdf.py`, `store.py` | [output-formats.md](output-formats.md), [store.md](store.md) |
 | Dependencies, extras, environment variables, `locate.py`, `setup.py`, `MANIFEST.in` | [install.md](install.md), [development.md](#packaging) |
 | `publish.yml`, `tests/check_dists.py`, `__version__` | [versioning.md](versioning.md#releasing), `README.md` (PyPI shows it) |

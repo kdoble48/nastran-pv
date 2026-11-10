@@ -62,10 +62,10 @@ options. The time steps become the frequency frames. Clear *Random ASD* to get t
 
 | Macro | Shows |
 |---|---|
-| NPV Random RMS (`random`) | The mesh colored by `AccelRMS` magnitude on a log scale, with the drive, input RMS, damping, mode count and captured mass |
-| NPV Random Sweep (`randomsweep`) | The mesh colored by `AccelASD` on one fixed log range for all frames (`RandomAccelASDRange`, six decades at most), with the frame's frequency in the corner. Press play to watch the response move across the model as each mode is passed |
+| NPV Result Random RMS (`random`) | The mesh colored by `AccelRMS` magnitude on a log scale, with the drive, input RMS, damping, mode count and captured mass |
+| NPV Result Random Sweep (`randomsweep`) | The mesh colored by `AccelASD` on one fixed log range for all frames (`RandomAccelASDRange`, six decades at most), with the frame's frequency in the corner. Press play to watch the response move across the model as each mode is passed |
 
-`DominantMode` is an integer array: color by it and run NPV Index Colors for a legend per mode.
+`DominantMode` is an integer array: color by it and run NPV Color Indexed for a legend per mode.
 A converted random series (`.vtkhdf` or `.pvd`) opens with ParaView's own reader, and both views
 work on it. On ParaView 5.x the sweep's frequency label lags one frame on a `.vtkhdf` series
 (its VTKHDF reader reports the previous time), but the colors are right. The label is correct on
