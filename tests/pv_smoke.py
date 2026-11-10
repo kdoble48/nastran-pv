@@ -2259,6 +2259,71 @@ def clear_checks(pv, nv, reader):
     pv.Delete(view)
 
 
+def panel_checks(pv, nv, reader):
+    """The reader's View properties (nastran_panel): the next render draws them, a view command sets
+    them, and a module's switch never rereads the deck."""
+    view = pv.CreateRenderView()
+    pv.SetActiveView(view)
+
+    def panel():
+        return str(reader.ColorBy).strip("'"), sorted(reader.Overlays)
+
+    def scene():
+        s = nv.scene_of(view)
+        return (s.coloring.name if s.coloring else None), sorted(s.overlays)
+
+    reader.ColorBy = "PID"
+    reader.Overlays = ["Masses"]
+    check(scene() == (None, []), "View properties: nothing is drawn before the next render")
+    pv.Render(view)
+    check(scene() == ("pid", ["masses"]) and pv.GetActiveSource() == reader,
+          f"View properties: Color By PID + Masses drawn at the next render, reader selected {scene()}")
+    reader.ColorBy = "MID"
+    reader.Overlays = ["SPC"]
+    pv.Render(view)
+    check(scene() == ("mid", ["spc"]), f"View properties: a new coloring replaces, overlays follow the boxes {scene()}")
+    nv.apply("loads", reader=reader, view=view)
+    check(panel() == ("MID", ["Loads", "SPC"]), f"a view command ticks its overlay in the reader {panel()}")
+    other = pv.CreateRenderView()  # the active view now; the reader's View properties still say MID, Loads, SPC
+    reader.ShowOnlyElements = "1"
+    pv.Render(other)
+    reader.ShowOnlyElements = ""
+    pv.Render(other)
+    check(nv.scene_of(other).empty, "applying another property draws no view")
+    pv.Delete(other)
+    pv.SetActiveView(view)
+    reader.Overlays = ["Loads", "SPC", "Masses"]
+    pv.Render(view)
+    check(scene() == ("mid", ["loads", "masses", "spc"]), f"the next Apply keeps an overlay a macro added {scene()}")
+    nv.apply("check", reader=reader, view=view)
+    check(panel()[0] == "Model check", f"a view command sets Color By {panel()}")
+    nv.apply("grow", reader=reader, view=view, seeds="1")
+    check(panel()[0] == "(other)", f"a coloring the list does not hold shows as (other) {panel()}")
+    reader.Overlays = ["Loads"]
+    pv.Render(view)
+    check(scene() == ("grow", ["loads"]), f"(other) leaves the coloring alone {scene()}")
+    nv.run_macro("clear")
+    check(panel() == ("(other)", []), f"NPV Clear View unticks the reader's View properties {panel()}")
+    reader.ColorBy = "Displacement"  # this reader has no results file
+    pv.Render(view)
+    check(scene()[0] == "results" and "No results" in (nv.info_of(view) or ""),
+          f"a coloring the model cannot show says why in the view's text {nv.info_of(view)!r}")
+    nv.run_macro("clear")
+    stamp = reader.GetClientSideObject().GetMTime() if reader.GetClientSideObject() else None
+    reader.RandomVibration = 1
+    reader.BlocksAndOptions = 1
+    reader.SelectionFromAnIDFile = 1
+    reader.ColorBy = "PID"
+    reader.UpdateVTKObjects()
+    check(stamp is None or reader.GetClientSideObject().GetMTime() == stamp,
+          "module switches and View properties do not modify the reader")
+    reader.ColorBy = "(other)"
+    reader.RandomVibration = reader.BlocksAndOptions = reader.SelectionFromAnIDFile = 0
+    pv.Render(view)
+    nv.run_macro("clear")
+    pv.Delete(view)
+
+
 def active_source_checks(pv, nv):
     """Every view and command ends with the object it is about selected, and running it again (or
     another one) with that object selected finds the same model and reuses its NPV objects."""
@@ -3885,6 +3950,7 @@ def main():
     scene_time_checks(pv, nv)
     comparison_checks(pv, nv)
     clear_checks(pv, nv, reader)
+    panel_checks(pv, nv, reader)
     preset_checks(pv, nv)
     active_source_checks(pv, nv)
     print("pv_smoke: all checks passed")

@@ -26,6 +26,14 @@ one-click views on the Macros toolbar. For step-by-step walkthroughs, see
    tables instead. *Phase Angle* (degrees) is the instant a complex step's arrays show
    ([complex results](model.md#complex-frequency-and-transient-results); `convert --phase`).
 
+   Three groups of settings are folded behind a check box each: *Random Vibration*, *Blocks And
+   Options* (the block switches, *NodalArrays*, *BushStiffnessReference*, *NSMSet*) and *Selection
+   From An ID File*. Tick the box to see the settings. The box only shows and hides them: Apply after
+   ticking one changes nothing, and a group whose settings were set from a script or a state file
+   stays folded until you tick it.
+4. Pick what to look at in the reader's [*View* section](#views-from-the-reader-panel), or with the
+   toolbar macros.
+
 `nastran-pv view DECK --view masses` does all of this in one command.
 
 Output Messages lists the deck's warnings and, last, the card report: a one-line count of the cards
@@ -175,6 +183,36 @@ group of their own:
   tree with the nested `Files/` branch.
 
 Color by `FileId` (then *NPV Color Indexed*) to see the files side by side.
+
+## Views from the reader panel
+
+The reader's Properties panel starts with a *View* section, which draws the same views as the
+toolbar macros below without installing them:
+
+| Property | Choices |
+|---|---|
+| *Color By* | PID, MID, Element type, Thickness, Family, Group, NSM, Displacement, Stress, Model check, Parts; *(other)* |
+| *Overlays* | Masses, Bushes, Beam axes, Loads, SPC, Rigid elements |
+
+Pick a coloring, tick overlays and click Apply: the active view shows them, and the reader stays
+selected, so the next change is one more Apply. The section and the macros work on the same view
+([How views combine](#how-views-combine)) and follow each other: after a macro, *Color By* and the
+*Overlays* boxes say what the view shows, and *NPV Clear View* unticks them.
+
+- *(other)* leaves the coloring as it is. It is what a new reader starts with (ParaView's own
+  display of the blocks) and what the list shows after a macro whose coloring it does not hold
+  (forces, plies, random response, grow, path, a diff).
+- A view the model cannot show says so in the view's text, as the macro does: an overlay with
+  nothing to draw, *Displacement* without a results file.
+- The section belongs to the deck reader: a converted `.vtm`/`.vtkhdf` has the macros only. The
+  settings of a view (glyph size, load sets, the stress quantity) are on its `NPV ...` filter
+  ([Filter properties](#filter-properties)).
+- There is one *View* section per reader, not per render view: with two render views, Apply draws
+  into the active one.
+- It needs ParaView's built-in server: connected to a remote `pvserver`, use the macros.
+
+From pvpython the properties are `reader.ColorBy = "PID"` and `reader.Overlays = ["Masses"]`; they
+are drawn when the next render ends. Scripts normally call `nastran_views.apply` instead.
 
 ## One-click views (toolbar macros)
 

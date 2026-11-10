@@ -371,6 +371,13 @@ def _with(label, setters, advanced=False):
     return decorate
 
 
+def _module_hint(toggle):
+    """Hint of a property that belongs to a collapsible module of the panel: shown while ``toggle`` (the
+    module's check box) is on. ParaView has no collapsible property group, so a module is a check box
+    plus this decorator on each member."""
+    return f'<PropertyWidgetDecorator type="GenericDecorator" mode="visibility" property="{toggle}" value="1"/>'
+
+
 def _enum_xml(labels):
     entries = "".join(f'<Entry value="{i}" text="{k}"/>' for i, k in enumerate(labels))
     return f'<EnumerationDomain name="enum">{entries}</EnumerationDomain>'
@@ -401,6 +408,25 @@ def _with_show_only(entries):
         self._set("_show_only", int(v))
 
     return _with("Show Only", [SetShowOnly])
+
+
+_VIEW_COLORS = ("(other)", "PID", "MID", "Element type", "Thickness", "Family", "Group", "NSM", "Displacement",
+                "Stress", "Model check", "Parts")  # the labels of nastran_panel.COLORINGS
+_VIEW_OVERLAYS = ("Masses", "Bushes", "Beam axes", "Loads", "SPC", "Rigid elements")  # nastran_panel.OVERLAYS
+
+
+def _install_panel():
+    """In a process that has a client session (the GUI, pvpython), let the reader's View
+    properties drive the NPV views (nastran_panel). A pvserver or pvbatch has nothing to draw in."""
+    try:
+        here = _plugin_dir()
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import nastran_panel
+
+        nastran_panel.install()
+    except Exception as exc:  # never break the reader over its panel
+        _message(f"nastran-pv: the View properties are off: {exc}")
 
 
 @smproxy.reader(
@@ -464,6 +490,11 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         self._sel_read = None  # (path, mtime, key) of _sel_ids
         self._sel_reload = 0
         self._sel_error = None  # the last SelectionFile problem reported
+        self._view_color = 0  # ViewColorBy/Overlays: read by the client's nastran_panel,
+        self._view_overlays = vtkDataArraySelection()  # never by RequestData
+        for label in _VIEW_OVERLAYS:
+            self._view_overlays.AddArray(label, False)
+        _install_panel()
 
     # ------------------------------------------------------------ properties
     @smproperty.stringvector(name="FileName")
@@ -477,6 +508,25 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
     @smhint.filechooser(extensions="op2 OP2 h5 hdf5", file_description="Nastran results (OP2, MSC/NX HDF5)")
     def SetOP2FileName(self, name):
         self._set("_op2name", name or "")
+
+    # ------------------------------------------------ view (nastran_panel draws it)
+    @smproperty.intvector(name="ViewColorBy", label="Color By", default_values=0)
+    @smdomain.xml(_enum_xml(_VIEW_COLORS))
+    def SetViewColorBy(self, v):
+        """The coloring drawn in the active view when Apply is pressed (the NPV Color and Result views)."""
+        self._view_color = int(v)  # no Modified(): the reader's output does not depend on it
+
+    @smproperty.dataarrayselection(name="Overlays")
+    @smhint.xml('<WidgetHeight number_of_rows="6"/>')
+    def GetOverlays(self):
+        """The overlays drawn in the active view when Apply is pressed (the NPV Overlay views)."""
+        return self._view_overlays
+
+    def _group_View(self):  # holds the PropertyGroup XML; never called
+        pass
+
+    _group_View._pvsm_property_xmls = ['<PropertyGroup label="View"><Property name="ViewColorBy"/>'
+                                       '<Property name="Overlays"/></PropertyGroup>']
 
     @smproperty.dataarrayselection(name="ResultTypes")
     def GetResultTypes(self):
@@ -506,34 +556,45 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
             setattr(self, attr, value)
             self.Modified()
 
+    @smproperty.intvector(name="ShowRandomVibration", label="Random Vibration", default_values=0)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetShowRandomVibration(self, v):
+        """Panel switch: show the random vibration settings. The reader's output does not depend on it."""
+
     @smproperty.stringvector(name="RandomASD", default_values="")
+    @smhint.xml(_module_hint("ShowRandomVibration"))
     def SetRandomASD(self, v):
         """Base-acceleration ASD for a random response from the OP2 modes: a two-column CSV/text
         file or "20:0.01,80:0.04,2000:0.007" (unit^2/Hz). Empty: the OP2 steps as they are."""
         self._set_random("_random_asd", (v or "").strip())
 
     @smproperty.intvector(name="RandomDrive", default_values=2)
+    @smhint.xml(_module_hint("ShowRandomVibration"))
     @smdomain.xml('<EnumerationDomain name="enum"><Entry value="0" text="X"/><Entry value="1" text="Y"/>'
                   '<Entry value="2" text="Z"/></EnumerationDomain>')
     def SetRandomDrive(self, v):
         self._set_random("_random_drive", int(v))
 
     @smproperty.doublevector(name="RandomDamping", default_values=0.05)
+    @smhint.xml(_module_hint("ShowRandomVibration"))
     def SetRandomDamping(self, v):
         """Modal critical-damping ratio (0.05 = Q 10)."""
         self._set_random("_random_damping", float(v))
 
     @smproperty.doublevector(name="RandomG", default_values=0.0)
+    @smhint.xml(_module_hint("ShowRandomVibration"))
     def SetRandomG(self, v):
         """Model length/s^2 per input acceleration unit (9806.65 for g in mm); 0 = no DispRMS."""
         self._set_random("_random_g", float(v))
 
     @smproperty.intvector(name="RandomFrames", default_values=100)
+    @smhint.xml(_module_hint("ShowRandomVibration"))
     @smdomain.intrange(min=1)
     def SetRandomFrames(self, v):
         self._set_random("_random_frames", int(v))
 
     @smproperty.intvector(name="RandomOutput", default_values=0)
+    @smhint.xml(_module_hint("ShowRandomVibration"))
     @smdomain.xml('<BooleanDomain name="bool"/>')
     def SetRandomOutput(self, v):
         """The random response the OP2 holds (SOL 111 PSD/RMS tables) instead of one computed from
@@ -543,72 +604,92 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
     def _set_flag(self, key, value):
         self._set_key("_flags", key, bool(value))
 
+    @smproperty.intvector(name="ShowBlocks", label="Blocks And Options", default_values=0)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetShowBlocks(self, v):
+        """Panel switch: show which blocks are read, the NSM set and the bush reference. The reader's
+        output does not depend on it."""
+
     @smproperty.intvector(name="Shells", default_values=1)
+    @smhint.xml(_module_hint("ShowBlocks"))
     @smdomain.xml('<BooleanDomain name="bool"/>')
     def SetShells(self, v):
         self._set_flag("shells", v)
 
     @smproperty.intvector(name="Lines", default_values=1)
+    @smhint.xml(_module_hint("ShowBlocks"))
     @smdomain.xml('<BooleanDomain name="bool"/>')
     def SetLines(self, v):
         self._set_flag("lines", v)
 
     @smproperty.intvector(name="Solids", default_values=1)
+    @smhint.xml(_module_hint("ShowBlocks"))
     @smdomain.xml('<BooleanDomain name="bool"/>')
     def SetSolids(self, v):
         self._set_flag("solids", v)
 
     @smproperty.intvector(name="Masses", default_values=1)
+    @smhint.xml(_module_hint("ShowBlocks"))
     @smdomain.xml('<BooleanDomain name="bool"/>')
     def SetMasses(self, v):
         self._set_flag("masses", v)
 
     @smproperty.intvector(name="RigidElements", default_values=1)
+    @smhint.xml(_module_hint("ShowBlocks"))
     @smdomain.xml('<BooleanDomain name="bool"/>')
     def SetRigidElements(self, v):
         self._set_flag("rigid", v)
 
     @smproperty.intvector(name="Connectors", default_values=1)
+    @smhint.xml(_module_hint("ShowBlocks"))
     @smdomain.xml('<BooleanDomain name="bool"/>')
     def SetConnectors(self, v):
         self._set_flag("connectors", v)
 
     @smproperty.intvector(name="Plotels", default_values=1)
+    @smhint.xml(_module_hint("ShowBlocks"))
     @smdomain.xml('<BooleanDomain name="bool"/>')
     def SetPlotels(self, v):
         self._set_flag("plotels", v)
 
     @smproperty.intvector(name="Bushes", default_values=1)
+    @smhint.xml(_module_hint("ShowBlocks"))
     @smdomain.xml('<BooleanDomain name="bool"/>')
     def SetBushes(self, v):
         self._set_flag("bushes", v)
 
     @smproperty.intvector(name="Constraints", default_values=1)
+    @smhint.xml(_module_hint("ShowBlocks"))
     @smdomain.xml('<BooleanDomain name="bool"/>')
     def SetConstraints(self, v):
         self._set_flag("constraints", v)
 
     @smproperty.intvector(name="Loads", default_values=1)
+    @smhint.xml(_module_hint("ShowBlocks"))
     @smdomain.xml('<BooleanDomain name="bool"/>')
     def SetLoads(self, v):
         self._set_flag("loads", v)
 
     @smproperty.intvector(name="ContactSurfaces", default_values=1)
+    @smhint.xml(_module_hint("ShowBlocks"))
     @smdomain.xml('<BooleanDomain name="bool"/>')
     def SetContactSurfaces(self, v):
         """The ContactSurfaces block (the faces of the BSURF and BSURFS regions) and the CONTACT_ pair table."""
         self._set_flag("contact", v)
 
     @smproperty.intvector(name="NodalArrays", default_values=1)
+    @smhint.xml(_module_hint("ShowBlocks"))
     @smdomain.xml('<BooleanDomain name="bool"/>')
     def SetNodalArrays(self, v):
         self._set("_nodal", bool(v))
 
     @smproperty.doublevector(name="BushStiffnessReference", default_values=0.0)
+    @smhint.xml(_module_hint("ShowBlocks"))
     def SetBushStiffnessReference(self, v):
         self._set("_k_ref", float(v))
 
     @smproperty.intvector(name="NSMSet", default_values=-1)
+    @smhint.xml(_module_hint("ShowBlocks"))
     @smdomain.intrange(min=-1)
     def SetNSMSet(self, v):
         """Bulk NSM set to apply: -1 = automatic (Case Control NSM=, or the only set of a bulk-only
@@ -655,7 +736,13 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         self._set("_hidden", v or "")
 
     # ------------------------------------------------- selection from an ID file
+    @smproperty.intvector(name="ShowSelectionFile", label="Selection From An ID File", default_values=0)
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetShowSelectionFile(self, v):
+        """Panel switch: show the ID-file selection settings. The reader's output does not depend on it."""
+
     @smproperty.stringvector(name="SelectionFile", default_values="")
+    @smhint.xml(_module_hint("ShowSelectionFile"))
     @smdomain.filelist()
     @smhint.filechooser(extensions=_SELECTION_EXTENSIONS, file_description="ID list (CSV, text, Excel)")
     def SetSelectionFile(self, v):
@@ -664,12 +751,14 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         self._set("_sel_file", (v or "").strip())
 
     @smproperty.intvector(name="SelectionKey", default_values=0)
+    @smhint.xml(_module_hint("ShowSelectionFile"))
     @smdomain.xml('<EnumerationDomain name="enum">' + "".join(
         f'<Entry value="{i}" text="{k}"/>' for i, k in enumerate(_SELECTION_KEYS)) + '</EnumerationDomain>')
     def SetSelectionKey(self, v):
         self._set("_sel_key", int(v))
 
     @smproperty.intvector(name="SelectionMode", default_values=0)
+    @smhint.xml(_module_hint("ShowSelectionFile"))
     @smdomain.xml('<EnumerationDomain name="enum"><Entry value="0" text="Show only"/><Entry value="1" text="Hide"/>'
                   '<Entry value="2" text="Off"/></EnumerationDomain>')
     def SetSelectionMode(self, v):
@@ -678,6 +767,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         self._set("_sel_mode", int(v))
 
     @smproperty.intvector(name="SelectionGrids", default_values=0)
+    @smhint.xml(_module_hint("ShowSelectionFile"))
     @smdomain.xml('<EnumerationDomain name="enum"><Entry value="0" text="All grids"/>'
                   '<Entry value="1" text="Any grid"/></EnumerationDomain>')
     def SetSelectionGrids(self, v):

@@ -51,6 +51,17 @@ def test_reader_glyph_and_diff_choices_match_nastran_pv():
     assert ast.literal_eval(found["_DIFF_REASONS"]) == tuple(diff.REASON_NAMES[1 << i] for i in range(len(diff.REASON_NAMES)))
 
 
+def test_reader_view_choices_match_the_panel_and_the_views():
+    found = _assignments("nastran_bdf_reader.py")
+    panel = _assignments("nastran_panel.py")
+    colorings, overlays = ast.literal_eval(panel["COLORINGS"]), ast.literal_eval(panel["OVERLAYS"])
+    assert ast.literal_eval(found["_VIEW_COLORS"]) == tuple(label for label, _ in colorings)
+    assert ast.literal_eval(found["_VIEW_OVERLAYS"]) == tuple(label for label, _ in overlays)
+    views = {k.value for k in _assignments("nastran_views.py")["VIEWS"].keys}
+    assert colorings[0] == ("(other)", None)  # index 0: a view the list does not hold, or none
+    assert {view for _, view in colorings[1:] + overlays} <= views
+
+
 def test_reader_results_helper_choices_match_nastran_pv():
     from nastran_pv.post import average, envelope
 
