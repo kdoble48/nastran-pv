@@ -301,8 +301,10 @@ face loaded by two kinds of card). `--no-loads` and the reader's *Loads* toggle 
   face), along the direction; with N1-N3, the integral of the pressure over the actual area along
   N. `ResultantForce` on the block is the sum over the set, which is what the faces contribute to
   the OLOAD resultant.
-* The faces follow their elements in the reader's scope (a PLOAD face follows its grids) and their
-  grids when the model deforms. They are not equivalent nodal forces: `F_<sid>` holds FORCE/MOMENT
+* A face belongs to its element, as a [contact face](#contact-surfaces) does: the reader's
+  visibility lists, a selection file and the overlays' scope show, hide and select it with that
+  element (a PLOAD face has no element: it follows its grids in the scope and is not hidden by the
+  lists). The faces follow their grids when the model deforms. They are not equivalent nodal forces: `F_<sid>` holds FORCE/MOMENT
   only.
 
 Solid faces follow the QRG's PLOAD4 rules: G3 diagonally opposite G1 names a quadrilateral face
@@ -331,8 +333,11 @@ Color by `ContactRegion` to see which faces each region holds.
   its own order, so the normal is the element's.
 
 The block is display geometry on top of `Shells` and `Solids`: it adds no mass and no element, and
-the derived fields, `stats` and the [model tools](tools.md) do not see it. The faces follow their
-elements in the reader's scope and their grids when the model deforms. A face that two regions
+the derived fields, `stats` and the [model tools](tools.md) do not see it. A face belongs to its
+element: the reader's visibility lists, the element ID lists, a selection file (`--select`) and
+the overlays' scope show, hide and select it with that element, and a face never selects its
+element (a list of the grids of one face of a solid selects nothing). The faces follow their
+grids when the model deforms. A face that two regions
 hold is two cells. `--no-contact` and the reader's *Contact Surfaces* toggle drop the block and
 the pair table.
 
@@ -341,10 +346,12 @@ per source and target region of each BCTSET (contact) and BGSET (glue) card. A p
 region nastran-pv does not draw (a BCPROP or BCPROPS).
 
 Entries that cannot be drawn do not stop the rest of the region. An element that is not of the
-card's kind (a solid on a BSURF, a shell on a BSURFS) and BSURFS grids that are not three corners
+card's kind (a solid on a BSURF, a shell on a BSURFS, a mass, rigid or plot element on either) and BSURFS grids that are not three corners
 of one face give a [card report](#cards-not-drawn) row with the region's ID. An element or a grid
-the deck lacks gives a warning (an `info:` line for a BSURF that still draws some elements: pyNastran
-expands a THRU range, and a range may span ids that do not exist).
+the deck lacks gives a warning (an `info:` line for a BSURF that still draws at least one face: pyNastran
+expands a THRU range, and a range may span ids that do not exist). Two cards of one type with the
+same ID are a warning too: pyNastran keeps the last one, and only that one is drawn (or listed in
+the pair table).
 
 ## Coordinate systems
 
@@ -427,7 +434,7 @@ more. The reasons:
 | `G1 and G3/G4 name no face` | PLOAD4 on a solid whose G1 and G3/G4 name none of its faces, such as a CPYRAM's apex (IDs: the load set) |
 | `element type it cannot load` | PLOAD2 on an element that is not a shell, PLOAD4 on one that is neither a shell nor a solid (IDs: the load set) |
 | `G1-G3 are not three corners of one face` | BSURFS with an entry whose three grids are not three different corners of one face of its element (IDs: the region) |
-| `element type the region cannot hold` | BSURF that lists an element that is not a shell, BSURFS with an entry on an element that is not a solid (IDs: the region) |
+| `element type the region cannot hold` | BSURF that lists an element that is not a shell, BSURFS with an entry on an element that is not a solid; a mass, rigid or plot element on either (IDs: the region) |
 | `matrix input` | DMIG, DMI, DMIJ, DMIJI, DMIK, DMIAX |
 | `superelement` | the cards of a `BEGIN SUPER` section (data and control cards left out) and the superelement cards (SEBULK, SECONCT, SELOC, ...) |
 | `not read` | cards pyNastran rejected (unknown to it), and CWELD, which nastran-pv turns off because pyNastran 1.5 aborts the read on some of its forms |

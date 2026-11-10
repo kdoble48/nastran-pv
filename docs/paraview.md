@@ -78,10 +78,11 @@ For Femap's AND visibility, use these lists in the reader's Properties panel:
 
 * **Visible Properties / Materials / Element Types / Families / Groups / Files**: an element stays only if
   every category it has is checked. An element without a category passes that test; for example,
-  CBUSH elements have no material, so the Materials list never hides them. Loads and SPCs are
-  switched by their block toggles only. The contact regions (`ContactSurfaces`, the reader's
-  *Contact Surfaces* toggle; color them by `ContactRegion`: see
-  [Contact surfaces](model.md#contact-surfaces)) follow the elements their faces are on.
+  CBUSH elements have no material, so the Materials list never hides them. Nodal loads and SPCs are
+  switched by their block toggles only. A face drawn on an element (a pressure face of
+  `Pressures/*`, a contact face of `ContactSurfaces`) has no category of its own: it is shown and
+  hidden with its element, by these lists and by the element ID lists below. Color the contact
+  regions by `ContactRegion` ([Contact surfaces](model.md#contact-surfaces)).
 * **Show Only Elements** and **Hidden Elements**: element ID lists such as `1001 1002 2000-2010`.
   They apply to everything that has an `EID`: elements, rigid elements, connectors and masses.
 

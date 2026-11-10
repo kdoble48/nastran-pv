@@ -45,7 +45,8 @@ EDGE_LOAD = "edge load (SORL=LINE or LDIR)"  # PLOAD4 forms that load an edge, n
 NO_FACE = "G1 and G3/G4 name no face"  # PLOAD4 on a solid
 WRONG_ELEMENT = "element type it cannot load"  # PLOAD2 on a non-shell, PLOAD4 on a non-shell non-solid
 NO_CONTACT_FACE = "G1-G3 are not three corners of one face"  # BSURFS
-CONTACT_ELEMENT = "element type the region cannot hold"  # a solid on a BSURF, a shell on a BSURFS
+# a solid on a BSURF, a shell on a BSURFS, a mass, rigid or plot element on either
+CONTACT_ELEMENT = "element type the region cannot hold"
 SID_CARDS = frozenset({"MPC", "PLOAD", "PLOAD2", "PLOAD4"})  # Deck.skip rows identified by their set id
 ID_CARDS = frozenset({"BSURF", "BSURFS"})  # ... by their region ID
 
@@ -113,7 +114,8 @@ def _id_order(v):
     return (0, int(v), "") if isinstance(v, (int, np.integer)) else (1, 0, str(v))
 
 
-def _ids_text(label: str, ids) -> str:
+def ids_text(label: str, ids) -> str:
+    """``"EID 3 7 9 ..."``: up to ``MAX_IDS`` of ``ids``, sorted and without repeats; "" for none."""
     uniq = sorted({i for i in ids if i is not None}, key=_id_order)
     if not uniq:
         return ""
@@ -197,10 +199,10 @@ def report(deck) -> list[dict]:
             ids = found.get(t)
             reason = (SCALAR if t in SCALAR_CARDS else HEAT if t in HEAT_CARDS
                       else SLOT_REASONS.get(slot, NOT_DRAWN))
-            add(t, reason, len(ids) if ids else model.card_count[t], _ids_text(_label(slot, model), ids or ()))
+            add(t, reason, len(ids) if ids else model.card_count[t], ids_text(_label(slot, model), ids or ()))
     for (card, reason), ids in sorted(getattr(deck, "skipped", {}).items()):
         label = "SID" if card in SID_CARDS else "ID" if card in ID_CARDS else "EID"  # MPC, loads: set ids
-        add(card, reason, len(ids), _ids_text(label, ids))
+        add(card, reason, len(ids), ids_text(label, ids))
     _superelements(model, type_slot, add)
     return sorted(rows.values(), key=lambda r: (-r["Count"], r["Card"], r["Reason"]))
 
@@ -215,7 +217,7 @@ def _superelements(model, type_slot, add) -> None:
             if _counted(t) and type_slot.get(t, "") not in QUIET_SLOTS:
                 per_type[t].append((seid, n))
     for t, found in sorted(per_type.items()):
-        add(t, SUPERELEMENT, sum(n for _, n in found), _ids_text("SE", [s for s, _ in found]))
+        add(t, SUPERELEMENT, sum(n for _, n in found), ids_text("SE", [s for s, _ in found]))
 
 
 def write_table(mb, rows: list[dict]) -> None:

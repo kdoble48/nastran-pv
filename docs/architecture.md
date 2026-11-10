@@ -50,7 +50,10 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   `ContactRegion EID ContactCard`) and the BCTSET/BGSET pairs as the root `CONTACT_` table. A BSURFS
   face is the element face that holds the entry's three grids (`pressures.solid_faces`, the face table
   PLOAD4 uses), turned outward with `pressures.winds_outward` in one numpy pass per face shape. The
-  block is in no mesh-block list. Design: `docs/design/2026-11-09-contact-surfaces.md`.
+  block is in no mesh-block list. It and `Pressures` are the face blocks (`tree.FACE_BLOCKS`): a
+  face with an `EID` is kept, hidden and selected with its element, in the reader's cut
+  (`tree._faces_follow`), `selection.item_masks` (it never brings its element in) and
+  `selection.scope_masks`. Design: `docs/design/2026-11-09-contact-surfaces.md`.
 - `assemble.py`: runs the builders according to `Options` and copies nodal SPC/load arrays onto the
   mesh blocks. It adds root field data: masses from `massprops.py` (numpy volumes when every solid is linear, else VTK cell sizes for the block; never
   pyNastran's slow `mass_properties`) and a `MAT_*` material table from `materials.py`. Derived

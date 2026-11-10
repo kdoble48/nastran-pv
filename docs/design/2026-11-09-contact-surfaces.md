@@ -38,9 +38,9 @@ Cards pyNastran rejects are not hand-parsed.
 | BSURF | Shell elements only (every type of `shells.SHELLS`) | That is the NX card. MSC's BSURF may list solid elements as a contact body; drawing it needs the free faces of the listed set, which is a different operation: reported, not drawn (follow-up) |
 | Same face in two regions | Two coincident cells | Each keeps its region ID; a region is never missing a face |
 | Mesh-block lists | None of `assemble.MESH_BLOCKS`, `fields/common.MESH`, `nastran_views.MESH`, `result_types.RESULT_BLOCKS` | Display geometry on top of Shells/Solids: no mass, no element count, no derived fields, no results. Not in the topology graph either |
-| Scope | `selection.scope_masks`: a face follows its element (the rule the Pressures faces have) | Hiding a property hides the regions on it |
+| A face follows its element | One declaration, `tree.FACE_BLOCKS` (`ContactSurfaces`, `Pressures`), read by the reader's cut (`tree.build_tree`: a face goes when a mesh block holds its element and does not keep it), by `selection.item_masks` (a face is never matched itself; the EID closure selects it with its element, so it cannot bring the element in) and by `selection.scope_masks` (before the Show Only branch, so a named EID does not keep the face of an element the checklists hide). Cells with EID < 0 (a PLOAD face) have no element and keep their own rules | The block has no PID, MID or type, so the checklists can only reach it through its elements. Found in review: the first version had the rule in `scope_masks` only. Pressures had the same two gaps (untested), so it moved to the same declaration: its tested behaviour is unchanged, and unchecking a property now hides its pressure faces in the reader too |
 | Pairs | Root table `CONTACT_Card CONTACT_Set CONTACT_Source CONTACT_Target`, a row per source/target of each BCTSET and BGSET | Which regions meet is one cheap table; no friction or distances (parameters, not geometry). IDs are kept as the card gives them, so a pair may name a BCPROP region that is not drawn |
-| Switch | `Options.contact` (on), `--no-contact`, the reader's *Contact Surfaces* | The pattern of every block. It drops the block and the pair table |
+| Switch | `Options.contact` (on; the **last** field of the dataclass, so positional arguments keep their meaning), `--no-contact`, the reader's *Contact Surfaces* | The pattern of every block. It drops the block and the pair table |
 | View, macro, glyphs | None | Out of scope; the block shows with the model and is colored by `ContactRegion` like any array |
 
 ## What is skipped and how it is reported
@@ -48,9 +48,10 @@ Cards pyNastran rejects are not hand-parsed.
 | Case | Report |
 |---|---|
 | BSURFS entry whose three grids are not three different corners of one face | card-report row `G1-G3 are not three corners of one face`, `Deck.skip("BSURFS", ..., region ID)`, once per card |
-| Element of the wrong kind (a solid or a line on a BSURF, a shell on a BSURFS) | card-report row `element type the region cannot hold`, once per card |
-| Element not in the deck | one warning per card with the count and the first IDs (a broken deck). A BSURF that still draws some elements gets an `info:` line instead: pyNastran expands THRU ranges, and a range may span IDs that do not exist |
+| Element of the wrong kind (a solid or a line on a BSURF, a shell on a BSURFS; a mass, rigid or plot element, which pyNastran keeps outside `model.elements`) | card-report row `element type the region cannot hold`, once per card |
+| Element not in the deck | one warning per card with the count and the first IDs (a broken deck). A BSURF that still draws at least one face gets an `info:` line instead: pyNastran expands THRU ranges, and a range may span IDs that do not exist |
 | A face on a grid the deck lacks | one warning for the block (count, regions) |
+| Two cards of one type with the same ID (BSURF, BSURFS, BCTSET, BGSET) | pyNastran 1.4.1 and main both keep the last card and say nothing; one warning per card type, from `card_count` against the cards kept: only the last card of a repeated ID is used |
 
 The other entries of the card are drawn. The card-report rows are identified by the region ID
 (`cards.ID_CARDS`), and counted per card, not per entry, so `Count` stays a number of cards.

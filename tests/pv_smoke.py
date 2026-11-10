@@ -1574,6 +1574,16 @@ def contact_checks(pv, nv):
     check(cells(rm.Model(reader), "ContactRegion") == [30, 30, 30, 10, 20, 20, 20],
           "contact: the faces follow the reader's scope (hex 1 hidden)")
     reader.HiddenElements = ""
+    props = nv._listed(reader, "VisibleProperties")
+    reader.VisibleProperties = [p for p in props if p != "PSHELL_2"]
+    check(cells(rm.Model(reader), "ContactRegion") == [10, 10, 10, 20, 20, 20],
+          "contact: unchecking a property hides the faces on its elements (the shells' region)")
+    reader.VisibleProperties = props
+    types = nv._listed(reader, "VisibleElementTypes")
+    reader.VisibleElementTypes = [t for t in types if t != "CHEXA"]
+    check(cells(rm.Model(reader), "EID") == [101, 102, 103, 2, 3, 3],
+          "contact: unchecking an element type hides the faces of those elements (both hexes)")
+    reader.VisibleElementTypes = types
     reader.ContactSurfaces = 0
     off = rm.Model(reader)
     check("ContactSurfaces" not in off.names and off.field("CONTACT_Source") is None,

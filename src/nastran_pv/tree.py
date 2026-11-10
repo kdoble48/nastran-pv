@@ -34,7 +34,7 @@ from vtkmodules.vtkCommonDataModel import (
 from vtkmodules.vtkFiltersCore import vtkAppendFilter, vtkAppendPolyData
 
 from . import includes, vtkutil
-from .fields.common import field_strings, get_array, iter_blocks
+from .fields.common import MESH, field_strings, get_array, iter_blocks
 
 CATEGORIES = ("Properties", "Materials", "ElementTypes", "Families", "Groups", "Files")
 DROP_ORDER = ("Families", "Groups", "Files", "ElementTypes", "Materials", "Properties")  # when over MAX_PIECES
@@ -42,6 +42,12 @@ MAX_PIECES = 1000
 TYPE_ARRAYS = (("ElementType", "ElementTypeNames"), ("RigidType", "RigidTypeNames"),
                ("ConnectorType", "ConnectorTypeNames"))
 BUSH_BLOCKS = ("Bushes", "BushLines")
+# Face blocks (top-level names): polygons drawn on mesh elements, with the element in the cell
+# ``EID`` and no PID, MID or type of their own. A face belongs to its element: the reader's cut
+# (build_tree), a selection (selection.item_masks) and the overlays' scope (selection.scope_masks)
+# keep it only with that element, and it never brings the element in. A cell with EID < 0 has no
+# element (a PLOAD face) and is judged by itself.
+FACE_BLOCKS = ("ContactSurfaces", "Pressures")
 
 
 def valid_name(label: str) -> str:
@@ -128,6 +134,32 @@ def category_values(mb, names=None) -> dict[str, list[str]]:
     read_order = [valid_name(n) for n in includes.parent_labels(mb)]
     out["Files"] = [n for n in read_order if n in found["Files"]] + [n for n in out["Files"] if n not in read_order]
     return out
+
+
+def is_face_block(path: str) -> bool:
+    """True for a block of ``FACE_BLOCKS`` or one nested in it (``Pressures/SID_10``)."""
+    return path.split("/", 1)[0] in FACE_BLOCKS
+
+
+def _faces_follow(blocks) -> None:
+    """Cut the kept items of the face blocks (``blocks``: lists ``[path, ds, kind, labels, kept]``)
+    down to the faces whose element is kept: a face goes when a mesh block holds its element and
+    does not keep it. Faces of elements no mesh block holds (the block is switched off) stay."""
+    held, kept_eids = [], []
+    for path, ds, kind, _, kept in blocks:
+        eid = get_array(_attr(ds, kind), "EID") if path in MESH else None
+        if eid is not None:
+            held.append(np.asarray(eid))
+            kept_eids.append(np.asarray(eid)[kept])
+    if not held:
+        return
+    held, kept_eids = np.concatenate(held), np.concatenate(kept_eids)
+    for block in blocks:
+        path, ds, kind, _, kept = block
+        eid = get_array(_attr(ds, kind), "EID") if is_face_block(path) else None
+        if eid is not None:
+            e = np.asarray(eid)[kept]
+            block[4] = kept[~np.isin(e, held) | np.isin(e, kept_eids)]
 
 
 # -------------------------------------------------------------- visibility
@@ -431,7 +463,9 @@ def build_tree(mb, vis: Visibility | None = None, names=None, max_pieces: int = 
             if path in selected:
                 keep &= selected[path]
             kept = np.flatnonzero(keep)
-        blocks.append((path, ds, kind, labels, kept))
+        blocks.append([path, ds, kind, labels, kept])
+    if masks is None and not vis.everything:
+        _faces_follow(blocks)  # no labels of their own: the checklists reach them through their elements
 
     cats = list(CATEGORIES)
     memo = {"cats": None, "keys": {}}  # the latest categories tried: count's keys serve the pieces too

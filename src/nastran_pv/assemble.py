@@ -36,10 +36,10 @@ class Options:
     """What :func:`build_multiblock` builds.
 
     The block switches (``shells``, ``lines``, ``solids``, ``masses``, ``rigid``, ``connectors``,
-    ``plotels``, ``bushes``, ``constraints``, ``loads``, ``contact``; all on by default, the CLI's
-    ``--no-*`` flags turn them off) leave a block out when False; ``bushes`` covers Bushes and
-    BushLines, ``loads`` covers Loads and Pressures, ``contact`` is ContactSurfaces and the
-    ``CONTACT_`` pair table. The other fields: ``k_ref`` (``--k-ref``), the stiffness
+    ``plotels``, ``bushes``, ``constraints``, ``loads`` and, the last field, ``contact``; all on by
+    default, the CLI's ``--no-*`` flags turn them off) leave a block out when False; ``bushes``
+    covers Bushes and BushLines, ``loads`` covers Loads and Pressures, ``contact`` is
+    ContactSurfaces and the ``CONTACT_`` pair table. The other fields: ``k_ref`` (``--k-ref``), the stiffness
     the bush glyphs' log scale starts at (None: the softest bush); ``nodal_arrays`` (on;
     ``--no-nodal-arrays``), the ``SPC_DOF`` and ``F_<sid>``/``M_<sid>`` point arrays on the mesh
     blocks, for at most ``max_nodal_load_sets`` load sets (8; no flag); ``nsm_set``
@@ -58,12 +58,12 @@ class Options:
     bushes: bool = True
     constraints: bool = True
     loads: bool = True
-    contact: bool = True
     k_ref: float | None = None  # bush stiffness reference for log scaling (None = softest)
     nodal_arrays: bool = True  # SPC_DOF / F_<sid> / M_<sid> point arrays on the mesh blocks
     max_nodal_load_sets: int = 8
     nsm_set: int | None = None  # bulk NSM set (None = Case Control NSM=, 0 = none)
     beam_sections: bool = False  # swept CBAR/CBEAM sections as the BeamSections block
+    contact: bool = True  # ContactSurfaces and the CONTACT_ pair table (a block switch, added last)
 
 
 def case_control_ids(model, key: str) -> list[int]:

@@ -141,3 +141,142 @@ def test_tree_keeps_the_block(mb, deck):
     cells = sum(out.GetPartition(i, k).GetNumberOfCells() for i, piece in enumerate(built.pieces)
                 for k in range(out.GetNumberOfPartitions(i)) if piece.path == "ContactSurfaces")
     assert cells == 9
+
+
+# ------------------------------------------------------------------ a face follows its element
+def _tree_cells(mb, deck, vis, path="ContactSurfaces"):
+    """The source cells of ``path`` that the reader's cut (``tree.build_tree(mb, vis)``) keeps."""
+    from nastran_pv import tree
+
+    built = tree.build_tree(mb, vis, tree.names_from_deck(deck))
+    return sorted(int(c) for p in built.pieces if p.path == path
+                  for c in (range(p.template.GetNumberOfCells()) if p.cell_ids is None else p.cell_ids))
+
+
+def test_reader_checklists_hide_the_faces_of_hidden_elements(mb, deck):
+    """The reader's own cut: the block has no PID, MID or type of its own, so a face stays only
+    while its element does (cells 0-2 the shells, 3-4 hex 1, 5 the tetra, 6-7 the wedge, 8 hex 4)."""
+    from nastran_pv import tree
+
+    assert _tree_cells(mb, deck, tree.Visibility(hidden={"Properties": frozenset({"PSHELL_2"})})) == [3, 4, 5, 6, 7, 8]
+    assert _tree_cells(mb, deck, tree.Visibility(hidden={"ElementTypes": frozenset({"CHEXA"})})) == [0, 1, 2, 5, 6, 7]
+    assert _tree_cells(mb, deck, tree.Visibility(hidden={"Materials": frozenset({"MAT1_1"})})) == []
+    assert _tree_cells(mb, deck, tree.Visibility(hidden_eids=frozenset({3}))) == [0, 1, 2, 3, 4, 5, 8]
+    assert _tree_cells(mb, deck, tree.Visibility(show_only=frozenset({1, 101}))) == [0, 3, 4]
+    assert _tree_cells(mb, deck, tree.Visibility()) == list(range(9))
+
+
+def test_a_grid_list_selects_the_same_elements_with_and_without_the_block(deck):
+    """Grids 5-8 are the hex's top face only: no element has all its grids listed, so nothing is
+    selected, and the contact face on those grids must not pull hex 1 in. Listing all eight grids
+    selects the hex, and then both its faces."""
+    from nastran_pv import selection
+
+    top = selection.IdList("NID", {5, 6, 7, 8})
+    for opts in (Options(contact=False), Options()):
+        masks, _ = selection.item_masks(build_multiblock(deck, opts), top, "all")
+        assert not masks["Solids"].any() and not masks["Shells"].any(), opts
+        assert not masks.get("ContactSurfaces", np.zeros(1, bool)).any(), opts
+    masks, _ = selection.item_masks(build_multiblock(deck), selection.IdList("NID", set(range(1, 9))), "all")
+    assert masks["Solids"].tolist() == [True, False, False, False]  # Solids cells: EIDs 1 4 2 3 or by type
+    assert masks["ContactSurfaces"].tolist() == [False] * 3 + [True, True] + [False] * 4
+    masks, _ = selection.item_masks(build_multiblock(deck), selection.IdList("EID", {3, 102}), "all")
+    assert masks["ContactSurfaces"].tolist() == [False, True, False, False, False, False, True, True, False]
+    masks, _ = selection.item_masks(build_multiblock(deck), selection.IdList("PID", {2}), "all")
+    assert masks["ContactSurfaces"].tolist() == [True] * 3 + [False] * 6
+
+
+def test_show_only_keeps_no_face_of_an_element_the_checklists_hide(mb, deck):
+    from nastran_pv import selection, tree
+
+    vis = tree.Visibility(hidden={"Properties": frozenset({"PSOLID_1"})}, show_only=frozenset({1, 101}))
+    masks = selection.scope_masks(mb, vis, tree.names_from_deck(deck))
+    assert not masks["Solids"].any()
+    assert masks["ContactSurfaces"].tolist() == [True] + [False] * 8  # shell 101's face only
+
+
+# ------------------------------------------------------------------ review items 4-7, 10
+HEX = """\
+GRID,1,,0.,0.,0.
+GRID,2,,1.,0.,0.
+GRID,3,,1.,1.,0.
+GRID,4,,0.,1.,0.
+GRID,5,,0.,0.,1.
+GRID,6,,1.,0.,1.
+GRID,7,,1.,1.,1.
+GRID,8,,0.,1.,1.
+MAT1,1,7.e10,,0.3,2.
+PSOLID,1,1
+PSHELL,2,1,0.1
+CHEXA,1,1,1,2,3,4,5,6,
+,7,8
+CQUAD4,10,2,1,2,3,4
+CQUAD4,11,2,5,6,7,8
+"""
+
+
+def _build(tmp_path, bulk, name="deck.bdf"):
+    path = tmp_path / name
+    path.write_text(bulk)
+    deck = load_deck(path, echo=False)
+    return build_multiblock(deck), deck
+
+
+def test_repeated_ids_warn_that_only_the_last_card_is_drawn(tmp_path):
+    """pyNastran (1.4.1 and main) keys the contact cards by ID and keeps the last of a repeated ID."""
+    mb, deck = _build(tmp_path, HEX + "BSURFS,100,,,,1,5,6,7\nBSURFS,100,,,,1,1,2,3\nBSURF,200,10\nBSURF,200,11\n"
+                      "BSURF,201,10\nBCTSET,1,100,200\nBCTSET,1,200,100\nBGSET,2,100,200\nBGSET,2,200,100\n")
+    ds = get_block(mb, "ContactSurfaces")
+    assert arr(ds, "ContactRegion", "cell").tolist() == [200, 201, 100]
+    assert arr(ds, "EID", "cell").tolist() == [11, 10, 1]  # the second BSURF 200, the second BSURFS 100
+    assert arr(ds, "NID").tolist() == [5, 6, 7, 8, 1, 2, 3, 4, 4, 3, 2, 1]
+    assert [(r["Source"], r["Target"]) for r in vtkutil.read_field_table(mb, "CONTACT_")] == [(200, 100), (200, 100)]
+    text = "\n".join(deck.warnings)
+    for card, read, kept in (("BSURF", 3, 2), ("BSURFS", 2, 1), ("BCTSET", 2, 1), ("BGSET", 2, 1)):
+        assert f"{card}: {read} cards with {kept} different ID(s): only the last card of a repeated ID is used" in text
+    clean = _build(tmp_path, HEX + "BSURF,200,10\nBSURF,201,11\n", "clean.bdf")[1]
+    assert not any("repeated ID" in w for w in clean.warnings)
+
+
+def test_options_contact_is_the_last_field():
+    """Options is public: a new switch goes at the end, so positional arguments keep their meaning."""
+    from dataclasses import fields
+
+    names = [f.name for f in fields(Options)]
+    assert names[-1] == "contact" and names.index("k_ref") == 10
+    assert Options(True, True, True, True, True, True, True, True, True, True, 1e5).k_ref == 1e5
+
+
+def test_a_region_that_draws_nothing_warns_about_its_missing_elements(tmp_path):
+    """BSURF 201: a solid, a rod and an element the deck lacks draw nothing: a warning, not an info
+    line. BSURF 202 still draws shell 10: info (a THRU range may span ids that do not exist)."""
+    mb, deck = _build(tmp_path, HEX + "CONROD,30,1,2,1,0.5\nBSURF,201,1,30,999\nBSURF,202,10,999\n")
+    assert arr(get_block(mb, "ContactSurfaces"), "ContactRegion", "cell").tolist() == [202]
+    text = "\n".join(deck.warnings)
+    assert "BSURF 201: 1 of 3 element(s) are not in the deck, skipped (EID 999)" in text
+    assert "info: BSURF 201" not in text
+    assert "info: BSURF 202: 1 of 2 element(s) are not in the deck, skipped (EID 999)" in text
+
+
+def test_mass_rigid_and_plot_elements_are_the_wrong_kind_not_missing(tmp_path):
+    mb, deck = _build(tmp_path, HEX + "CONM2,40,1,,2.0\nRBE2,41,1,123456,2\nPLOTEL,42,1,7\n"
+                      "BSURF,300,10,40,41,42\nBSURFS,301,,,,40,1,2,3\n")
+    assert arr(get_block(mb, "ContactSurfaces"), "EID", "cell").tolist() == [10]
+    assert not any("not in the deck" in w for w in deck.warnings), deck.warnings
+    report = {(r["Card"], r["Reason"]): r["IDs"] for r in cards.read(mb)}
+    assert report == {("BSURF", cards.CONTACT_ELEMENT): "ID 300", ("BSURFS", cards.CONTACT_ELEMENT): "ID 301"}
+
+
+def test_faces_carry_the_include_file_of_their_element(tmp_path):
+    """FileId is the file of the element's own card: the hex is in solids.bdf (file 1), the shells
+    in the main file (0), whichever file holds the BSURF and BSURFS cards."""
+    from conftest import strings as field_names
+
+    head, shells = HEX.split("CHEXA")[0], "CQUAD4,10,2,1,2,3,4\nCQUAD4,11,2,5,6,7,8\n"
+    (tmp_path / "solids.bdf").write_text("CHEXA,1,1,1,2,3,4,5,6,\n,7,8\nBSURF,200,10,11\n")
+    mb, _ = _build(tmp_path, "BEGIN BULK\n" + head + shells + "INCLUDE 'solids.bdf'\nBSURFS,100,,,,1,5,6,7\nENDDATA\n",
+                   "main.bdf")
+    ds = get_block(mb, "ContactSurfaces")
+    assert arr(ds, "EID", "cell").tolist() == [10, 11, 1]
+    assert arr(ds, "FileId", "cell").tolist() == [0, 0, 1]
+    assert field_names(ds, "FileNames") == ["main_bdf", "solids_bdf"]

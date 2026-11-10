@@ -104,24 +104,22 @@ def _solid_corners(elem, g1, g34) -> list[int]:
     CTETRA, the face without G4; a quadrilateral face, G3 diagonally opposite G1; CPENTA with G3
     blank, its triangle holding G1; CPYRAM with G1 and G3 adjacent base corners, the triangle they
     make with the apex (the QRG's PLOAD4 remarks)."""
-    nids = [int(n) for n in elem.node_ids[:SOLIDS[elem.type][0]]]
-    on = lambda f: [nids[i] for i in f]  # noqa: E731
+    every, nids = solid_faces(elem)
     if g1 not in nids:
         raise Unsupported(NO_FACE, f"G1 {g1} is not a corner of {elem.type} {elem.eid}")
     if elem.type == "CTETRA":  # G4: the corner not on the face
-        faces = [f for f in _FACES["CTETRA"] if g1 in on(f) and g34 not in on(f)]
+        faces = [f for f in every if g1 in f and g34 not in f]
     elif elem.type == "CPYRAM" and g1 in nids[:4] and g34 in nids[:4] and g34 != g1 and (nids.index(g1) - nids.index(g34)) % 2:
-        faces = [f for f in _FACES["CPYRAM"] if len(f) == 3 and g1 in on(f) and g34 in on(f)]  # adjacent: a side
+        faces = [f for f in every if len(f) == 3 and g1 in f and g34 in f]  # adjacent: a side
     elif g34:  # a quadrilateral face with G3 diagonally opposite G1
-        faces = [f for f in _FACES[elem.type] if len(f) == 4 and g1 in on(f) and g34 in on(f)
-                 and abs(on(f).index(g1) - on(f).index(g34)) == 2]
+        faces = [f for f in every if len(f) == 4 and g1 in f and g34 in f and abs(f.index(g1) - f.index(g34)) == 2]
     elif elem.type == "CPENTA":  # its triangle holding G1
-        faces = [f for f in _FACES["CPENTA"] if len(f) == 3 and g1 in on(f)]
+        faces = [f for f in every if len(f) == 3 and g1 in f]
     else:
         faces = []
     if len(faces) != 1:
         raise Unsupported(NO_FACE, f"G1 {g1} and G3/G4 {g34 or 'blank'} name no face of {elem.type} {elem.eid}")
-    return on(faces[0]), nids
+    return list(faces[0]), nids
 
 
 def _solid_face(deck: Deck, elem, g1, g34, pressures) -> tuple[list[int], np.ndarray]:

@@ -407,7 +407,7 @@ def test_contact_regions_with_bad_entries_report_and_skip(tmp_path):
     text = "\n".join(deck.warnings)
     assert "BSURFS 100: 1 of 4 element(s) are not in the deck, skipped (EID 999)" in text
     assert "info: BSURF 200: 1 of 3 element(s) are not in the deck, skipped (EID 12)" in text
-    assert "contact surfaces: 1 face(s) on unknown grids, skipped (BSURF 200)" in text
+    assert "contact surfaces: 1 face(s) on unknown grids, skipped (region 200)" in text
     assert "BSURF 202: 2 of 2 element(s) are not in the deck, skipped (EID 500 501)" in text
     assert "info: BSURF 202" not in text
     report = {(r["Card"], r["Reason"]): (r["Count"], r["IDs"]) for r in cards.read(mb)}
