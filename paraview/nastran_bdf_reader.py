@@ -1580,7 +1580,8 @@ class NastranPVContactFaces(_GlyphFilter):
     """The faces of the checked contact regions (the ContactSurfaces block: BSURF and BSURFS), moved
     Lift x the model diagonal off their elements so that they do not flicker in the plane of the
     element under them: a solid's face moves out of its element, a shell gets a face on each side.
-    Cell arrays ContactRegion, EID and ContactCard."""
+    Regions the input shows later (the reader's visibility changed) come checked while every region
+    is checked, unchecked once some are not. Cell arrays ContactRegion, EID and ContactCard."""
 
     BLOCK, REQUIRED = "ContactSurfaces", "NID"
     LISTS = True
@@ -1605,11 +1606,15 @@ class NastranPVContactFaces(_GlyphFilter):
 
         block = _find_block(data, self.BLOCK, self.REQUIRED)
         if block is not None and not block.IsA("vtkMultiBlockDataSet"):
-            _fill_checklist(self, self._regions, [f"Region {r}" for r in contact_regions_of(block)])
+            # a region that turns up later is checked only while the user has left every region checked
+            narrowed = len(_checked(self._regions)) < self._regions.GetNumberOfArrays()
+            _fill_checklist(self, self._regions, [f"Region {r}" for r in contact_regions_of(block)],
+                            on=set() if narrowed else None)
 
     def _glyphs(self, block, diag, model):
         from nastran_pv.glyphs import contact_faces
 
+        self._list(block)  # a ContactSurfaces dataset as the input: RequestData lists a multiblock only
         on = [int(n.split()[-1]) for n in _checked(self._regions)]
         return contact_faces(block, diag, self._lift, regions=on)
 

@@ -94,7 +94,7 @@ with `cannot read DECK: <error>` and writes no PNG.
   `--dry-run` prints the generated script.
 - Custom pvpython scripts: `import nastran_views as nv; nv.apply("masses", reader=r, view=v)`.
   Views edit the view's scene: a coloring (pid, thickness, results, ...) replaces the coloring, but
-  overlays (masses, bushes, beams, loads, spc, rigid) accumulate in one view, so use a fresh view
+  overlays (masses, bushes, beams, loads, spc, rigid, contact) accumulate in one view, so use a fresh view
   per picture (`nv.white_view(size)`, as `render_model.render` does) or `nv.clear(view)` between
   pictures (`docs/paraview.md#how-views-combine`). A view keeps its model whatever is selected, so
   pass `reader=` to name the model (another one starts a new scene; a comparison view refuses a

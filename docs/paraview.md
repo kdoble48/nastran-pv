@@ -505,7 +505,9 @@ the selection commands make no filter of their own.
   ([Contact surfaces](model.md#contact-surfaces)) *Lift* × the model diagonal (0.001) off their
   elements, along the face normals: a face in the plane of its element flickers with it. A solid's
   face (BSURFS) moves out of its element; a shell (BSURF) is seen from both sides, so it gets a face
-  on each side. *Lift* 0 leaves the faces on their elements. Cell arrays `ContactRegion`, `EID` and
+  on each side. Faces on the same grids (a shell in two regions) are stepped: the second is drawn
+  twice as far off. *Lift* 0 leaves the faces on their elements. A region that appears later (the
+  reader's visibility changed) comes checked unless you have unchecked some. Cell arrays `ContactRegion`, `EID` and
   `ContactCard`, point `NID`; field data `ContactFaces` (the faces drawn, a shell counted once) and
   `ContactRegions`.
 * **Nastran Ply Axes** draws a composite ply's material axes as a line through each shell's centre,

@@ -1620,7 +1620,8 @@ def contact_view_checks(pv, nv):
           and "BCTSET 1: source 10, target 20" in text and "BGSET 2: source 30, target 10" in text,
           f"contact view: the faces and the pairs in the text: {text!r}")
     check(nv._shown_array(view) == ("CELLS", "ContactRegion"), f"contact view: coloured by ContactRegion {nv._shown_array(view)}")
-    lut = pv.GetColorTransferFunction("ContactRegion")
+    lut = pv.GetColorTransferFunction("ContactRegion", nv._shown_rep(g, view), separate=True)
+    red = list(lut.IndexedColors)[:3]
     check(list(lut.Annotations) == ["10", "Region 10 (BCTSET 1 source, BGSET 2 target)", "20", "Region 20 (BCTSET 1 target)",
                                     "30", "Region 30 (BGSET 2 source)"], f"contact view: the legend names the pairs {list(lut.Annotations)}")
     scene = nv.scene_of(view)
@@ -1645,6 +1646,9 @@ def contact_view_checks(pv, nv):
     nv.apply("contact", reader=reader, view=view, regions=[20, 30], lift=0.001)
     check(g.Lift == 0.001 and _cell_values(g, "ContactRegion") == {20, 30} and _root(g, "ContactFaces") == [6],
           "contact view: regions= and lift= win")
+    lut = pv.GetColorTransferFunction("ContactRegion", nv._shown_rep(g, view), separate=True)
+    check(list(lut.Annotations)[0::2] == ["10", "20", "30"] and list(lut.IndexedColors)[:3] == red,
+          "contact view: a region keeps its colour when others are unchecked (the map holds every region)")
     g.Regions = []
     nv.apply("contact", reader=reader, view=view)
     check("none in the checked regions" in _info(nv, m), f"contact view: no region checked says so: {_info(nv, m)!r}")
@@ -1657,9 +1661,14 @@ def contact_view_checks(pv, nv):
     reader.HiddenElements = ""
     nv.apply("contact", reader=reader, view=view)
     text = _info(nv, m)
-    check(_cell_values(g, "ContactRegion") == {30} and "No faces to draw for region 10" in text and "reader's scope" in text,
+    check(_cell_values(g, "ContactRegion") == {30} and "No faces to draw for region 10 20: hidden" in text,
           f"contact view: a pair's region the scope hides is named: {text!r}")
+    g.Regions = ["Region 30"]  # narrowed while the solids' regions are hidden: they come back unchecked
     nv.show_all(reader)
+    nv.apply("contact", reader=reader, view=view)
+    check(list(g.Regions) == ["Region 30"] and _cell_values(g, "ContactRegion") == {30},
+          f"contact faces: regions that come back after a narrowed choice stay unchecked {list(g.Regions)}")
+    g.Regions = ["Region 10", "Region 20", "Region 30"]
     nv.apply("pid", reader=reader, view=view)
     check("contact" in nv.scene_of(view).overlays and _root(g, "ContactFaces") == [9],
           "contact view: stays over a coloring, whole again after NPV Show All")
@@ -1678,6 +1687,17 @@ def contact_view_checks(pv, nv):
     g = pv.FindSource(nv._name(m, "contact faces"))
     check(_root(g, "ContactFaces") == [9] and "BCTSET 1: source 10, target 20" in _info(nv, m),
           f"contact view on a converted .vtkhdf: the faces and the pairs: {_info(nv, m)!r}")
+    faces = pv.MergeBlocks(Input=nv.extract_blocks(src, ["ContactSurfaces"]))
+    alone = pv.NastranContactFaces(Input=faces)
+    alone.UpdatePipeline()
+    alone.UpdatePipelineInformation()  # the checklist was filled while it ran
+    listed = list(alone.GetProperty("Regions").Available)
+    check(_root(alone, "ContactFaces") == [9] and listed == ["Region 10", "Region 20", "Region 30"],
+          f"Nastran Contact Faces on the ContactSurfaces dataset itself: every face, Regions listed {listed}")
+    extract = faces.Input
+    pv.Delete(alone)
+    pv.Delete(faces)
+    pv.Delete(extract)
     nv.clear(view)
     tag = nv._name(m, "x").split(" ", 2)[2]
     for s in [x for k, x in pv.GetSources().items() if k[0].startswith("NPV ") and k[0].endswith(tag)]:

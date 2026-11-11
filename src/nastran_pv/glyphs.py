@@ -937,11 +937,33 @@ def contact_regions_of(faces) -> list[int]:
     return [] if region is None else sorted({int(r) for r in np.unique(region)})
 
 
+def _stack_level(conn, starts, sizes, owner, nid, rows) -> np.ndarray:
+    """Per cell (0 for the cells not in ``rows``): how many of the ``rows`` cells before it are on
+    the same grids (the same ``nid`` values, else the same points), in any order."""
+    ids = (np.asarray(nid).astype(np.int64) if nid is not None else np.arange(conn.max() + 1))[conn]
+    width = int(sizes[rows].max())
+    key = np.full((len(sizes), width), -1, dtype=np.int64)
+    inside = np.isin(owner, rows)
+    key[owner[inside], (np.arange(len(conn)) - starts[owner])[inside]] = ids[inside]
+    key = np.sort(key[rows], axis=1)
+    _, group = np.unique(key, axis=0, return_inverse=True)
+    group = np.asarray(group).ravel()
+    order = np.argsort(group, kind="stable")
+    sorted_group = group[order]
+    begins = np.flatnonzero(np.r_[True, sorted_group[1:] != sorted_group[:-1]])
+    rank = np.arange(len(rows)) - np.repeat(begins, np.diff(np.r_[begins, len(rows)]))
+    level = np.zeros(len(sizes), dtype=np.int64)
+    level[rows[order]] = rank
+    return level
+
+
 def contact_faces(faces: vtkPolyData, diag: float, lift: float = CONTACT_LIFT, regions=None) -> vtkPolyData:
     """The faces of a ``ContactSurfaces`` block moved ``lift`` x ``diag`` off their elements along
     their normals, so they are not drawn in the plane of the element under them (two coincident
     surfaces flicker). A solid's face (BSURFS, wound outward) moves out of its element; a shell
-    (BSURF) is seen from both sides, so it gets a face on each side. ``regions`` (region IDs;
+    (BSURF) is seen from both sides, so it gets a face on each side (one face with no lift).
+    Faces on the same grids (a shell in two regions, a shell on a solid's face) would still share
+    a plane: the second is moved twice as far, the third three times. ``regions`` (region IDs;
     None = all) keeps the faces of those regions.
 
     Cell arrays ``ContactRegion``, ``EID``, ``ContactCard`` and a Nastran Diff's status arrays, in
@@ -969,12 +991,15 @@ def contact_faces(faces: vtkPolyData, diag: float, lift: float = CONTACT_LIFT, r
         length = np.linalg.norm(normal, axis=1)
         normal /= np.where(length > 0, length, 1.0)[:, None]
         # the cells drawn: every kept face on its normal's side, then the shells' other side
-        cells = np.concatenate([rows, rows[card[rows] == 0]])
-        side = np.concatenate([np.ones(len(rows)), -np.ones(len(cells) - len(rows))])
-        corner = np.concatenate([np.arange(starts[c], starts[c] + sizes[c]) for c in cells])
-        of = np.repeat(np.arange(len(cells)), sizes[cells])
-        points = conn[corner]
-        moved = xyz[points] + (float(lift) * float(diag) * side[of])[:, None] * normal[cells[of]]
+        other = rows[card[rows] == 0] if lift else rows[:0]
+        cells = np.concatenate([rows, other])
+        side = np.concatenate([np.ones(len(rows)), -np.ones(len(other))])
+        count = sizes[cells]
+        first = np.cumsum(count) - count
+        of = np.repeat(np.arange(len(cells)), count)
+        points = conn[starts[cells][of] + np.arange(count.sum()) - first[of]]
+        steps = (1 + _stack_level(conn, starts, sizes, owner, get_array(faces.GetPointData(), "NID"), rows))[cells]
+        moved = xyz[points] + (float(lift) * float(diag) * side * steps)[of][:, None] * normal[cells[of]]
         out.SetPoints(vtkutil.make_points(moved))
         out.SetPolys(vtkutil.make_cell_array(sizes[cells], np.arange(len(points))))
         for name in ("ContactRegion", "EID", "ContactCard") + STATUS_ARRAYS:

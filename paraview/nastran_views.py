@@ -1737,10 +1737,14 @@ def view_contact(model, view, regions=None, lift=None):
     d.Representation = "Surface"
     d.Opacity = 1.0
     pairs = contact_pairs(model)
-    drawn = sorted({int(v) for v in _gather(fetch(g), "ContactRegion", "CELLS")})
-    categorical(d, "ContactRegion", drawn, contact_labels(drawn, pairs), view=view)
+    # the map holds every region of the model, so a region keeps its colour whatever is checked or
+    # hidden; it is this representation's own, since another view may show another model's regions
+    known = sorted({int(v) for v in _gather(model.block("ContactSurfaces"), "ContactRegion", "CELLS")})
+    categorical(d, "ContactRegion", known, contact_labels(known, pairs), view=view, separate=True)
     every = sorted({int(v) for v in _gather(faces, "ContactRegion", "CELLS")})
-    lines = [f"{shown} contact faces in {len(drawn)} region(s), coloured by region"]
+    info = g.GetDataInformation().DataInformation.GetFieldDataInformation().GetArrayInformation("ContactRegions")
+    drawn = info.GetNumberOfTuples() if info is not None else len(every)
+    lines = [f"{shown} contact faces in {drawn} region(s), coloured by region"]
     if shown < total:
         lines.append(f"(of {total} faces in {len(every)} regions: Regions on 'NPV contact faces')")
     for card, sid, source, target in pairs[:CONTACT_PAIRS_LISTED]:
@@ -1751,9 +1755,8 @@ def view_contact(model, view, regions=None, lift=None):
     if absent:
         from nastran_pv.cards import ids_text
 
-        lines.append(f"No faces to draw for {ids_text('region', absent)} "
-                     + ("(hidden by the reader's scope, a BCPROP/BCPROPS, or not in the deck)"
-                        if model.scope_active() else "(a BCPROP/BCPROPS, or not in the deck)"))
+        lines.append(f"No faces to draw for {ids_text('region', absent)}: hidden, or not a BSURF/BSURFS "
+                     "region with faces")
     info_text(model, view, "\n".join(lines))
     return g
 

@@ -386,5 +386,23 @@ def test_contact_faces_of_some_regions(mb):
     assert arr(shells, "ContactFaces", "field").tolist() == [3]
     none = contact_faces(block, 10.0, regions=[99])
     assert none.GetNumberOfCells() == 0 and arr(none, "ContactFaces", "field").tolist() == [0]
-    flat = contact_faces(block, 10.0, lift=0.0)  # no lift: the block's own points
+    flat = contact_faces(block, 10.0, lift=0.0)  # no lift: the block as it is, a shell drawn once
+    assert flat.GetNumberOfCells() == 9 and flat.GetNumberOfPoints() == 33
     np.testing.assert_allclose(flat.GetPoint(11), (0.0, 0.0, 1.0))
+
+
+def test_contact_faces_on_the_same_grids_do_not_share_a_plane(tmp_path):
+    """A shell in two regions, and a shell on a solid's face: with a lift of 0.1 the second face on
+    the same grids is 0.2 off, the third 0.3. The quad 1-2-3-4 is in z = 0 (normal +Z) under the
+    unit cube's bottom face, whose outward normal is -Z."""
+    from nastran_pv.glyphs import contact_faces
+
+    _, deck = _build(tmp_path, HEX + "BSURF,200,10\nBSURF,201,10\nBSURFS,300,,,,1,1,2,3\n")
+    block = get_block(build_multiblock(deck), "ContactSurfaces")
+    assert arr(block, "ContactRegion", "cell").tolist() == [200, 201, 300]
+    out = contact_faces(block, 1.0, lift=0.1)
+    z = [out.GetPoint(4 * i)[2] for i in range(out.GetNumberOfCells())]
+    assert arr(out, "ContactRegion", "cell").tolist() == [200, 201, 300, 200, 201]
+    np.testing.assert_allclose(z, [0.1, 0.2, -0.3, -0.1, -0.2], atol=1e-12)
+    only = contact_faces(block, 1.0, lift=0.1, regions=[201])  # the faces not drawn do not count
+    np.testing.assert_allclose([only.GetPoint(0)[2], only.GetPoint(4)[2]], [0.1, -0.1], atol=1e-12)
