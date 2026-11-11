@@ -38,6 +38,7 @@ SCALAR = "scalar points, no location"
 NOT_READ = "not read"
 SUPERELEMENT = "superelement"
 MATRIX = "matrix input"
+COMPLEX_MATRIX = "complex matrix"  # a DMIG with TIN 3/4: matrices.py gives only its structure
 PATCH = "patch form, no GA/GB"
 GROUNDED = "grounded, one grid"
 HEAT = "heat transfer"
@@ -48,7 +49,7 @@ NO_CONTACT_FACE = "G1-G3 are not three corners of one face"  # BSURFS
 # a solid on a BSURF, a shell on a BSURFS, a mass, rigid or plot element on either
 CONTACT_ELEMENT = "element type the region cannot hold"
 SID_CARDS = frozenset({"MPC", "PLOAD", "PLOAD2", "PLOAD4"})  # Deck.skip rows identified by their set id
-ID_CARDS = frozenset({"BSURF", "BSURFS"})  # ... by their region ID
+ID_CARDS = frozenset({"BSURF", "BSURFS", "DMIG"})  # ... by their region ID (a DMIG: its name)
 
 DRAWN_SLOTS = frozenset({"rigid_elements"})  # build_rigid draws every card in it
 # connect (or are) scalar points only: SPOINT/EPOINT have no coordinates, so nothing to place
@@ -94,12 +95,13 @@ SCALAR_POINT_SLOTS = {"SPOINT": "spoints", "EPOINT": "epoints"}  # pyNastran kee
 def drawn_types() -> frozenset:
     """Card types some builder draws or resolves, from the builders' own type tables (imported here:
     the builders import the reasons above). A builder that learns a card takes it off the report."""
+    from . import matrices
     from .builders import bushes, connectors, constraints, contact, lines, loads, masses, plotels, shells, solids
     from .categories import CONNECTOR_TYPES
 
     tables = (shells.SHELLS, solids.SOLIDS, lines.LINE_TYPES, CONNECTOR_TYPES, connectors.RESOLVED_TYPES,
               masses.MASS_TYPES, bushes.BUSH_TYPES, plotels.PLOTEL_TYPES, constraints.SPC_TYPES,
-              loads.LOAD_TYPES, loads.COMBINATION_TYPES, contact.CONTACT_TYPES, ("GRID",))
+              loads.LOAD_TYPES, loads.COMBINATION_TYPES, contact.CONTACT_TYPES, matrices.USED_TYPES, ("GRID",))
     return frozenset(t for table in tables for t in table)
 
 
@@ -181,9 +183,12 @@ def report(deck) -> list[dict]:
         row["Count"] += int(count)
         row["IDs"] = row["IDs"] or ids_text
 
+    from .fluid import USED_REJECTS  # pyNastran rejects MFLUID/ELIST; fluid.py reads them
+
     rejected = {t: n for t, n in (getattr(model, "reject_count", None) or {}).items() if _counted(t)}
     for t, n in rejected.items():
-        add(t, NOT_READ, n, "")
+        if t not in USED_REJECTS:
+            add(t, NOT_READ, n, "")
     type_slot = _type_slots(model)
     drawn = drawn_types()
     by_slot: dict[str, set[str]] = defaultdict(set)

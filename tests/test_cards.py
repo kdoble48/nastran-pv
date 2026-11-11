@@ -32,7 +32,7 @@ REPORT = [
     ("CMASS3", 1, S, "EID 37"),
     ("CMASS4", 1, S, "EID 38"),
     ("CWELD", 1, cards.NOT_READ, ""),
-    ("DMIG", 1, cards.MATRIX, "ID KAAX"),  # one matrix (a header and one column card)
+    ("DMI", 1, cards.MATRIX, "ID WKK"),  # one matrix (a header and one column card); DMIG is used (test_matrices)
     ("FOOBAR", 1, cards.NOT_READ, ""),
     ("GENEL", 1, ND, "EID 44"),
     ("SPCOFF", 1, ND, ""),  # pyNastran keys SPCOFF by its type: no id to show

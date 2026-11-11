@@ -2567,6 +2567,40 @@ def _point_values(src, name):
     return set(vtk_to_numpy(a).tolist()) if a is not None else set()
 
 
+def dmig_checks(pv, nv):
+    """tests/data/dmig.bdf (hand-worked in test_matrices.py): the DMIG_ table and the DMIG mass
+    totals on the reader's root, and the masses view's DMIG line; tests/data/mfluid.bdf's FLUID_ table."""
+    reader = rm.load_reader(os.path.join(HERE, "data", "dmig.bdf"))
+    model = rm.Model(reader)
+    check(model.field_strings(None, "DMIG_Name") == ["KC", "KG", "KP", "KS", "MP", "MS", "PL", "VAX"]
+          and model.field("DMIGMass").tolist() == [9] and model.field("ModelMassWithDMIG").tolist() == [22],
+          "dmig: the DMIG_ table and the selected DMIG mass on the reader's output")
+    view = pv.CreateRenderView()
+    nv.apply("masses", reader=reader, view=view)
+    text = nv.info_of(view)
+    check("With the selected DMIG mass 9: 22 at (0.5455, 1.636, 0)" in text,
+          f"dmig: the masses view adds the DMIG mass: {text!r}")
+    nv.clear(view)
+    pv.Delete(reader)
+    path = os.path.join(tempfile.mkdtemp(), "only_dmig.bdf")  # no CONM2: the DMIG line still shows
+    with open(path, "w") as f:
+        f.write("SOL 103\nCEND\nM2GG = MP\nBEGIN BULK\nGRID,2,,2.,0.,0.\n"
+                "DMIG,MP,0,6,2,0\nDMIG,MP,2,1,,2,1,1.\nDMIG,MP,2,2,,2,2,1.\nDMIG,MP,2,3,,2,3,1.\nENDDATA\n")
+    reader = rm.load_reader(path)
+    nv.apply("masses", reader=reader, view=view)
+    text = nv.info_of(view)
+    check("With the selected DMIG mass 1: 1 at (2, 0, 0)" in text,
+          f"dmig: a model without concentrated masses still shows the DMIG mass: {text!r}")
+    nv.clear(view)
+    pv.Delete(view)
+    pv.Delete(reader)
+    reader = rm.load_reader(os.path.join(HERE, "data", "mfluid.bdf"))  # test_fluid.py has the values
+    model = rm.Model(reader)
+    check(model.field("FLUID_SID").tolist() == [1, 2] and model.field("FLUID_FluidMass")[0] == 4000
+          and model.field("FLUID_AddedMass").reshape(-1, 6)[0, 2] > 0,
+          "mfluid: the FLUID_ table (MFLUID/ELIST read from pyNastran's rejected lines) on the reader's output")
+    pv.Delete(reader)
+
 def _info(nv, model=None):
     """The active view's info text (one per view, rule R6; ``model`` is not needed any more)."""
     return nv.info_of(nv.pv.GetActiveView())
@@ -3627,6 +3661,7 @@ def main():
     pv.SetActiveSource(reader)
     selection_file_checks(pv, nv, reader)
     card_report_checks(pv, nv)
+    dmig_checks(pv, nv)
     pv.SetActiveSource(reader)
 
     from op2_fixture import make_op2  # synthesized results, written with pyNastran

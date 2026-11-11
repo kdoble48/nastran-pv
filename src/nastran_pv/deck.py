@@ -52,6 +52,8 @@ class Deck:
     includes: IncludeTree | None = None  # files read and the file of each element (includes.py)
     # {(card, reason): [id, ...]}: cards of a drawn type in a form no block draws (cards.py)
     skipped: dict = field(default_factory=dict)
+    # results computed from the deck alone, kept across rebuilds ({key: value}; fluid.write)
+    cache: dict = field(default_factory=dict, repr=False)
     _n_mass: int = field(default=0, repr=False)  # where the next mass warning goes (see warn)
     _n_pinned: int = field(default=0, repr=False)  # leading load errors kept first (xref failure)
 

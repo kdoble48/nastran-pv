@@ -1271,6 +1271,18 @@ def _changes(model, data, association, item):
     return change_text(status_counts(data, association), removed_count(model.block("Removed"), item))
 
 
+def _dmig_mass_text(model) -> str:
+    """The masses view's line for the mass DMIGs M2GG/M2PP select (matrices.py; not drawn), "" without."""
+    with_dmig, cg_dmig = model.field("ModelMassWithDMIG"), model.field("ModelCGWithDMIG")
+    if with_dmig is None:
+        return ""
+    text = f"\nWith the selected DMIG mass {model.field('DMIGMass')[0]:.6g}: {with_dmig[0]:.6g}"
+    if cg_dmig is not None:
+        c = cg_dmig.reshape(-1)
+        text += f" at ({c[0]:.4g}, {c[1]:.4g}, {c[2]:.4g})"
+    return text
+
+
 def view_masses(model, view, mode=None, relative=None, law=None, minimum=None, minimum_mass=None, color_by=None):
     """Mass glyphs. Sizing: ``mode`` Auto/Physical/Relative; in relative sizing the heaviest
     mass gets radius ``relative`` (the filter's Size) x model diagonal and the others follow ``law``
@@ -1279,7 +1291,7 @@ def view_masses(model, view, mode=None, relative=None, law=None, minimum=None, m
     filter's settings (its defaults on a first run)."""
     masses = model.scoped("Masses")
     if masses is None:
-        info_text(model, view, _missing_text(model, "concentrated masses (CONM1/CONM2/CMASS)"))
+        info_text(model, view, _missing_text(model, "concentrated masses (CONM1/CONM2/CMASS)") + _dmig_mass_text(model))
         return
     glyphs = _overlay(model, "mass glyphs", lambda src: pv.NastranMassGlyphs(Input=src))
     _set_given(glyphs, SizeMode=mode, Size=relative, RadiusLaw=LAW_NAMES[law] if law else None,
@@ -1309,6 +1321,7 @@ def view_masses(model, view, mode=None, relative=None, law=None, minimum=None, m
         text += f"\n{hidden} lighter than Minimum Mass {glyphs.MinimumMass:g} not drawn"
     if total is not None:
         text += f"\nModel mass (structure + concentrated): {total[0]:.6g}"
+    text += _dmig_mass_text(model)
     if cg is not None:
         cg = cg.reshape(-1)
         marker = _named(model, "CG marker", lambda: pv.Sphere())

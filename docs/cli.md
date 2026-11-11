@@ -10,6 +10,8 @@ nastran-pv convert DECK --results sol108.op2 [--phase 90 | --phase-sweep 24 --st
 nastran-pv stats  DECK|VTM --by PID|MID|FAMILY|GROUP|ELEMENTTYPE --field ElementMass [--csv t.csv]
 nastran-pv check  DECK|VTM [--strict] [--rules TEXT] [--only CHECK ...] [--tol R] [-o findings.vtm]
 nastran-pv sections DECK|VTM [--pid ID ...] [--csv t.csv]          # CBAR/CBEAM section table
+nastran-pv dmig   DECK [--modes N] [--csv t.csv]                    # DMIG mass, free-free check, frequencies
+nastran-pv mfluid DECK [--csv t.csv]                                # MFLUID fluid mass and added mass
 nastran-pv diff   A B [--csv diff.csv] [--grid-tol R] [--rel-tol R] [--skip KIND]  # what changed from A to B
 nastran-pv convert B --diff-against A -o diff.vtm                   # B with the diff on its mesh
 nastran-pv store  add|list|fields|query|compare|open --db runs.sqlite ...
@@ -209,6 +211,59 @@ nastran-pv check run_deck.bdf --strict -o out/findings.vtm   # exit 1 on errors;
 
 `check` reports free edges and faces, coincident grids, duplicate elements, dangling connectors
 and floating parts. See [Model tools](tools.md#model-check) for what each check means.
+
+## DMIG matrices
+
+```bash
+nastran-pv dmig system.bdf                       # a system deck that includes the punch file
+nastran-pv dmig system.bdf --modes 20 --csv out/dmig.csv
+```
+
+`dmig` prints, for each DMIG, what selects it and its size, then the quantities of its kind
+([DMIG matrices](model.md#dmig-matrices)): the mass, CG and inertia of a mass matrix; the
+rigid-body energy ratio of a stiffness, free-free or grounded, with the five grids that hold it
+most, its zero and negative eigenvalue counts (an eigenvalue is zero when its mode's energy ratio
+is round-off, as for the free-free check) and, paired with a mass matrix on the same DOFs or some
+of them (`KAAX` with `MAAX`; a mass without rotations is zero on them), its first `--modes` natural frequencies (default 10, 0 for none); and the
+force and moment of every column of a load. The last line adds the selected DMIG mass to the
+model's:
+
+```text
+KAAX: stiffness, K2GG x 1; 138x138 symmetric, 4830 entries, 23 grids
+  diagonal 657.872 .. 1.20346e+06, 0 negative; asymmetry 0
+  rigid-body energy ratio TX 0.0916 TY 0.0252 TZ 0.00498 RX 0.00649 RY 0.000814 RZ 0.0256: grounded
+  grids holding it in TX: 349 (7.25e+04), 405 (7.23e+04), 375 (5.49e+04), 404 (5.48e+04), 376 (5.1e+04)
+  eigenvalues: 0 zero (energy ratio < 1e-08), 0 negative
+  frequencies with MAAX: 11.8808 46.4408 76.7769 81.6914 188.953 220.431 323.172 353.352 424.61 458.173
+MAAX: mass, not selected; 138x138 symmetric, 4830 entries, 23 grids
+  mass 0.0391942 (X 0.0379104, Y 0.0396269, Z 0.0400454; spread 5.33%)
+  CG (65.7534, 24.9762, 0)
+  ...
+```
+
+It needs the deck, not a converted file (whose `DMIG_` table has everything but the eigenvalues),
+and the grids: run it on the system deck that includes a punch file, not on the punch file alone.
+`--csv` writes the table with each vector split into `_X`/`_Y`/`_Z` (or `_TX` ... `_RZ`) columns.
+Matrices up to 2000 DOFs are solved dense, larger ones with a sparse shift-invert solver; there the
+counts come from the 20 lowest eigenvalues and say `at least` when all 20 are zero or negative.
+
+## MFLUID virtual fluid mass
+
+```bash
+nastran-pv mfluid tank.bdf [--csv out/fluid.csv]
+```
+
+```text
+MFLUID 1: selected, rho 1000, free surface z = 2 in CID 0, planes NN; 2 wetted elements, area 5
+  fluid volume 4, fluid mass 4000
+  added mass TX 216.709 TY 0 TZ 1365.43 RX 341.359 RY 1174.78 RZ 54.1774
+```
+
+One block per MFLUID card: whether Case Control selects it, the wetted elements and area, the
+fluid (or displaced) volume and mass, and the rigid-body added mass about the basic origin
+([MFLUID virtual fluid mass](model.md#mfluid-virtual-fluid-mass)). It solves sets of up to 6000
+wetted elements (a dense solve: 4 s at 2000, 13 s at 4000, and over 1 GB of memory at 6000); `convert`
+stops at 2000.
 
 ## Opening ParaView
 

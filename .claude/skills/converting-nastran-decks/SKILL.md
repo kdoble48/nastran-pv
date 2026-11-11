@@ -55,6 +55,12 @@ the file skips deck parsing, which is much faster on large models. `summary.py` 
 
 ## Reading the result
 
+- **DMIG:** mass, CG, inertia, free-free check and load resultant per matrix in the root table
+  `DMIG_`; `ModelMassWithDMIG`/`ModelCGWithDMIG` add the M2GG/M2PP-selected ones. `nastran-pv dmig
+  DECK` prints it with eigenvalue counts and frequencies (run it on the system deck, not the punch
+  file alone: the grids come from the deck). See docs/model.md#dmig-matrices.
+- **MFLUID:** fluid volume/mass and the 6x6 rigid-body added mass per set in the root table `FLUID_`
+  (`nastran-pv mfluid DECK`); not part of `ModelMass`. See docs/model.md#mfluid-virtual-fluid-mass.
 - **Mass:** `ModelMass = StructuralMass + NonstructuralMass + ConcentratedMass`, computed from cell
   sizes (numpy volumes for linear solids, VTK's cell size filter otherwise), with WTMASS **not** applied. NSM (property fields + the bulk NSM/NSML set picked by
   `NSM=` or `--nsm-set`) is in `ElementMass` and split out as `NSMMass`, `PropertyNSMMass`,
