@@ -35,7 +35,7 @@ MACROS = {  # label -> the name nastran_views.run_macro takes; sorted, so each k
     "Highlight Listed": "highlight_file",
     "Mode Animate": "animate_mode", "Mode Animate All": "animate_modes", "Mode Save GIFs": "save_mode_animations",
     "Overlay Beams": "beams", "Overlay Bush Rotations": "bushrotations", "Overlay Bushes": "bushes",
-    "Overlay Loads": "loads", "Overlay Masses": "masses", "Overlay Rigid": "rigid", "Overlay SPC": "spc",
+    "Overlay Contact": "contact", "Overlay Loads": "loads", "Overlay Masses": "masses", "Overlay Rigid": "rigid", "Overlay SPC": "spc",
     "Path from Selection": "path_from_selection",
     "Result Displacement": "results", "Result Forces": "forces", "Result Plies": "plies",
     "Result Random RMS": "random", "Result Random Sweep": "randomsweep", "Result Stress": "stress",

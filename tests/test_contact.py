@@ -341,3 +341,50 @@ def test_a_deck_pynastran_rejects_still_fails_with_its_own_error(tmp_path):
     with pytest.raises(Exception) as caught:
         load_deck(path, echo=False)
     assert "e1x" in str(caught.value) and "bytes-like" not in str(caught.value)
+
+
+def test_contact_faces_are_lifted_off_their_elements(mb):
+    """glyphs.contact_faces (the Nastran Contact Faces filter) with a diagonal of 10 and a lift of
+    0.01: every face moves 0.1 along its normal (NORMALS, worked out above), and the three shells
+    get a second face 0.1 on the other side, after the nine first faces."""
+    from nastran_pv.glyphs import CONTACT_LIFT, contact_faces, contact_regions_of
+
+    block = get_block(mb, "ContactSurfaces")
+    assert contact_regions_of(block) == [10, 20, 30] and contact_regions_of(None) == []
+    out = contact_faces(block, 10.0, lift=0.01)
+    assert out.GetNumberOfCells() == 12 and out.GetNumberOfPoints() == 33 + 11
+    faces = FACES + FACES[:3]
+    sides = [1.0] * 9 + [-1.0] * 3
+    cells, _ = _cells(out)
+    assert cells == [f[3] for f in faces]
+    assert arr(out, "ContactRegion", "cell").tolist() == [f[0] for f in faces]
+    assert arr(out, "EID", "cell").tolist() == [f[1] for f in faces]
+    assert arr(out, "ContactCard", "cell").tolist() == [f[2] for f in faces]
+    grid = {int(n): np.array(block.GetPoint(i)) for i, n in enumerate(arr(block, "NID"))}
+    at = 0
+    for (_, _, _, nids), normal, side in zip(faces, NORMALS + NORMALS[:3], sides):
+        for nid in nids:
+            np.testing.assert_allclose(out.GetPoint(at), grid[nid] + 0.1 * side * np.array(normal), atol=1e-12)
+            at += 1
+    np.testing.assert_allclose(out.GetPoint(11), (0.0, 0.0, 1.1))  # grid 5 of the hex's top face (z = 1)
+    np.testing.assert_allclose(out.GetPoint(33), (0.0, 0.0, 4.9))  # grid 61 again, under its shell (z = 5)
+    assert arr(out, "ContactFaces", "field").tolist() == [9]
+    assert arr(out, "ContactRegions", "field").tolist() == [10, 20, 30]
+    assert strings(out, "ContactCardNames") == ["BSURF", "BSURFS"]
+    assert CONTACT_LIFT == 0.001
+
+
+def test_contact_faces_of_some_regions(mb):
+    from nastran_pv.glyphs import contact_faces
+
+    block = get_block(mb, "ContactSurfaces")
+    solids = contact_faces(block, 10.0, regions=[10])
+    assert arr(solids, "ContactRegion", "cell").tolist() == [10, 10, 10]  # solid faces: one side
+    assert arr(solids, "ContactFaces", "field").tolist() == [3]
+    shells = contact_faces(block, 10.0, regions=[30])
+    assert arr(shells, "EID", "cell").tolist() == [101, 102, 103, 101, 102, 103]  # both sides
+    assert arr(shells, "ContactFaces", "field").tolist() == [3]
+    none = contact_faces(block, 10.0, regions=[99])
+    assert none.GetNumberOfCells() == 0 and arr(none, "ContactFaces", "field").tolist() == [0]
+    flat = contact_faces(block, 10.0, lift=0.0)  # no lift: the block's own points
+    np.testing.assert_allclose(flat.GetPoint(11), (0.0, 0.0, 1.0))

@@ -40,6 +40,8 @@ VIEW_INFO = {
                        "resultant force."),
     "spc": ("SPC", "Constrained grids colored by DOF code."),
     "rigid": ("Rigid", "RBE2/RBE3 spider legs by type."),
+    "contact": ("Contact", "The faces of the contact regions (BSURF, BSURFS), colored by region; the "
+                           "BCTSET/BGSET pairs in the legend."),
     "family": ("Family", "Mesh colored by element family, from the pre-processor comments."),
     "group": ("Group", "Mesh colored by top-level family group."),
     "pid": ("PID", "Mesh colored by property ID."),

@@ -35,7 +35,7 @@ ZIP = ROOT / "build" / "gallery-assets.zip"
 RELEASE = "gallery-assets"
 SCENE_WARN_BYTES = 3_000_000
 MODEL_ORDER = ["ucrm9", "ucrm9static", "demo", "tray", "plate"]
-VIEW_ORDER = ["masses", "bushes", "bushrotations", "beams", "loads", "spc", "rigid", "family", "group", "pid", "mid",
+VIEW_ORDER = ["masses", "bushes", "bushrotations", "beams", "loads", "spc", "rigid", "contact", "family", "group", "pid", "mid",
               "elementtype", "thickness", "nsm", "grow", "parts", "check", "results", "forces", "stress", "spcforces",
               "mpcforces", "oload", "freebody", "average", "plies", "random", "randomsweep", "diff"]
 UCRM9_CREDIT = ("uCRM-9 wingbox, coarse mesh: Brooks, Kenway and Martins, *Benchmark Aerostructural Models "

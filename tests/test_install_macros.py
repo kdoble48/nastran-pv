@@ -76,7 +76,7 @@ def test_labels_group_on_the_toolbar():
     ".py", with or without case, the buttons of a kind (a label's first word) stay together and the
     kinds come in the same order."""
     labels = list(install_macros.MACROS)
-    assert labels == sorted(labels) and len(set(install_macros.MACROS.values())) == len(labels) == 42
+    assert labels == sorted(labels) and len(set(install_macros.MACROS.values())) == len(labels) == 43
     kinds = ["Check", "Clear", "Color", "Diff", "Grow", "Hide", "Highlight", "Mode", "Overlay", "Path", "Result",
              "Show"]
     for key in (str, str.lower, lambda s: s + ".py", lambda s: (s + ".py").lower()):
