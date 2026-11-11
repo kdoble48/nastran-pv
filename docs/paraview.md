@@ -89,8 +89,8 @@ For Femap's AND visibility, use these lists in the reader's Properties panel:
   CBUSH elements have no material, so the Materials list never hides them. Nodal loads and SPCs are
   switched by their block toggles only. A face drawn on an element (a pressure face of
   `Pressures/*`, a contact face of `ContactSurfaces`) has no category of its own: it is shown and
-  hidden with its element, by these lists and by the element ID lists below. Color the contact
-  regions by `ContactRegion` ([Contact surfaces](model.md#contact-surfaces)).
+  hidden with its element, by these lists and by the element ID lists below. NPV Overlay Contact
+  colors the contact regions ([Contact surfaces](model.md#contact-surfaces)).
 * **Show Only Elements** and **Hidden Elements**: element ID lists such as `1001 1002 2000-2010`.
   They apply to everything that has an `EID`: elements, rigid elements, connectors and masses.
 
@@ -99,7 +99,7 @@ describe the whole deck, whatever is hidden.
 
 ### Overlays follow the scope
 
-The overlay macros (NPV Overlay Masses, Bushes, Bush Rotations, Loads, SPC, Rigid, Beams) draw only what
+The overlay macros (NPV Overlay Masses, Bushes, Bush Rotations, Loads, SPC, Rigid, Contact, Beams) draw only what
 hangs off the elements you kept. With Visible Groups set to one group, NPV Overlay Masses shows the masses
 of that group. The rules, in Nastran terms:
 
@@ -192,7 +192,7 @@ toolbar macros below without installing them:
 | Property | Choices |
 |---|---|
 | *Color By* | PID, MID, Element type, Thickness, Family, Group, NSM, Displacement, Stress, Model check, Parts; *(other)* |
-| *Overlays* | Masses, Bushes, Beam axes, Loads, SPC, Rigid elements |
+| *Overlays* | Masses, Bushes, Beam axes, Loads, SPC, Rigid elements, Contact |
 
 Pick a coloring, tick overlays and click Apply: the active view shows them, and the reader stays
 selected, so the next change is one more Apply. The section and the macros work on the same view
@@ -258,6 +258,7 @@ The buttons are named by what they do, so the toolbar, which sorts them by name,
 | NPV Overlay Beams | CBAR/CBEAM cross sections swept along the beams, colored by PID, with the shear-center axis (black), neutral axis (orange) and, up to *Max Triads* (500) beams, x/y/z triads (*NPV beam axes*); undeformed like the ghost mesh (`nv.apply("beams", scale=10)` or the filters' *DeformationScale* deforms it; [Beam sections](beam-sections.md)) |
 | NPV Overlay Bush Rotations | CBUSH rotational stiffness: K4/K5/K6 rings around the element axes (radius ~ log stiffness, on their own scale); says so when no CBUSH has rotational stiffness |
 | NPV Overlay Bushes | CBUSH translational stiffness: K1/K2/K3 bars along the element axes (length ~ log stiffness, the clearly stiffest axis thicker, released directions grey) and thin GA–GB lines; *Show Only* keeps the grounded or zero-length ones |
+| NPV Overlay Contact | The faces of the contact regions (BSURF, BSURFS) colored by region (*Nastran Contact Faces*), drawn just off their elements so they do not flicker on them; the legend and the text name each region's BCTSET (contact) and BGSET (glue) pairs. *Regions* on *NPV contact faces* picks which; says so when the deck has no contact regions ([Contact surfaces](model.md#contact-surfaces)) |
 | NPV Overlay Loads | Force, pressure and GRAV arrows (*Nastran Load Glyphs*) for the active LOAD set, scaled by magnitude (at most 1,500 arrows a set, every Nth loaded grid, on large models); resultant force. Other sets, moments and fixed-length arrows are settings of *NPV load glyphs*; its *Source* draws the results' SPC forces, MPC forces or applied loads instead, with their resultant |
 | NPV Overlay Masses | Mass ellipsoids from mass and inertia, colored by mass (or *Color By* EID/NID); grid→CG offsets; model CG marker; total mass |
 | NPV Overlay Rigid | RBE2/RBE3/... spider legs by type |
@@ -286,7 +287,7 @@ What a render view shows is a *scene* made of layers, and each macro edits one l
 | Layer | What it is | Changed by |
 |---|---|---|
 | Coloring | How the mesh itself is drawn; exactly one | NPV Color Family, Color Group, Color PID, Color MID, Color Element Type, Color Thickness, Color NSM, Result Displacement, Result Forces, Result Stress, Result Random RMS, Result Random Sweep, Check Parts, Grow from Selection, Check Model, Path from Selection, Diff |
-| Overlays | Glyphs and lines drawn on the mesh; any number | NPV Overlay Masses, Overlay Bushes, Overlay Bush Rotations, Overlay Beams, Overlay Loads, Overlay SPC, Overlay Rigid |
+| Overlays | Glyphs and lines drawn on the mesh; any number | NPV Overlay Masses, Overlay Bushes, Overlay Bush Rotations, Overlay Beams, Overlay Loads, Overlay SPC, Overlay Rigid, Overlay Contact |
 | Scope | What part of the model is in play: the reader's checklists, its Show Only / Hide element lists and its *Selection File* | the visibility macros ([Model tree and visibility](#model-tree-and-visibility)) |
 | Time | The time step, the deformation scale and mode animation | NPV Result Displacement, the animation macros, the time controls |
 | Text | One per view (`NPV info [RenderView1]`): a line or more per layer | every macro, from the layers it leaves |
@@ -339,7 +340,8 @@ Nastran Diff's *Input*), and **A**, the reference (its *Reference*). The compari
   coloring.
 - **Overlays show the change.** NPV Overlay Masses, Bushes, Bush Rotations, Beams, Loads, SPC and Rigid draw
   B's items colored by `DiffStatus` (the heavier engine mass orange, a new stringer's bush green), and
-  A's removed items of that kind in red; the summary counts the changes.
+  A's removed items of that kind in red; the summary counts the changes. NPV Overlay Contact is the
+  exception: the diff does not compare contact regions, so it draws B's faces by region.
 - **One scope for both models, by ID.** NPV Show Only Selected, Hide Selected, Show All, Show Only Property, Show Only Material, Show
   Only/Hide Reached and the Selection File macros write the same lists to A's and B's readers. The
   comparison itself stays whole-model; the drawn layers follow the scope: B's items by B's reader,
@@ -384,6 +386,7 @@ again keeps what you changed; from Python an argument you pass explicitly wins
 | Beams | *NPV beam sections* (the triads are on *NPV beam axes*) | *ShowSections*, *ShowAxes*, *ShowTriads*, *TriadSize*, *Max Triads*, *DeformationScale* |
 | Loads | *NPV load glyphs* | *Source*, *Load Sets*, *Show*, *Show Pressures*, *Show Gravity*, *Arrow Length*, *Every Nth Point*; *Glyph Size* group |
 | SPC | *NPV spc glyphs* | *SPC Sets*, *DOFs*; *Glyph Size* group |
+| Contact | *NPV contact faces* | *Regions*, *Lift* |
 | Results, Mode Animate | *NPV deform* | *Auto Scale*, *Scale Factor*, *Auto Scale Peak* (advanced), *Phase* (complex steps), *Match Steps* (advanced, set by the views on A's side of a pair); the undeformed outline's opacity is the Display opacity of *NPV undeformed mesh* |
 | Plies | *NPV ply axes* (the ply itself is the reader's *Ply*) | *Ply* (0: the model's, as the reader laid it; the view's `ply=` sets it), *Size*, *Both Axes* |
 | Random RMS, Random Sweep | the reader | *Random ASD*, *Random Drive*, *Random Damping*, *Random G*, *Random Frames* (the reader computes the response), or *Random Output* (the SOL 111 tables) |
@@ -498,6 +501,15 @@ the selection commands make no filter of their own.
 * **Nastran SPC Glyphs** puts a sphere of diameter *Size* × the model diagonal (0.006) on every
   constrained grid of the checked *SPC Sets* that constrains any of the *DOFs* (default `123456`;
   `123` keeps the grids that fix a translation). Point arrays `DOFCode`, `SPCSet`, `NID` and `CD`.
+* **Nastran Contact Faces** draws the faces of the checked *Regions* of the `ContactSurfaces` block
+  ([Contact surfaces](model.md#contact-surfaces)) *Lift* × the model diagonal (0.001) off their
+  elements, along the face normals: a face in the plane of its element flickers with it. A solid's
+  face (BSURFS) moves out of its element; a shell (BSURF) is seen from both sides, so it gets a face
+  on each side. Faces on the same grids (a shell in two regions) are stepped: the second is drawn
+  twice as far off. *Lift* 0 leaves the faces on their elements. A region that appears later (the
+  reader's visibility changed) comes checked unless you have unchecked some. Cell arrays `ContactRegion`, `EID` and
+  `ContactCard`, point `NID`; field data `ContactFaces` (the faces drawn, a shell counted once) and
+  `ContactRegions`.
 * **Nastran Ply Axes** draws a composite ply's material axes as a line through each shell's centre,
   *Size* (0.5) × the element's size (twice its mean centre-to-grid distance) long: the 1-direction
   (the fibre) and, with *Both Axes*, the 2-direction. *Ply* is a ply id (from the Shells layup, so it

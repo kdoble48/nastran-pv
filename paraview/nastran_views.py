@@ -4,7 +4,7 @@ Every view works on a Nastran reader (the active source, or the reader
 upstream of it) or on a ``.vtm``/VTKHDF file written by nastran-pv and opened with
 ParaView's own reader. Views edit the active view's scene (:func:`scene_of`): a coloring
 (``pid``, ``thickness``, ``results``, ...) replaces the coloring and keeps the overlays, an overlay
-(``masses``, ``bushes``, ``bushrotations``, ``beams``, ``loads``, ``spc``, ``rigid``) adds itself
+(``masses``, ``bushes``, ``bushrotations``, ``beams``, ``loads``, ``spc``, ``rigid``, ``contact``) adds itself
 (over a ghost mesh on an empty view), and a second toolbar click on an overlay removes it
 (``apply(name, toggle=True)``; ``apply`` itself refreshes). A view for another model starts a new
 scene. Views build or reuse named pipeline objects ("NPV ..."), so running a view twice does not
@@ -13,9 +13,9 @@ glyphs, NPV grow, the Nastran Diff, NPV deform for results and mode animation), 
 it only recolours the model or changes the reader's visibility; the model is found upstream of it
 again. Available views::
 
-    masses  bushes  bushrotations  beams  loads  spc  rigid  family  group  pid  mid  thickness
-    nsm  elementtype  results  random  randomsweep  parts  grow  path  check  diff  forces  stress
-    plies
+    masses  bushes  bushrotations  beams  loads  spc  rigid  contact  family  group  pid  mid
+    thickness  nsm  elementtype  results  random  randomsweep  parts  grow  path  check  diff  forces
+    stress  plies
 
 ``forces`` and ``stress`` color each block by its element forces or stresses (``stress`` takes
 ``quantity``, ``fibre``, ``strain`` and ``component``); ``apply`` first turns on the result
@@ -1165,7 +1165,8 @@ def labels_for(model, array, values):
         from nastran_pv.categories import BEAM_PARTS
 
         return [BEAM_PARTS[v] if 0 <= v < len(BEAM_PARTS) else str(v) for v in values]
-    prefix = {"PID": "PID", "MID": "MID", "DOFCode": "DOF", "SPCSet": "SPC set", "CID": "CID", "CD": "CD"}
+    prefix = {"PID": "PID", "MID": "MID", "DOFCode": "DOF", "SPCSet": "SPC set", "CID": "CID", "CD": "CD",
+              "ContactRegion": "Region"}
     return [f"{prefix[array]} {v}" if array in prefix else str(v) for v in values]
 
 
@@ -1686,6 +1687,78 @@ def view_rigid(model, view):
         categorical(d, "RigidType", types, labels_for(model, "RigidType", types), view=view)
     d.LineWidth = 2.5
     info_text(model, view, text)
+
+
+CONTACT_PAIRS_LISTED = 6  # pairs the contact view's text lists
+
+
+def contact_pairs(model):
+    """``[(card, set id, source region, target region)]``: the model's BCTSET and BGSET pairs (the
+    root ``CONTACT_`` table)."""
+    cards = model.field_strings(None, "CONTACT_Card")
+    columns = [model.field(f"CONTACT_{name}") for name in ("Set", "Source", "Target")]
+    if not cards or any(c is None for c in columns):
+        return []
+    return [(card, int(s), int(a), int(b)) for card, s, a, b in zip(cards, *columns)]
+
+
+def contact_labels(regions, pairs):
+    """A legend label per region: ``Region 10 (BCTSET 1 source, BGSET 2 target)``, the first two of
+    its pairs; ``Region 30`` for a region no pair names."""
+    labels = []
+    for region in regions:
+        roles = [f"{card} {sid} {role}" for card, sid, source, target in pairs
+                 for role, r in (("source", source), ("target", target)) if r == region]
+        more = ", ..." if len(roles) > 2 else ""
+        labels.append(f"Region {region}" + (f" ({', '.join(roles[:2])}{more})" if roles else ""))
+    return labels
+
+
+def view_contact(model, view, regions=None, lift=None):
+    """The faces of the contact regions (BSURF, BSURFS: the ContactSurfaces block) through Nastran
+    Contact Faces, coloured by region, with the BCTSET/BGSET pairs in the legend and the text.
+    ``regions`` (region IDs) and ``lift`` (the faces' distance off their elements, a fraction of
+    the model diagonal) set 'NPV contact faces'; left None they keep its settings."""
+    faces = model.scoped("ContactSurfaces")
+    if faces is None:
+        info_text(model, view, _missing_text(model, "contact regions (BSURF, BSURFS)"))
+        return
+    g = _overlay(model, "contact faces", lambda src: pv.NastranContactFaces(Input=src), "NastranPVContactFaces")
+    g.UpdatePipelineInformation()
+    if regions is not None:
+        g.Regions = [f"Region {int(r)}" for r in regions]
+    _set_given(g, Lift=lift)
+    g.UpdatePipeline()
+    total, shown = faces.GetNumberOfCells(), int(_glyph_field(g, "ContactFaces"))
+    if not shown:
+        info_text(model, view, f"{total} contact faces, none in the checked regions ('NPV contact faces': Regions).")
+        return g
+    d = _show(g, view)
+    d.Representation = "Surface"
+    d.Opacity = 1.0
+    pairs = contact_pairs(model)
+    # the map holds every region of the model, so a region keeps its colour whatever is checked or
+    # hidden; it is this representation's own, since another view may show another model's regions
+    known = sorted({int(v) for v in _gather(model.block("ContactSurfaces"), "ContactRegion", "CELLS")})
+    categorical(d, "ContactRegion", known, contact_labels(known, pairs), view=view, separate=True)
+    every = sorted({int(v) for v in _gather(faces, "ContactRegion", "CELLS")})
+    info = g.GetDataInformation().DataInformation.GetFieldDataInformation().GetArrayInformation("ContactRegions")
+    drawn = info.GetNumberOfTuples() if info is not None else len(every)
+    lines = [f"{shown} contact faces in {drawn} region(s), coloured by region"]
+    if shown < total:
+        lines.append(f"(of {total} faces in {len(every)} regions: Regions on 'NPV contact faces')")
+    for card, sid, source, target in pairs[:CONTACT_PAIRS_LISTED]:
+        lines.append(f"{card} {sid}: source {source}, target {target}")
+    if len(pairs) > CONTACT_PAIRS_LISTED:
+        lines.append(f"... {len(pairs) - CONTACT_PAIRS_LISTED} more pair(s)")
+    absent = sorted({r for _, _, source, target in pairs for r in (source, target)} - set(every))
+    if absent:
+        from nastran_pv.cards import ids_text
+
+        lines.append(f"No faces to draw for {ids_text('region', absent)}: hidden, or not a BSURF/BSURFS "
+                     "region with faces")
+    info_text(model, view, "\n".join(lines))
+    return g
 
 
 def _mesh_categorical(model, view, array, blocks=MESH):
@@ -3055,7 +3128,7 @@ CATEGORICAL = ("PID", "MID", "ElementType", "FamilyId", "GroupId", "FileId", "Di
 SHARED_CATEGORIES = ("PID", "MID", "ElementType", "FamilyId", "GroupId", "FileId", "NSMSource")  # one legend in a pair
 # A's removed items each overlay adds in red (diff_items.ITEM_TYPES names; the colorings add "element")
 REMOVED_ITEMS = {"masses": ("mass",), "bushes": ("bush",), "bushrotations": ("bush",), "loads": ("load",),
-                 "spc": ("spc",), "rigid": ("rigid",), "beams": ()}
+                 "spc": ("spc",), "rigid": ("rigid",), "beams": (), "contact": ()}
 # the coloring a side by side array is drawn with: the view that colors the mesh by it, else "array"
 ARRAY_VIEWS = {"PID": "pid", "MID": "mid", "ElementType": "elementtype", "FamilyId": "family", "GroupId": "group",
                "Thickness": "thickness", "DiffStatus": "diff"}
@@ -3473,7 +3546,7 @@ def single(view=None):
 
 VIEWS = {
     "masses": view_masses, "bushes": view_bushes, "bushrotations": view_bushrotations, "beams": view_beams, "loads": view_loads, "spc": view_spc,
-    "rigid": view_rigid, "family": view_family, "group": view_group, "pid": view_pid,
+    "rigid": view_rigid, "contact": view_contact, "family": view_family, "group": view_group, "pid": view_pid,
     "mid": view_mid, "elementtype": view_elementtype, "thickness": view_thickness, "nsm": view_nsm,
     "results": view_results, "random": view_random, "randomsweep": view_randomsweep, "parts": view_parts, "grow": view_grow, "path": view_path, "check": view_check,
     "diff": view_diff, "forces": view_forces, "stress": view_stress, "plies": view_plies,

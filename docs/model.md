@@ -323,7 +323,10 @@ other than NORM), G1 and G3/G4 that name no face, a PLOAD2 on an element that is
 The contact regions of a deck become the `ContactSurfaces` block: one polygon per face, on its
 corner grids, with the region it belongs to in `ContactRegion` (the card's ID), the element in
 `EID` and the kind of card in `ContactCard` (0 `BSURF`, 1 `BSURFS`; names in `ContactCardNames`).
-Color by `ContactRegion` to see which faces each region holds.
+The `contact` view (NPV Overlay Contact, `nastran-pv view --view contact`) colors the faces by
+region and names each region's pairs; it draws them through
+[Nastran Contact Faces](paraview.md#glyph-filters), just off their elements, because a face
+in the plane of its element flickers with it when both are drawn.
 
 * **BSURFS** (solid faces): each entry is an element and three corner grids of one of its faces.
   The face that holds the three grids is drawn whole, a triangle or a quadrilateral, for CHEXA,

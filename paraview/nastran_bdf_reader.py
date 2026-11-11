@@ -412,7 +412,7 @@ def _with_show_only(entries):
 
 _VIEW_COLORS = ("(other)", "PID", "MID", "Element type", "Thickness", "Family", "Group", "NSM", "Displacement",
                 "Stress", "Model check", "Parts")  # the labels of nastran_panel.COLORINGS
-_VIEW_OVERLAYS = ("Masses", "Bushes", "Beam axes", "Loads", "SPC", "Rigid elements")  # nastran_panel.OVERLAYS
+_VIEW_OVERLAYS = ("Masses", "Bushes", "Beam axes", "Loads", "SPC", "Rigid elements", "Contact")  # nastran_panel.OVERLAYS
 
 
 def _install_panel():
@@ -517,7 +517,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         self._view_color = int(v)  # no Modified(): the reader's output does not depend on it
 
     @smproperty.dataarrayselection(name="Overlays")
-    @smhint.xml('<WidgetHeight number_of_rows="6"/>')
+    @smhint.xml('<WidgetHeight number_of_rows="7"/>')
     def GetOverlays(self):
         """The overlays drawn in the active view when Apply is pressed (the NPV Overlay views)."""
         return self._view_overlays
@@ -1567,6 +1567,56 @@ class NastranPVPlyAxes(_GlyphFilter):
             _message(f"nastran-pv: Nastran Ply Axes: nothing drawn: {note}")
         self._note = note
         return out
+
+
+_CONTACT_LIFT = 0.001  # copy of nastran_pv.glyphs.CONTACT_LIFT (test_plugin_constants)
+
+
+@smproxy.filter(name="NastranPVContactFaces", label="Nastran Contact Faces")
+@smhint.xml('<ShowInMenu category="Nastran" />')
+@smproperty.input(name="Input", port_index=0)
+@smdomain.datatype(dataTypes=["vtkDataObject"], composite_data_supported=True)
+class NastranPVContactFaces(_GlyphFilter):
+    """The faces of the checked contact regions (the ContactSurfaces block: BSURF and BSURFS), moved
+    Lift x the model diagonal off their elements so that they do not flicker in the plane of the
+    element under them: a solid's face moves out of its element, a shell gets a face on each side.
+    Regions the input shows later (the reader's visibility changed) come checked while every region
+    is checked, unchecked once some are not. Cell arrays ContactRegion, EID and ContactCard."""
+
+    BLOCK, REQUIRED = "ContactSurfaces", "NID"
+    LISTS = True
+
+    def __init__(self):
+        _GlyphFilter.__init__(self)
+        self._regions = _checklist(self)
+        self._lift = _CONTACT_LIFT
+
+    @smproperty.dataarrayselection(name="Regions")
+    def GetRegions(self):
+        return self._regions
+
+    @smproperty.doublevector(name="Lift", default_values=_CONTACT_LIFT)
+    @smdomain.doublerange(min=0.0, max=0.02)
+    def SetLift(self, v):
+        """How far a face is drawn off its element, as a fraction of the model diagonal (0: on it)."""
+        self._set("_lift", float(v))
+
+    def _list(self, data):
+        from nastran_pv.glyphs import contact_regions_of
+
+        block = _find_block(data, self.BLOCK, self.REQUIRED)
+        if block is not None and not block.IsA("vtkMultiBlockDataSet"):
+            # a region that turns up later is checked only while the user has left every region checked
+            narrowed = len(_checked(self._regions)) < self._regions.GetNumberOfArrays()
+            _fill_checklist(self, self._regions, [f"Region {r}" for r in contact_regions_of(block)],
+                            on=set() if narrowed else None)
+
+    def _glyphs(self, block, diag, model):
+        from nastran_pv.glyphs import contact_faces
+
+        self._list(block)  # a ContactSurfaces dataset as the input: RequestData lists a multiblock only
+        on = [int(n.split()[-1]) for n in _checked(self._regions)]
+        return contact_faces(block, diag, self._lift, regions=on)
 
 
 def _spc_set_ids(data):

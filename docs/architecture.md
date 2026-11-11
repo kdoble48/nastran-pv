@@ -53,7 +53,11 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   block is in no mesh-block list. It and `Pressures` are the face blocks (`tree.FACE_BLOCKS`): a
   face with an `EID` is kept, hidden and selected with its element, in the reader's cut
   (`tree._faces_follow`), `selection.item_masks` (it never brings its element in) and
-  `selection.scope_masks`. Design: `docs/design/2026-11-09-contact-surfaces.md`.
+  `selection.scope_masks`. Design: `docs/design/2026-11-09-contact-surfaces.md`. The `contact` view
+  draws the block through `glyphs.contact_faces` (the plugin's Nastran Contact Faces): the faces
+  moved off their elements along their normals, a shell's on both sides, because ParaView has no
+  depth offset per representation and coincident surfaces flicker
+  (`docs/design/2026-11-10-contact-view.md`).
 - `assemble.py`: runs the builders according to `Options` and copies nodal SPC/load arrays onto the
   mesh blocks. It adds root field data: masses from `massprops.py` (numpy volumes when every solid is linear, else VTK cell sizes for the block; never
   pyNastran's slow `mass_properties`) and a `MAT_*` material table from `materials.py`. Derived
@@ -258,10 +262,11 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   coloring, the overlays, the comparison's role, partner, diff and side; `summary(header)` composes
   the view's one info text, the layer drawn last, `latest`, in full and the others by their first line).
 - `glyphs.py`: mass ellipsoids, bush triads, load arrows (`load_glyphs`; forces single-, moments
-  double-headed) and SPC markers (`spc_glyphs`) as real `vtkPolyData`, plus the subsets the filters
+  double-headed), SPC markers (`spc_glyphs`) and the lifted contact faces (`contact_faces`) as real
+  `vtkPolyData`, plus the subsets the filters
   offer (`minimum_mass`, `bush_selection`, `default_load_set`).
-- `paraview/nastran_bdf_reader.py`: one plugin file containing the reader, five glyph filters
-  (masses, bushes, loads, SPCs, beam sections), the deform filter (it writes the scale it applied as
+- `paraview/nastran_bdf_reader.py`: one plugin file containing the reader, the glyph filters
+  (masses, bushes, loads, SPCs, ply axes, contact faces, beam sections), the deform filter (it writes the scale it applied as
   root `DeformScale`), *Nastran Scope* (after the model's deform: the overlays' copy of the model
   cut by `selection.scope_masks`, moved by `DeformScale`; both deforms look grid displacements up
   in the whole model, `Deformer(grids=)`; on a Nastran Diff's output, the comparison's layers: the

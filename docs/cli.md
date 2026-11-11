@@ -230,7 +230,7 @@ nastran-pv render out/modes.vtkhdf --step 3 --preset results   # a converted ser
 ```
 
 `--preset` defaults to `family masses loads spc`, `--out` to `shots/` and `--size` to `1600 1000`.
-`--step` is 0-based. The presets are the views from the toolbar macros: `masses`, `bushes`, `bushrotations`, `beams`, `loads`, `spc`, `rigid`,
+`--step` is 0-based. The presets are the views from the toolbar macros: `masses`, `bushes`, `bushrotations`, `beams`, `loads`, `spc`, `rigid`, `contact`,
 `family`, `group`, `pid`, `mid`, `elementtype`, `thickness`, `nsm`, `results`, `forces`, `stress`, `plies`, `random`,
 `randomsweep`, `parts`, `check` and `diff`. The two random views need `--random` or `--random-output` (or a converted random series),
 and `diff` needs `--against A`. Rendering is offscreen, so no ParaView window opens; `--onscreen`

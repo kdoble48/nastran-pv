@@ -8,9 +8,16 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Added
 
+- The contact view: `contact` (toolbar *NPV Overlay Contact*, `nastran-pv view/render` preset, the
+  reader panel's *Overlays* > *Contact*) draws the faces of the BSURF/BSURFS regions colored by
+  region, with each region's BCTSET and BGSET pairs in the legend and in the view's text. It is an
+  overlay, so it stays on any coloring. The faces go through the new *Nastran Contact Faces* filter
+  (`glyphs.contact_faces`): *Regions* picks the regions and *Lift* (0.001 of the model diagonal)
+  draws each face just off its element, a shell's on both sides, so the faces no longer flicker in
+  the plane of their elements ([Views and macros](docs/paraview.md#one-click-views-toolbar-macros)).
 - Views from the reader's Properties panel: a *View* section with *Color By* (PID, MID, Element
   type, Thickness, Family, Group, NSM, Displacement, Stress, Model check, Parts) and an *Overlays*
-  checklist (Masses, Bushes, Beam axes, Loads, SPC, Rigid elements). Apply draws them in the active
+  checklist (Masses, Bushes, Beam axes, Loads, SPC, Rigid elements, Contact). Apply draws them in the active
   view with the code the toolbar macros run, so the macros need not be installed for these views;
   the section and the macros follow each other, and *NPV Clear View* unticks it. Deck reader and
   built-in server only ([Views from the reader panel](docs/paraview.md#views-from-the-reader-panel)).

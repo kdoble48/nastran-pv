@@ -63,7 +63,8 @@ The faces are exactly coincident with the Shells cells and the Solids outer face
 extracted mesh blocks, so they are not affected, but the reader's raw representation colored by
 `ContactRegion` or by `PID` z-fights where a face and its element overlap (which one wins varies by
 face; a quadratic solid's face shows it most). `Pressures` has the same pattern. A view that extracts
-`ContactSurfaces` with its own categorical map would avoid it; none is added here.
+`ContactSurfaces` with its own categorical map would avoid it; none is added here. (Added since: the
+`contact` view, which also lifts the faces off their elements, `2026-11-10-contact-view.md`.)
 
 ## Not covered
 
@@ -71,7 +72,8 @@ face; a quadratic solid's face shows it most). `Pressures` has the same pattern.
   BCONTACT/BCTABLE: card report.
 - A BSURF of solid elements (the MSC contact body): its free faces.
 - Which side of a shell is in contact (BCRPARA SURF), friction, search distances.
-- A view, a toolbar macro, contact results (contact pressure and status from the OP2).
+- Contact results (contact pressure and status from the OP2). (The view and its toolbar macro came
+  later: `2026-11-10-contact-view.md`.)
 
 ## Tests
 

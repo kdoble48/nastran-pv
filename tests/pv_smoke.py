@@ -1598,6 +1598,123 @@ def contact_checks(pv, nv):
     pv.Delete(src)
 
 
+def contact_view_checks(pv, nv):
+    """The contact view (NPV Overlay Contact) on tests/data/contact.bdf: Nastran Contact Faces lifts
+    the faces off their elements (the hand-worked geometry is in test_contact.py), the legend names
+    the pairs, Regions and Lift are kept on a rerun, the scope, the toggle, a deck without contact."""
+    from vtkmodules.util.numpy_support import vtk_to_numpy
+
+    path = os.path.join(HERE, "data", "contact.bdf")
+    reader = rm.load_reader(path)
+    view = pv.CreateRenderView()
+    view.ViewSize = [400, 300]
+    m = nv.apply("contact", reader=reader, view=view)
+    g = pv.FindSource(nv._name(m, "contact faces"))
+    text = _info(nv, m)
+    check(g is not None and pv.GetActiveSource() == g and list(g.Regions) == ["Region 10", "Region 20", "Region 30"],
+          f"contact view: NPV contact faces selected, every region checked {g and list(g.Regions)}")
+    check(_root(g, "ContactFaces") == [9] and nv.fetch(g).GetNumberOfCells() == 12
+          and _cell_values(g, "ContactRegion") == {10, 20, 30},
+          "contact view: nine faces, the three shells drawn on both sides")
+    check("9 contact faces in 3 region(s), coloured by region" in text
+          and "BCTSET 1: source 10, target 20" in text and "BGSET 2: source 30, target 10" in text,
+          f"contact view: the faces and the pairs in the text: {text!r}")
+    check(nv._shown_array(view) == ("CELLS", "ContactRegion"), f"contact view: coloured by ContactRegion {nv._shown_array(view)}")
+    lut = pv.GetColorTransferFunction("ContactRegion", nv._shown_rep(g, view), separate=True)
+    red = list(lut.IndexedColors)[:3]
+    check(list(lut.Annotations) == ["10", "Region 10 (BCTSET 1 source, BGSET 2 target)", "20", "Region 20 (BCTSET 1 target)",
+                                    "30", "Region 30 (BGSET 2 source)"], f"contact view: the legend names the pairs {list(lut.Annotations)}")
+    scene = nv.scene_of(view)
+    check(scene.coloring is not None and scene.coloring.name == "ghost" and "contact" in scene.overlays,
+          "contact view: an overlay, over the ghost mesh")
+    # the hex's top face (grids 5-8, z = 1) is drawn Lift x the model diagonal above the hex
+    diag = float(np.linalg.norm([10.0, 1.0, 5.0]))  # the deck's bounds: x 0..10, y 0..1, z 0..5
+
+    def top_z():
+        data = nv.fetch(g)
+        nid = vtk_to_numpy(data.GetPointData().GetArray("NID")).tolist()
+        return data.GetPoint(nid.index(5))[2]
+
+    check(abs(top_z() - (1.0 + 0.001 * diag)) < 1e-9, f"contact faces: Lift 0.001 of the model diagonal ({top_z()})")
+    g.Lift = 0.01
+    g.Regions = ["Region 10"]
+    nv.apply("contact", reader=reader, view=view)
+    text = _info(nv, m)
+    check(g.Lift == 0.01 and abs(top_z() - (1.0 + 0.01 * diag)) < 1e-9 and _cell_values(g, "ContactRegion") == {10}
+          and "3 contact faces in 1 region(s)" in text and "(of 9 faces in 3 regions" in text,
+          f"contact faces: Lift and Regions change the output and are kept on a rerun: {text!r}")
+    nv.apply("contact", reader=reader, view=view, regions=[20, 30], lift=0.001)
+    check(g.Lift == 0.001 and _cell_values(g, "ContactRegion") == {20, 30} and _root(g, "ContactFaces") == [6],
+          "contact view: regions= and lift= win")
+    lut = pv.GetColorTransferFunction("ContactRegion", nv._shown_rep(g, view), separate=True)
+    check(list(lut.Annotations)[0::2] == ["10", "20", "30"] and list(lut.IndexedColors)[:3] == red,
+          "contact view: a region keeps its colour when others are unchecked (the map holds every region)")
+    g.Regions = []
+    nv.apply("contact", reader=reader, view=view)
+    check("none in the checked regions" in _info(nv, m), f"contact view: no region checked says so: {_info(nv, m)!r}")
+    g.Regions = ["Region 10", "Region 20", "Region 30"]
+    reader.HiddenElements = "1"
+    nv.apply("contact", reader=reader, view=view)
+    check(_root(g, "ContactFaces") == [7] and 1 not in _cell_values(g, "EID"),
+          "contact view: the faces follow the reader's scope (hex 1 hidden)")
+    reader.VisibleProperties = [p for p in nv._listed(reader, "VisibleProperties") if p != "PSOLID_1"]
+    reader.HiddenElements = ""
+    nv.apply("contact", reader=reader, view=view)
+    text = _info(nv, m)
+    check(_cell_values(g, "ContactRegion") == {30} and "No faces to draw for region 10 20: hidden" in text,
+          f"contact view: a pair's region the scope hides is named: {text!r}")
+    g.Regions = ["Region 30"]  # narrowed while the solids' regions are hidden: they come back unchecked
+    nv.show_all(reader)
+    nv.apply("contact", reader=reader, view=view)
+    check(list(g.Regions) == ["Region 30"] and _cell_values(g, "ContactRegion") == {30},
+          f"contact faces: regions that come back after a narrowed choice stay unchecked {list(g.Regions)}")
+    g.Regions = ["Region 10", "Region 20", "Region 30"]
+    nv.apply("pid", reader=reader, view=view)
+    check("contact" in nv.scene_of(view).overlays and _root(g, "ContactFaces") == [9],
+          "contact view: stays over a coloring, whole again after NPV Show All")
+    nv.apply("contact", reader=reader, view=view, toggle=True)
+    check("contact" not in nv.scene_of(view).overlays and nv._shown_rep(g, view) is None,
+          "contact view: a second toolbar click removes it")
+    nv.clear(view)
+    tag = nv._name(m, "x").split(" ", 2)[2]
+    for src in [x for k, x in pv.GetSources().items() if k[0].startswith("NPV ") and k[0].endswith(tag)]:
+        pv.Delete(src)
+    pv.Delete(reader)
+    out = os.path.join(tempfile.mkdtemp(), "contact.vtkhdf")
+    convert(["convert", path, "-o", out, "-q"])
+    src = nv.load_reader(out)
+    m = nv.apply("contact", reader=src, view=view)
+    g = pv.FindSource(nv._name(m, "contact faces"))
+    check(_root(g, "ContactFaces") == [9] and "BCTSET 1: source 10, target 20" in _info(nv, m),
+          f"contact view on a converted .vtkhdf: the faces and the pairs: {_info(nv, m)!r}")
+    faces = pv.MergeBlocks(Input=nv.extract_blocks(src, ["ContactSurfaces"]))
+    alone = pv.NastranContactFaces(Input=faces)
+    alone.UpdatePipeline()
+    alone.UpdatePipelineInformation()  # the checklist was filled while it ran
+    listed = list(alone.GetProperty("Regions").Available)
+    check(_root(alone, "ContactFaces") == [9] and listed == ["Region 10", "Region 20", "Region 30"],
+          f"Nastran Contact Faces on the ContactSurfaces dataset itself: every face, Regions listed {listed}")
+    extract = faces.Input
+    pv.Delete(alone)
+    pv.Delete(faces)
+    pv.Delete(extract)
+    nv.clear(view)
+    tag = nv._name(m, "x").split(" ", 2)[2]
+    for s in [x for k, x in pv.GetSources().items() if k[0].startswith("NPV ") and k[0].endswith(tag)]:
+        pv.Delete(s)
+    pv.Delete(src)
+    plain = rm.load_reader(os.path.join(HERE, "data", "pressures.bdf"))
+    m = nv.apply("contact", reader=plain, view=view)
+    check("No contact regions (BSURF, BSURFS) in this deck." in _info(nv, m),
+          f"contact view: a deck without contact regions says so: {_info(nv, m)!r}")
+    nv.clear(view)
+    tag = nv._name(m, "x").split(" ", 2)[2]
+    for s in [x for k, x in pv.GetSources().items() if k[0].startswith("NPV ") and k[0].endswith(tag)]:
+        pv.Delete(s)
+    pv.Delete(plain)
+    pv.Delete(view)
+
+
 def random_checks(pv, nv):
     """Random response from synthesized modes: reader properties, both views, a converted series."""
     from op2_fixture import make_modes_op2
@@ -2231,9 +2348,9 @@ def parity_checks(pv, nv):
 
 
 # what each view selects on tiny_run.bdf ("NPV <what> [<deck>]"; None: the reader). The deck has no
-# CBAR/CBEAM (beams: beam_checks), no NSM and no random response; diff: diff_checks
+# CBAR/CBEAM (beams: beam_checks), no contact regions (contact_view_checks), no NSM and no random response; diff: diff_checks
 VIEW_SELECTS = {"masses": "mass glyphs", "bushes": "bush glyphs", "bushrotations": "bush rotation glyphs",
-                "beams": None, "loads": "load glyphs", "spc": "spc glyphs", "rigid": None, "family": None,
+                "beams": None, "loads": "load glyphs", "spc": "spc glyphs", "rigid": None, "contact": None, "family": None,
                 "group": None, "pid": None, "mid": None, "elementtype": None, "thickness": None, "nsm": None,
                 "results": "deform", "random": None, "randomsweep": None, "parts": "parts", "grow": "grow",
                 "path": "path", "check": "check", "forces": None, "stress": None, "plies": None}
@@ -3942,6 +4059,7 @@ def main():
     results_helper_checks(pv, nv)
     pressure_checks(pv, nv)
     contact_checks(pv, nv)
+    contact_view_checks(pv, nv)
     dynamic_result_checks(pv, nv)
     topology_checks(pv, nv)
     diff_checks(pv, nv)
