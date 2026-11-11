@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import numpy as np
 from vtkmodules.vtkCommonDataModel import vtkMultiBlockDataSet
 
-from . import vtkutil
+from . import fluid, matrices, vtkutil
 from .builders.bushes import build_bushes
 from .builders.connectors import build_connectors, mpcadd_sets
 from .builders.constraints import build_constraints, nodal_spc_mask, spc_enforced, spc_sets
@@ -249,6 +249,12 @@ def build_multiblock(deck: Deck, opts: Options | None = None, progress: Progress
     vtkutil.add_array(fd, "ConcentratedMass", np.array([conc_mass]))
     vtkutil.add_array(fd, "ModelMass", np.array([mass]))
     vtkutil.add_array(fd, "ModelCG", cg[None, :], skip_all_nan=True)
+    if getattr(model, "dmig", None):
+        with step("DMIG matrices"):
+            matrices.write(mb, deck)
+    if any(t in (getattr(model, "reject_count", None) or {}) for t in fluid.USED_REJECTS):
+        with step("MFLUID virtual mass"):
+            fluid.write(mb, deck)
     mats = material_table(model)
     if len(mats["MID"]):
         vtkutil.add_array(fd, "MAT_ID", mats["MID"])

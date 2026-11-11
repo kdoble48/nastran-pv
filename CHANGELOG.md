@@ -8,6 +8,23 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Added
 
+- DMIG matrices: every real DMIG is a row of the root table `DMIG_`, with what selects it
+  (`K2GG`, `M2GG`, `P2G`, ... and the scale from case control and `PARAM,CK2/CM2/CB2/CP2`), its
+  structure, and the quantities of its kind: the mass, directional masses, CG and inertia of a
+  mass matrix; whether a stiffness is free-free or grounded (`RigidEnergyRatio`, `FreeFree`); the
+  force and moment of a load. The rigid motions follow each grid's CD frame. Selected mass DMIGs
+  give `DMIGMass`/`DMIGCG` and `ModelMassWithDMIG`/`ModelCGWithDMIG` (`ModelMass` is unchanged),
+  and the masses view prints them. The new `nastran-pv dmig DECK` prints it all and adds the
+  eigenvalue counts and the natural frequencies of each stiffness/mass pair (`--modes`, `--csv`).
+  DMIG leaves the card report; a complex one gets a `complex matrix` row
+  ([DMIG matrices](docs/model.md#dmig-matrices)).
+- MFLUID virtual fluid mass: nastran-pv reads the MFLUID and ELIST cards pyNastran rejects, and the
+  root table `FLUID_` gives per set the wetted elements and area, the fluid volume and mass of a
+  tank (or the volume a body displaces), and the 6x6 rigid-body added mass from a boundary-element
+  solution with Nastran's free-surface and symmetry-plane images (`ZFS`, `PLANE1/2`, `RMAX`). The new
+  `nastran-pv mfluid DECK` prints it. Sets wetted on both sides (ELIST2) get no added mass, with a
+  warning ([MFLUID virtual fluid mass](docs/model.md#mfluid-virtual-fluid-mass)).
+
 - The contact view: `contact` (toolbar *NPV Overlay Contact*, `nastran-pv view/render` preset, the
   reader panel's *Overlays* > *Contact*) draws the faces of the BSURF/BSURFS regions colored by
   region, with each region's BCTSET and BGSET pairs in the legend and in the view's text. It is an

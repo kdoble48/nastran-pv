@@ -1309,6 +1309,12 @@ def view_masses(model, view, mode=None, relative=None, law=None, minimum=None, m
         text += f"\n{hidden} lighter than Minimum Mass {glyphs.MinimumMass:g} not drawn"
     if total is not None:
         text += f"\nModel mass (structure + concentrated): {total[0]:.6g}"
+    with_dmig, cg_dmig = model.field("ModelMassWithDMIG"), model.field("ModelCGWithDMIG")
+    if with_dmig is not None:  # mass DMIGs that M2GG/M2PP select (matrices.py), not drawn
+        text += f"\nWith the selected DMIG mass {model.field('DMIGMass')[0]:.6g}: {with_dmig[0]:.6g}"
+        if cg_dmig is not None:
+            c = cg_dmig.reshape(-1)
+            text += f" at ({c[0]:.4g}, {c[1]:.4g}, {c[2]:.4g})"
     if cg is not None:
         cg = cg.reshape(-1)
         marker = _named(model, "CG marker", lambda: pv.Sphere())

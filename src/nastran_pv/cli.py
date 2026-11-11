@@ -6,6 +6,8 @@
     nastran-pv stats DECK|VTM --by PID --field ElementMass   group statistics table
     nastran-pv check DECK|VTM [--strict] [-o findings.vtm]   model checks
     nastran-pv sections DECK|VTM [--csv FILE]                CBAR/CBEAM section properties per PID
+    nastran-pv dmig DECK [--modes N] [--csv FILE]            DMIG mass/CG/inertia, free-free, frequencies
+    nastran-pv mfluid DECK [--csv FILE]                      MFLUID wetted area, fluid mass, added mass
     nastran-pv diff A B [--csv FILE]                         what changed from model A to model B
     nastran-pv convert B --diff-against A -o diff.vtm        B with the diff on its mesh (+ Removed)
     nastran-pv store add|list|fields|query|compare|open ...  model/results store (SQLite)
@@ -714,6 +716,56 @@ def cmd_check(args) -> int:
     return 0
 
 
+def cmd_dmig(args) -> int:
+    from . import matrices
+    from .fields.tables import write_csv
+
+    mb, deck, _ = load_model(args, args.verbose)
+    if deck is None:
+        raise SystemExit(f"nastran-pv dmig: needs the deck; {Path(args.input).name} is already converted "
+                         "(its DMIG_ table holds the quantities without the eigenvalues)")
+    print_warnings([w for w in model_warnings(mb, deck) if w.startswith("DMIG")], file=sys.stderr)
+    mats = matrices.read(deck)
+    if not mats:
+        print("no DMIG matrices")
+        return 0
+    rows = matrices.table_rows(deck, mats)
+    fd = mb.GetFieldData()
+    cg = fd.GetArray("ModelCG")
+    model = (float(fd.GetArray("ModelMass").GetValue(0)),
+             None if cg is None else [cg.GetComponent(0, i) for i in range(3)], deck.wtmass)
+    print("\n".join(matrices.report(deck, mats, rows, args.modes, model)))
+    if args.csv:
+        print(f"wrote {write_csv(matrices.csv_rows(rows), args.csv)}")
+    return 0
+
+
+def cmd_mfluid(args) -> int:
+    from . import fluid
+    from .deck import load_deck
+    from .fields.tables import write_csv
+
+    src = Path(args.input)
+    if src.suffix.lower() in MODEL_SUFFIXES:
+        raise SystemExit(f"nastran-pv mfluid: needs the deck; {src.name} is already converted (its FLUID_ table "
+                         f"has the sets of up to {fluid.CONVERT_PANELS} wetted elements)")
+    if not src.is_file():
+        raise SystemExit(f"nastran-pv: model not found: {src.resolve()}")
+    deck = load_deck(src, echo=args.verbose, progress=progress_for(args))
+    warnings = []
+    table = fluid.rows(deck, warn=warnings.append)
+    print_warnings(warnings, file=sys.stderr)
+    if not table:
+        print("no MFLUID cards")
+        return 0
+    print("\n".join(fluid.report(table)))
+    if args.csv:
+        from .matrices import csv_rows
+
+        print(f"wrote {write_csv(csv_rows(table), args.csv)}")
+    return 0
+
+
 SECTION_COLUMNS = ("PID", "Station", "Property", "Shape", "A", "I1", "I2", "I12", "J", "Cw",
                    "CentroidY", "CentroidZ", "RefA", "RefI1", "RefI2", "RefJ", "MaxRelDiff")
 
@@ -876,6 +928,22 @@ def main(argv=None) -> int:
     b.add_argument("--csv", help="also write the table to CSV")
     add_common_arguments(b)
     b.set_defaults(func=cmd_sections)
+
+    dm = sub.add_parser("dmig", help="DMIG matrices: mass, CG and inertia; free-free check, eigenvalues and "
+                                     "frequencies; load resultants")
+    dm.add_argument("input", help="run deck or bulk-data file (a punch file needs its system deck for the grids)")
+    dm.add_argument("--modes", type=int, default=10, metavar="N",
+                    help="natural frequencies of each stiffness/mass pair (default 10, 0 = none)")
+    dm.add_argument("--csv", help="also write the table to CSV (vectors split into _X/_Y/_Z columns)")
+    add_common_arguments(dm)
+    dm.set_defaults(func=cmd_dmig)
+
+    mf = sub.add_parser("mfluid", help="MFLUID virtual fluid mass: wetted area, fluid volume and mass, "
+                                       "rigid-body added mass")
+    mf.add_argument("input", help="run deck or bulk-data file")
+    mf.add_argument("--csv", help="also write the table to CSV")
+    add_common_arguments(mf)
+    mf.set_defaults(func=cmd_mfluid)
 
     st = sub.add_parser("store", help="model/results store (SQLite + saved .vtm per run)")
     ssub = st.add_subparsers(dest="store_cmd", required=True)

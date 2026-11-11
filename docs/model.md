@@ -57,7 +57,10 @@ of each MPCADD, nested MPCADDs expanded; decks with MPCADD),
 and `CoordSystemCount` (see [Coordinate systems](#coordinate-systems)), the grid systems
 `GRIDCS_NID GRIDCS_CP GRIDCS_CD`, the gravity per load set `GRAV_Set GRAV_Name GRAV_Acceleration`
 (decks with GRAV), the contact and glue pairs `CONTACT_Card CONTACT_Set CONTACT_Source CONTACT_Target`
-(decks with BCTSET or BGSET; see [Contact surfaces](#contact-surfaces)), plus `ActiveNSMSet PropertyNSMMass BulkNSMMass NonstructuralMass`, `DefinedNSMSets` (the top-level
+(decks with BCTSET or BGSET; see [Contact surfaces](#contact-surfaces)), the DMIG table `DMIG_Name DMIG_Use ...` and
+`DMIGMass DMIGCG ModelMassWithDMIG ModelCGWithDMIG` (decks with DMIG; see [DMIG matrices](#dmig-matrices)),
+the virtual fluid mass table `FLUID_SID FLUID_AddedMass ...` (decks with MFLUID; see
+[MFLUID virtual fluid mass](#mfluid-virtual-fluid-mass)), plus `ActiveNSMSet PropertyNSMMass BulkNSMMass NonstructuralMass`, `DefinedNSMSets` (the top-level
 bulk sets, when the deck has any) and, when there is NSM, the
 `NSM_SET NSM_SetType NSM_SetMass NSM_SetCount` (per NSM set) and `NSM_PID NSM_PIDMass` tables
 (see [Nonstructural mass](#nonstructural-mass)). Decks with CBAR/CBEAM also get the
@@ -405,6 +408,60 @@ with a warning. Warnings that change the mass are listed first, so the CLI's and
 shortened lists show them. The `nsm` view shows all of this
 ([toolbar macros](paraview.md#one-click-views-toolbar-macros)).
 
+## DMIG matrices
+
+A DMIG is a matrix typed into the deck, its rows and columns tied to grid DOFs: most often a
+reduced component another run punched (`EXTSEOUT`, `PARAM,EXTOUT,DMIGPCH`: `KAAX`, `MAAX`,
+`PAX`). nastran-pv does not draw them; it computes what each adds to the model. Every real DMIG
+is one row of the root table `DMIG_` (the matrix as written, its scale not applied):
+
+| Columns | Meaning |
+|---|---|
+| `Name Use Kind Scale` | `Use` is the case-control key that selects it (`K2GG`, `M2GG`, `B2GG`, `K42GG`, `P2G`, `K2PP`, `M2PP`, `B2PP`; empty when nothing does), `Scale` the factor the run applies (case control times `PARAM,CK2`/`CM2`/`CB2`/`CP2`). A DMIG nothing selects gets its `Kind` (`stiffness`, `mass`, `damping`, `load`, `other`) from its first letter, as `EXTSEOUT` names them |
+| `Form Rows Cols Entries Grids ScalarPoints MissingGrids` | IFO, the size, the values on the cards (one triangle of a symmetric matrix, which is mirrored), and the grids, scalar points (component 0) and grids the deck lacks |
+| `Asymmetry DiagonalMin DiagonalMax NegativeDiagonals` | square matrices: max of the absolute asymmetry over the largest term, the diagonal's range and its negative terms |
+| `Mass MassX MassY MassZ MassSpread CG Inertia PrincipalInertia` | mass: from the rigid-body mass `Dᵀ M D` about the origin, as Nastran's grid point weight generator gives it. `MassX/Y/Z` are the directional masses, `Mass` their mean and `MassSpread` (max − min) / max: a reduction whose clamped grids took mass to ground shows a spread. `CG` is the mean of the two directional estimates of each axis; `Inertia` (`Ixx Iyy Izz Ixy Iyz Izx`, tensor components) is about the CG |
+| `RigidEnergyRatio FreeFree RigidStiffness` | stiffness and damping: per rigid motion (TX TY TZ RX RY RZ about the origin) `dᵀ K d / dᵀ diag(K) d`, 0 for a free-free matrix and order 0.1 to 1 for a grounded one (NaN when the DOFs cannot move that way); `FreeFree` is 1 when all are round-off (below 1e-5 for a single-precision matrix, TIN 1, and 1e-8 for a double one), 0 when not, -1 when nothing moves; `RigidStiffness` is `dᵀ K d` |
+| `Force Moment` | load: the first column's resultant about the origin (`nastran-pv dmig` prints every column) |
+
+The rigid motions are rotated into each grid's displacement system (CD), so a DMIG in local
+frames sums correctly. A punch file read without its system deck has no grids: its rows count
+them in `MissingGrids` and a warning says so. When `M2GG` or `M2PP` selects a mass DMIG,
+`DMIGMass` and `DMIGCG` add up the selected ones (each times its scale), and `ModelMassWithDMIG`
+and `ModelCGWithDMIG` add them to the model: `ModelMass + DMIGMass / WTMASS`, because nastran-pv
+reports `ModelMass` without WTMASS and Nastran applies none to DMIG mass. `ModelMass`, `ModelCG`,
+the [model diff](diff.md) and the [run store](store.md) leave DMIGs out.
+[`nastran-pv dmig`](cli.md#dmig-matrices) prints the table and adds the eigenvalue counts and the
+natural frequencies of each stiffness/mass pair. A complex DMIG (TIN 3 or 4) gets only the
+structure columns and a `complex matrix` row in the card report. The design notes are in
+`docs/design/2026-11-11-dmig.md`.
+
+## MFLUID virtual fluid mass
+
+An MFLUID set adds the mass of an incompressible fluid touching the shells its ELISTs name: a
+tank's contents, or the water around a hull. Nastran makes it a full virtual mass matrix, so it
+has no single mass or CG; nastran-pv computes, per MFLUID card, the root table `FLUID_`:
+
+| Columns | Meaning |
+|---|---|
+| `SID Selected CID ZFS Rho Planes` | the card, and whether Case Control `MFLUID =` selects it. The fluid is below the free surface `z = ZFS` of the rectangular frame `CID` (NaN: no free surface); `Planes` are PLANE1 (the x-z plane) and PLANE2 (the y-z plane), each `S`ymmetric, `A`ntisymmetric or `N`one |
+| `WettedElements WettedArea TwoSided` | the CQUAD4/CQUADR/CTRIA3/CTRIAR it wets that have a grid below the free surface (ELIST1 one-sided: on the side of the normal, or the other side for a negative ID; ELIST2 both sides) |
+| `FluidVolume FluidMass DisplacedVolume` | the volume between the wetted surface, the free surface and the symmetry planes: fluid inside the surface (a tank) gives `FluidVolume` and `FluidMass = Rho × FluidVolume`, a body in the fluid gives `DisplacedVolume` |
+| `AddedMass AddedMassMatrix` | the rigid-body added mass about the basic origin, TX TY TZ RX RY RZ (the diagonal) and the full 6×6 |
+
+The added mass comes from a boundary-element solution like Nastran's: one constant potential per
+wetted element, the free surface (zero pressure) a negative image, a symmetric plane a positive and
+an antisymmetric plane a negative image, and `RMAX` the farthest two elements interact. A sphere
+of 512 elements is within 0.3% of ρ·⅔πa³ and a closed tank of 384 within 2% of its fluid mass
+(the tests check both). A full closed tank moving rigidly carries all its fluid, so its
+translational added mass is `FluidMass`; an open tank's horizontal one is less, as part of the
+fluid sloshes. Sets wetted on both sides (ELIST2, a plate inside the fluid) need a doublet
+formulation and get no added mass, with a warning. `convert` and the reader solve sets of up to
+2000 wetted elements; [`nastran-pv mfluid`](cli.md#mfluid-virtual-fluid-mass) solves up to 6000.
+pyNastran does not read MFLUID or ELIST; nastran-pv reads them from the lines pyNastran set aside,
+so they leave the card report. Nothing here changes `ModelMass`. The design notes are in
+`docs/design/2026-11-11-dmig.md`.
+
 ## Cards not drawn
 
 Every bulk-data card is drawn (a block shows it), used (its values become arrays or root tables:
@@ -443,7 +500,8 @@ more. The reasons:
 | `element type it cannot load` | PLOAD2 on an element that is not a shell, PLOAD4 on one that is neither a shell nor a solid (IDs: the load set) |
 | `G1-G3 are not three corners of one face` | BSURFS with an entry whose three grids are not three different corners of one face of its element (IDs: the region) |
 | `element type the region cannot hold` | BSURF that lists an element that is not a shell, BSURFS with an entry on an element that is not a solid; a mass, rigid or plot element on either (IDs: the region) |
-| `matrix input` | DMIG, DMI, DMIJ, DMIJI, DMIK, DMIAX |
+| `matrix input` | DMI, DMIJ, DMIJI, DMIK, DMIAX and `DMIG,UACCEL` (a DMIG is used: [DMIG matrices](#dmig-matrices)) |
+| `complex matrix` | a DMIG with TIN 3 or 4: only its structure is in the `DMIG_` table (IDs: its name) |
 | `superelement` | the cards of a `BEGIN SUPER` section (data and control cards left out) and the superelement cards (SEBULK, SECONCT, SELOC, ...) |
 | `not read` | cards pyNastran rejected (unknown to it), and CWELD, which nastran-pv turns off because pyNastran 1.5 aborts the read on some of its forms |
 
@@ -457,11 +515,12 @@ every card is drawn or used); a file without it predates the report. The design 
 ## Not visualized yet
 
 Everything in the [card report](#cards-not-drawn) (beam and axisymmetric loads PLOAD1/PLOADX1,
-axisymmetric and heat-transfer elements, CBUSH1D/2D, GENEL, DMIG, superelements, grounded springs,
+axisymmetric and heat-transfer elements, CBUSH1D/2D, GENEL, superelements, grounded springs,
 CFAST patch forms, CWELD, PLOTEL3/4/6/8 and the 3D plot elements, and the contact cards other than BSURF and BSURFS:
 regions by property (BCPROP, BCPROPS: pyNastran does not read them), contact bodies (BCBODY), line
 contact (BCONP, BLSEG) and BCONTACT/BCTABLE; a BSURF of solid elements is not drawn either). Scalar-point cards stay in the
-report: they have no location to draw at. GRAV is drawn as one arrow at the model CG (at the
+report: they have no location to draw at. DMIG matrices are not drawn either: their quantities are
+the [DMIG table](#dmig-matrices). GRAV is drawn as one arrow at the model CG (at the
 centre of the model's bounds when it has no mass) ([Nastran Load Glyphs](paraview.md#filter-properties)),
 not as nodal forces; the results' applied
 loads (OLOAD, [result types](#result-types)) give the nodal forces Nastran made of it.

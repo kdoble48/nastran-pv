@@ -1,0 +1,58 @@
+$ DMIG matrices with hand-computed quantities (tests/test_matrices.py)
+SOL 103
+CEND
+K2GG = 2.0*KS + KG
+M2GG = MP + MNOPE
+SUBCASE 1
+  P2G = PL
+SUBCASE 2
+  K2GG = KS
+BEGIN BULK
+PARAM,CK2,0.5
+PARAM,CM2,3.0
+PARAM,WTMASS,0.5
+$ CD 5: local x = basic +Y, local y = basic -X, local z = basic Z
+CORD2R,5,,0.,0.,0.,0.,0.,1.
+,0.,1.,0.
+GRID,1,,0.,0.,0.
+GRID,2,,2.,0.,0.
+GRID,3,,0.,3.,0.,5
+SPOINT,100
+CONM2,1,1,,4.
+$ mass 1 at grid 2 (with RX inertia 0.5), mass 2 at grid 3: 3 at (2/3, 2, 0)
+DMIG,MP,0,6,2,0
+DMIG,MP,2,1,,2,1,1.
+DMIG,MP,2,2,,2,2,1.
+DMIG,MP,2,3,,2,3,1.
+DMIG,MP,2,4,,2,4,0.5
+DMIG,MP,3,1,,3,1,2.
+DMIG,MP,3,2,,3,2,2.
+DMIG,MP,3,3,,3,3,2.
+$ axial spring k = 100 from grid 1 to grid 2, upper triangle only: free-free
+DMIG,KS,0,6,2,0
+DMIG,KS,1,1,,1,1,100.
+DMIG,KS,2,1,,1,1,-100.,
+,2,1,100.
+$ masses 1 and 4 on the spring's DOFs: f = sqrt(100 (1/1 + 1/4)) / 2 pi
+DMIG,MS,0,6,2,0
+DMIG,MS,1,1,,1,1,1.
+DMIG,MS,2,1,,2,1,4.
+$ spring to ground on grid 3's CD y (= basic -X): grounded
+DMIG,KG,0,6,2,0
+DMIG,KG,3,2,,3,2,50.
+$ square, not symmetric: scalar point 100 and grid 99, which the deck lacks
+DMIG,KP,0,1,2,0
+DMIG,KP,100,0,,100,0,1.,
+,99,1,0.5
+DMIG,KP,99,1,,99,1,2.
+$ load: 10 along grid 3's CD x (= basic +Y), 5 along Z at grid 2, moment 7 about Z at grid 2
+DMIG,PL,0,9,2,0,,,1
+DMIG,PL,1,0,,3,1,10.,
+,2,3,5.,,2,6,7.
+$ selected by nothing, no kind from its name
+DMIG,VAX,0,9,2,0,,,1
+DMIG,VAX,1,0,,1,1,1.
+$ complex: structure only, and a card-report row
+DMIG,KC,0,6,3,0
+DMIG,KC,1,1,,1,1,1.,0.5
+ENDDATA
