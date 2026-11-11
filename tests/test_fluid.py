@@ -151,3 +151,47 @@ def test_cli(tmp_path, capsys):
     assert "AddedMass_TX" in csv.read_text().splitlines()[0]
     with pytest.raises(SystemExit, match="needs the deck"):
         main(["mfluid", str(tmp_path / "x.vtm")])
+
+
+def test_a_bad_frame_skips_the_set_and_other_rejects_are_not_parsed(tmp_path):
+    path = tmp_path / "frame.bdf"
+    path.write_text("SOL 103\nCEND\nBEGIN BULK\nGRID,1,,0.,0.,0.\nGRID,2,,1.,0.,0.\nGRID,3,,1.,1.,0.\n"
+                    "CTRIA3,1,1,1,2,3\nPSHELL,1,1,0.01\nMAT1,1,7e10,,0.3,0.\n"
+                    "CORD2C,8,,0.,0.,0.,0.,0.,1.\n,1.,0.,0.\n"
+                    "MFLUID,1,7,,1.,10\nMFLUID,2,8,,1.,10\nMFLUID,3,,,1.,10\nELIST,10,1\n"
+                    "FOOBAR,1,=,2\nENDDATA\n")
+    deck = load_deck(path, echo=False)
+    rows = vtkutil.read_field_table(build_multiblock(deck), "FLUID_")
+    assert [r["SID"] for r in rows] == [3]
+    said = [w for w in deck.warnings if w.startswith("MFLUID")]
+    assert said == ["MFLUID 1: CID 7 is not defined; the set is left out",
+                    "MFLUID 2: CID 8 is CORD2C, not rectangular; the set is left out"]
+
+
+def test_a_long_free_field_line_keeps_all_its_fields(tmp_path):
+    path = tmp_path / "long.bdf"
+    path.write_text("SOL 103\nCEND\nBEGIN BULK\nGRID,1,,0.,0.,0.\nMFLUID,1,,,1.0,10,,S,N,0.5\n"
+                    "ELIST,10,1,2,3,4,5,6,7,8,9,10\nENDDATA\n")
+    c = fluid.cards(load_deck(path, echo=False).model)
+    assert c.mfluids[0].rmax == 0.5 and c.mfluids[0].planes == ("S", "N")
+    assert c.elists[10] == list(range(1, 11))
+
+
+def test_the_table_is_solved_once_per_deck_and_keeps_its_warnings(hand):
+    deck, _ = hand
+    first = deck.cache["fluid"][0]
+    deck.reset_warnings([])
+    mb = build_multiblock(deck)  # the reader's rebuild on Apply
+    assert deck.cache["fluid"][0] is first
+    assert len([w for w in deck.warnings if w.startswith("MFLUID")]) == 3
+    assert vtkutil.read_field_table(mb, "FLUID_")[0]["FluidMass"] == pytest.approx(4000)
+
+
+def test_csv_splits_the_added_mass_matrix(tmp_path):
+    csv = tmp_path / "f.csv"
+    assert main(["mfluid", str(DATA / "mfluid.bdf"), "-q", "--csv", str(csv)]) == 0
+    header, first = csv.read_text().splitlines()[:2]
+    cols = header.split(",")
+    assert "AddedMassMatrix_TX_TX" in cols and "AddedMassMatrix_RZ_RZ" in cols and "AddedMassMatrix" not in cols
+    assert "[" not in first
+

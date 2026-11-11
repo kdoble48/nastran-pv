@@ -24,6 +24,7 @@ import numpy as np
 import scipy.sparse as sp
 
 from .cards import COMPLEX_MATRIX, MATRIX
+from .deck import RECTANGULAR
 
 
 # case-control key -> (kind, PARAM that scales it)
@@ -111,19 +112,23 @@ def from_card(card) -> Matrix:
     i, j = _index(rows, gci), _index(cols, gcj)
     a = sp.coo_matrix((values, (i, j)), shape=(len(rows), len(cols))).tocsr()
     a.sum_duplicates()
-    if form == 6:
-        lower, upper = sp.tril(a, -1), sp.triu(a, 1)
-        if not (lower.nnz and upper.nnz):  # one triangle given: mirror it
-            a = (a + (lower + upper).T).tocsr()
+    if form == 6:  # mirror every off-diagonal term whose transpose is not written
+        off = sp.triu(a, 1) + sp.tril(a, -1)
+        given = off.copy()
+        given.data[:] = 1.0
+        missing = (given.T - given.T.multiply(given)).tocsr()  # (i, j) where only (j, i) is written
+        a = (a + off.T.multiply(missing)).tocsr()
     return Matrix(str(card.name), form, int(card.tin), rows, cols, a, entries=len(values))
 
 
 def _terms(selection) -> list[tuple[float, str]]:
     """pyNastran's ``[(scale, text), ...]`` of a K2GG-like key as ``[(scale, NAME), ...]``.
     pyNastran 1.4.1 keeps ``1.2*KAAX + KB`` as ``[(1.2, "KAAX + KB")]``, so the text is parsed
-    again (``+``, ``-`` and ``,`` separate terms)."""
+    again (``+``, ``-`` and ``,`` separate terms). The PP keys come as ``(real, imaginary, name)``:
+    the real part is the scale."""
     out = []
-    for scale, text in selection:
+    for entry in selection:
+        scale, text = (entry[0], entry[-1]) if isinstance(entry, (tuple, list)) else (1.0, entry)
         for k, part in enumerate(re.split(r",", str(text))):
             pos = 0
             while pos < len(part):
@@ -253,7 +258,7 @@ def rigid_modes(deck, dofs: np.ndarray) -> tuple[np.ndarray, list[int]]:
         if coord is None:
             _warn(deck, f"DMIG: grid CD {int(cid)} is not defined; its DOFs are taken in basic")
             continue
-        if coord.type in ("CORD1R", "CORD2R"):
+        if coord.type in RECTANGULAR:
             b = np.broadcast_to(deck.basis(int(cid)), (int(sel.sum()), 3, 3))
         else:
             b = deck.bases(int(cid), xyz[sel])
@@ -335,7 +340,7 @@ def _structure(m: Matrix, missing: list[int]) -> dict:
            "Grids": len(np.unique(m.rows[m.rows[:, 1] > 0, 0])),
            "ScalarPoints": len(np.unique(m.rows[m.rows[:, 1] == 0, 0])), "MissingGrids": len(missing),
            "Asymmetry": math.nan, "DiagonalMin": math.nan, "DiagonalMax": math.nan, "NegativeDiagonals": -1}
-    if m.square:
+    if m.square and a.shape[0]:
         big = abs(a).max() if a.nnz else 0.0
         diff = abs(a - a.T).max() if a.nnz else 0.0
         diag = a.diagonal()
@@ -357,13 +362,15 @@ def quantities(deck, m: Matrix) -> dict:
             "MassSpread": math.nan, "CG": NAN3, "Inertia": NAN6, "PrincipalInertia": NAN3}
     stiff = {"RigidEnergyRatio": NAN6, "FreeFree": -1, "RigidStiffness": NAN6}
     load = {"Force": NAN3, "Moment": NAN3}
-    if m.square and not m.is_complex and m.kind == "mass":
+    if not (a_size := m.data.shape[0] * m.data.shape[1]):
+        pass  # a header without columns (a null BAAX/K4AAX punched by EXTSEOUT): structure only
+    elif m.square and not m.is_complex and m.kind == "mass":
         mass = mass_properties(d.T @ (m.data @ d))
     elif m.square and not m.is_complex and m.kind in ("stiffness", "damping"):
         res = rigid_energy_ratio(m.data, d)
         free = int(np.nanmax(res) < zero_tol(m)) if np.isfinite(res).any() else -1
         stiff = {"RigidEnergyRatio": res, "FreeFree": free, "RigidStiffness": np.diag(d.T @ (m.data @ d))}
-    elif m.kind == "load" and not m.is_complex:
+    elif m.kind == "load" and not m.is_complex and a_size:
         col = load_resultants(m, d)[0]
         load = {"Force": col[:3], "Moment": col[3:]}
     row.update(mass)
@@ -533,14 +540,20 @@ def _vec(v, fmt=".6g") -> str:
 
 def csv_rows(rows: list[dict]) -> list[dict]:
     """``rows`` with each vector column split into one column per component (``CG_X``, ...)."""
-    names = {3: ("X", "Y", "Z"), 6: None}
     out = []
     for r in rows:
         flat = {}
         for k, v in r.items():
             a = np.asarray(v)
-            if a.ndim == 1 and a.size in names:
-                comps = names[a.size] or (("XX", "YY", "ZZ", "XY", "YZ", "ZX") if k == "Inertia" else AXES)
+            if a.ndim == 1 and a.size > 1:
+                if a.size == 3:
+                    comps = ("X", "Y", "Z")
+                elif a.size == 6:
+                    comps = ("XX", "YY", "ZZ", "XY", "YZ", "ZX") if k == "Inertia" else AXES
+                elif a.size == 36:  # a 6x6, row by row: AddedMassMatrix_TX_RY
+                    comps = tuple(f"{i}_{j}" for i in AXES for j in AXES)
+                else:
+                    comps = tuple(str(i + 1) for i in range(a.size))
                 flat.update({f"{k}_{c}": float(x) for c, x in zip(comps, a)})
             else:
                 flat[k] = v
@@ -563,6 +576,9 @@ def report(deck, matrices: list[Matrix], rows: list[dict], modes: int = 10, mode
         if r["MissingGrids"]:
             head += f", {r['MissingGrids']} grids not in the deck"
         out.append(head + (" (complex: real part)" if m.is_complex else ""))
+        if not (r["Rows"] and r["Cols"]):
+            out.append("  empty: a header without columns")
+            continue
         if m.square:
             out.append(f"  diagonal {r['DiagonalMin']:.6g} .. {r['DiagonalMax']:.6g}, "
                        f"{r['NegativeDiagonals']} negative; asymmetry {r['Asymmetry']:.3g}")

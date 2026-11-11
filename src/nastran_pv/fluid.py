@@ -25,6 +25,9 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from .deck import RECTANGULAR
+from .matrices import AXES
+
 SHELL_TYPES = ("CQUAD4", "CQUADR", "CTRIA3", "CTRIAR")  # what MFLUID may wet
 USED_REJECTS = ("MFLUID", "ELIST")  # pyNastran rejects them; read here, so not "not read"
 MAX_PANELS = 6000  # a dense N x N solve above this is too big: no added mass (nastran-pv mfluid)
@@ -32,7 +35,6 @@ CONVERT_PANELS = 2000  # convert and the reader solve sets up to this size (a fe
 ROWS = 256  # influence rows computed at once (the (rows, n, 3) distance array stays small)
 NEAR = 3.0  # pairs closer than this x sqrt(panel area) are integrated over sub-triangles
 SUBDIVIDE = 3  # sub-triangle levels: 4**SUBDIVIDE per triangle
-AXES = ("TX", "TY", "TZ", "RX", "RY", "RZ")
 
 
 @dataclass
@@ -59,11 +61,22 @@ class Cards:
 
 
 # ------------------------------------------------------------------ reading
+def _name(line: str) -> str:
+    return line.split(",")[0].split()[0].rstrip("*").upper() if line.strip() else ""
+
+
 def _fields(lines) -> list[str]:
+    """The fields of one card. Free-field lines are split at commas (a continuation line's first
+    field is its marker), so a long line keeps all its fields; fixed-field cards go through
+    pyNastran's ``to_fields``."""
+    if all("," in ln for ln in lines):
+        out = [f.strip() for f in lines[0].split(",")]
+        for ln in lines[1:]:
+            out += [f.strip() for f in ln.split(",")[1:]]
+        return out
     from pyNastran.bdf.bdf_interface.utils import to_fields
 
-    name = lines[0].split(",")[0].split()[0].rstrip("*").upper() if lines[0].strip() else ""
-    return [f.strip() for f in to_fields(list(lines), name)]
+    return [f.strip() for f in to_fields(list(lines), _name(lines[0]))]
 
 
 def _num(text, default=None, kind=float):
@@ -103,12 +116,12 @@ def cards(model) -> Cards:
     """MFLUID and ELIST from the lines pyNastran rejected."""
     out = Cards()
     for lines in getattr(model, "reject_lines", None) or []:
-        body = [ln for ln in lines if ln.strip() and not ln.lstrip().startswith("$")]
-        if not body:
+        body = [ln.split("$")[0].rstrip() for ln in lines if ln.strip() and not ln.lstrip().startswith("$")]
+        if not body or _name(body[0]) not in USED_REJECTS:
             continue
         try:
             _read_card(out, _fields(body))
-        except (ValueError, IndexError) as exc:
+        except Exception as exc:  # noqa: BLE001 - one bad card is a warning, not a failed build
             out.errors.append(f"could not read {body[0].strip()!r} ({exc})")
     return out
 
@@ -153,17 +166,21 @@ class Panels:
 
 
 def _frame(deck, cid: int) -> tuple[np.ndarray, np.ndarray]:
-    """(origin, axes rows in basic) of a rectangular CID."""
+    """(origin, axes rows in basic) of a rectangular CID; ValueError when it is not one."""
     if not cid:
         return np.zeros(3), np.eye(3)
-    coord = deck.model.coords[cid]
+    coord = deck.model.coords.get(cid)
+    if coord is None:
+        raise ValueError(f"CID {cid} is not defined")
+    if coord.type not in RECTANGULAR:
+        raise ValueError(f"CID {cid} is {coord.type}, not rectangular")
     return np.asarray(coord.origin, dtype=float), deck.basis(cid)
 
 
-def panels(deck, mf: Mfluid, signed: list[int], warn) -> Panels:
+def panels(deck, mf: Mfluid, signed: list[int], warn, frame=None) -> Panels:
     """The wetted elements of ``signed`` EIDs (negative: fluid on the side away from the normal)
-    with at least one grid below the free surface."""
-    origin, axes = _frame(deck, mf.cid)
+    with at least one grid below the free surface (``frame``: the MFLUID frame, from its CID)."""
+    origin, axes = frame if frame is not None else _frame(deck, mf.cid)
     eids, cents, norms, areas, tris, owner = [], [], [], [], [], []
     skipped: dict[str, list[int]] = {}
     for sid in signed:
@@ -301,8 +318,10 @@ def influence(p: Panels, mf: Mfluid, origin, axes) -> tuple[np.ndarray, np.ndarr
             rq = np.linalg.norm(dq, axis=1)
             g[i, j] += sign * float((wq[sl] / (4 * math.pi * rq)).sum())
             dl[i, j] += sign * float((wq[sl] * (dq @ nsrc[j]) / (4 * math.pi * rq ** 3)).sum())
+    order = np.argsort(p.owner, kind="stable")
+    bounds = np.searchsorted(p.owner[order], np.arange(n + 1))
     for j in range(n):  # a flat panel on its own centroid: exact potential; its double layer is 0
-        g[j, j] += _self_potential(p.tris[p.owner == j], c[j]) / (4 * math.pi)
+        g[j, j] += _self_potential(p.tris[order[bounds[j]:bounds[j + 1]]], c[j]) / (4 * math.pi)
     return g, dl
 
 
@@ -357,8 +376,12 @@ def rows(deck, warn=None, max_panels: int = MAX_PANELS) -> list[dict]:
         for lid in (mf.elist1, mf.elist2):
             if lid and lid not in c.elists:
                 warn(f"MFLUID {mf.sid}: ELIST {lid} is not in the deck")
-        p = panels(deck, mf, one + both + [-e for e in both], warn)
-        origin, axes = _frame(deck, mf.cid)
+        try:
+            origin, axes = _frame(deck, mf.cid)
+        except ValueError as exc:
+            warn(f"MFLUID {mf.sid}: {exc}; the set is left out")
+            continue
+        p = panels(deck, mf, one + both + [-e for e in both], warn, (origin, axes))
         vol = volume(p, mf, origin, axes) if len(p.area) else math.nan
         row = {"SID": mf.sid, "Selected": int(mf.sid in chosen), "CID": mf.cid,
                "ZFS": math.nan if mf.zfs is None else mf.zfs, "Rho": mf.rho, "Planes": "".join(mf.planes),
@@ -381,10 +404,17 @@ def rows(deck, warn=None, max_panels: int = MAX_PANELS) -> list[dict]:
 
 
 def write(mb, deck) -> None:
-    """The root table ``FLUID_`` (decks with MFLUID)."""
+    """The root table ``FLUID_`` (decks with MFLUID). The table is kept on the deck: the reader
+    rebuilds the model on every Apply, and the solve depends only on the deck."""
     from . import vtkutil
 
-    table = rows(deck, max_panels=CONVERT_PANELS)
+    if "fluid" not in deck.cache:
+        said: list[str] = []
+        deck.cache["fluid"] = (rows(deck, warn=said.append, max_panels=CONVERT_PANELS), said)
+    table, said = deck.cache["fluid"]
+    for msg in said:  # every build starts from the load warnings (Deck.reset_warnings)
+        if msg not in deck.warnings:
+            deck.warn(msg)
     if table:
         vtkutil.write_field_table(mb, "FLUID_", table)
 

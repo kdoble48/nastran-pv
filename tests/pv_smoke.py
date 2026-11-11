@@ -2581,6 +2581,17 @@ def dmig_checks(pv, nv):
     check("With the selected DMIG mass 9: 22 at (0.5455, 1.636, 0)" in text,
           f"dmig: the masses view adds the DMIG mass: {text!r}")
     nv.clear(view)
+    pv.Delete(reader)
+    path = os.path.join(tempfile.mkdtemp(), "only_dmig.bdf")  # no CONM2: the DMIG line still shows
+    with open(path, "w") as f:
+        f.write("SOL 103\nCEND\nM2GG = MP\nBEGIN BULK\nGRID,2,,2.,0.,0.\n"
+                "DMIG,MP,0,6,2,0\nDMIG,MP,2,1,,2,1,1.\nDMIG,MP,2,2,,2,2,1.\nDMIG,MP,2,3,,2,3,1.\nENDDATA\n")
+    reader = rm.load_reader(path)
+    nv.apply("masses", reader=reader, view=view)
+    text = nv.info_of(view)
+    check("With the selected DMIG mass 1: 1 at (2, 0, 0)" in text,
+          f"dmig: a model without concentrated masses still shows the DMIG mass: {text!r}")
+    nv.clear(view)
     pv.Delete(view)
     pv.Delete(reader)
     reader = rm.load_reader(os.path.join(HERE, "data", "mfluid.bdf"))  # test_fluid.py has the values

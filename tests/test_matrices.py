@@ -238,3 +238,44 @@ def test_with_model_without_model_mass():
     assert mass == 8 and cg.tolist() == [1, 1, 1]
     mass, cg = matrices.totals(rows[1:2])
     assert mass == 6 and np.isnan(cg).all() and cg.shape == (3,)
+
+
+def _build(tmp_path, text, name="d.bdf"):
+    path = tmp_path / name
+    path.write_text(text)
+    deck = load_deck(path, echo=False)
+    return deck, build_multiblock(deck)
+
+
+def test_pp_selections_take_the_real_part(tmp_path):
+    # pyNastran gives K2PP/B2PP terms as (real, imaginary, name)
+    assert matrices._terms([(2.0, 0.5, "KX")]) == [(2.0, "KX")]
+    deck, mb = _build(tmp_path, "SOL 103\nCEND\nK2PP = KX\nB2PP = BX\nBEGIN BULK\nGRID,1,,0.,0.,0.\n"
+                                "DMIG,KX,0,1,2,0\nDMIG,KX,1,1,,1,1,5.\nENDDATA\n")
+    row = vtkutil.read_field_table(mb, "DMIG_")[0]
+    assert (row["Name"], row["Use"], row["Kind"]) == ("KX", "K2PP", "stiffness")
+
+
+def test_a_header_without_columns_is_structure_only(tmp_path, capsys):
+    text = ("SOL 103\nCEND\nBEGIN BULK\nGRID,1,,0.,0.,0.\nDMIG,K4AAX,0,6,2,0\nDMIG,PAX,0,9,2,0,,,1\n"
+            "ENDDATA\n")
+    deck, mb = _build(tmp_path, text)
+    rows = {r["Name"]: r for r in vtkutil.read_field_table(mb, "DMIG_")}
+    assert (rows["K4AAX"]["Rows"], rows["K4AAX"]["Cols"], rows["K4AAX"]["FreeFree"]) == (0, 0, -1)
+    assert rows["PAX"]["Rows"] == 0
+    assert main(["dmig", str(tmp_path / "d.bdf"), "-q"]) == 0
+    assert "K4AAX: damping, not selected; 0x0 symmetric, 0 entries, 0 grids\n  empty: a header without columns" in \
+        capsys.readouterr().out
+
+
+def test_a_symmetric_matrix_split_between_triangles_is_mirrored_per_term(tmp_path):
+    # a free-free chain 1-2-3: K12 written in the upper triangle, K32 in the lower
+    text = ("SOL 103\nCEND\nBEGIN BULK\nGRID,1,,0.,0.,0.\nGRID,2,,1.,0.,0.\nGRID,3,,2.,0.,0.\n"
+            "DMIG,KC,0,6,2,0\nDMIG,KC,1,1,,1,1,1.\nDMIG,KC,2,1,,1,1,-1.,\n,2,1,2.,,3,1,-1.\n"
+            "DMIG,KC,3,1,,3,1,1.\nENDDATA\n")
+    deck, mb = _build(tmp_path, text)
+    kc = matrices.read(deck)[0]
+    np.testing.assert_array_equal(kc.data.toarray(), [[1, -1, 0], [-1, 2, -1], [0, -1, 1]])
+    row = vtkutil.read_field_table(mb, "DMIG_")[0]
+    assert (row["Asymmetry"], row["FreeFree"]) == (0, 1)
+

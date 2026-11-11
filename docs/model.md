@@ -418,7 +418,7 @@ is one row of the root table `DMIG_` (the matrix as written, its scale not appli
 | Columns | Meaning |
 |---|---|
 | `Name Use Kind Scale` | `Use` is the case-control key that selects it (`K2GG`, `M2GG`, `B2GG`, `K42GG`, `P2G`, `K2PP`, `M2PP`, `B2PP`; empty when nothing does), `Scale` the factor the run applies (case control times `PARAM,CK2`/`CM2`/`CB2`/`CP2`). A DMIG nothing selects gets its `Kind` (`stiffness`, `mass`, `damping`, `load`, `other`) from its first letter, as `EXTSEOUT` names them |
-| `Form Rows Cols Entries Grids ScalarPoints MissingGrids` | IFO, the size, the values on the cards (one triangle of a symmetric matrix, which is mirrored), and the grids, scalar points (component 0) and grids the deck lacks |
+| `Form Rows Cols Entries Grids ScalarPoints MissingGrids` | IFO, the size (0 for a header without columns, which gets these columns only), the values on the cards (a symmetric matrix's terms are mirrored wherever their transpose is not written), and the grids, scalar points (component 0) and grids the deck lacks |
 | `Asymmetry DiagonalMin DiagonalMax NegativeDiagonals` | square matrices: max of the absolute asymmetry over the largest term, the diagonal's range and its negative terms |
 | `Mass MassX MassY MassZ MassSpread CG Inertia PrincipalInertia` | mass: from the rigid-body mass `Dᵀ M D` about the origin, as Nastran's grid point weight generator gives it. `MassX/Y/Z` are the directional masses, `Mass` their mean and `MassSpread` (max − min) / max: a reduction whose clamped grids took mass to ground shows a spread. `CG` is the mean of the two directional estimates of each axis; `Inertia` (`Ixx Iyy Izz Ixy Iyz Izx`, tensor components) is about the CG |
 | `RigidEnergyRatio FreeFree RigidStiffness` | stiffness and damping: per rigid motion (TX TY TZ RX RY RZ about the origin) `dᵀ K d / dᵀ diag(K) d`, 0 for a free-free matrix and order 0.1 to 1 for a grounded one (NaN when the DOFs cannot move that way); `FreeFree` is 1 when all are round-off (below 1e-5 for a single-precision matrix, TIN 1, and 1e-8 for a double one), 0 when not, -1 when nothing moves; `RigidStiffness` is `dᵀ K d` |
@@ -459,7 +459,8 @@ fluid sloshes. Sets wetted on both sides (ELIST2, a plate inside the fluid) need
 formulation and get no added mass, with a warning. `convert` and the reader solve sets of up to
 2000 wetted elements; [`nastran-pv mfluid`](cli.md#mfluid-virtual-fluid-mass) solves up to 6000.
 pyNastran does not read MFLUID or ELIST; nastran-pv reads them from the lines pyNastran set aside,
-so they leave the card report. Nothing here changes `ModelMass`. The design notes are in
+so they leave the card report; an MFLUID whose CID is missing or not rectangular is left out with a
+warning. The reader solves each deck once, not on every Apply. Nothing here changes `ModelMass`. The design notes are in
 `docs/design/2026-11-11-dmig.md`.
 
 ## Cards not drawn
