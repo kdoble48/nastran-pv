@@ -119,7 +119,7 @@ def _bootstrap():
 _bootstrap()
 
 _FLAGS = ("shells", "lines", "solids", "masses", "rigid", "connectors", "plotels", "bushes", "constraints", "loads",
-          "contact")
+          "contact", "dmig")
 # model tree checklists (reader property -> nastran_pv.tree category)
 _VISIBILITY = {"VisibleProperties": "Properties", "VisibleMaterials": "Materials",
                "VisibleElementTypes": "ElementTypes", "VisibleFamilies": "Families", "VisibleGroups": "Groups",
@@ -412,7 +412,8 @@ def _with_show_only(entries):
 
 _VIEW_COLORS = ("(other)", "PID", "MID", "Element type", "Thickness", "Family", "Group", "NSM", "Displacement",
                 "Stress", "Model check", "Parts")  # the labels of nastran_panel.COLORINGS
-_VIEW_OVERLAYS = ("Masses", "Bushes", "Beam axes", "Loads", "SPC", "Rigid elements", "Contact")  # nastran_panel.OVERLAYS
+_VIEW_OVERLAYS = ("Masses", "Bushes", "Beam axes", "Loads", "SPC", "Rigid elements", "Contact",
+                  "DMIG stiffness")  # nastran_panel.OVERLAYS
 
 
 def _install_panel():
@@ -517,7 +518,7 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
         self._view_color = int(v)  # no Modified(): the reader's output does not depend on it
 
     @smproperty.dataarrayselection(name="Overlays")
-    @smhint.xml('<WidgetHeight number_of_rows="7"/>')
+    @smhint.xml('<WidgetHeight number_of_rows="8"/>')
     def GetOverlays(self):
         """The overlays drawn in the active view when Apply is pressed (the NPV Overlay views)."""
         return self._view_overlays
@@ -676,6 +677,13 @@ class NastranPVReader(_Settable, VTKPythonAlgorithmBase):
     def SetContactSurfaces(self, v):
         """The ContactSurfaces block (the faces of the BSURF and BSURFS regions) and the CONTACT_ pair table."""
         self._set_flag("contact", v)
+
+    @smproperty.intvector(name="DMIGStiffness", default_values=1)
+    @smhint.xml(_module_hint("ShowBlocks"))
+    @smdomain.xml('<BooleanDomain name="bool"/>')
+    def SetDMIGStiffness(self, v):
+        """The DMIGStiffness block: each stiffness DMIG's 3x3 translational stiffness per grid."""
+        self._set_flag("dmig", v)
 
     @smproperty.intvector(name="NodalArrays", default_values=1)
     @smhint.xml(_module_hint("ShowBlocks"))
@@ -1617,6 +1625,79 @@ class NastranPVContactFaces(_GlyphFilter):
         self._list(block)  # a ContactSurfaces dataset as the input: RequestData lists a multiblock only
         on = [int(n.split()[-1]) for n in _checked(self._regions)]
         return contact_faces(block, diag, self._lift, regions=on)
+
+
+# copies of nastran_pv.glyphs.STIFFNESS_KINDS / STIFFNESS_COLORS / STIFFNESS_SIZE (test_plugin_constants)
+_STIFFNESS_KINDS = ("held", "free")
+_STIFFNESS_COLORS = ("Log10Stiffness", "Log10Anisotropy", "NID")
+_STIFFNESS_SIZE = 0.04
+
+
+
+@smproxy.filter(name="NastranPVStiffnessGlyphs", label="Nastran Stiffness Glyphs")
+@smhint.xml('<ShowInMenu category="Nastran" />')
+@smproperty.input(name="Input", port_index=0)
+@smdomain.datatype(dataTypes=["vtkDataObject"], composite_data_supported=True)
+@_with_glyph_size(_STIFFNESS_SIZE, 0.001, 0.3, 16, 6, 64)
+class NastranPVStiffnessGlyphs(_GlyphFilter):
+    """DMIG stiffness ellipsoids (the DMIGStiffness block): per grid of the checked matrices, the
+    principal directions of its 3x3 translational stiffness, each semi-axis ~ log stiffness. Stiffness
+    Held is the grid's own block (every other DOF held), Free what the grid feels with every other DOF
+    free (grounded matrices of up to 6000 DOFs). Size: upper bound of the largest semi-axis as a
+    fraction of the model diagonal (otherwise 0.45 x the median grid spacing)."""
+
+    BLOCK, REQUIRED = "DMIGStiffness", "KHeld"
+    LISTS = True
+
+    def __init__(self):
+        _GlyphFilter.__init__(self)
+        self._matrices = _checklist(self)
+        self._kind = 0
+        self._size = _STIFFNESS_SIZE
+        self._resolution = 16
+        self._color = 0
+        self._scale = 1.0
+
+    @smproperty.dataarrayselection(name="Matrices")
+    def GetMatrices(self):
+        return self._matrices
+
+    @smproperty.intvector(name="Stiffness", default_values=0)
+    @smdomain.xml('<EnumerationDomain name="enum"><Entry value="0" text="Held (other DOFs fixed)"/>'
+                  '<Entry value="1" text="Free (other DOFs free)"/></EnumerationDomain>')
+    def SetStiffness(self, v):
+        """Held: the grid's own 3x3 block. Free: the inverse of the grid's block of K^-1, the stiffness
+        an attached part feels there (none for a free-free matrix or one of more than 6000 DOFs)."""
+        self._set("_kind", int(v))
+
+    @smproperty.doublevector(name="ScaleFactor", default_values=1.0)
+    @smdomain.doublerange(min=0.1, max=20.0)
+    def SetScaleFactor(self, v):
+        """Multiplies the ellipsoids' size (0.45 x the median grid spacing, capped by Size): above 1 to
+        see them on a mesh whose boundary grids come in close pairs."""
+        self._set("_scale", float(v))
+
+    @smproperty.intvector(name="ColorBy", default_values=0)
+    @smdomain.xml(_enum_xml(_STIFFNESS_COLORS))
+    def SetColorBy(self, v):
+        """The output's active scalars: log10 of the largest principal stiffness, log10 of largest over
+        smallest (how directional it is), or the grid id."""
+        self._set("_color", int(v))
+
+    def _list(self, data):
+        block = _find_block(data, self.BLOCK, self.REQUIRED)
+        if block is not None and not block.IsA("vtkMultiBlockDataSet"):
+            from nastran_pv.glyphs import default_stiffness_matrices, stiffness_names
+
+            _fill_checklist(self, self._matrices, stiffness_names(block), on=default_stiffness_matrices(block))
+
+    def _glyphs(self, block, diag, model):
+        from nastran_pv.glyphs import stiffness_glyphs
+
+        self._list(block)
+        return stiffness_glyphs(block, diag, _STIFFNESS_KINDS[self._kind % 2], self._size,
+                                matrices=_checked(self._matrices), resolution=self._resolution,
+                                scalars=_STIFFNESS_COLORS[self._color % len(_STIFFNESS_COLORS)], scale=self._scale)
 
 
 def _spc_set_ids(data):

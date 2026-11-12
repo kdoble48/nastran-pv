@@ -2348,9 +2348,11 @@ def parity_checks(pv, nv):
 
 
 # what each view selects on tiny_run.bdf ("NPV <what> [<deck>]"; None: the reader). The deck has no
-# CBAR/CBEAM (beams: beam_checks), no contact regions (contact_view_checks), no NSM and no random response; diff: diff_checks
+# CBAR/CBEAM (beams: beam_checks), no contact regions (contact_view_checks), no DMIG (stiffness_view_checks), no NSM
+# and no random response; diff: diff_checks
 VIEW_SELECTS = {"masses": "mass glyphs", "bushes": "bush glyphs", "bushrotations": "bush rotation glyphs",
-                "beams": None, "loads": "load glyphs", "spc": "spc glyphs", "rigid": None, "contact": None, "family": None,
+                "beams": None, "loads": "load glyphs", "spc": "spc glyphs", "rigid": None, "contact": None, "dmig": None,
+                "family": None,
                 "group": None, "pid": None, "mid": None, "elementtype": None, "thickness": None, "nsm": None,
                 "results": "deform", "random": None, "randomsweep": None, "parts": "parts", "grow": "grow",
                 "path": "path", "check": "check", "forces": None, "stress": None, "plies": None}
@@ -2567,6 +2569,52 @@ def _point_values(src, name):
     return set(vtk_to_numpy(a).tolist()) if a is not None else set()
 
 
+STIFFNESS_CHAIN = """SOL 101
+CEND
+K2GG = KC
+BEGIN BULK
+GRID,1,,0.,0.,0.
+GRID,2,,1.,0.,0.
+CBAR,9,1,1,2,0.,0.,1.
+PBAR,1,1,1.
+MAT1,1,7e10,,0.3,0.
+DMIG,KC,0,6,2,0
+DMIG,KC,1,1,,1,1,20.
+DMIG,KC,2,1,,1,1,-10.,
+,2,1,10.
+ENDDATA
+"""
+
+
+def stiffness_view_checks(pv, nv):
+    """The dmig view on a grounded two-spring chain (test_dmig_stiffness.py has the values: held 20
+    and 10, free 10 and 5): the DMIGStiffness block, Nastran Stiffness Glyphs held and free, the
+    view's text, its Matrices list and the reader's block switch."""
+    path = os.path.join(tempfile.mkdtemp(), "chain.bdf")
+    with open(path, "w") as f:
+        f.write(STIFFNESS_CHAIN)
+    reader = rm.load_reader(path)
+    model = rm.Model(reader)
+    check("DMIGStiffness" in model.names and model.field_strings("DMIGStiffness", "MatrixNames") == ["KC"],
+          f"dmig view: the DMIGStiffness block on the reader's output ({model.names})")
+    view = pv.CreateRenderView()
+    nv.apply("dmig", reader=reader, view=view)
+    text = nv.info_of(view)
+    glyphs = pv.GetActiveSource()  # apply ends with the view's filter selected
+    check(glyphs is not None and glyphs in nv.shown_sources(view) and "DMIG stiffness ellipsoids: 2 grids of KC" in text
+          and "K_ref 10" in text and "Stiffness Free" in text, f"dmig view: held ellipsoids and their text: {text!r}")
+    check("KC" in list(glyphs.Matrices), f"dmig view: the Matrices list ({list(glyphs.Matrices)})")
+    nv.apply("dmig", reader=reader, view=view, stiffness="free")
+    text = nv.info_of(view)
+    check("free: what the grid feels" in text and "K_ref 5" in text, f"dmig view: stiffness='free': {text!r}")
+    check(nv.enum_text(glyphs, "Stiffness").startswith("Free"), "dmig view: the filter keeps Stiffness Free")
+    nv.clear(view)
+    reader.DMIGStiffness = 0
+    check("DMIGStiffness" not in rm.Model(reader).names, "DMIG Stiffness toggle removes the block")
+    pv.Delete(view)
+    pv.Delete(reader)
+
+
 def dmig_checks(pv, nv):
     """tests/data/dmig.bdf (hand-worked in test_matrices.py): the DMIG_ table and the DMIG mass
     totals on the reader's root, and the masses view's DMIG line; tests/data/mfluid.bdf's FLUID_ table."""
@@ -2594,6 +2642,7 @@ def dmig_checks(pv, nv):
     nv.clear(view)
     pv.Delete(view)
     pv.Delete(reader)
+    stiffness_view_checks(pv, nv)
     reader = rm.load_reader(os.path.join(HERE, "data", "mfluid.bdf"))  # test_fluid.py has the values
     model = rm.Model(reader)
     check(model.field("FLUID_SID").tolist() == [1, 2] and model.field("FLUID_FluidMass")[0] == 4000

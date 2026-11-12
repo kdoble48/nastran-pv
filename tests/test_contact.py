@@ -238,12 +238,12 @@ def test_repeated_ids_warn_that_only_the_last_card_is_drawn(tmp_path):
     assert not any("repeated ID" in w for w in clean.warnings)
 
 
-def test_options_contact_is_the_last_field():
+def test_options_contact_comes_last_but_dmig():
     """Options is public: a new switch goes at the end, so positional arguments keep their meaning."""
     from dataclasses import fields
 
     names = [f.name for f in fields(Options)]
-    assert names[-1] == "contact" and names.index("k_ref") == 10
+    assert names[-2:] == ["contact", "dmig"] and names.index("k_ref") == 10  # dmig: DMIGStiffness, after contact
     assert Options(True, True, True, True, True, True, True, True, True, True, 1e5).k_ref == 1e5
 
 

@@ -4,7 +4,8 @@ Every view works on a Nastran reader (the active source, or the reader
 upstream of it) or on a ``.vtm``/VTKHDF file written by nastran-pv and opened with
 ParaView's own reader. Views edit the active view's scene (:func:`scene_of`): a coloring
 (``pid``, ``thickness``, ``results``, ...) replaces the coloring and keeps the overlays, an overlay
-(``masses``, ``bushes``, ``bushrotations``, ``beams``, ``loads``, ``spc``, ``rigid``, ``contact``) adds itself
+(``masses``, ``bushes``, ``bushrotations``, ``beams``, ``loads``, ``spc``, ``rigid``, ``contact``,
+``dmig``) adds itself
 (over a ghost mesh on an empty view), and a second toolbar click on an overlay removes it
 (``apply(name, toggle=True)``; ``apply`` itself refreshes). A view for another model starts a new
 scene. Views build or reuse named pipeline objects ("NPV ..."), so running a view twice does not
@@ -13,7 +14,7 @@ glyphs, NPV grow, the Nastran Diff, NPV deform for results and mode animation), 
 it only recolours the model or changes the reader's visibility; the model is found upstream of it
 again. Available views::
 
-    masses  bushes  bushrotations  beams  loads  spc  rigid  contact  family  group  pid  mid
+    masses  bushes  bushrotations  beams  loads  spc  rigid  contact  dmig  family  group  pid  mid
     thickness  nsm  elementtype  results  random  randomsweep  parts  grow  path  check  diff  forces
     stress  plies
 
@@ -1774,6 +1775,68 @@ def view_contact(model, view, regions=None, lift=None):
     return g
 
 
+def view_dmig(model, view, stiffness=None, matrices=None, size=None, color_by=None, scale=None):
+    """DMIG stiffness ellipsoids (the DMIGStiffness block) through Nastran Stiffness Glyphs: per grid,
+    the principal directions of its 3x3 translational stiffness, sized by log stiffness and coloured
+    by ``color_by`` (Log10Stiffness, Log10Anisotropy, NID). ``stiffness`` ("held" or "free"),
+    ``matrices`` (names), ``size`` and ``scale`` (Scale Factor) set 'NPV stiffness glyphs'; left None
+    they keep its settings."""
+    from nastran_pv.fields.common import field_strings
+    from nastran_pv.glyphs import STIFFNESS_COLORS, STIFFNESS_KINDS
+
+    block = model.scoped("DMIGStiffness")
+    if block is None:
+        info_text(model, view, _missing_text(model, "stiffness DMIGs (KAAX, K2GG ...)"))
+        return
+    g = _overlay(model, "stiffness glyphs", lambda src: pv.NastranStiffnessGlyphs(Input=src),
+                 "NastranPVStiffnessGlyphs")
+    g.UpdatePipelineInformation()
+    if matrices is not None:
+        g.Matrices = [str(m) for m in matrices]
+    _set_given(g, Stiffness=None if stiffness is None else STIFFNESS_KINDS.index(stiffness), Size=size,
+               ScaleFactor=scale, ColorBy=None if color_by is None else STIFFNESS_COLORS.index(color_by))
+    g.UpdatePipeline()
+    glyph_data = fetch(g)
+    out = glyph_data.GetFieldData()
+
+    def strings(name):
+        return field_strings(glyph_data, name)
+
+    kind = (strings("StiffnessKind") or ["held"])[0]
+    drawn = strings("StiffnessMatrices")
+    notes = dict(zip(model.field_strings("DMIGStiffness", "MatrixNames"),
+                     model.field_strings("DMIGStiffness", "FreeNote")))
+    no_free = [f"{n}: no free stiffness ({notes[n]})" for n in drawn if notes.get(n, "-") != "-"]
+    shown = int(_glyph_field(g, "StiffnessGrids"))
+    if not shown:
+        info_text(model, view, "\n".join([f"No {kind} stiffness to draw for the checked matrices "
+                                          "('NPV stiffness glyphs': Matrices, Stiffness)"]
+                                         + (no_free if kind == "free" else [])))
+        return g
+    d = _show(g, view)
+    d.Representation = "Surface"
+    array = enum_text(g, "ColorBy")
+    if array == "NID" or glyph_data.GetPointData().GetArray(array) is None:  # NID, or an all-NaN array
+        solid(d, [0.35, 0.55, 0.85])
+    else:
+        lut = continuous(d, "POINTS", array, preset="Turbo", view=view)
+        span = out.GetArray(f"{array}Range")
+        if span is not None and span.GetValue(1) > span.GetValue(0):
+            lut.RescaleTransferFunction(span.GetValue(0), span.GetValue(1))
+    lines = [f"DMIG stiffness ellipsoids: {shown} grids of {', '.join(drawn)}",
+             (strings("GlyphSizing") or [""])[0],
+             "a cigar is stiff along its length, a disc soft across it"]
+    skipped = int(_glyph_field(g, "StiffnessSkipped"))
+    if skipped:
+        lines.append(f"{skipped} grid(s) without a {kind} stiffness")
+    if kind == "free":
+        lines += no_free
+    elif len(no_free) < len(drawn):
+        lines.append("Stiffness Free on 'NPV stiffness glyphs': the other DOFs free instead of held")
+    info_text(model, view, "\n".join(line for line in lines if line))
+    return g
+
+
 def _mesh_categorical(model, view, array, blocks=MESH):
     mesh = _extract(model, *[b for b in blocks if model.has(b)], what="mesh" if blocks == MESH else None)
     if mesh is None:
@@ -3141,7 +3204,7 @@ CATEGORICAL = ("PID", "MID", "ElementType", "FamilyId", "GroupId", "FileId", "Di
 SHARED_CATEGORIES = ("PID", "MID", "ElementType", "FamilyId", "GroupId", "FileId", "NSMSource")  # one legend in a pair
 # A's removed items each overlay adds in red (diff_items.ITEM_TYPES names; the colorings add "element")
 REMOVED_ITEMS = {"masses": ("mass",), "bushes": ("bush",), "bushrotations": ("bush",), "loads": ("load",),
-                 "spc": ("spc",), "rigid": ("rigid",), "beams": (), "contact": ()}
+                 "spc": ("spc",), "rigid": ("rigid",), "beams": (), "contact": (), "dmig": ()}
 # the coloring a side by side array is drawn with: the view that colors the mesh by it, else "array"
 ARRAY_VIEWS = {"PID": "pid", "MID": "mid", "ElementType": "elementtype", "FamilyId": "family", "GroupId": "group",
                "Thickness": "thickness", "DiffStatus": "diff"}
@@ -3559,7 +3622,7 @@ def single(view=None):
 
 VIEWS = {
     "masses": view_masses, "bushes": view_bushes, "bushrotations": view_bushrotations, "beams": view_beams, "loads": view_loads, "spc": view_spc,
-    "rigid": view_rigid, "contact": view_contact, "family": view_family, "group": view_group, "pid": view_pid,
+    "rigid": view_rigid, "contact": view_contact, "dmig": view_dmig, "family": view_family, "group": view_group, "pid": view_pid,
     "mid": view_mid, "elementtype": view_elementtype, "thickness": view_thickness, "nsm": view_nsm,
     "results": view_results, "random": view_random, "randomsweep": view_randomsweep, "parts": view_parts, "grow": view_grow, "path": view_path, "check": view_check,
     "diff": view_diff, "forces": view_forces, "stress": view_stress, "plies": view_plies,

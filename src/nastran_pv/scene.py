@@ -18,10 +18,10 @@ from dataclasses import dataclass, field
 
 COLORINGS = ("family", "group", "pid", "mid", "elementtype", "thickness", "nsm", "results",
              "random", "randomsweep", "parts", "grow", "path", "check", "diff", "forces", "stress", "plies")
-OVERLAYS = ("masses", "bushes", "bushrotations", "beams", "loads", "spc", "rigid", "contact")
+OVERLAYS = ("masses", "bushes", "bushrotations", "beams", "loads", "spc", "rigid", "contact", "dmig")
 GHOST = "ghost"
 ARRAY = "array"  # the mesh colored by any cell or point array (side by side's ``array=``); no macro
-GHOST_OPACITY = {"loads": 0.5, "spc": 0.35, "rigid": 0.3, "contact": 0.3}   # default 0.2
+GHOST_OPACITY = {"loads": 0.5, "spc": 0.35, "rigid": 0.3, "contact": 0.3, "dmig": 0.3}   # default 0.2
 ROLES = ("A", "B")
 
 

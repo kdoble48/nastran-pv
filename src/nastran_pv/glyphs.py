@@ -10,6 +10,9 @@ pvpython and in a written .vtm, and is unit-testable.
   stiffness) or three rings (rotational) along the element axes, sized from the
   bush spacing and the normalised log stiffness, plus optional translation
   ellipsoids.
+* :func:`stiffness_glyphs` - one ellipsoid per grid of a stiffness DMIG (the
+  ``DMIGStiffness`` block), its axes along the principal directions of the grid's
+  3x3 translational stiffness and sized by their log stiffness.
 """
 from __future__ import annotations
 
@@ -18,7 +21,7 @@ from vtkmodules.vtkCommonDataModel import vtkPolyData
 from vtkmodules.vtkFiltersSources import vtkArrowSource, vtkSphereSource
 
 from . import vtkutil
-from .fields.common import load_set_id, set_id_of_name
+from .fields.common import field_strings, load_set_id, set_id_of_name
 
 MASS_SIZE_MODES = ("auto", "physical", "relative")
 
@@ -1015,3 +1018,113 @@ def contact_faces(faces: vtkPolyData, diag: float, lift: float = CONTACT_LIFT, r
     vtkutil.add_array(fd, "ContactRegions", np.unique(region[rows]).astype(np.int64))
     vtkutil.add_string_array(fd, "ContactCardNames", field_strings(faces, "ContactCardNames"))
     return out
+
+
+# ------------------------------------------------------------ DMIG stiffness
+STIFFNESS_KINDS = ("held", "free")  # Nastran Stiffness Glyphs' Stiffness: the KHeld / KFree tensors
+STIFFNESS_COLORS = ("Log10Stiffness", "Log10Anisotropy", "NID")  # its Color By
+STIFFNESS_SIZE = 0.04  # its Size: the largest semi-axis cap over the model diagonal (as bushes)
+STIFFNESS_FLOOR = 0.15  # a direction with no stiffness keeps this fraction of the full semi-axis
+STIFFNESS_ROUNDOFF = 1e-9  # a principal stiffness below this x its grid's largest is 0
+STIFFNESS_TEXT = {"held": "held: the grid's own block, every other DOF held fixed",
+                  "free": "free: what the grid feels with every other DOF free (the inverse of its block of K^-1)"}
+
+
+def stiffness_names(block) -> list[str]:
+    """The matrix names of a ``DMIGStiffness`` block (``MatrixId`` indexes them)."""
+    return field_strings(block, "MatrixNames")
+
+
+def default_stiffness_matrices(block) -> set[str]:
+    """What Nastran Stiffness Glyphs draws first: the first matrix Case Control selects (K2GG, K2PP)
+    that has grids in the block, else the first that has grids."""
+    names, uses = field_strings(block, "MatrixNames"), field_strings(block, "MatrixUse")
+    ids = block.GetPointData().GetArray("MatrixId") if block.GetNumberOfPoints() else None
+    present = set(vtkutil.to_numpy(ids).astype(int).tolist()) if ids is not None else set()
+    drawn = [(n, u) for i, (n, u) in enumerate(zip(names, uses)) if i in present]
+    chosen = [n for n, u in drawn if u not in ("", "-")] or [n for n, _ in drawn]
+    return {chosen[0]} if chosen else set()
+
+
+def stiffness_glyphs(block: vtkPolyData, diag: float, kind: str = "held", size: float = STIFFNESS_SIZE,
+                     matrices=None, resolution: int = 16, scalars: str = "Log10Stiffness",
+                     scale: float = 1.0) -> vtkPolyData:
+    """Ellipsoids for a ``DMIGStiffness`` block: per grid of the ``matrices`` named (default: all),
+    the principal directions of its 3x3 stiffness (``kind`` held or free) as the axes, each semi-axis
+    ``s (FLOOR + (1 - FLOOR) k)`` with ``k = log10(1 + λ/λ_ref) / max`` over the drawn grids (λ_ref:
+    the smallest positive principal stiffness), and ``s`` 0.45 x the median grid spacing, capped by
+    ``size`` x the model diagonal, times ``scale`` (to enlarge them on a mesh with close grids). A
+    cigar is stiff along its length, a disc soft across it.
+
+    Point arrays: ``NID``, ``MatrixId``, ``Stiffness`` (the largest principal stiffness),
+    ``StiffnessMin``, ``Log10Stiffness``, ``Log10Anisotropy`` (log10 of largest over smallest; NaN
+    when the smallest is 0). Field data: ``StiffnessKind``, ``StiffnessMatrices`` (the names drawn),
+    ``Log10StiffnessRange`` and ``Log10AnisotropyRange`` (2nd and 98th percentiles, the colour range),
+    ``StiffnessReference`` (λ_ref),
+    ``StiffnessGrids`` (drawn), ``StiffnessSkipped`` (grids without that kind of tensor),
+    ``GlyphSizing``."""
+    out = vtkPolyData()
+    n = block.GetNumberOfPoints()
+    pd = block.GetPointData()
+    array = pd.GetArray("KFree" if kind == "free" else "KHeld")
+    names = stiffness_names(block)
+    wanted = set(range(len(names))) if matrices is None else {names.index(m) for m in matrices if m in names}
+    ids = vtkutil.to_numpy(pd.GetArray("MatrixId")).astype(int) if n else np.zeros(0, dtype=int)
+    rows = np.flatnonzero(np.isin(ids, sorted(wanted)))
+    skipped = 0
+    if array is not None and len(rows):
+        k = vtkutil.to_numpy(array).reshape(n, 3, 3)[rows]
+        ok = np.isfinite(k).all(axis=(1, 2))
+        skipped, rows, k = int((~ok).sum()), rows[ok], k[ok]
+    else:
+        skipped, rows, k = len(rows), rows[:0], np.zeros((0, 3, 3))
+    picked = [names[i] for i in sorted(wanted)]
+
+    def describe(target, grids):
+        fd = target.GetFieldData()
+        vtkutil.add_string_array(fd, "StiffnessKind", [kind])
+        vtkutil.add_string_array(fd, "StiffnessMatrices", picked)
+        vtkutil.add_array(fd, "StiffnessGrids", np.array([grids], dtype=np.int64))
+        vtkutil.add_array(fd, "StiffnessSkipped", np.array([skipped], dtype=np.int64))
+
+    describe(out, 0)
+    if not len(rows):
+        return out
+    w, v = np.linalg.eigh(0.5 * (k + np.transpose(k, (0, 2, 1))))
+    v[:, :, 0] *= np.sign(np.linalg.det(v))[:, None]  # right-handed axes: no mirrored (inside-out) glyph
+    # an eigenvalue below 1e-9 of its grid's largest is round-off (a rotated frame, a grid with one
+    # or two DOFs): 0, so it neither becomes K_ref nor makes the grid look endlessly directional
+    w = np.where(w < STIFFNESS_ROUNDOFF * w.max(axis=1, keepdims=True), 0.0, w)
+    positive = w[w > 0]
+    ref = float(positive.min()) if len(positive) else 1.0
+    logk = np.log10(1.0 + w / ref)
+    top = float(logk.max()) or 1.0
+    xyz = vtkutil.to_numpy(block.GetPoints().GetData()).astype(float)[rows]
+    s = bush_glyph_scale(xyz, diag, size) * float(scale)
+    axes = s * (STIFFNESS_FLOOR + (1.0 - STIFFNESS_FLOOR) * logk / top)
+    mats = v * axes[:, None, :]  # columns: principal direction x semi-axis
+    tmpl = unit_sphere(resolution)
+    pts, conn, ntri, normals = instance(tmpl, mats, xyz)
+    out = _polydata(pts, conn, ntri, len(rows), normals)
+    per = len(tmpl[0])
+    _repeat_point_arrays(block, out, per, ("NID", "MatrixId"), rows)
+    big, small = w[:, 2], w[:, 0]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        log_big = np.where(big > 0, np.log10(big), np.nan)
+        aniso = np.where(small > 0, np.log10(big / small), np.nan)
+    for name, values in (("Stiffness", big), ("StiffnessMin", small), ("Log10Stiffness", log_big),
+                         ("Log10Anisotropy", aniso)):  # an all-NaN array would break VTK's XML reader
+        vtkutil.add_array(out.GetPointData(), name, np.repeat(values, per), skip_all_nan=True)
+    for name, values in (("Log10Stiffness", log_big), ("Log10Anisotropy", aniso)):
+        finite = values[np.isfinite(values)]
+        if len(finite):  # a colour range a few very stiff grids do not stretch: 2nd to 98th percentile
+            vtkutil.add_array(out.GetFieldData(), f"{name}Range", np.percentile(finite, [2, 98]))
+    if out.GetPointData().GetArray(scalars) is not None:
+        out.GetPointData().SetActiveScalars(scalars)
+    describe(out, len(rows))
+    fd = out.GetFieldData()
+    vtkutil.add_array(fd, "StiffnessReference", np.array([ref]))
+    vtkutil.add_string_array(fd, "GlyphSizing", [
+        f"{STIFFNESS_TEXT[kind]}; semi-axes ~ log10(1 + K/K_ref), K_ref {ref:.3g}; largest {s:.3g}"])
+    return out
+

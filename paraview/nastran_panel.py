@@ -18,7 +18,7 @@ COLORINGS = (("(other)", None), ("PID", "pid"), ("MID", "mid"), ("Element type",
              ("Thickness", "thickness"), ("Family", "family"), ("Group", "group"), ("NSM", "nsm"),
              ("Displacement", "results"), ("Stress", "stress"), ("Model check", "check"), ("Parts", "parts"))
 OVERLAYS = (("Masses", "masses"), ("Bushes", "bushes"), ("Beam axes", "beams"), ("Loads", "loads"),
-            ("SPC", "spc"), ("Rigid elements", "rigid"), ("Contact", "contact"))
+            ("SPC", "spc"), ("Rigid elements", "rigid"), ("Contact", "contact"), ("DMIG stiffness", "dmig"))
 
 _STATE = {"installed": False, "busy": False}
 _HOOKED = set()    # global ids of the readers that have the update observer
