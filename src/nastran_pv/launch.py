@@ -33,7 +33,7 @@ def shell_join(cmd) -> str:
 
     return shlex.join(str(c) for c in cmd)
 
-VIEW_NAMES = ("masses", "bushes", "bushrotations", "beams", "loads", "spc", "rigid", "contact", "family", "group", "pid", "mid",
+VIEW_NAMES = ("masses", "bushes", "bushrotations", "beams", "loads", "spc", "rigid", "contact", "dmig", "family", "group", "pid", "mid",
               "elementtype", "thickness", "nsm", "results", "random", "randomsweep", "parts", "check", "diff",
               "forces", "stress", "plies", "none")
 

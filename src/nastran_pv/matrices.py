@@ -530,6 +530,152 @@ def frequencies(k: Matrix, m: Matrix, n: int = 10) -> np.ndarray:
 
 
 
+
+# ------------------------------------------------------------- per-grid stiffness
+FREE_MAX = 6000  # DOFs up to which the free (condensed) stiffness is computed: a dense inverse
+BLOCK = "DMIGStiffness"  # the point block of per-grid stiffness tensors
+
+
+@dataclass
+class GridStiffness:
+    """Per grid of a stiffness DMIG: ``nids`` and ``xyz`` (basic), and the 3x3 translational
+    stiffness in basic, ``held`` (the grid's own block: every other DOF held) and ``free`` (the
+    inverse of the grid's block of K⁻¹: every other DOF free; None with ``note`` saying why)."""
+
+    nids: np.ndarray
+    xyz: np.ndarray
+    held: np.ndarray
+    free: np.ndarray | None
+    note: str = ""
+
+
+def _bases_at(deck, nids: np.ndarray, xyz: np.ndarray) -> np.ndarray:
+    """(n, 3, 3): each grid's CD axes in basic (rows), the identity for CD 0 or an unknown CD."""
+    out = np.broadcast_to(np.eye(3), (len(nids), 3, 3)).copy()
+    cd = deck.cd[deck.lookup(nids)]
+    for cid in np.unique(cd):
+        if cid == 0 or deck.model.coords.get(int(cid)) is None:
+            continue
+        sel = cd == cid
+        if deck.model.coords[int(cid)].type in RECTANGULAR:
+            out[sel] = deck.basis(int(cid))
+        else:
+            out[sel] = deck.bases(int(cid), xyz[sel])
+    return out
+
+
+def _translational(m: Matrix, deck) -> tuple[np.ndarray, np.ndarray]:
+    """(grid ids, (n, 3) row index of components 1-3, -1 where absent) of the deck's grids that
+    have a translational DOF in ``m``."""
+    trans = (m.rows[:, 1] >= 1) & (m.rows[:, 1] <= 3)
+    grids = np.unique(m.rows[trans, 0])
+    grids = grids[deck.lookup(grids) >= 0]
+    index = np.full((len(grids), 3), -1, dtype=np.int64)
+    pos = np.searchsorted(grids, m.rows[:, 0])
+    for r in np.flatnonzero(trans):
+        g = pos[r]
+        if g < len(grids) and grids[g] == m.rows[r, 0]:
+            index[g, m.rows[r, 1] - 1] = r
+    return grids, index
+
+
+def _local_blocks(a: np.ndarray, index: np.ndarray) -> np.ndarray:
+    """(n, 3, 3) blocks of the dense or sparse ``a`` at ``index`` rows/columns, 0 where absent."""
+    n = len(index)
+    out = np.zeros((n, 3, 3))
+    for i in range(3):
+        for j in range(3):
+            ok = (index[:, i] >= 0) & (index[:, j] >= 0)
+            if ok.any():
+                vals = a[index[ok, i], index[ok, j]]
+                out[ok, i, j] = np.asarray(vals).ravel()
+    return out
+
+
+def _free_inverse(m: Matrix) -> tuple[np.ndarray | None, str]:
+    """K⁻¹ (dense) of a positive definite stiffness, or (None, why not)."""
+    n = m.data.shape[0]
+    if n > FREE_MAX:
+        return None, f"{n} DOFs, more than {FREE_MAX}: the free stiffness needs a dense inverse"
+    import scipy.linalg as sla
+
+    k = _dense(0.5 * (m.data + m.data.T))
+    try:
+        factor = sla.cho_factor(k)
+    except (np.linalg.LinAlgError, ValueError):
+        return None, "not positive definite (free-free, a mechanism or a negative term): no inverse"
+    return sla.cho_solve(factor, np.eye(n)), ""
+
+
+def grid_stiffness(deck, m: Matrix, free: bool = True) -> GridStiffness:
+    """:class:`GridStiffness` of a square real stiffness DMIG, in basic. A component a grid lacks
+    has no stiffness (a zero row and column). The free stiffness exists for a grounded,
+    positive definite matrix of up to :data:`FREE_MAX` DOFs, and is cached on the deck."""
+    nids, index = _translational(m, deck)
+    xyz = deck.xyz[deck.lookup(nids)] if len(nids) else np.zeros((0, 3))
+    b = _bases_at(deck, nids, xyz)
+    rotate = lambda local: np.transpose(b, (0, 2, 1)) @ local @ b  # noqa: E731 - K_basic = Bᵀ K B
+    held = rotate(_local_blocks(m.data.tocsr(), index))
+    free_k, note = None, ""
+    if free and len(nids):
+        key = ("dmig free", m.name)
+        if key not in deck.cache:
+            d, _ = rigid_modes(deck, m.rows)
+            ratio = rigid_energy_ratio(m.data, d)
+            if np.isfinite(ratio).any() and np.nanmax(ratio) < zero_tol(m):
+                deck.cache[key] = (None, "free-free: no inverse, every grid can move as a rigid body")
+            else:
+                inverse, why = _free_inverse(m)
+                if inverse is None:
+                    deck.cache[key] = (None, why)
+                else:
+                    flex = _local_blocks(inverse, index)
+                    local = np.zeros_like(flex)
+                    for g in range(len(nids)):
+                        on = index[g] >= 0
+                        sub = flex[g][np.ix_(on, on)]
+                        try:
+                            local[g][np.ix_(on, on)] = np.linalg.inv(sub)
+                        except np.linalg.LinAlgError:
+                            local[g] = np.nan
+                    deck.cache[key] = (rotate(local), "")
+        free_k, note = deck.cache[key]
+    elif free:
+        note = "no grid of the deck has a translational DOF in it"
+    return GridStiffness(nids, xyz, held, free_k, note)
+
+
+def stiffness_block(deck, matrices: list[Matrix]):
+    """The ``DMIGStiffness`` point block: one point per grid of each square real stiffness DMIG,
+    point arrays ``NID``, ``MatrixId`` (index into the field ``MatrixNames``), ``KHeld`` and
+    ``KFree`` (3x3 in basic, row by row; NaN where the free stiffness does not exist), field
+    ``MatrixNames``, ``MatrixUse`` and ``FreeNote`` (why a matrix has no free stiffness, "" when
+    it has). None when no matrix qualifies."""
+    from . import vtkutil
+
+    picked = [m for m in matrices if m.kind == "stiffness" and m.square and not m.is_complex and m.data.shape[0]]
+    parts = []
+    for k, m in enumerate(picked):
+        gs = grid_stiffness(deck, m)
+        if len(gs.nids):
+            parts.append((k, gs))  # a matrix without a free stiffness says why in FreeNote, not a warning
+    if not parts:
+        return None
+    xyz = np.vstack([gs.xyz for _, gs in parts])
+    pd = vtkutil.polydata(xyz)
+    out = pd.GetPointData()
+    vtkutil.add_array(out, "NID", np.concatenate([gs.nids for _, gs in parts]).astype(np.int64))
+    vtkutil.add_array(out, "MatrixId", np.concatenate([np.full(len(gs.nids), k) for k, gs in parts]).astype(np.int64))
+    vtkutil.add_array(out, "KHeld", np.vstack([gs.held.reshape(-1, 9) for _, gs in parts]))
+    free = [gs.free.reshape(-1, 9) if gs.free is not None else np.full((len(gs.nids), 9), math.nan) for _, gs in parts]
+    vtkutil.add_array(out, "KFree", np.vstack(free), skip_all_nan=True)
+    fd = pd.GetFieldData()
+    vtkutil.add_string_array(fd, "MatrixNames", [m.name for m in picked])
+    vtkutil.add_string_array(fd, "MatrixUse", [m.use or "-" for m in picked])
+    notes = {k: gs.note for k, gs in parts}
+    vtkutil.add_string_array(fd, "FreeNote", [notes.get(k, "no grids in the deck") or "-" for k in range(len(picked))])
+    return pd
+
 # ------------------------------------------------------------------ report
 AXES = ("TX", "TY", "TZ", "RX", "RY", "RZ")
 
@@ -631,4 +777,5 @@ def report(deck, matrices: list[Matrix], rows: list[dict], modes: int = 10, mode
 
 __all__ = ["Matrix", "read", "rigid_modes", "mass_properties", "rigid_energy_ratio", "residual_by_grid",
            "load_resultants", "table_rows", "totals", "with_model", "write", "eigen_counts", "pair",
-           "frequencies", "selection", "from_card", "report", "csv_rows"]
+           "frequencies", "selection", "from_card", "report", "csv_rows", "GridStiffness",
+           "grid_stiffness", "stiffness_block"]

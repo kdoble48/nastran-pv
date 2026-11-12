@@ -8,6 +8,15 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Added
 
+- The DMIG stiffness view: `dmig` (toolbar *NPV Overlay DMIG Stiffness*, `nastran-pv view/render`
+  preset, the reader panel's *Overlays* > *DMIG stiffness*) draws one ellipsoid per grid of a
+  stiffness DMIG, its axes along the principal directions of the grid's 3x3 translational stiffness
+  and sized by log stiffness, through the new *Nastran Stiffness Glyphs* filter (*Matrices*,
+  *Stiffness* Held/Free, *Size*, *Scale Factor*, *Color By*). Held is the grid's own block (the other
+  DOFs fixed), Free what the grid feels with the other DOFs free (grounded matrices up to 6000 DOFs).
+  The tensors are the new `DMIGStiffness` block (`--no-dmig`, the reader's *DMIG Stiffness* toggle)
+  ([DMIG stiffness per grid](docs/model.md#dmig-stiffness-per-grid)).
+
 - DMIG matrices: every real DMIG is a row of the root table `DMIG_`, with what selects it
   (`K2GG`, `M2GG`, `P2G`, ... and the scale from case control and `PARAM,CK2/CM2/CB2/CP2`), its
   structure, and the quantities of its kind: the mass, directional masses, CG and inertia of a

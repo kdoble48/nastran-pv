@@ -76,7 +76,7 @@ file, not full fuel.
 
 ## Presets
 
-`masses bushes bushrotations beams loads spc rigid contact family group pid mid elementtype thickness nsm results forces stress plies random randomsweep parts check diff`
+`masses bushes bushrotations beams loads spc rigid contact dmig family group pid mid elementtype thickness nsm results forces stress plies random randomsweep parts check diff`
 (`random`/`randomsweep` need `--results MODES --random ASD`, or a SOL 111 OP2 with `--random-output`, see
 `docs/random-vibration.md`; `diff` needs `--against A`; after it every view in that render view draws from the
 diff, and `nv.side_by_side(array=...)` puts A and B in two linked views that draw every later view, see
@@ -106,7 +106,7 @@ with `cannot read DECK: <error>` and writes no PNG.
 - Each view's settings live on the filter it selects (`docs/paraview.md#filter-properties`):
   `NPV mass glyphs` (*Size*, *MinimumMass*, *ColorBy*), `NPV bush glyphs` (*ShowOnly* grounded or
   zero-length), `NPV load glyphs` (*Source* deck sets or the results' SPC/MPC forces and
-  OLOAD, *LoadSets*, *Show* forces/moments, *ArrowLength*, *EveryNthPoint*), `NPV spc glyphs` (*SPCSets*, *DOFs*), `NPV contact faces` (*Regions*, *Lift*), `NPV beam axes` (*MaxTriads*),
+  OLOAD, *LoadSets*, *Show* forces/moments, *ArrowLength*, *EveryNthPoint*), `NPV spc glyphs` (*SPCSets*, *DOFs*), `NPV contact faces` (*Regions*, *Lift*), `NPV stiffness glyphs` (*Matrices*, *Stiffness* held/free, *Scale Factor*), `NPV beam axes` (*MaxTriads*),
   `NPV deform` (*AutoScale* in the results view). A rerun keeps them; pass arguments to override:
   `nv.apply("loads", sets=["SID_2"], show="Moments")`, `nv.apply("loads", source="SPC forces")`, `nv.apply("spc", dofs="123")`,
   `nv.apply("masses", minimum_mass=0.5, color_by="EID")`, `nv.apply("results", scale=50)`. Set

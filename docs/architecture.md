@@ -262,11 +262,12 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   coloring, the overlays, the comparison's role, partner, diff and side; `summary(header)` composes
   the view's one info text, the layer drawn last, `latest`, in full and the others by their first line).
 - `glyphs.py`: mass ellipsoids, bush triads, load arrows (`load_glyphs`; forces single-, moments
-  double-headed), SPC markers (`spc_glyphs`) and the lifted contact faces (`contact_faces`) as real
+  double-headed), SPC markers (`spc_glyphs`), the lifted contact faces (`contact_faces`) and the DMIG
+  stiffness ellipsoids (`stiffness_glyphs`) as real
   `vtkPolyData`, plus the subsets the filters
   offer (`minimum_mass`, `bush_selection`, `default_load_set`).
 - `paraview/nastran_bdf_reader.py`: one plugin file containing the reader, the glyph filters
-  (masses, bushes, loads, SPCs, ply axes, contact faces, beam sections), the deform filter (it writes the scale it applied as
+  (masses, bushes, loads, SPCs, ply axes, contact faces, DMIG stiffness, beam sections), the deform filter (it writes the scale it applied as
   root `DeformScale`), *Nastran Scope* (after the model's deform: the overlays' copy of the model
   cut by `selection.scope_masks`, moved by `DeformScale`; both deforms look grid displacements up
   in the whole model, `Deformer(grids=)`; on a Nastran Diff's output, the comparison's layers: the

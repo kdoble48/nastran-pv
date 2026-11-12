@@ -23,6 +23,7 @@ out when the deck has nothing for it.
 | `Loads/SID_n`, `Loads/LOAD_n` | FORCE/MOMENT(1,2) per set, LOAD combinations resolved | point: `NID Force Moment ForceMagnitude MomentMagnitude`; field: `LoadSet ResultantForce GravityAcceleration` (GRAV only) |
 | `Pressures/SID_n`, `Pressures/LOAD_n` | the faces PLOAD, PLOAD2 and PLOAD4 load, per set as for `Loads` (LOAD combinations scale and sum them); see [Pressure loads](#pressure-loads) | cell: `EID LoadCard Pressure PressureDirection PressureForce`; point: `NID CornerPressure`; field: `LoadSet ResultantForce LoadCardNames` |
 | `ContactSurfaces` | the faces of the contact regions: BSURFS (solid faces by element and three corner grids) and BSURF (shell elements); see [Contact surfaces](#contact-surfaces) | cell: `ContactRegion EID ContactCard`; point: `NID`; field: `ContactCardNames` |
+| `DMIGStiffness` | one point per grid of each stiffness DMIG; see [DMIG stiffness per grid](#dmig-stiffness-per-grid) | point: `NID MatrixId KHeld KFree`; field: `MatrixNames MatrixUse FreeNote` |
 | `Removed` | the reference model's removed items (only with `convert --diff-against` or the Nastran Diff filter) | cell: `EID PID ElementType ElementMass DiffStatus DiffReason DeltaElementMass ItemType SID`; point: `NID`; see [Model diff](diff.md#diff-on-the-mesh) |
 | `Averaged/Shells`, `Averaged/Solids`, `Averaged/Lines` | cell arrays averaged to the grids without crossing PIDs (only with `convert --average`): the block's cells on points duplicated per (grid, PID); see [Results helpers](results-helpers.md#nodal-averaging-within-properties) | point: `NID PID Displacement` and the averaged arrays (named as the cell arrays); cell: `EID PID ElementType` |
 | `BeamSections` | CBAR/CBEAM cross sections swept in 3D (only with `--beam-sections`) | cell: `EID PID MID ElementType BeamPart Face`; point: `GA GB StationT`, with results `Displacement DisplacementMagnitude` |
@@ -435,6 +436,23 @@ the [model diff](diff.md) and the [run store](store.md) leave DMIGs out.
 natural frequencies of each stiffness/mass pair. A complex DMIG (TIN 3 or 4) gets only the
 structure columns and a `complex matrix` row in the card report. The design notes are in
 `docs/design/2026-11-11-dmig.md`.
+
+### DMIG stiffness per grid
+
+The `DMIGStiffness` block (point block; `--no-dmig` and the reader's *DMIG Stiffness* toggle drop
+it, not the `DMIG_` table) has one point per grid of each square, real stiffness DMIG, at the grid,
+with the 3×3 translational stiffness there in basic:
+
+| Array | Meaning |
+|---|---|
+| `KHeld` | the grid's own block of the matrix, rotated from its CD frame: the stiffness felt pushing that grid with every other DOF held fixed. Always there |
+| `KFree` | the inverse of the grid's 3×3 block of K⁻¹: the stiffness felt with every other DOF free, the driving-point stiffness an attached part sees. Only for a grounded, positive definite matrix of up to 6000 DOFs (a dense inverse); NaN otherwise, and field `FreeNote` says why (`free-free: ...`, `not positive definite ...`, `18765 DOFs, more than 6000 ...`) |
+| `NID`, `MatrixId` | the grid, and the matrix (field `MatrixNames`, `MatrixUse`) |
+
+A component a grid lacks has no stiffness there. Held is never below Free: freeing the other DOFs
+can only soften a grid (a plate's edge grid, 9.2e4 out of plane held, is 298 free). NPV Overlay DMIG
+Stiffness draws it ([views](paraview.md#one-click-views-toolbar-macros)). The design notes are in
+`docs/design/2026-11-11-dmig-stiffness-view.md`.
 
 ## MFLUID virtual fluid mass
 

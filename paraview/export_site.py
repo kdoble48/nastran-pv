@@ -40,6 +40,8 @@ VIEW_INFO = {
                        "resultant force."),
     "spc": ("SPC", "Constrained grids colored by DOF code."),
     "rigid": ("Rigid", "RBE2/RBE3 spider legs by type."),
+    "dmig": ("DMIG stiffness", "Per-grid stiffness ellipsoids of a stiffness DMIG (a reduced component's "
+                               "KAAX): principal directions, log stiffness, held or free."),
     "contact": ("Contact", "The faces of the contact regions (BSURF, BSURFS), colored by region; the "
                            "BCTSET/BGSET pairs in the legend."),
     "family": ("Family", "Mesh colored by element family, from the pre-processor comments."),

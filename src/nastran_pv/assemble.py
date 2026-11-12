@@ -36,10 +36,11 @@ class Options:
     """What :func:`build_multiblock` builds.
 
     The block switches (``shells``, ``lines``, ``solids``, ``masses``, ``rigid``, ``connectors``,
-    ``plotels``, ``bushes``, ``constraints``, ``loads`` and, the last field, ``contact``; all on by
-    default, the CLI's ``--no-*`` flags turn them off) leave a block out when False; ``bushes``
+    ``plotels``, ``bushes``, ``constraints``, ``loads``, ``contact`` and, the last field, ``dmig``; all
+    on by default, the CLI's ``--no-*`` flags turn them off) leave a block out when False; ``bushes``
     covers Bushes and BushLines, ``loads`` covers Loads and Pressures, ``contact`` is
-    ContactSurfaces and the ``CONTACT_`` pair table. The other fields: ``k_ref`` (``--k-ref``), the stiffness
+    ContactSurfaces and the ``CONTACT_`` pair table, ``dmig`` is DMIGStiffness (the ``DMIG_`` table
+    stays). The other fields: ``k_ref`` (``--k-ref``), the stiffness
     the bush glyphs' log scale starts at (None: the softest bush); ``nodal_arrays`` (on;
     ``--no-nodal-arrays``), the ``SPC_DOF`` and ``F_<sid>``/``M_<sid>`` point arrays on the mesh
     blocks, for at most ``max_nodal_load_sets`` load sets (8; no flag); ``nsm_set``
@@ -63,7 +64,8 @@ class Options:
     max_nodal_load_sets: int = 8
     nsm_set: int | None = None  # bulk NSM set (None = Case Control NSM=, 0 = none)
     beam_sections: bool = False  # swept CBAR/CBEAM sections as the BeamSections block
-    contact: bool = True  # ContactSurfaces and the CONTACT_ pair table (a block switch, added last)
+    contact: bool = True  # ContactSurfaces and the CONTACT_ pair table (a block switch)
+    dmig: bool = True  # DMIGStiffness, per-grid stiffness of the stiffness DMIGs (a block switch, added last)
 
 
 def case_control_ids(model, key: str) -> list[int]:
@@ -215,6 +217,9 @@ def build_multiblock(deck: Deck, opts: Options | None = None, progress: Progress
     if opts.contact:
         with step("ContactSurfaces"):
             blocks.add("ContactSurfaces", build_contact(deck))
+    if opts.dmig and getattr(model, "dmig", None):
+        with step("DMIG stiffness"):
+            blocks.add(matrices.BLOCK, matrices.stiffness_block(deck, matrices.read(deck)))
 
     mb = blocks.mb
     vtkutil.write_field_table(mb, "GRAV_", grav)

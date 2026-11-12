@@ -99,7 +99,7 @@ describe the whole deck, whatever is hidden.
 
 ### Overlays follow the scope
 
-The overlay macros (NPV Overlay Masses, Bushes, Bush Rotations, Loads, SPC, Rigid, Contact, Beams) draw only what
+The overlay macros (NPV Overlay Masses, Bushes, Bush Rotations, Loads, SPC, Rigid, Contact, DMIG Stiffness, Beams) draw only what
 hangs off the elements you kept. With Visible Groups set to one group, NPV Overlay Masses shows the masses
 of that group. The rules, in Nastran terms:
 
@@ -192,7 +192,7 @@ toolbar macros below without installing them:
 | Property | Choices |
 |---|---|
 | *Color By* | PID, MID, Element type, Thickness, Family, Group, NSM, Displacement, Stress, Model check, Parts; *(other)* |
-| *Overlays* | Masses, Bushes, Beam axes, Loads, SPC, Rigid elements, Contact |
+| *Overlays* | Masses, Bushes, Beam axes, Loads, SPC, Rigid elements, Contact, DMIG stiffness |
 
 Pick a coloring, tick overlays and click Apply: the active view shows them, and the reader stays
 selected, so the next change is one more Apply. The section and the macros work on the same view
@@ -259,6 +259,7 @@ The buttons are named by what they do, so the toolbar, which sorts them by name,
 | NPV Overlay Bush Rotations | CBUSH rotational stiffness: K4/K5/K6 rings around the element axes (radius ~ log stiffness, on their own scale); says so when no CBUSH has rotational stiffness |
 | NPV Overlay Bushes | CBUSH translational stiffness: K1/K2/K3 bars along the element axes (length ~ log stiffness, the clearly stiffest axis thicker, released directions grey) and thin GA–GB lines; *Show Only* keeps the grounded or zero-length ones |
 | NPV Overlay Contact | The faces of the contact regions (BSURF, BSURFS) colored by region (*Nastran Contact Faces*), drawn just off their elements so they do not flicker on them; the legend and the text name each region's BCTSET (contact) and BGSET (glue) pairs. *Regions* on *NPV contact faces* picks which; says so when the deck has no contact regions ([Contact surfaces](model.md#contact-surfaces)) |
+| NPV Overlay DMIG Stiffness | One ellipsoid per grid of a stiffness DMIG (a reduced component's `KAAX`; *Nastran Stiffness Glyphs*): its axes along the principal directions of the grid's 3×3 translational stiffness, each as long as log10(1 + K/K_ref) allows, colored by log10 of the largest. A cigar is stiff along its length, a disc soft across it. *Stiffness* **Held** is the grid's own block (every other DOF held fixed), **Free** what the grid feels with every other DOF free (an attached part's view; grounded matrices up to 6000 DOFs). *Matrices* picks the DMIG (first: the one K2GG selects), *Scale Factor* enlarges them where boundary grids come in close pairs; says so when the deck has no stiffness DMIG ([DMIG stiffness](model.md#dmig-stiffness-per-grid)) |
 | NPV Overlay Loads | Force, pressure and GRAV arrows (*Nastran Load Glyphs*) for the active LOAD set, scaled by magnitude (at most 1,500 arrows a set, every Nth loaded grid, on large models); resultant force. Other sets, moments and fixed-length arrows are settings of *NPV load glyphs*; its *Source* draws the results' SPC forces, MPC forces or applied loads instead, with their resultant |
 | NPV Overlay Masses | Mass ellipsoids from mass and inertia, colored by mass (or *Color By* EID/NID); grid→CG offsets; model CG marker; total mass |
 | NPV Overlay Rigid | RBE2/RBE3/... spider legs by type |
@@ -287,7 +288,7 @@ What a render view shows is a *scene* made of layers, and each macro edits one l
 | Layer | What it is | Changed by |
 |---|---|---|
 | Coloring | How the mesh itself is drawn; exactly one | NPV Color Family, Color Group, Color PID, Color MID, Color Element Type, Color Thickness, Color NSM, Result Displacement, Result Forces, Result Stress, Result Random RMS, Result Random Sweep, Check Parts, Grow from Selection, Check Model, Path from Selection, Diff |
-| Overlays | Glyphs and lines drawn on the mesh; any number | NPV Overlay Masses, Overlay Bushes, Overlay Bush Rotations, Overlay Beams, Overlay Loads, Overlay SPC, Overlay Rigid, Overlay Contact |
+| Overlays | Glyphs and lines drawn on the mesh; any number | NPV Overlay Masses, Overlay Bushes, Overlay Bush Rotations, Overlay Beams, Overlay Loads, Overlay SPC, Overlay Rigid, Overlay Contact, Overlay DMIG Stiffness |
 | Scope | What part of the model is in play: the reader's checklists, its Show Only / Hide element lists and its *Selection File* | the visibility macros ([Model tree and visibility](#model-tree-and-visibility)) |
 | Time | The time step, the deformation scale and mode animation | NPV Result Displacement, the animation macros, the time controls |
 | Text | One per view (`NPV info [RenderView1]`): a line or more per layer | every macro, from the layers it leaves |
@@ -340,8 +341,9 @@ Nastran Diff's *Input*), and **A**, the reference (its *Reference*). The compari
   coloring.
 - **Overlays show the change.** NPV Overlay Masses, Bushes, Bush Rotations, Beams, Loads, SPC and Rigid draw
   B's items colored by `DiffStatus` (the heavier engine mass orange, a new stringer's bush green), and
-  A's removed items of that kind in red; the summary counts the changes. NPV Overlay Contact is the
-  exception: the diff does not compare contact regions, so it draws B's faces by region.
+  A's removed items of that kind in red; the summary counts the changes. NPV Overlay Contact and
+  DMIG Stiffness are the exceptions: the diff compares neither contact regions nor DMIGs, so they
+  draw B's.
 - **One scope for both models, by ID.** NPV Show Only Selected, Hide Selected, Show All, Show Only Property, Show Only Material, Show
   Only/Hide Reached and the Selection File macros write the same lists to A's and B's readers. The
   comparison itself stays whole-model; the drawn layers follow the scope: B's items by B's reader,
@@ -387,6 +389,7 @@ again keeps what you changed; from Python an argument you pass explicitly wins
 | Loads | *NPV load glyphs* | *Source*, *Load Sets*, *Show*, *Show Pressures*, *Show Gravity*, *Arrow Length*, *Every Nth Point*; *Glyph Size* group |
 | SPC | *NPV spc glyphs* | *SPC Sets*, *DOFs*; *Glyph Size* group |
 | Contact | *NPV contact faces* | *Regions*, *Lift* |
+| DMIG Stiffness | *NPV stiffness glyphs* | *Matrices*, *Stiffness*, *Size*, *Scale Factor*, *Color By* |
 | Results, Mode Animate | *NPV deform* | *Auto Scale*, *Scale Factor*, *Auto Scale Peak* (advanced), *Phase* (complex steps), *Match Steps* (advanced, set by the views on A's side of a pair); the undeformed outline's opacity is the Display opacity of *NPV undeformed mesh* |
 | Plies | *NPV ply axes* (the ply itself is the reader's *Ply*) | *Ply* (0: the model's, as the reader laid it; the view's `ply=` sets it), *Size*, *Both Axes* |
 | Random RMS, Random Sweep | the reader | *Random ASD*, *Random Drive*, *Random Damping*, *Random G*, *Random Frames* (the reader computes the response), or *Random Output* (the SOL 111 tables) |
@@ -510,6 +513,18 @@ the selection commands make no filter of their own.
   reader's visibility changed) comes checked unless you have unchecked some. Cell arrays `ContactRegion`, `EID` and
   `ContactCard`, point `NID`; field data `ContactFaces` (the faces drawn, a shell counted once) and
   `ContactRegions`.
+* **Nastran Stiffness Glyphs** draws the `DMIGStiffness` block ([DMIG stiffness](model.md#dmig-stiffness-per-grid)):
+  per grid of the checked *Matrices*, an ellipsoid whose axes are the principal directions of the
+  grid's 3×3 translational stiffness (*Stiffness* Held or Free), each semi-axis
+  `s (0.15 + 0.85 k)` with `k = log10(1 + K/K_ref) / max` over the grids drawn (K_ref the smallest
+  positive principal stiffness), so a direction with no stiffness keeps a thin floor. `s` is 0.45 ×
+  the median grid spacing, capped by *Size* × the model diagonal (0.04), times *Scale Factor* (1).
+  *Color By*: `Log10Stiffness` (the largest principal stiffness), `Log10Anisotropy` (log10 of largest
+  over smallest) or `NID`; the view's color range is the 2nd to 98th percentile, so a few very stiff
+  grids do not wash out the rest. Point arrays `NID`, `MatrixId`, `Stiffness`, `StiffnessMin`,
+  `Log10Stiffness`, `Log10Anisotropy`; field data `StiffnessKind`, `StiffnessMatrices`,
+  `StiffnessReference`, `StiffnessGrids`, `StiffnessSkipped` (grids without that kind: Free on a
+  free-free matrix), `GlyphSizing`.
 * **Nastran Ply Axes** draws a composite ply's material axes as a line through each shell's centre,
   *Size* (0.5) × the element's size (twice its mean centre-to-grid distance) long: the 1-direction
   (the fibre) and, with *Both Axes*, the 2-direction. *Ply* is a ply id (from the Shells layup, so it
