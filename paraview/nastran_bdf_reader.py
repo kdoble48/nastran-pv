@@ -1633,15 +1633,6 @@ _STIFFNESS_COLORS = ("Log10Stiffness", "Log10Anisotropy", "NID")
 _STIFFNESS_SIZE = 0.04
 
 
-def _default_matrices(block):
-    """The matrix a Nastran Stiffness Glyphs draws first: the first one Case Control selects
-    (K2GG, K2PP), else the first."""
-    from nastran_pv.fields.common import field_strings
-
-    names, uses = field_strings(block, "MatrixNames"), field_strings(block, "MatrixUse")
-    chosen = [n for n, u in zip(names, uses) if u not in ("", "-")]
-    return {(chosen or names)[0]} if names else set()
-
 
 @smproxy.filter(name="NastranPVStiffnessGlyphs", label="Nastran Stiffness Glyphs")
 @smhint.xml('<ShowInMenu category="Nastran" />')
@@ -1696,9 +1687,9 @@ class NastranPVStiffnessGlyphs(_GlyphFilter):
     def _list(self, data):
         block = _find_block(data, self.BLOCK, self.REQUIRED)
         if block is not None and not block.IsA("vtkMultiBlockDataSet"):
-            from nastran_pv.glyphs import stiffness_names
+            from nastran_pv.glyphs import default_stiffness_matrices, stiffness_names
 
-            _fill_checklist(self, self._matrices, stiffness_names(block), on=_default_matrices(block))
+            _fill_checklist(self, self._matrices, stiffness_names(block), on=default_stiffness_matrices(block))
 
     def _glyphs(self, block, diag, model):
         from nastran_pv.glyphs import stiffness_glyphs

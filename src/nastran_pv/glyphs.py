@@ -1025,6 +1025,7 @@ STIFFNESS_KINDS = ("held", "free")  # Nastran Stiffness Glyphs' Stiffness: the K
 STIFFNESS_COLORS = ("Log10Stiffness", "Log10Anisotropy", "NID")  # its Color By
 STIFFNESS_SIZE = 0.04  # its Size: the largest semi-axis cap over the model diagonal (as bushes)
 STIFFNESS_FLOOR = 0.15  # a direction with no stiffness keeps this fraction of the full semi-axis
+STIFFNESS_ROUNDOFF = 1e-9  # a principal stiffness below this x its grid's largest is 0
 STIFFNESS_TEXT = {"held": "held: the grid's own block, every other DOF held fixed",
                   "free": "free: what the grid feels with every other DOF free (the inverse of its block of K^-1)"}
 
@@ -1032,6 +1033,17 @@ STIFFNESS_TEXT = {"held": "held: the grid's own block, every other DOF held fixe
 def stiffness_names(block) -> list[str]:
     """The matrix names of a ``DMIGStiffness`` block (``MatrixId`` indexes them)."""
     return field_strings(block, "MatrixNames")
+
+
+def default_stiffness_matrices(block) -> set[str]:
+    """What Nastran Stiffness Glyphs draws first: the first matrix Case Control selects (K2GG, K2PP)
+    that has grids in the block, else the first that has grids."""
+    names, uses = field_strings(block, "MatrixNames"), field_strings(block, "MatrixUse")
+    ids = block.GetPointData().GetArray("MatrixId") if block.GetNumberOfPoints() else None
+    present = set(vtkutil.to_numpy(ids).astype(int).tolist()) if ids is not None else set()
+    drawn = [(n, u) for i, (n, u) in enumerate(zip(names, uses)) if i in present]
+    chosen = [n for n, u in drawn if u not in ("", "-")] or [n for n, _ in drawn]
+    return {chosen[0]} if chosen else set()
 
 
 def stiffness_glyphs(block: vtkPolyData, diag: float, kind: str = "held", size: float = STIFFNESS_SIZE,
@@ -1080,7 +1092,9 @@ def stiffness_glyphs(block: vtkPolyData, diag: float, kind: str = "held", size: 
         return out
     w, v = np.linalg.eigh(0.5 * (k + np.transpose(k, (0, 2, 1))))
     v[:, :, 0] *= np.sign(np.linalg.det(v))[:, None]  # right-handed axes: no mirrored (inside-out) glyph
-    w = np.clip(w, 0.0, None)
+    # an eigenvalue below 1e-9 of its grid's largest is round-off (a rotated frame, a grid with one
+    # or two DOFs): 0, so it neither becomes K_ref nor makes the grid look endlessly directional
+    w = np.where(w < STIFFNESS_ROUNDOFF * w.max(axis=1, keepdims=True), 0.0, w)
     positive = w[w > 0]
     ref = float(positive.min()) if len(positive) else 1.0
     logk = np.log10(1.0 + w / ref)
@@ -1099,8 +1113,8 @@ def stiffness_glyphs(block: vtkPolyData, diag: float, kind: str = "held", size: 
         log_big = np.where(big > 0, np.log10(big), np.nan)
         aniso = np.where(small > 0, np.log10(big / small), np.nan)
     for name, values in (("Stiffness", big), ("StiffnessMin", small), ("Log10Stiffness", log_big),
-                         ("Log10Anisotropy", aniso)):
-        vtkutil.add_array(out.GetPointData(), name, np.repeat(values, per))
+                         ("Log10Anisotropy", aniso)):  # an all-NaN array would break VTK's XML reader
+        vtkutil.add_array(out.GetPointData(), name, np.repeat(values, per), skip_all_nan=True)
     for name, values in (("Log10Stiffness", log_big), ("Log10Anisotropy", aniso)):
         finite = values[np.isfinite(values)]
         if len(finite):  # a colour range a few very stiff grids do not stretch: 2nd to 98th percentile

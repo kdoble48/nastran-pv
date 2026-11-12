@@ -441,12 +441,13 @@ structure columns and a `complex matrix` row in the card report. The design note
 
 The `DMIGStiffness` block (point block; `--no-dmig` and the reader's *DMIG Stiffness* toggle drop
 it, not the `DMIG_` table) has one point per grid of each square, real stiffness DMIG, at the grid,
-with the 3×3 translational stiffness there in basic:
+with the 3×3 translational stiffness there in basic, times the scale the run applies (`Scale` in
+the `DMIG_` table: case control and `PARAM,CK2`):
 
 | Array | Meaning |
 |---|---|
 | `KHeld` | the grid's own block of the matrix, rotated from its CD frame: the stiffness felt pushing that grid with every other DOF held fixed. Always there |
-| `KFree` | the inverse of the grid's 3×3 block of K⁻¹: the stiffness felt with every other DOF free, the driving-point stiffness an attached part sees. Only for a grounded, positive definite matrix of up to 6000 DOFs (a dense inverse); NaN otherwise, and field `FreeNote` says why (`free-free: ...`, `not positive definite ...`, `18765 DOFs, more than 6000 ...`) |
+| `KFree` | the inverse of the grid's 3×3 block of K⁻¹: the stiffness felt with every other DOF free, the driving-point stiffness an attached part sees. Only for a grounded, positive definite matrix of up to 6000 DOFs (a dense inverse) whose Cholesky pivots are all above round-off; NaN otherwise, and field `FreeNote` says why (`free-free: ...`, `not positive definite ...`, `singular to round-off ...`, `18765 DOFs, more than 6000 ...`) |
 | `NID`, `MatrixId` | the grid, and the matrix (field `MatrixNames`, `MatrixUse`) |
 
 A component a grid lacks has no stiffness there. Held is never below Free: freeing the other DOFs

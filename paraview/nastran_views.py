@@ -1704,8 +1704,6 @@ def view_rigid(model, view):
 
 
 CONTACT_PAIRS_LISTED = 6  # pairs the contact view's text lists
-STIFFNESS_KINDS = ("held", "free")  # Nastran Stiffness Glyphs' Stiffness entries (nastran_pv.glyphs)
-STIFFNESS_COLORS = ("Log10Stiffness", "Log10Anisotropy", "NID")  # its Color By entries
 
 
 def contact_pairs(model):
@@ -1783,6 +1781,9 @@ def view_dmig(model, view, stiffness=None, matrices=None, size=None, color_by=No
     by ``color_by`` (Log10Stiffness, Log10Anisotropy, NID). ``stiffness`` ("held" or "free"),
     ``matrices`` (names), ``size`` and ``scale`` (Scale Factor) set 'NPV stiffness glyphs'; left None
     they keep its settings."""
+    from nastran_pv.fields.common import field_strings
+    from nastran_pv.glyphs import STIFFNESS_COLORS, STIFFNESS_KINDS
+
     block = model.scoped("DMIGStiffness")
     if block is None:
         info_text(model, view, _missing_text(model, "stiffness DMIGs (KAAX, K2GG ...)"))
@@ -1795,11 +1796,11 @@ def view_dmig(model, view, stiffness=None, matrices=None, size=None, color_by=No
     _set_given(g, Stiffness=None if stiffness is None else STIFFNESS_KINDS.index(stiffness), Size=size,
                ScaleFactor=scale, ColorBy=None if color_by is None else STIFFNESS_COLORS.index(color_by))
     g.UpdatePipeline()
-    out = fetch(g).GetFieldData()
+    glyph_data = fetch(g)
+    out = glyph_data.GetFieldData()
 
     def strings(name):
-        arr = out.GetAbstractArray(name)
-        return [arr.GetValue(i) for i in range(arr.GetNumberOfValues())] if arr is not None else []
+        return field_strings(glyph_data, name)
 
     kind = (strings("StiffnessKind") or ["held"])[0]
     drawn = strings("StiffnessMatrices")
@@ -1815,7 +1816,7 @@ def view_dmig(model, view, stiffness=None, matrices=None, size=None, color_by=No
     d = _show(g, view)
     d.Representation = "Surface"
     array = enum_text(g, "ColorBy")
-    if array == "NID":
+    if array == "NID" or glyph_data.GetPointData().GetArray(array) is None:  # NID, or an all-NaN array
         solid(d, [0.35, 0.55, 0.85])
     else:
         lut = continuous(d, "POINTS", array, preset="Turbo", view=view)

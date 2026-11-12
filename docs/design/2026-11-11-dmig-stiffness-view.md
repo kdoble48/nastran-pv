@@ -59,3 +59,15 @@ rotations view); not asked for.
 
 Rotational stiffness ellipsoids, coupling lines between grids, a sparse free stiffness, DMIGs in
 the model diff.
+
+## Code review (PR #84)
+
+Fixed: a principal stiffness below 1e-9 of its grid's largest is round-off and 0 (it had become
+K_ref, sizing every grid at full length, and made Log10Anisotropy ~16); a Cholesky pivot below the
+round-off cutoff of its diagonal term means no free stiffness (a direction grounded nowhere passed the
+factorization and drew noise); only the translational columns of K⁻¹ are solved; the matrices are
+read once per build; the default matrix is the first selected one that has grids; all-NaN glyph
+arrays are left out (VTK's XML reader); the default choice moved to `glyphs.default_stiffness_matrices`;
+the view imports the glyphs' constants and uses `field_strings`; KHeld and KFree are times the run's
+scale. Still computed on every build (cached per deck): the free inverse, at most a few seconds at 6000 DOFs.
+

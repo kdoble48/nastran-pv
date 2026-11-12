@@ -5,9 +5,9 @@ Hand-worked:
 - the chain deck below: a spring k = 10 from grid 1 to ground and one from grid 1 to grid 2, both
   along X: K = [[20, -10], [-10, 10]]. Held (the other DOF fixed): 20 at grid 1, 10 at grid 2.
   K⁻¹ = [[0.1, 0.1], [0.1, 0.2]], so free (the other DOF free): 1/0.1 = 10 and 1/0.2 = 5.
-- tests/data/dmig.bdf: KG's 50 on grid 3's CD y (= basic -X) is 50 in basic XX, held and free
-  (one DOF: nothing else to hold or free); KS is free-free (no free stiffness); KP has no grid of
-  the deck.
+- tests/data/dmig.bdf: KG's 50 on grid 3's CD y (= basic -X) is basic XX, held and free (one DOF:
+  nothing else to hold or free), times the run's scale 0.5 (K2GG = 2.0*KS + KG, PARAM,CK2 0.5): 25;
+  KS (x 1) is free-free (no free stiffness); KP has no grid of the deck.
 """
 import math
 
@@ -67,7 +67,7 @@ def test_frames_free_free_and_missing_grids():
     by = {(names[m], n): i for i, (m, n) in enumerate(zip(arr(block, "MatrixId"), arr(block, "NID")))}
     held, free = arr(block, "KHeld").reshape(-1, 3, 3), arr(block, "KFree").reshape(-1, 3, 3)
     want = np.zeros((3, 3))
-    want[0, 0] = 50  # CD y is basic -X: Bᵀ K B puts it on XX
+    want[0, 0] = 25  # CD y is basic -X: Bᵀ K B puts it on XX; K2GG's 0.5 scale
     np.testing.assert_allclose(held[by[("KG", 3)]], want, atol=1e-12)
     np.testing.assert_allclose(free[by[("KG", 3)]], want, atol=1e-12)
     assert np.isnan(free[by[("KS", 1)]]).all() and held[by[("KS", 1)]][0, 0] == 100
@@ -117,7 +117,7 @@ def test_ellipsoids_of_the_chain(chain):
     assert _extent(out, 1, 1) == pytest.approx(s * 0.15)  # no stiffness in Y: the floor
     first = {name: arr(out, name)[0] for name in ("Stiffness", "StiffnessMin", "Log10Stiffness")}
     assert first == pytest.approx({"Stiffness": 20, "StiffnessMin": 0, "Log10Stiffness": math.log10(20)})
-    assert np.isnan(arr(out, "Log10Anisotropy")).all()  # no stiffness across: not finite
+    assert out.GetPointData().GetArray("Log10Anisotropy") is None  # no stiffness across: all NaN, left out
     fd = out.GetFieldData()
     assert (field_strings(out, "StiffnessKind"), field_strings(out, "StiffnessMatrices")) == (["held"], ["KC"])
     assert arr(out, "StiffnessReference", "field").tolist() == [10]
@@ -140,3 +140,41 @@ def test_matrix_choice_and_grids_without_a_free_stiffness():
     none = glyphs.stiffness_glyphs(block, diag=10.0, kind="free", matrices=["KS"])
     assert none.GetNumberOfPoints() == 0 and arr(none, "StiffnessGrids", "field").tolist() == [0]
     assert field_strings(none, "StiffnessMatrices") == ["KS"]
+
+
+def test_round_off_eigenvalues_are_zero(tmp_path):
+    # KXX = 50 alone in a frame rotated 30 degrees about Z: eigh gives ~1e-15 for the two empty
+    # directions; they must not become K_ref (which would size every grid at full length)
+    text = CHAIN.replace("GRID,1,,0.,0.,0.", "CORD2R,7,,0.,0.,0.,0.,0.,1.\n,0.866025403784,0.5,0.\nGRID,1,,0.,0.,0.,7")
+    text = text.replace("GRID,2,,1.,0.,0.", "GRID,2,,1.,0.,0.,7")
+    path = tmp_path / "rot.bdf"
+    path.write_text(text)
+    block = get_block(build_multiblock(load_deck(path, echo=False)), "DMIGStiffness")
+    out = glyphs.stiffness_glyphs(block, diag=100.0)
+    assert arr(out, "StiffnessReference", "field").tolist() == pytest.approx([10])
+    assert out.GetPointData().GetArray("Log10Anisotropy") is None
+
+
+def test_a_direction_grounded_nowhere_has_no_free_stiffness(tmp_path):
+    # grid 1 grounded in X only; Y coupled to grid 2 but neither is grounded in Y: singular, though a
+    # Cholesky may pass on round-off pivots
+    text = CHAIN.replace("DMIG,KC,2,1,,1,1,-10.,\n,2,1,10.\n",
+                         "DMIG,KC,2,1,,1,1,-10.,\n,2,1,10.\nDMIG,KC,1,2,,1,2,1.\nDMIG,KC,2,2,,1,2,-1.,\n,2,2,1.\n")
+    path = tmp_path / "y.bdf"
+    path.write_text(text)
+    deck = load_deck(path, echo=False)
+    gs = matrices.grid_stiffness(deck, matrices.read(deck)[0])
+    assert gs.free is None and gs.note.startswith(("singular to round-off", "not positive definite"))
+
+
+def test_the_default_matrix_has_grids():
+    block = get_block(build_multiblock(load_deck(DATA / "dmig.bdf", echo=False)), "DMIGStiffness")
+    assert glyphs.default_stiffness_matrices(block) == {"KG"}  # K2GG, and on deck grids (KP has none)
+
+
+def test_the_scale_is_applied(tmp_path):
+    path = tmp_path / "s.bdf"
+    path.write_text(CHAIN.replace("K2GG = KC", "K2GG = 3.0*KC"))
+    block = get_block(build_multiblock(load_deck(path, echo=False)), "DMIGStiffness")
+    assert _xx(block, "KHeld") == pytest.approx([60, 30]) and _xx(block, "KFree") == pytest.approx([30, 15])
+

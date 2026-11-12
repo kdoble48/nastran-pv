@@ -217,9 +217,10 @@ def build_multiblock(deck: Deck, opts: Options | None = None, progress: Progress
     if opts.contact:
         with step("ContactSurfaces"):
             blocks.add("ContactSurfaces", build_contact(deck))
-    if opts.dmig and getattr(model, "dmig", None):
+    dmigs = matrices.read(deck) if getattr(model, "dmig", None) else []  # read once: the block and the table
+    if opts.dmig and dmigs:
         with step("DMIG stiffness"):
-            blocks.add(matrices.BLOCK, matrices.stiffness_block(deck, matrices.read(deck)))
+            blocks.add(matrices.BLOCK, matrices.stiffness_block(deck, dmigs))
 
     mb = blocks.mb
     vtkutil.write_field_table(mb, "GRAV_", grav)
@@ -254,9 +255,9 @@ def build_multiblock(deck: Deck, opts: Options | None = None, progress: Progress
     vtkutil.add_array(fd, "ConcentratedMass", np.array([conc_mass]))
     vtkutil.add_array(fd, "ModelMass", np.array([mass]))
     vtkutil.add_array(fd, "ModelCG", cg[None, :], skip_all_nan=True)
-    if getattr(model, "dmig", None):
+    if dmigs:
         with step("DMIG matrices"):
-            matrices.write(mb, deck)
+            matrices.write(mb, deck, dmigs)
     if any(t in (getattr(model, "reject_count", None) or {}) for t in fluid.USED_REJECTS):
         with step("MFLUID virtual mass"):
             fluid.write(mb, deck)

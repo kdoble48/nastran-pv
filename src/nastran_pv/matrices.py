@@ -415,12 +415,13 @@ def with_model(model_mass: float, model_cg, wtmass: float, dmig: tuple[float, np
     return _combined([(model_mass, model_cg), (dmig[0] / (wtmass or 1.0), dmig[1])])
 
 
-def write(mb, deck) -> None:
+def write(mb, deck, matrices: list[Matrix] | None = None) -> None:
     """The ``DMIG_`` table and, when a mass DMIG is selected, ``DMIGMass``, ``DMIGCG``,
-    ``ModelMassWithDMIG`` and ``ModelCGWithDMIG`` on the root of ``mb`` (after ``ModelMass``)."""
+    ``ModelMassWithDMIG`` and ``ModelCGWithDMIG`` on the root of ``mb`` (after ``ModelMass``).
+    ``matrices``: :func:`read`'s, when the caller has them already."""
     from . import vtkutil
 
-    matrices = read(deck)
+    matrices = read(deck) if matrices is None else matrices
     rows = table_rows(deck, matrices)
     vtkutil.write_field_table(mb, "DMIG_", rows)
     tot = totals(rows)
@@ -592,8 +593,10 @@ def _local_blocks(a: np.ndarray, index: np.ndarray) -> np.ndarray:
     return out
 
 
-def _free_inverse(m: Matrix) -> tuple[np.ndarray | None, str]:
-    """K⁻¹ (dense) of a positive definite stiffness, or (None, why not)."""
+def _free_inverse(m: Matrix, columns: np.ndarray) -> tuple[np.ndarray | None, str]:
+    """The ``columns`` of K⁻¹ (dense, n x len(columns)) of a positive definite stiffness, or (None,
+    why not). A Cholesky pivot below the round-off cutoff (:func:`zero_tol`) of its diagonal term
+    is a mechanism or a direction grounded nowhere: the factor exists, its inverse is noise."""
     n = m.data.shape[0]
     if n > FREE_MAX:
         return None, f"{n} DOFs, more than {FREE_MAX}: the free stiffness needs a dense inverse"
@@ -604,18 +607,24 @@ def _free_inverse(m: Matrix) -> tuple[np.ndarray | None, str]:
         factor = sla.cho_factor(k)
     except (np.linalg.LinAlgError, ValueError):
         return None, "not positive definite (free-free, a mechanism or a negative term): no inverse"
-    return sla.cho_solve(factor, np.eye(n)), ""
+    pivots = np.diag(factor[0]) ** 2
+    diag = np.diag(k)
+    if np.any(pivots < zero_tol(m) * np.where(diag > 0, diag, 1.0)):
+        return None, "singular to round-off (a mechanism, or a direction grounded nowhere): no inverse"
+    rhs = np.zeros((n, len(columns)))
+    rhs[columns, np.arange(len(columns))] = 1.0
+    return sla.cho_solve(factor, rhs), ""
 
 
 def grid_stiffness(deck, m: Matrix, free: bool = True) -> GridStiffness:
-    """:class:`GridStiffness` of a square real stiffness DMIG, in basic. A component a grid lacks
-    has no stiffness (a zero row and column). The free stiffness exists for a grounded,
+    """:class:`GridStiffness` of a square real stiffness DMIG, in basic, times the scale the run
+    applies (``m.scale``). A component a grid lacks has no stiffness (a zero row and column). The free stiffness exists for a grounded,
     positive definite matrix of up to :data:`FREE_MAX` DOFs, and is cached on the deck."""
     nids, index = _translational(m, deck)
     xyz = deck.xyz[deck.lookup(nids)] if len(nids) else np.zeros((0, 3))
     b = _bases_at(deck, nids, xyz)
     rotate = lambda local: np.transpose(b, (0, 2, 1)) @ local @ b  # noqa: E731 - K_basic = Bᵀ K B
-    held = rotate(_local_blocks(m.data.tocsr(), index))
+    held = rotate(_local_blocks(m.data.tocsr(), index)) * m.scale
     free_k, note = None, ""
     if free and len(nids):
         key = ("dmig free", m.name)
@@ -625,11 +634,14 @@ def grid_stiffness(deck, m: Matrix, free: bool = True) -> GridStiffness:
             if np.isfinite(ratio).any() and np.nanmax(ratio) < zero_tol(m):
                 deck.cache[key] = (None, "free-free: no inverse, every grid can move as a rigid body")
             else:
-                inverse, why = _free_inverse(m)
+                columns = np.unique(index[index >= 0])  # only the translational columns of K⁻¹
+                inverse, why = _free_inverse(m, columns)
                 if inverse is None:
                     deck.cache[key] = (None, why)
                 else:
-                    flex = _local_blocks(inverse, index)
+                    col = np.full(m.data.shape[0], -1, dtype=np.int64)
+                    col[columns] = np.arange(len(columns))
+                    flex = _local_blocks(inverse[:, np.maximum(col, 0)], index)
                     local = np.zeros_like(flex)
                     for g in range(len(nids)):
                         on = index[g] >= 0
@@ -640,6 +652,7 @@ def grid_stiffness(deck, m: Matrix, free: bool = True) -> GridStiffness:
                             local[g] = np.nan
                     deck.cache[key] = (rotate(local), "")
         free_k, note = deck.cache[key]
+        free_k = None if free_k is None else free_k * m.scale
     elif free:
         note = "no grid of the deck has a translational DOF in it"
     return GridStiffness(nids, xyz, held, free_k, note)
