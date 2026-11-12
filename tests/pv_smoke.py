@@ -2348,9 +2348,11 @@ def parity_checks(pv, nv):
 
 
 # what each view selects on tiny_run.bdf ("NPV <what> [<deck>]"; None: the reader). The deck has no
-# CBAR/CBEAM (beams: beam_checks), no contact regions (contact_view_checks), no NSM and no random response; diff: diff_checks
+# CBAR/CBEAM (beams: beam_checks), no contact regions (contact_view_checks), no DMIG (stiffness_view_checks), no NSM
+# and no random response; diff: diff_checks
 VIEW_SELECTS = {"masses": "mass glyphs", "bushes": "bush glyphs", "bushrotations": "bush rotation glyphs",
-                "beams": None, "loads": "load glyphs", "spc": "spc glyphs", "rigid": None, "contact": None, "family": None,
+                "beams": None, "loads": "load glyphs", "spc": "spc glyphs", "rigid": None, "contact": None, "dmig": None,
+                "family": None,
                 "group": None, "pid": None, "mid": None, "elementtype": None, "thickness": None, "nsm": None,
                 "results": "deform", "random": None, "randomsweep": None, "parts": "parts", "grow": "grow",
                 "path": "path", "check": "check", "forces": None, "stress": None, "plies": None}
