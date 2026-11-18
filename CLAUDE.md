@@ -12,6 +12,9 @@ python -m pyflakes src paraview/*.py tests            # lint (never paraview/_ve
 PYTHONPATH=src python -m nastran_pv convert <deck> -o out/x.vtm --derive   # CLI without installing
 PYTHONPATH=src python -m nastran_pv view <deck> --view masses --dry-run    # launcher: print, don't open
 PYTHONPATH=src python -m nastran_pv diff <A> <B> [--csv out/d.csv]         # model diff
+PYTHONPATH=src python -m nastran_pv solve <deck> [--json]                  # MYSTRAN (tools/mystran*); one folder per run
+PYTHONPATH=src python -m nastran_pv modes <B.op2> --against <A.op2>        # modes matched by shape: delta %, MAC
+PYTHONPATH=src python -m nastran_pv connector --list                       # the MCP server's tools
 "C:/Program Files/ParaView 6.0.0/bin/pvpython.exe" --force-offscreen-rendering tests/pv_smoke.py      # plugin, views, filters
 out/pv513/ParaView-5.13.1-Windows-Python3.10-msvc2017-AMD64/bin/pvpython.exe --force-offscreen-rendering tests/pv_smoke.py   # 5.13
 PYTHONPATH=src python -m nastran_pv setup [--dry-run] # install_deps.py (vendor pyNastran+scipy) + install_macros.py
@@ -40,6 +43,7 @@ Project skills in `.claude/skills/` hold the task workflows. Load the matching o
 | Deck → `.vtm`/VTKHDF, fields (`--derive/--map/--calc`), `stats`, model mass/CG/load sets | `converting-nastran-decks` |
 | Screenshots, `render`/`view`, cameras, custom pvpython scripts | `rendering-nastran-views` |
 | Comparing runs or meshes, model diff, the SQLite run store | `comparing-nastran-runs` |
+| Solving with MYSTRAN, comparing modes, a study of deck variants, the connector | `solving-with-mystran` |
 | Missing mass/MID, "(partial)" arrays, empty views, import or locate errors | `troubleshooting-nastran-models` |
 | Code changes: new card, block, array, view, flag or format | `extending-nastran-pv` |
 | Gallery assets, Sphinx site, `sphinx -W` failures | `regenerating-nastran-gallery` |
@@ -82,6 +86,7 @@ the model into the reader's model tree; plugin filters `gather` it, run the same
 | `fields/`, `topology/`, `sections/`, `selection.py`, `diff.py`, `diff_items.py` | derived data, topology tools, beam sections, ID-file selection, model diff |
 | `vtkio.py`, `vtkhdf.py`, `store.py`, `tree.py`, `glyphs.py`, `scene.py` | output formats, run store, model tree, glyph geometry, view scene layers |
 | `cli.py`, `launch.py`, `locate.py`, `progress.py`, `deprecation.py` | commands, ParaView launcher, progress, deprecated aliases |
+| `solve.py`, `modes.py`, `connector.py` | MYSTRAN runs, mode comparison (MAC), the MCP server (each tool runs a CLI command as a child process) |
 | `paraview/nastran_bdf_reader.py`, `paraview/nastran_views.py` | the plugin (reader, filters, shared-property decorators) and the views/macros |
 
 ## Gotchas that bite on any change
@@ -93,6 +98,7 @@ the model into the reader's model tree; plugin filters `gather` it, run the same
 - pvpython: constructors are named after proxy *labels* (`NastranMassGlyphs`); `Fetch` renames
   blocks (`nastran_views.block_names`) and drops a collection's assembly (`nastran_views.fetch`);
   a Python proxy sees only its own class's `__dict__` (shared properties via the `_with_*` decorators).
+- MYSTRAN exits 0 on a fatal and still writes an OP2: judge a run by `solve`'s `ok`, never by the exit code.
 - Bash heredocs mangle `\n` inside Python string literals: write patch scripts with the Write tool.
 - More (solid winding, VTK 9.7 / ParaView 5.13 differences, VTKHDF rewrite rules, pyNastran 1.4.1
   vs main): [docs/architecture.md#gotchas](docs/architecture.md#gotchas).

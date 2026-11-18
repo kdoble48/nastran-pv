@@ -8,6 +8,20 @@ All notable changes to nastran-pv are listed here. The format follows
 
 ### Added
 
+- `nastran-pv solve DECK` runs the MYSTRAN solver on a deck and reports the run: exit 0 with the
+  OP2, or exit 1 with MYSTRAN's `*ERROR` lines and the listing (`--json`, `--timeout`,
+  `--mystran`). A run is judged by its messages, because MYSTRAN exits 0 on a fatal and still
+  writes an OP2. The executable comes from `NASTRAN_PV_MYSTRAN`, `PATH` or a checkout's `tools/`,
+  and `nastran-pv --version` now prints it ([Solving with MYSTRAN](docs/cli.md#solving-with-mystran)).
+- `nastran-pv modes RESULTS` lists the normal modes of an OP2 or HDF5 file and counts the
+  rigid-body ones; `--against REFERENCE` pairs each reference mode with the most similar shape
+  of the other run and gives the frequency difference and the MAC (`--rigid-hz`, `--subcase`,
+  `--csv`, `--json`) ([Comparing modes](docs/cli.md#comparing-modes)).
+- The connector: `nastran-pv connector` is an MCP server that offers `solve`, `modes`, `check`,
+  `convert`, `diff`, `stats`, `render`, any other command and the workflow guides as tools, so an
+  AI assistant working in another folder can run a study through nastran-pv. It needs the new
+  `connector` extra (`mcp>=2`) ([Connector](docs/connector.md)).
+
 - The DMIG stiffness view: `dmig` (toolbar *NPV Overlay DMIG Stiffness*, `nastran-pv view/render`
   preset, the reader panel's *Overlays* > *DMIG stiffness*) draws one ellipsoid per grid of a
   stiffness DMIG, its axes along the principal directions of the grid's 3x3 translational stiffness

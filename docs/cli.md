@@ -15,6 +15,9 @@ nastran-pv mfluid DECK [--csv t.csv]                                # MFLUID flu
 nastran-pv diff   A B [--csv diff.csv] [--grid-tol R] [--rel-tol R] [--skip KIND]  # what changed from A to B
 nastran-pv convert B --diff-against A -o diff.vtm                   # B with the diff on its mesh
 nastran-pv store  add|list|fields|query|compare|open --db runs.sqlite ...
+nastran-pv solve  DECK [--mystran EXE] [--timeout S] [--json]      # solve with MYSTRAN
+nastran-pv modes  RESULTS [--against REF] [--rigid-hz HZ] [--csv t.csv] [--json]  # modes; match to a reference
+nastran-pv connector [--list]                                      # MCP server: the commands as tools
 nastran-pv setup  [--pvpython PATH] [--no-macros] [--dry-run]
 nastran-pv --version                                                # versions, for a bug report
 ```
@@ -22,7 +25,7 @@ nastran-pv --version                                                # versions, 
 `python -m nastran_pv ...` works without installing; add `src` to `PYTHONPATH`. Run any command
 with `--help` for the full option list. `nastran-pv --version` prints the version of nastran-pv,
 the folder it runs from (and the commit, when that is a source checkout), and the versions of
-Python, pyNastran, numpy, VTK and h5py, the `pvpython` it finds and the OS: the lines the
+Python, pyNastran, numpy, VTK and h5py, the `pvpython` and the MYSTRAN it finds and the OS: the lines the
 [bug report form](https://github.com/kdoble48/nastran-pv/issues/new?template=bug_report.yml) asks
 for. It prints them even when a dependency does not import, naming the error.
 
@@ -264,6 +267,82 @@ fluid (or displaced) volume and mass, and the rigid-body added mass about the ba
 ([MFLUID virtual fluid mass](model.md#mfluid-virtual-fluid-mass)). It solves sets of up to 6000
 wetted elements (a dense solve: 4 s at 2000, 13 s at 4000, and over 1 GB of memory at 6000); `convert`
 stops at 2000.
+
+## Solving with MYSTRAN
+
+```bash
+nastran-pv solve runs/a/beam.bdf                 # exit 0 and the OP2, or exit 1 and MYSTRAN's errors
+nastran-pv solve runs/a/beam.bdf --json          # the same as one JSON object
+```
+
+`solve` runs [MYSTRAN](https://github.com/MYSTRANsolver/MYSTRAN), an open-source Nastran-compatible
+solver for linear statics and normal modes, on a deck. MYSTRAN writes its listing (`.F06`), its
+results (`.OP2`) and scratch files next to the deck, so give every run its own folder. Before the
+run, `solve` deletes that deck's old `.op2`, `.f06` and `.err`.
+
+A run is judged by MYSTRAN's messages, not by its exit code: MYSTRAN exits 0 on a fatal error and
+still writes an OP2 (144 bytes, no tables). The run is good when the listing has no `*ERROR` line,
+the exit code is 0 and the OP2 holds tables. Otherwise `solve` prints the `*ERROR` lines and the
+path of the listing and exits 1:
+
+```
+MYSTRAN did not solve beam.bdf (0.1 s):
+  *ERROR 1964: PSOLID ENTRY HAD FIELD FOR IN BLANK WITH ELEMENT TYPE HEXA8
+listing: runs/a/beam.F06
+```
+
+`--json` prints `deck`, `ok`, `op2` (null when the run failed), `f06`, `errors`, `warnings`,
+`seconds`, `returncode` and `files`. `--timeout` (default 3600 s) stops a run that takes too long.
+The executable is `--mystran`, else [`NASTRAN_PV_MYSTRAN`](install.md#finding-mystran), `mystran`
+on `PATH`, or the newest `tools/mystran*` of a source checkout; `nastran-pv --version` shows which.
+
+MYSTRAN does not solve frequency response, transient or complex-eigenvalue runs, and rejects some
+cards a Nastran deck may hold (CQUADR, a PSHELL with MID4, a PSOLID with a blank integration
+field); its error line names the card.
+
+## Comparing modes
+
+```bash
+nastran-pv modes runs/a/beam.OP2                                  # Mode, Hz, Rigid
+nastran-pv modes runs/b/beam.OP2 --against runs/a/beam.OP2        # each mode of a matched in b
+nastran-pv modes runs/b/beam.OP2 --against runs/a/beam.OP2 --csv out/a_b.csv --json
+```
+
+`modes` lists the normal modes of an OP2 or MSC/NX HDF5 results file: the mode number, the
+frequency (from the eigenvalue) and whether it is below `--rigid-hz` (default 1 Hz), which marks
+the rigid-body modes of a free structure. More than six of those means the model has a mechanism.
+
+With `--against REFERENCE`, each reference mode at or above `--rigid-hz` is paired with the mode of
+RESULTS whose shape is most like it:
+
+```
+reference: beam.OP2, subcase 1: 16 modes, 6 below 1 Hz
+compared:  beam.OP2, subcase 1: 16 modes, 6 below 1 Hz; 1025 shared grids
+Mode  Hz       Match  MatchHz  DeltaPct  MAC
+7     661.659  7      661.607  -0.008    1.0000
+8     982.58   8      982.487  -0.009    1.0000
+...
+largest frequency difference -0.010 % (mode 9), smallest MAC 1.0000 (mode 11)
+```
+
+| Column | Meaning |
+|---|---|
+| `Mode`, `Hz` | The reference mode and its frequency |
+| `Match`, `MatchHz` | The mode of RESULTS with the largest MAC, and its frequency |
+| `DeltaPct` | `100 (MatchHz / Hz - 1)` |
+| `MAC` | The modal assurance criterion of the pair, `(a.b)^2 / ((a.a)(b.b))` over the translations of the grids both runs have: 1 for the same shape at any scale or sign, 0 for orthogonal shapes |
+
+Modes are paired by shape, not by number, so a mode that changed order is still found. A low MAC
+says the reference mode has no counterpart; two reference modes may then share a match. The two
+runs must use the same ids for the grids they share, and those grids must write displacements in
+the same coordinate systems (the shapes are compared as the file holds them). `--subcase` picks
+the subcase (default: the first that has modes); `--csv` and `--json` write the rows with full
+precision.
+
+## Connector
+
+`nastran-pv connector` starts an MCP server that offers these commands as tools to an AI
+assistant working in another folder; see [Connector](connector.md).
 
 ## Opening ParaView
 

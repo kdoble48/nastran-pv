@@ -163,3 +163,40 @@ def find_executable(name: str) -> Path:
         if cand.is_file():
             return cand
     raise FileNotFoundError(f"{name} not found; put ParaView's bin folder on PATH or set NASTRAN_PV_PARAVIEW_BIN")
+
+
+MYSTRAN_ENV = "NASTRAN_PV_MYSTRAN"
+_MYSTRAN_VERSION = re.compile(r"(\d+)\.(\d+)(?:\.(\d+))?")
+
+
+def _mystran_key(path: Path) -> tuple[int, int, int]:
+    """(major, minor, patch) of the first version in a release's file name
+    (``mystran-19.0.0-windows-x86_64.exe``); a name without one sorts first."""
+    m = _MYSTRAN_VERSION.search(path.name)
+    return (int(m[1]), int(m[2]), int(m[3] or 0)) if m else (-1, -1, -1)
+
+
+def find_mystran() -> Path:
+    """The MYSTRAN executable ``nastran-pv solve`` runs, in this order:
+
+    1. ``NASTRAN_PV_MYSTRAN``, the path of the executable (an error if it is not a file);
+    2. ``mystran`` on PATH;
+    3. the newest ``mystran*`` file in a checkout's ``tools/`` folder (where the release binary
+       goes for the gallery build), walking up from this file.
+    """
+    env = os.environ.get(MYSTRAN_ENV)
+    if env:
+        if not Path(env).is_file():
+            raise FileNotFoundError(f"{MYSTRAN_ENV}={env} is not a file")
+        return Path(env)
+    found = shutil.which("mystran")
+    if found:
+        return Path(found)
+    for parent in Path(__file__).resolve().parents:
+        tools = parent / "tools"
+        if tools.is_dir():
+            cands = [p for p in tools.glob("mystran*") if p.is_file()]
+            if cands:
+                return max(sorted(cands), key=_mystran_key)
+    raise FileNotFoundError(f"MYSTRAN not found; set {MYSTRAN_ENV} to its executable, or put `mystran` on PATH "
+                            "(releases: https://github.com/MYSTRANsolver/MYSTRAN/releases)")

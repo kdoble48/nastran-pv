@@ -198,7 +198,15 @@ The pipeline is `deck.load_deck` → `assemble.build_multiblock` → optional `r
   `tree.Visibility`, by the reader's *Selection File* and the NPV Show Only Listed, Hide Listed and Highlight Listed macros.
 - `store.py`: SQLite in long format (`runs`, `elements`, `nodes`, `element_values`,
   `node_values`), plus `<db>_vtm/run_<id>.vtm`.
-- `cli.py`: the `convert`, `stats`, `check`, `sections`, `diff` and `store` commands, with shared field options.
+- `cli.py`: the `convert`, `stats`, `check`, `sections`, `diff`, `store`, `solve`, `modes` and `connector` commands, with shared field options.
+- `solve.py` (standard library only): runs MYSTRAN in the deck's folder and returns a `SolveResult`. A run is
+  judged by the `*ERROR` lines of its F06, because MYSTRAN exits 0 on a fatal and still writes an OP2 (144
+  bytes, no tables). `docs/models/make_demo.solve` (the gallery build) calls it.
+- `modes.py`: the eigenvector steps of one subcase as a `ModeSet` (through `results.open_results`, so OP2 and
+  HDF5), `mac`, and `compare_modes`, which pairs each reference mode with the most similar shape of another run.
+- `connector.py`: the MCP server of `nastran-pv connector`. Each tool builds a `nastran-pv` argument list and
+  runs it as a child process (`run_cli`), so no command output or VTK crash reaches the protocol stream on
+  stdout, and all logic stays in the CLI. `mcp` is imported only in `build_server`.
   The `nastran-pv` command enters at `__main__.main`, which answers `--version` from `versions.py`
   (standard library only) before importing `cli.py` and its dependencies.
   `launch.py` provides `view`, `render` and `setup`, and `locate.py` (standard library only) finds

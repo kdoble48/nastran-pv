@@ -9,6 +9,9 @@
     nastran-pv dmig DECK [--modes N] [--csv FILE]            DMIG mass/CG/inertia, free-free, frequencies
     nastran-pv mfluid DECK [--csv FILE]                      MFLUID wetted area, fluid mass, added mass
     nastran-pv diff A B [--csv FILE]                         what changed from model A to model B
+    nastran-pv solve DECK [--mystran EXE] [--json]           solve a deck with MYSTRAN
+    nastran-pv modes RESULTS [--against REF] [--csv FILE]    frequencies; modes matched to a reference run
+    nastran-pv connector [--list]                            MCP server: these commands as tools
     nastran-pv convert B --diff-against A -o diff.vtm        B with the diff on its mesh (+ Removed)
     nastran-pv store add|list|fields|query|compare|open ...  model/results store (SQLite)
     nastran-pv view DECK --view masses                       open the ParaView GUI on a deck
@@ -32,6 +35,7 @@ Results helpers (convert; each step of an --all-steps series too):
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 from pathlib import Path
@@ -861,6 +865,82 @@ class _VersionAction(argparse.Action):
         parser.exit()
 
 
+def cmd_solve(args) -> int:
+    """Solve a deck with MYSTRAN: exit 0 with the OP2, or 1 with MYSTRAN's error lines."""
+    from .solve import run_mystran
+
+    res = run_mystran(args.deck, args.mystran, args.timeout)
+    if args.json:
+        print(json.dumps(res.as_dict(), indent=2))
+        return 0 if res.ok else 1
+    print_warnings(res.warnings)
+    if res.ok:
+        print(f"solved {res.deck.name} in {res.seconds:.1f} s: {res.op2}")
+        return 0
+    print(f"MYSTRAN did not solve {res.deck.name} ({res.seconds:.1f} s):")
+    for line in res.errors:
+        print(f"  {line}")
+    if res.f06:
+        print(f"listing: {res.f06}")
+    return 1
+
+
+def _modes_line(label, summary, rigid_hz) -> str:
+    return (f"{label} {Path(summary['path']).name}, subcase {summary['subcase']}: {summary['modes']} modes, "
+            f"{summary['rigid']} below {rigid_hz:g} Hz")
+
+
+def cmd_modes(args) -> int:
+    """The modes of a results file, or (--against) each reference mode's best match in it."""
+    from . import modes as md
+    from .fields.tables import write_csv
+
+    for path in filter(None, (args.results, args.against)):
+        if not Path(path).is_file():
+            print(f"nastran-pv modes: results file not found: {Path(path).resolve()}", file=sys.stderr)
+            return 2
+    try:
+        found = md.read_modes(args.results, args.subcase)
+        if args.against:
+            out = md.compare_modes(md.read_modes(args.against, args.subcase), found, args.rigid_hz)
+        else:
+            out = md.mode_rows(found, args.rigid_hz)
+    except md.ModesError as exc:
+        print(f"nastran-pv modes: {exc}", file=sys.stderr)
+        return 2
+    rows = out["rows"]
+    if args.csv:
+        out["csv"] = str(write_csv(rows, args.csv))
+    if args.json:
+        print(json.dumps(out, indent=2))
+        return 0
+    if args.against:
+        print(_modes_line("reference:", out["reference"], args.rigid_hz))
+        print(_modes_line("compared: ", out["other"], args.rigid_hz) + f"; {out['shared_grids']} shared grids")
+        _print_rows([{**r, "DeltaPct": f"{r['DeltaPct']:+.3f}", "MAC": f"{r['MAC']:.4f}"} for r in rows], args.limit)
+        worst = max(rows, key=lambda r: abs(r["DeltaPct"]))
+        least = min(rows, key=lambda r: r["MAC"])
+        print(f"largest frequency difference {worst['DeltaPct']:+.3f} % (mode {worst['Mode']}), "
+              f"smallest MAC {least['MAC']:.4f} (mode {least['Mode']})")
+    else:
+        print(_modes_line("modes:", out["summary"], args.rigid_hz))
+        _print_rows(rows, args.limit)
+    if args.csv:
+        print(f"wrote {out['csv']}")
+    return 0
+
+
+def cmd_connector(args) -> int:
+    """Start the MCP server (stdin/stdout), or list its tools."""
+    from . import connector
+
+    if args.list:
+        for tool in connector.TOOLS:
+            print(f"{tool.__name__}: {connector.summary(tool)}")
+        return 0
+    return connector.serve()
+
+
 def main(argv=None) -> int:
     from .launch import nsm_set_id
 
@@ -973,6 +1053,34 @@ def main(argv=None) -> int:
             q.add_argument("--limit", type=int, default=50)
             q.add_argument("--csv")
     st.set_defaults(func=cmd_store)
+
+    so = sub.add_parser("solve", help="solve a deck with MYSTRAN (statics, normal modes)")
+    so.add_argument("deck", help="run deck; MYSTRAN writes its files next to it (one folder per run)")
+    so.add_argument("--mystran", help="MYSTRAN executable (default: NASTRAN_PV_MYSTRAN, `mystran` on PATH, "
+                                      "a checkout's tools/ folder)")
+    so.add_argument("--timeout", type=float, default=3600.0, metavar="SECONDS", help="stop the run after this long "
+                                                                                    "(default 3600)")
+    so.add_argument("--json", action="store_true", help="print the result as JSON (ok, op2, f06, errors, warnings, "
+                                                        "seconds, files)")
+    so.set_defaults(func=cmd_solve)
+
+    mo = sub.add_parser("modes", help="normal modes of a results file; with --against, each reference mode's "
+                                      "best match (frequency difference, MAC)")
+    mo.add_argument("results", help="OP2 or MSC/NX HDF5 results with normal modes")
+    mo.add_argument("--against", metavar="REFERENCE", help="reference results: pair each of its modes with the "
+                                                           "most similar mode of RESULTS")
+    mo.add_argument("--subcase", type=int, default=None, metavar="N", help="subcase (default: the first with modes)")
+    mo.add_argument("--rigid-hz", type=float, default=1.0, metavar="HZ",
+                    help="modes below this are rigid-body modes: counted, not compared (default 1.0)")
+    mo.add_argument("--limit", type=int, default=None, help="rows printed")
+    mo.add_argument("--csv", help="also write the table to CSV")
+    mo.add_argument("--json", action="store_true", help="print the rows and counts as JSON")
+    mo.set_defaults(func=cmd_modes)
+
+    cn = sub.add_parser("connector", help="MCP server on stdin/stdout: solve, modes, check, diff, convert, render "
+                                          "and the workflow guides as tools for an MCP client")
+    cn.add_argument("--list", action="store_true", help="print the tools and exit")
+    cn.set_defaults(func=cmd_connector)
 
     from .launch import add_parsers
 

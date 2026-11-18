@@ -227,7 +227,7 @@ def solve_results(ucrm9, mystran, out) -> dict:
         deck = write(out / key / name)
         try:
             solved[key] = (deck, md.solve(deck, mystran))
-        except RuntimeError as exc:  # MYSTRAN wrote no OP2: its .f06 tail is in the message
+        except RuntimeError as exc:  # the solve failed: MYSTRAN's error lines are in the message
             print(f"skip model {key}: {exc}", flush=True)
     if ucrm9:
         copy, models = ucrm9_for_mystran(ucrm9, out / "ucrm9-mystran")

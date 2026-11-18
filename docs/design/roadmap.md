@@ -322,5 +322,6 @@ Worth doing, but not among the 15:
 ## Out of scope for 1.0
 
 - conda-forge packaging, and ParaView older than 5.13.
-- Running solvers, beyond the existing MYSTRAN gallery solve.
+- Running solvers other than MYSTRAN (`nastran-pv solve`, added on 2026-11-17 for studies run through the
+  connector: `2026-11-17-mystran-connector.md`).
 - Editing decks, or input formats other than Nastran.
