@@ -27,7 +27,7 @@ work in (for example a study folder next to your decks):
     "nastran-pv": {
       "command": "python",
       "args": ["-m", "nastran_pv", "connector"],
-      "env": {"PYTHONPATH": "D:/ws/nastran_pv/src"}
+      "env": {"PYTHONPATH": "C:/path/to/nastran-pv/src"}
     }
   }
 }

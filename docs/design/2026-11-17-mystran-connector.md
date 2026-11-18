@@ -5,7 +5,7 @@ the implementer's unless marked *user*.
 
 ## Why
 
-The user is starting a study outside this repository (`D:\ws\rbe_benchmark`): the connection-element
+The user is starting a study in a folder of its own, outside this repository: the connection-element
 examples of Predictive Engineering's RBE2/RBE3/CBUSH white paper, rebuilt and solved with MYSTRAN.
 Its first phase cuts a solid brick beam at midspan, rejoins it several ways and compares the modes
 with the one-piece beam; the second is a bolted flange joint with several bolt representations.
