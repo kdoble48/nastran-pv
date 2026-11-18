@@ -8,7 +8,9 @@ import asyncio
 import contextlib
 import io
 import json
+import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -89,11 +91,16 @@ def test_each_tool_builds_its_command(recorded):
     ]
 
 
-def test_commands_that_would_open_a_window_or_recurse_are_refused(recorded):
-    for args, why in ((["view", "m.bdf"], "render tool"), (["connector"], "another connector"), ([], "no arguments")):
+def test_commands_that_open_a_window_install_or_recurse_are_refused(recorded):
+    for args, why in ((["view", "m.bdf"], "render tool"), (["connector"], "another connector"), ([], "no arguments"),
+                      (["store", "open", "--db", "runs.sqlite", "3"], "opens the ParaView GUI"),
+                      (["render", "m.bdf", "--onscreen"], "offscreen only"), (["setup"], "run `nastran-pv setup` yourself")):
         reply = connector.nastran_pv(args)
-        assert reply["ok"] is False and why in reply["error"]
+        assert reply["ok"] is False and why in reply["error"], args
     assert recorded == []
+    assert connector.nastran_pv(["store", "list", "--db", "runs.sqlite"])["ok"]     # the rest of store runs
+    assert connector.nastran_pv(["render", "m.bdf", "--dry-run"])["ok"]
+    assert recorded == [["store", "list", "--db", "runs.sqlite"], ["render", "m.bdf", "--dry-run"]]
 
 
 def test_the_commands_are_ones_the_cli_accepts(inprocess, tmp_path):
@@ -119,20 +126,39 @@ def test_render_runs_offscreen_with_the_presets_and_step(recorded, tmp_path, cap
     assert "--step 1" in command
 
 
-def test_render_lists_the_images_it_wrote(monkeypatch, tmp_path):
+def test_render_lists_the_images_this_call_wrote(monkeypatch, tmp_path):
     shots = tmp_path / "shots"
     shots.mkdir()
-    (shots / "old.png").write_bytes(b"")
-    import os
-    os.utime(shots / "old.png", (0, 0))   # from an earlier render
+    (shots / "other_call.png").write_bytes(b"")       # another render's, written at the same time
 
     def run(args, timeout=None):
         (shots / "m_rigid_iso.png").write_bytes(b"")
-        (shots / "notes.txt").write_text("")
-        return {"command": "c", "exit_code": 0, "stdout": "", "stderr": ""}
+        # what `render` prints: a path per image; one it could not write is not listed as written
+        printed = f"{shots / 'm_rigid_iso.png'}\n{shots / 'm_bushes_iso.png'}\nWRN - no configuration file\n"
+        return {"command": "c", "exit_code": 0, "stdout": printed, "stderr": ""}
 
     monkeypatch.setattr(connector, "run_cli", run)
     assert connector.render(DECK, str(shots))["images"] == [str((shots / "m_rigid_iso.png").resolve())]
+
+
+def test_a_child_gets_a_checkouts_src_but_never_site_packages_on_pythonpath(monkeypatch):
+    seen = []
+
+    def run_tree(cmd, cwd=None, env=None, timeout=None, merge=False):
+        seen.append((cmd, env))
+        return 0, b"out\r\n", b""
+
+    monkeypatch.setattr(connector, "run_tree", run_tree)
+    monkeypatch.setenv("PYTHONPATH", "elsewhere")
+    src = str(Path(connector.__file__).resolve().parents[1])
+    ran = connector.run_cli(["--version"])                         # this checkout
+    cmd, env = seen[-1]
+    assert cmd == [sys.executable, "-m", "nastran_pv", "--version"] and ran["stdout"] == "out\n"
+    assert env["PYTHONPATH"].split(os.pathsep) == [src, "elsewhere"] and env["PYTHONIOENCODING"] == "utf-8"
+    # an installed package: pvpython (render) would inherit site-packages and load the pip VTK
+    monkeypatch.setattr(connector, "_site_dirs", lambda: {Path(src)})
+    connector.run_cli(["--version"])
+    assert seen[-1][1]["PYTHONPATH"] == "elsewhere"
 
 
 def test_solve_and_modes_return_their_json_fields(inprocess, tmp_path):

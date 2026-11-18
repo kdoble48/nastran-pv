@@ -16,7 +16,7 @@ nastran-pv diff   A B [--csv diff.csv] [--grid-tol R] [--rel-tol R] [--skip KIND
 nastran-pv convert B --diff-against A -o diff.vtm                   # B with the diff on its mesh
 nastran-pv store  add|list|fields|query|compare|open --db runs.sqlite ...
 nastran-pv solve  DECK [--mystran EXE] [--timeout S] [--json]      # solve with MYSTRAN
-nastran-pv modes  RESULTS [--against REF] [--rigid-hz HZ] [--csv t.csv] [--json]  # modes; match to a reference
+nastran-pv modes  RESULTS [--against REF] [--rigid-hz HZ] [--subcase N] [--limit N] [--csv t.csv] [--json]
 nastran-pv connector [--list]                                      # MCP server: the commands as tools
 nastran-pv setup  [--pvpython PATH] [--no-macros] [--dry-run]
 nastran-pv --version                                                # versions, for a bug report
@@ -311,6 +311,8 @@ nastran-pv modes runs/b/beam.OP2 --against runs/a/beam.OP2 --csv out/a_b.csv --j
 `modes` lists the normal modes of an OP2 or MSC/NX HDF5 results file: the mode number, the
 frequency (from the eigenvalue) and whether it is below `--rigid-hz` (default 1 Hz), which marks
 the rigid-body modes of a free structure. More than six of those means the model has a mechanism.
+A mode at exactly 0 Hz counts as rigid at any `--rigid-hz`. A file without readable results, such
+as the OP2 MYSTRAN leaves after a failed run, gives a message and exit code 2.
 
 With `--against REFERENCE`, each reference mode at or above `--rigid-hz` is paired with the mode of
 RESULTS whose shape is most like it:
@@ -336,8 +338,8 @@ Modes are paired by shape, not by number, so a mode that changed order is still 
 says the reference mode has no counterpart; two reference modes may then share a match. The two
 runs must use the same ids for the grids they share, and those grids must write displacements in
 the same coordinate systems (the shapes are compared as the file holds them). `--subcase` picks
-the subcase (default: the first that has modes); `--csv` and `--json` write the rows with full
-precision.
+the subcase (default: the first that has modes); `--limit` cuts the printed table; `--csv` and
+`--json` write every row with full precision.
 
 ## Connector
 

@@ -23,7 +23,13 @@ MESSAGES = {
                  "               THIS IS FOR ROW AND COL IN THE MATRIX FOR GRID POINT     1019 COMPONENT   2\n"),
     "empty": " *INFORMATION: NOTHING WAS REQUESTED\n",
 }
-EMPTY_OP2 = 144  # bytes: MYSTRAN's OP2 without tables
+# the OP2 MYSTRAN 19.0.0 wrote after a fatal: a header (NASTRAN FORT TAPE ID CODE), no tables
+EMPTY_OP2_FILE = bytes.fromhex(
+    "0400000003000000040000000c0000000300000018000000150000000c0000000400000007000000040000001c000000"
+    "4e41535452414e20464f5254205441504520494420434f4445202d201c00000004000000020000000400000008000000"
+    "58585858585858580800000004000000ffffffff04000000040000000000000004000000040000000000000004000000")
+EMPTY_OP2 = len(EMPTY_OP2_FILE)  # 144 bytes
+SLEEP = 8.0  # seconds the `sleep` run takes: longer than any time limit a test gives it
 
 
 def main(argv) -> int:
@@ -33,24 +39,25 @@ def main(argv) -> int:
         print("forrtl: severe (157): Program Exception - access violation")
         return 3
     if mode == "sleep":
-        time.sleep(4.0)
+        time.sleep(SLEEP)
         mode = "ok"
     text = BEGIN.format(name=deck.name) + MESSAGES[mode] + END
     deck.with_name(deck.stem + ".F06").write_text(text)
     deck.with_name(deck.stem + ".ERR").write_text(text)
-    deck.with_name(deck.stem + ".OP2").write_bytes(b"\0" * (4096 if mode in ("ok", "warn") else EMPTY_OP2))
+    deck.with_name(deck.stem + ".OP2").write_bytes(b"\0" * 4096 if mode in ("ok", "warn") else EMPTY_OP2_FILE)
     return 0  # MYSTRAN exits 0 on a fatal too
 
 
 def fake_solver(folder) -> Path:
-    """An executable in ``folder`` that runs this script with the running interpreter."""
+    """An executable in ``folder`` that runs this script with the running interpreter, as a child
+    of the launcher (no ``exec``): a time limit has to stop both, like a solver behind a wrapper."""
     folder = Path(folder)
     if sys.platform.startswith("win"):
         path = folder / "fake_mystran.cmd"
         path.write_text(f'@"{sys.executable}" "{Path(__file__).resolve()}" %*\n')
     else:
         path = folder / "fake_mystran"
-        path.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{Path(__file__).resolve()}" "$@"\n')
+        path.write_text(f'#!/bin/sh\n"{sys.executable}" "{Path(__file__).resolve()}" "$@"\n')
         path.chmod(0o755)
     return path
 

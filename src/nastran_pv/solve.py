@@ -11,14 +11,17 @@ Standard library only (with ``locate``): the connector and the gallery build imp
 """
 from __future__ import annotations
 
+import os
+import signal
 import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from .locate import find_mystran
 
-__all__ = ["SolveResult", "run_mystran", "read_messages", "EMPTY_OP2_BYTES"]
+__all__ = ["SolveResult", "run_mystran", "read_messages", "run_tree", "EMPTY_OP2_BYTES"]
 
 EMPTY_OP2_BYTES = 144  # the OP2 MYSTRAN 19 writes when it stops on an error: a header, no tables
 STALE = (".op2", ".f06", ".err")  # a deck's old outputs, removed before a run (any case)
@@ -68,6 +71,47 @@ def read_messages(path) -> tuple[list[str], list[str]]:
     return list(dict.fromkeys(errors)), list(dict.fromkeys(warnings))
 
 
+def _kill_tree(proc) -> None:
+    """Kill ``proc`` and every process it started."""
+    if sys.platform.startswith("win"):
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=0x08000000)
+    else:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)  # its own session (run_tree), so its own group
+        except (ProcessLookupError, PermissionError):
+            pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
+
+
+def run_tree(cmd, cwd=None, env=None, timeout: float | None = None, merge: bool = False):
+    """Run ``cmd`` with stdin closed and its output captured. After ``timeout`` seconds, or when
+    this process is interrupted, ``cmd`` *and the processes it started* are killed: a launcher
+    script's solver or a command's pvpython would otherwise run on, and on Windows keep the pipes
+    open so that the call does not return.
+
+    Returns ``(returncode, stdout, stderr)`` as bytes, with return code None after a timeout;
+    ``merge`` puts stderr into stdout. No console window opens on Windows. Raises OSError when
+    ``cmd`` cannot be started.
+    """
+    kwargs = {"creationflags": 0x08000000} if sys.platform.startswith("win") else {"start_new_session": True}
+    proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT if merge else subprocess.PIPE, **kwargs)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+        return proc.returncode, out, err or b""
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+        out, err = proc.communicate()
+        return None, out, err or b""
+    except BaseException:  # Ctrl+C: the child has no console of its own to hear it
+        _kill_tree(proc)
+        raise
+
+
 def _siblings(deck: Path) -> list[Path]:
     """The files next to the deck with its name and another suffix, whatever their case (MYSTRAN
     writes upper-case names; a case-sensitive file system may also hold lower-case ones)."""
@@ -89,7 +133,7 @@ def run_mystran(deck, mystran=None, timeout: float | None = 3600.0) -> SolveResu
         res.errors.append(f"deck not found: {deck}")
         return res
     try:
-        exe = Path(mystran).resolve() if mystran else find_mystran()
+        exe = (Path(mystran) if mystran else find_mystran()).resolve()  # it runs in the deck's folder
         if not exe.is_file():
             raise FileNotFoundError(f"MYSTRAN executable not found: {exe}")
     except FileNotFoundError as exc:
@@ -102,12 +146,10 @@ def run_mystran(deck, mystran=None, timeout: float | None = 3600.0) -> SolveResu
     start = time.monotonic()
     said = ""
     try:
-        done = subprocess.run([str(exe), deck.name], cwd=deck.parent, stdin=subprocess.DEVNULL,
-                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
-        res.returncode = done.returncode
-        said = next((ln.strip() for ln in reversed(done.stdout.decode("latin-1").splitlines()) if ln.strip()), "")
-    except subprocess.TimeoutExpired:
-        res.errors.append(f"MYSTRAN timed out after {timeout:g} s")
+        res.returncode, printed, _ = run_tree([str(exe), deck.name], cwd=deck.parent, timeout=timeout, merge=True)
+        if res.returncode is None:
+            res.errors.append(f"MYSTRAN timed out after {timeout:g} s")
+        said = next((ln.strip() for ln in reversed(printed.decode("latin-1").splitlines()) if ln.strip()), "")
     except OSError as exc:
         res.errors.append(f"MYSTRAN could not be started ({exe}): {exc}")
     res.seconds = time.monotonic() - start

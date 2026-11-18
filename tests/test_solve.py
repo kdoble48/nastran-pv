@@ -5,11 +5,12 @@ real one when MYSTRAN_BIN is set.
 """
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
 
-from fake_mystran import EMPTY_OP2, fake_solver, write_deck
+from fake_mystran import EMPTY_OP2, SLEEP, fake_solver, write_deck
 from nastran_pv import locate, solve
 from nastran_pv.cli import main
 
@@ -23,7 +24,7 @@ def fake(tmp_path):
 
 
 def test_a_good_run_is_ok_and_names_its_files(tmp_path, fake):
-    deck = write_deck(tmp_path / "a run" / "beam.bdf", "ok")   # a folder with a space
+    deck = write_deck(tmp_path / "a run" / "beam.bdf", "ok").resolve()   # a folder with a space
     res = solve.run_mystran(deck, fake)
     assert res.ok and res.errors == [] and res.warnings == [] and res.returncode == 0
     assert res.op2 == deck.with_name("beam.OP2") and res.op2.is_absolute() and res.op2.is_file()
@@ -32,7 +33,7 @@ def test_a_good_run_is_ok_and_names_its_files(tmp_path, fake):
 
 
 def test_a_fatal_is_not_ok_although_mystran_exits_0_and_writes_an_op2(tmp_path, fake):
-    deck = write_deck(tmp_path / "beam.bdf", "fatal")
+    deck = write_deck(tmp_path / "beam.bdf", "fatal").resolve()
     res = solve.run_mystran(deck, fake)
     assert res.returncode == 0 and deck.with_name("beam.OP2").stat().st_size == EMPTY_OP2 == solve.EMPTY_OP2_BYTES
     assert not res.ok and res.op2 is None and res.errors == [PSOLID_IN]   # not the "Stopping processing" line
@@ -67,9 +68,24 @@ def test_no_error_line_but_no_results_is_not_ok(tmp_path, fake):
     assert not res.ok and res.errors == ["MYSTRAN wrote no results (no OP2 with tables); see beam.F06"]
 
 
-def test_a_run_over_the_time_limit_is_not_ok(tmp_path, fake):
+def test_a_run_over_the_time_limit_is_stopped_with_what_it_started(tmp_path, fake):
+    # the fake solver is a launcher whose child sleeps: killing the launcher alone would leave the
+    # child holding the pipes (Windows: no return before it ends) and writing results afterwards
     res = solve.run_mystran(write_deck(tmp_path / "beam.bdf", "sleep"), fake, timeout=0.5)
-    assert not res.ok and res.op2 is None and res.errors[0] == "MYSTRAN timed out after 0.5 s"
+    assert not res.ok and res.op2 is None and res.errors == ["MYSTRAN timed out after 0.5 s"]
+    assert res.returncode is None and res.seconds < SLEEP - 2.0
+    assert not list(tmp_path.glob("beam.[oO][pP]2"))
+
+
+def test_run_tree_returns_the_exit_code_and_both_streams(tmp_path):
+    script = tmp_path / "say.py"
+    script.write_text("import sys\nprint('out')\nprint('err', file=sys.stderr)\nsys.exit(4)\n")
+    code, out, err = solve.run_tree([sys.executable, str(script)])
+    assert (code, out.split(), err.split()) == (4, [b"out"], [b"err"])
+    code, out, err = solve.run_tree([sys.executable, str(script)], merge=True)
+    assert code == 4 and sorted(out.split()) == [b"err", b"out"] and err == b""
+    with pytest.raises(OSError):
+        solve.run_tree([str(tmp_path / "no_such_program")])
 
 
 def test_missing_deck_or_solver_is_a_result_not_an_exception(tmp_path, fake, monkeypatch):
@@ -94,33 +110,51 @@ def test_cli_solve_exit_codes_and_json(tmp_path, fake, capsys):
     data = json.loads(capsys.readouterr().out)
     assert data["ok"] is False and data["op2"] is None and data["errors"] == [PSOLID_IN]
     assert main(["solve", str(good), "--mystran", str(fake), "--json"]) == 0
-    assert json.loads(capsys.readouterr().out)["op2"] == str(good.with_name("good.OP2"))
+    assert json.loads(capsys.readouterr().out)["op2"] == str(good.resolve().with_name("good.OP2"))
 
 
 # ----------------------------------------------------------------- finding MYSTRAN
+def _program(path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("")
+    path.chmod(0o755)
+    return path
+
+
 def test_find_mystran_env_then_path_then_a_checkouts_tools(tmp_path, monkeypatch):
-    exe = tmp_path / "bin" / "mystran.exe"
-    exe.parent.mkdir()
-    exe.write_text("")
+    tmp_path = tmp_path.resolve()
+    exe = _program(tmp_path / "bin" / "mystran.exe")
     monkeypatch.setenv(locate.MYSTRAN_ENV, str(exe))
     assert locate.find_mystran() == exe
+    monkeypatch.chdir(tmp_path)                      # a relative path: solve runs in the deck's folder,
+    monkeypatch.setenv(locate.MYSTRAN_ENV, "bin/mystran.exe")   # so the path it gets must be absolute
+    assert locate.find_mystran() == exe and locate.find_mystran().is_absolute()
     monkeypatch.setenv(locate.MYSTRAN_ENV, str(tmp_path / "gone.exe"))
     with pytest.raises(FileNotFoundError, match="is not a file"):
         locate.find_mystran()
     monkeypatch.delenv(locate.MYSTRAN_ENV)
-    monkeypatch.setattr(locate.shutil, "which", lambda name: str(exe) if name == "mystran" else None)
+    monkeypatch.setattr(locate.shutil, "which", lambda name: "bin/mystran.exe" if name == "mystran" else None)
     assert locate.find_mystran() == exe
-    # a checkout: <repo>/tools next to <repo>/src/nastran_pv; the newest release wins
+
+
+def test_find_mystran_in_a_checkouts_tools_takes_the_newest_this_system_runs(tmp_path, monkeypatch):
+    tmp_path = tmp_path.resolve()
+    monkeypatch.delenv(locate.MYSTRAN_ENV, raising=False)
     monkeypatch.setattr(locate.shutil, "which", lambda name: None)
-    repo = tmp_path / "repo"
+    repo = tmp_path / "repo"                         # <repo>/tools next to <repo>/src/nastran_pv
     (repo / "src" / "nastran_pv").mkdir(parents=True)
-    (repo / "tools").mkdir()
-    for name in ("mystran-9.2.0-windows-x86_64.exe", "mystran-19.0.0-windows-x86_64.exe", "readme.txt"):
-        (repo / "tools" / name).write_text("")
     monkeypatch.setattr(locate, "__file__", str(repo / "src" / "nastran_pv" / "locate.py"))
-    assert locate.find_mystran() == repo / "tools" / "mystran-19.0.0-windows-x86_64.exe"
-    (repo / "tools" / "mystran-9.2.0-windows-x86_64.exe").unlink()
-    (repo / "tools" / "mystran-19.0.0-windows-x86_64.exe").unlink()
+    windows = sys.platform.startswith("win")
+    ours, theirs = ("-windows-x86_64.exe", "-linux-x86_64") if windows else ("-linux-x86_64", "-windows-x86_64.exe")
+    for name in ("mystran-9.2.0" + ours, "mystran-19.0.0" + ours, "mystran-19.0.0" + theirs,
+                 "mystran-20.0.0" + theirs):
+        _program(repo / "tools" / name)
+    (repo / "tools" / "mystran-21.0.0.zip").write_text("")           # an archive, not a program
+    (repo / "tools" / "mystran-notes.txt").write_text("")
+    _program(tmp_path / "tools" / ("mystran-99.0.0" + ours))         # a tools/ folder further up is not the checkout's
+    assert locate.find_mystran() == repo / "tools" / ("mystran-19.0.0" + ours)
+    for name in ("mystran-9.2.0" + ours, "mystran-19.0.0" + ours):
+        (repo / "tools" / name).unlink()
     with pytest.raises(FileNotFoundError, match=locate.MYSTRAN_ENV):
         locate.find_mystran()
 

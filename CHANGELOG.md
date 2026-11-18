@@ -16,7 +16,7 @@ All notable changes to nastran-pv are listed here. The format follows
 - `nastran-pv modes RESULTS` lists the normal modes of an OP2 or HDF5 file and counts the
   rigid-body ones; `--against REFERENCE` pairs each reference mode with the most similar shape
   of the other run and gives the frequency difference and the MAC (`--rigid-hz`, `--subcase`,
-  `--csv`, `--json`) ([Comparing modes](docs/cli.md#comparing-modes)).
+  `--limit`, `--csv`, `--json`) ([Comparing modes](docs/cli.md#comparing-modes)).
 - The connector: `nastran-pv connector` is an MCP server that offers `solve`, `modes`, `check`,
   `convert`, `diff`, `stats`, `render`, any other command and the workflow guides as tools, so an
   AI assistant working in another folder can run a study through nastran-pv. It needs the new

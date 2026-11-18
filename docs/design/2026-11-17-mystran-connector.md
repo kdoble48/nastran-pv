@@ -127,7 +127,7 @@ nastran-pv connector --list     # print the tools and exit (no MCP library neede
 | `diff(a, b, csv="")` | `diff` | |
 | `stats(model, by="PID", field="ElementMass", results="")` | `stats` | |
 | `render(model, out, presets=[...], views=["iso"], results="", step=0)` | `render` (offscreen) | `images` |
-| `nastran_pv(args)` | any other command; `connector` and `view` are refused | |
+| `nastran_pv(args)` | any other command; `connector`, `setup`, `view`, `store open` and `render --onscreen` are refused | |
 | `versions()` | `--version` | |
 | `guide(topic="")` | no command: the workflow guides | `topics` or `text` |
 
@@ -135,8 +135,11 @@ nastran-pv connector --list     # print the tools and exit (no MCP library neede
   `rendering-nastran-views`, `comparing-nastran-runs`, `troubleshooting-nastran-models`,
   `solving-with-mystran`) from a checkout's `.claude/skills`; an installed wheel has none and says
   so. The server's instructions tell the client to read the matching guide first.
-- `view` (the ParaView GUI) is refused: a connector call should not open windows on the user's
-  desktop. `render` is always offscreen.
+- What opens a window on the user's desktop is refused (`view`, `store open`, `render --onscreen`),
+  and so is `setup` (it installs packages): `render` is always offscreen, one call at a time.
+- A call over its time limit is stopped with the processes it started (`solve.run_tree`).
+- A child gets a checkout's `src` on `PYTHONPATH`; an installed package's site-packages is never
+  put there, because pvpython would inherit it and load the pip VTK ahead of ParaView's.
 
 ### Skill and docs
 

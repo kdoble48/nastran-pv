@@ -176,27 +176,37 @@ def _mystran_key(path: Path) -> tuple[int, int, int]:
     return (int(m[1]), int(m[2]), int(m[3] or 0)) if m else (-1, -1, -1)
 
 
+def _runnable(path: Path) -> bool:
+    """A file this OS can start: an ``.exe`` on Windows; elsewhere an executable file that is not
+    one (a ``tools/`` folder may hold the releases of several systems, and their archives)."""
+    if not path.is_file():
+        return False
+    if sys.platform.startswith("win"):
+        return path.suffix.lower() == ".exe"
+    return path.suffix.lower() != ".exe" and os.access(path, os.X_OK)
+
+
 def find_mystran() -> Path:
-    """The MYSTRAN executable ``nastran-pv solve`` runs, in this order:
+    """The MYSTRAN executable ``nastran-pv solve`` runs, as an absolute path, in this order:
 
     1. ``NASTRAN_PV_MYSTRAN``, the path of the executable (an error if it is not a file);
     2. ``mystran`` on PATH;
-    3. the newest ``mystran*`` file in a checkout's ``tools/`` folder (where the release binary
-       goes for the gallery build), walking up from this file.
+    3. the newest ``mystran*`` this system can run in a checkout's ``tools/`` folder (where the
+       release binary goes for the gallery build): ``<repo>/tools`` for ``<repo>/src/nastran_pv``.
     """
     env = os.environ.get(MYSTRAN_ENV)
     if env:
         if not Path(env).is_file():
             raise FileNotFoundError(f"{MYSTRAN_ENV}={env} is not a file")
-        return Path(env)
+        return Path(env).resolve()
     found = shutil.which("mystran")
     if found:
-        return Path(found)
-    for parent in Path(__file__).resolve().parents:
-        tools = parent / "tools"
-        if tools.is_dir():
-            cands = [p for p in tools.glob("mystran*") if p.is_file()]
-            if cands:
-                return max(sorted(cands), key=_mystran_key)
+        return Path(found).resolve()
+    here = Path(__file__).resolve()
+    tools = here.parents[2] / "tools" if len(here.parents) > 2 else None
+    if tools is not None and tools.is_dir():
+        cands = sorted(p for p in tools.glob("mystran*") if _runnable(p))
+        if cands:
+            return max(cands, key=_mystran_key)
     raise FileNotFoundError(f"MYSTRAN not found; set {MYSTRAN_ENV} to its executable, or put `mystran` on PATH "
                             "(releases: https://github.com/MYSTRANsolver/MYSTRAN/releases)")

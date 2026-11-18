@@ -83,4 +83,6 @@ calls are relative to the folder the session was opened in. `nastran-pv connecto
 - Solving two decks in one folder: the second run's scratch files and listing replace the first's.
 - Reading `mode_cycles` from pyNastran for a MYSTRAN OP2: it is rad/s. Use `modes`.
 - Comparing runs whose shared grids were renumbered: `modes --against` then finds no common grid.
+- Running `modes` on the OP2 of a failed solve: it has no tables (`modes` says so, exit 2). Check
+  `solve`'s `ok` first.
 - Calling a join "rigid" because its CBUSH stiffness is huge: see the trap above.

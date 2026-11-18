@@ -10,6 +10,7 @@ import pytest
 
 from nastran_pv import modes
 from nastran_pv.cli import main
+from fake_mystran import EMPTY_OP2_FILE
 from op2_fixture import NIDS, make_modes_op2, make_op2
 
 SIN = [np.sin(k * np.pi * NIDS / 8) for k in (1, 2, 3)]
@@ -77,6 +78,50 @@ def test_shapes_are_compared_on_the_grids_both_runs_have(tmp_path):
     unlike = write(tmp_path, "unlike.op2", freqs=(12.0,), z=[[1.0, 0.0, 0.0, 0.0, 0.0, 50.0, 50.0]], nids=np.arange(3, 10))
     # (3, 4, 5, 6, 7) . (1, 0, 0, 0, 0) = 3; 3^2 / (135 * 1) = 1/15
     assert modes.compare_modes(ref, modes.read_modes(unlike))["rows"][0]["MAC"] == pytest.approx(1 / 15, abs=1e-6)
+
+
+def test_a_mode_at_zero_hz_is_never_compared(tmp_path):
+    # --rigid-hz 0 asks for every mode; one at exactly 0 Hz has no frequency to take a ratio with
+    ref = modes.read_modes(write(tmp_path, "ref.op2", freqs=(0.0, 30.0), z=SIN[:2]))
+    other = modes.read_modes(write(tmp_path, "other.op2", freqs=(0.0, 33.0), z=SIN[:2]))
+    assert list(ref.rigid(0.0)) == [True, False] and list(ref.rigid(-1.0)) == [True, False]
+    out = modes.compare_modes(ref, other, rigid_hz=0.0)
+    assert [(r["Mode"], r["Match"]) for r in out["rows"]] == [(2, 2)] and out["reference"]["rigid"] == 1
+    assert out["rows"][0]["DeltaPct"] == pytest.approx(10.0, abs=1e-4)
+    nan = modes.ModeSet(ref.path, 1, ref.numbers, np.array([np.nan, 30.0]), ref.ids, ref.shapes)
+    assert list(nan.rigid()) == [True, False]
+
+
+def test_the_op2_of_a_failed_solve_is_a_message_not_a_traceback(tmp_path, capsys):
+    failed = tmp_path / "failed.OP2"
+    failed.write_bytes(EMPTY_OP2_FILE)              # what MYSTRAN leaves after a fatal: no tables
+    with pytest.raises(modes.ModesError, match=r"failed.OP2 holds no results that can be read \(.+\); a failed solve"):
+        modes.read_modes(failed)
+    garbage = tmp_path / "garbage.op2"
+    garbage.write_bytes(b"\0" * 144)                # pyNastran dumps what it cannot parse: not onto our stdout
+    with pytest.raises(modes.ModesError, match="garbage.op2 holds no results that can be read"):
+        modes.read_modes(garbage)
+    assert capsys.readouterr().out == ""
+    ref = write(tmp_path, "ref.op2")
+    assert main(["modes", str(failed), "--against", str(ref)]) == 2
+    assert main(["modes", str(ref), "--against", str(failed), "--json"]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err.count("nastran-pv modes: failed.OP2 holds no results") == 2
+
+
+def test_modes_of_an_hdf5_file_and_the_steps_own_subcase_and_mode(tmp_path):
+    pytest.importorskip("h5py")
+    from nastran_pv.results import open_results
+    from test_results_h5 import write_msc_h5
+
+    path = write_msc_h5(tmp_path / "run.h5")           # a static step in subcase 1, mode 1 (10 Hz) in subcase 2
+    assert [(s.kind, s.subcase, s.mode) for s in open_results(path).steps] == [("displacement", 1, None),
+                                                                              ("eigenvector", 2, 1)]
+    found = modes.read_modes(path)
+    assert found.subcase == 2 and list(found.numbers) == [1] and found.frequencies == pytest.approx([10.0])
+    assert found.shapes[0, :, 1] == pytest.approx(NIDS.astype(float)) and not found.shapes[0, :, 2].any()
+    op2 = open_results(write(tmp_path, "a.op2")).steps
+    assert [(s.subcase, s.mode) for s in op2] == [(1, 1), (1, 2)]
 
 
 def test_one_subcase_of_a_file_that_mixes_static_and_modal_steps(tmp_path):

@@ -9,7 +9,8 @@ must write their displacements in the same coordinate systems.
 """
 from __future__ import annotations
 
-import re
+import contextlib
+import io
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,10 +20,6 @@ from . import result_types
 from .results import open_results
 
 __all__ = ["ModeSet", "ModesError", "read_modes", "mac", "mode_rows", "compare_modes"]
-
-_SUBCASE = re.compile(r"Subcase (\d+)")
-_MODE = re.compile(r"mode (\d+)")
-
 
 class ModesError(ValueError):
     """A results file without the modes asked for, or two mode sets that cannot be compared."""
@@ -43,15 +40,23 @@ class ModeSet:
 
     def rigid(self, rigid_hz: float = 1.0) -> np.ndarray:
         """True for the modes below ``rigid_hz``: the rigid-body modes of a free structure (and a
-        mechanism a join left)."""
-        return self.frequencies < rigid_hz
+        mechanism a join left). A mode at 0 Hz, or without a frequency, is rigid at any
+        ``rigid_hz``: it has no frequency to compare."""
+        return ~((self.frequencies >= rigid_hz) & (self.frequencies > 0.0))
 
 
 def read_modes(path, subcase: int | None = None) -> ModeSet:
     """The eigenvector steps of ``subcase`` (default: the first subcase that has any) of an OP2 or
-    MSC/NX HDF5 results file. Raises :class:`ModesError` when the file has none."""
-    res = open_results(path)
-    steps = [(int(m[1]), s) for s in res.steps if s.kind == "eigenvector" and (m := _SUBCASE.match(s.label))]
+    MSC/NX HDF5 results file. Raises :class:`ModesError` when the file has none, or cannot be read
+    as results (the OP2 without tables that MYSTRAN leaves after a failed run)."""
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):  # pyNastran prints the bytes it cannot parse
+            res = open_results(path)
+    except Exception as exc:  # pyNastran's FatalError for an OP2 without tables, a truncated file, ...
+        reason = (str(exc).strip().splitlines() or [type(exc).__name__])[0]
+        raise ModesError(f"{Path(path).name} holds no results that can be read ({reason}); a failed solve "
+                         "leaves such a file: see its F06") from exc
+    steps = [(s.subcase, s) for s in res.steps if s.kind == "eigenvector"]
     if not steps:
         raise ModesError(f"{Path(path).name} has no normal modes (real eigenvectors)")
     found = sorted({sc for sc, _ in steps})
@@ -70,8 +75,7 @@ def read_modes(path, subcase: int | None = None) -> ModeSet:
             raise ModesError(f"{Path(path).name}: {step.label} is not on the same grids as the modes before it")
         ids = got[0]
         shapes.append(np.asarray(got[1], dtype=float)[:, :3])
-        m = _MODE.search(step.label)
-        numbers.append(int(m[1]) if m else n)
+        numbers.append(n if step.mode is None else step.mode)
     return ModeSet(Path(path), subcase, np.asarray(numbers), np.asarray([s.frequency for s in steps], dtype=float),
                    np.asarray(ids, dtype=np.int64), np.stack(shapes))
 

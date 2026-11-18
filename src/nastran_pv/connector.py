@@ -14,11 +14,13 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
+import site
 import sys
-import time
+import threading
 from pathlib import Path
 from typing import Any
+
+from .solve import run_tree
 
 __all__ = ["TOOLS", "GUIDES", "ConnectorUnavailable", "build_server", "serve", "run_cli", "summary",
            "guide", "solve", "modes", "check", "convert", "diff", "stats", "render", "nastran_pv", "versions"]
@@ -28,7 +30,9 @@ OUTPUT_LIMIT = 20000  # characters of a command's output a tool returns; the mid
 GUIDES = ("solving-with-mystran", "converting-nastran-decks", "rendering-nastran-views",
           "comparing-nastran-runs", "troubleshooting-nastran-models")
 REFUSED = {"connector": "the connector cannot start another connector",
-           "view": "view opens the ParaView GUI on the desktop; use the render tool for screenshots"}
+           "view": "view opens the ParaView GUI on the desktop; use the render tool for screenshots",
+           "setup": "setup installs packages and toolbar macros; run `nastran-pv setup` yourself, in a terminal"}
+_RENDER = threading.Lock()  # one pvpython at a time: the MCP library runs each tool call in a thread of its own
 INSTRUCTIONS = (
     "nastran-pv reads Nastran decks and OP2/HDF5 results, solves decks with MYSTRAN, compares modes and models, "
     "checks meshes, and renders ParaView screenshots. Call guide() for the list of workflow guides and read the "
@@ -59,21 +63,44 @@ def run_cli(args, timeout: float | None = None) -> dict[str, Any]:
     gives exit code None and says so in ``stderr``."""
     args = [str(a) for a in args]
     env = dict(os.environ)
-    package_parent = str(Path(__file__).resolve().parents[1])  # src/ of a checkout, or site-packages
-    env["PYTHONPATH"] = os.pathsep.join([package_parent, *filter(None, [env.get("PYTHONPATH")])])
     env["PYTHONIOENCODING"] = "utf-8"
-    kwargs = {"creationflags": 0x08000000} if sys.platform.startswith("win") else {}  # CREATE_NO_WINDOW
-    out = {"command": "nastran-pv " + " ".join(args), "exit_code": None, "stdout": "", "stderr": ""}
-    try:
-        done = subprocess.run([sys.executable, "-m", "nastran_pv", *args], stdin=subprocess.DEVNULL,
-                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout, env=env,
-                              encoding="utf-8", errors="replace", **kwargs)
-    except subprocess.TimeoutExpired as exc:
-        out["stdout"] = exc.stdout if isinstance(exc.stdout, str) else (exc.stdout or b"").decode("utf-8", "replace")
+    package_parent = Path(__file__).resolve().parents[1]
+    if package_parent not in _site_dirs():
+        # a checkout: the child finds the package through its src/ folder. An installed package is
+        # found without help, and its site-packages must stay off PYTHONPATH: pvpython (render)
+        # inherits the variable, and a pip vtk or numpy ahead of ParaView's own breaks it.
+        env["PYTHONPATH"] = os.pathsep.join([str(package_parent), *filter(None, [env.get("PYTHONPATH")])])
+    code, stdout, stderr = run_tree([sys.executable, "-m", "nastran_pv", *args], env=env, timeout=timeout)
+    out = {"command": "nastran-pv " + " ".join(args), "exit_code": code,
+           "stdout": stdout.decode("utf-8", "replace").replace("\r\n", "\n"),
+           "stderr": stderr.decode("utf-8", "replace").replace("\r\n", "\n")}
+    if code is None:
         out["stderr"] = f"timed out after {timeout:g} s"
-        return out
-    out.update(exit_code=done.returncode, stdout=done.stdout, stderr=done.stderr)
     return out
+
+
+def _site_dirs() -> set[Path]:
+    """This interpreter's own site-packages folders (a child of the same interpreter has them)."""
+    dirs = list(site.getsitepackages()) if hasattr(site, "getsitepackages") else []
+    try:
+        dirs.append(site.getusersitepackages())
+    except Exception:  # no home folder
+        pass
+    return {Path(d).resolve() for d in dirs}
+
+
+def _refusal(args: list[str]) -> str | None:
+    """Why the nastran_pv tool does not run ``args``, or None: commands that open a window on the
+    user's desktop or install software are not a connector's to run."""
+    if not args:
+        return 'no arguments; start with a command, e.g. ["convert", "--help"]'
+    if args[0] in REFUSED:
+        return REFUSED[args[0]]
+    if args[:2] == ["store", "open"]:
+        return "store open opens the ParaView GUI on the desktop; convert or render the run's saved file instead"
+    if args[0] == "render" and "--onscreen" in args:
+        return "render --onscreen opens a window on the desktop; the connector renders offscreen only"
+    return None
 
 
 def _result(ran: dict, **extra) -> dict[str, Any]:
@@ -215,24 +242,24 @@ def render(model: str, out: str, presets: list[str] | None = None, views: list[s
     """
     args = ["render", model, "--out", out] + (["--preset", *presets] if presets else [])
     args += ["--views", *(views or ["iso"])] + (["--results", results] if results else []) + ["--step", str(step)]
-    start = time.time() - 2.0  # a file system's time stamps are coarser than the clock
-    ran = run_cli(args, 3600.0)
-    folder = Path(out)
-    images = sorted(str(p.resolve()) for p in folder.glob("*.png") if p.stat().st_mtime >= start) if folder.is_dir() else []
-    return _result(ran, images=images)
+    with _RENDER:
+        ran = run_cli(args, 3600.0)
+    # render prints the path of every image it writes: this call's, whatever else is in the folder
+    printed = [Path(ln.strip()) for ln in ran["stdout"].splitlines() if ln.strip().lower().endswith(".png")]
+    return _result(ran, images=[str(p.resolve()) for p in printed if p.is_file()])
 
 
 def nastran_pv(args: list[str]) -> dict[str, Any]:
     """Run any other nastran-pv command by its arguments, e.g. ``["sections", "model.bdf", "--pid", "7"]``.
 
     For what has no tool of its own: sections, dmig, mfluid, store, and the flags the other tools
-    leave out (``["convert", "--help"]`` lists a command's flags). ``connector`` and ``view`` are
-    refused.
+    leave out (``["convert", "--help"]`` lists a command's flags). Refused: what opens a window on
+    the desktop (``view``, ``store open``, ``render --onscreen``), ``setup`` and ``connector``.
     """
-    if not args:
-        return {"ok": False, "error": "no arguments; start with a command, e.g. [\"convert\", \"--help\"]"}
-    if args[0] in REFUSED:
-        return {"ok": False, "error": REFUSED[args[0]]}
+    args = [str(a) for a in args]
+    why = _refusal(args)
+    if why:
+        return {"ok": False, "error": why}
     return _result(run_cli(args, 3600.0))
 
 

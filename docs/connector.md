@@ -74,15 +74,18 @@ Every tool runs one `nastran-pv` command as a child process and returns `ok`, `e
   server tells the client to read the matching guide before a task. A pip-installed nastran-pv has
   no guides; `guide` then says so.
 - **`nastran_pv`** covers what has no tool of its own (`sections`, `dmig`, `mfluid`, `store`, and
-  flags the other tools leave out). It refuses `view`, which would open the ParaView GUI on your
-  desktop, and `connector`.
+  flags the other tools leave out). It refuses what would open a window on your desktop (`view`,
+  `store open`, `render --onscreen`), `setup`, which installs packages and macros, and `connector`.
+- **`render`** calls run one at a time, and a call that passes its time limit is stopped together
+  with the ParaView or MYSTRAN process it started.
 
 ## What it can touch
 
 The connector runs on your machine with your permissions. Its tools read the files they are
-given, write the output files they are asked for (`convert`, `render`, `--csv`), and `solve`
-runs the MYSTRAN executable in the deck's folder, where it deletes that deck's old `.op2`, `.f06`
-and `.err` first. It runs no other program and has no network access of its own. `store query`
+given and write the output files they are asked for (`convert`, `render`, `--csv`, `store add`).
+Besides Python it starts two programs: MYSTRAN (`solve`), in the deck's folder, where it deletes
+that deck's old `.op2`, `.f06` and `.err` first, and ParaView's `pvpython` (`render`), offscreen.
+It opens no window, installs nothing and makes no network connection of its own. `store query`
 through `nastran_pv` runs the SQL it is given on the SQLite file it is given.
 
 ## Limits
