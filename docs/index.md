@@ -21,8 +21,8 @@ you use.
 - [ParaView tutorials](paraview-tutorials.md): step-by-step walkthroughs in the ParaView GUI, from
   browsing the model tree and Femap-style hiding to masses, mode shapes, model checks and your own
   tables.
-- [CLI](cli.md): `convert`, `stats`, `check`, `sections`, `diff`, `store`, `view`, `render` and
-  `setup`, with examples.
+- [CLI](cli.md): `convert`, `stats`, `check`, `sections`, `diff`, `store`, `solve`, `modes`, `view`,
+  `render` and `setup`, with examples.
 - [Fields](fields.md): add derived, table-mapped and computed fields, from the CLI or from the
   ParaView filters.
 - [Model tools](tools.md): connectivity traversal (grow), parts, shortest paths and model checks,
@@ -35,6 +35,8 @@ you use.
 - [Run store](store.md): keep runs in SQLite and compare fields across runs and meshes.
 - [Random vibration](random-vibration.md): base-drive random response from a normal-modes run
   (RMS, response ASD per frequency, dominant mode), as colors on the mesh.
+- [Connector](connector.md): the commands as tools for an AI assistant working in another folder
+  (an MCP server): solve with MYSTRAN, compare modes, check, diff, convert and render.
 
 ## Reference
 
@@ -78,6 +80,7 @@ results-helpers
 diff
 store
 random-vibration
+connector
 ```
 
 ```{toctree}

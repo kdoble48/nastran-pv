@@ -20,7 +20,8 @@ does not need it there, and the vtk wheel would shadow ParaView's VTK.
 
 Optional extras: `h5` (h5py: MSC/NX HDF5 results, VTKHDF series of several steps and reading VTKHDF
 files back), `tables` (Excel files for `--map` and `--select`),
-`sql` (non-SQLite databases for `--map`), `all` (the three above), `gallery` (thumbnails for
+`sql` (non-SQLite databases for `--map`), `all` (the three above), `connector` (the `mcp` package
+for [`nastran-pv connector`](connector.md)), `gallery` (thumbnails for
 `docs/build_gallery.py`) and `test`. `vtk` is a dependency now; the `vtk` extra is kept so that
 older install commands still work.
 
@@ -133,6 +134,19 @@ installed `nastran_pv/paraview/` folder):
   with an error if a broken copy on ParaView's own path still wins.
 - `paraview/install_macros.py` adds the toolbar macros (see [ParaView](paraview.md#one-click-views-toolbar-macros)).
 
+## Finding MYSTRAN
+
+[`nastran-pv solve`](cli.md#solving-with-mystran) runs the MYSTRAN solver, which is not installed
+with nastran-pv. Download a release from <https://github.com/MYSTRANsolver/MYSTRAN/releases>;
+nastran-pv is tested with 19.0.0. `solve` looks for the executable in this order:
+
+1. its `--mystran` option;
+2. the `NASTRAN_PV_MYSTRAN` environment variable (the path of the executable);
+3. `mystran` on `PATH`;
+4. the newest `mystran*` file in a source checkout's `tools/` folder (gitignored).
+
+`nastran-pv --version` prints the one it finds.
+
 ## Environment variables
 
 | Variable | Use |
@@ -140,6 +154,7 @@ installed `nastran_pv/paraview/` folder):
 | `NASTRAN_PV_SITE_PACKAGES` | Instead of `install_deps.py`: the site-packages folder of a CPython with ParaView's Python version that has pyNastran installed. |
 | `NASTRAN_PV_PARAVIEW_BIN` | ParaView's `bin` folder, ahead of `PATH` and the folders searched ([Finding ParaView](#finding-paraview)). |
 | `NASTRAN_PV_PARAVIEW_DIR` | A `paraview/` folder to use instead of the installed copy or the clone's (it must hold `nastran_bdf_reader.py`). |
+| `NASTRAN_PV_MYSTRAN` | The MYSTRAN executable `solve` runs, ahead of `PATH` and a checkout's `tools/` ([Finding MYSTRAN](#finding-mystran)). |
 | `NASTRAN_PV_VENDOR_DIR` | The vendor folder, used as is by `install_deps.py` and the plugin, instead of the per-user folder or `paraview/_vendor`. Set it for both. |
 | `PV_PLUGIN_PATH` | ParaView's own variable; set it to the plugin folder that `nastran-pv setup` prints, to load the plugin at startup. |
 

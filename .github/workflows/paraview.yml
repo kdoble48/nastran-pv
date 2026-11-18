@@ -24,7 +24,7 @@ concurrency:
 jobs:
   smoke:
     name: pv_smoke / ParaView ${{ matrix.paraview }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -32,10 +32,14 @@ jobs:
         include:
           # 6.0 has a single Linux build: it picks X, EGL or its bundled OSMesa (lib/mesa) at run time
           - paraview: "6.0.1"
+            os: ubuntu-latest
             url: https://www.paraview.org/files/v6.0/ParaView-6.0.1-MPI-Linux-Python3.12-x86_64.tar.gz
             apt: ""
-          # 5.13 still ships separate headless builds; its libOSMesa needs the system's libglapi
+          # 5.13 still ships separate headless builds; its libOSMesa needs the system's libglapi.
+          # Ubuntu 24.04 has it as the package libglapi-mesa; the image ubuntu-latest moved to
+          # (2026-11) has no such package ("no installation candidate"), so this job stays on 24.04
           - paraview: "5.13.1"
+            os: ubuntu-24.04
             url: https://www.paraview.org/files/v5.13/ParaView-5.13.1-osmesa-MPI-Linux-Python3.10-x86_64.tar.gz
             apt: libglapi-mesa
     defaults:

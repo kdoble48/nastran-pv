@@ -282,7 +282,8 @@ class H5Results(_Results):
                     label = step_label(actual, sc, stp, n_rows=2 if stp else 1)
                 else:  # a mode, frequency, complex mode (|EIGI| / 2 pi) or transient time
                     label = step_label(actual, sc, value, mode=mode, freq=freq)
-                steps.append(Step(label, actual, int(did), 0, freq, value, path))
+                steps.append(Step(label, actual, int(did), 0, freq, value, path, sc,
+                                  mode if actual in ("eigenvector", "complex_eigenvector") else None))
         return steps
 
     # ------------------------------------------------------------------ data

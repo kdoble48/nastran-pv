@@ -33,18 +33,21 @@ def make_op2() -> OP2:
     return op2
 
 
-def make_modes_op2(freqs=(30.0, 120.0)) -> OP2:
+def make_modes_op2(freqs=(30.0, 120.0), z=None, nids=NIDS, subcase=1) -> OP2:
     """Normal modes only, on grids 1-7 (Z shapes), written as a real eigenvector table (table code 7)
-    so that write_op2 round-trips them as modes: the input of a random response."""
+    so that write_op2 round-trips them as modes: the input of a random response. ``z``: each mode's
+    T3 per grid instead of the sine shapes (tests/test_modes.py); ``nids``: other grid ids;
+    ``subcase``: their subcase."""
     op2 = OP2(debug=None)
     op2.set_mode("msc")
-    ng = np.column_stack([NIDS, np.ones(len(NIDS), dtype=int)])
-    eig = np.zeros((len(freqs), len(NIDS), 6), dtype="float32")
+    nids = np.asarray(nids)
+    ng = np.column_stack([nids, np.ones(len(nids), dtype=int)])
+    eig = np.zeros((len(freqs), len(nids), 6), dtype="float32")
     for k in range(len(freqs)):
-        eig[k, :, 2] = np.sin((k + 1) * np.pi * NIDS / (len(NIDS) + 1))
+        eig[k, :, 2] = np.sin((k + 1) * np.pi * NIDS / (len(NIDS) + 1)) if z is None else z[k]
     lam = list((2 * np.pi * np.asarray(freqs, dtype=float)) ** 2)
-    op2.eigenvectors[1] = vec = RealEigenvectorArray.add_modal_case(
-        "BOUGV1", ng, eig, 1, list(range(1, len(freqs) + 1)), lam, list(freqs))
+    op2.eigenvectors[subcase] = vec = RealEigenvectorArray.add_modal_case(
+        "BOUGV1", ng, eig, subcase, list(range(1, len(freqs) + 1)), lam, list(freqs))
     vec.table_code = vec.data_code["table_code"] = 7
     return op2
 

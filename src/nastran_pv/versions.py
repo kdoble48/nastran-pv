@@ -56,9 +56,21 @@ def pvpython() -> str:
         return f"not found ({type(exc).__name__}: {exc})"
 
 
+def mystran() -> str:
+    try:
+        from .locate import find_mystran
+
+        return str(find_mystran())
+    except FileNotFoundError:
+        return "not found"
+    except Exception as exc:
+        return f"not found ({type(exc).__name__}: {exc})"
+
+
 def report() -> str:
     """The lines ``nastran-pv --version`` prints: nastran-pv (where it was imported from, and the
-    commit of a checkout), Python, each dependency, the pvpython ``setup`` would use, the OS."""
+    commit of a checkout), Python, each dependency, the pvpython ``setup`` would use, the MYSTRAN
+    ``solve`` would run, the OS."""
     from . import __version__
 
     here = Path(__file__).resolve().parent
@@ -66,5 +78,5 @@ def report() -> str:
     lines = [f"nastran-pv {__version__} from {here}" + (f" (git {git})" if git else ""),
              f"Python {platform.python_version()} ({sys.executable})"]
     lines += [f"{label} {module_version(module, probe)}" for label, module, probe in DEPENDENCIES]
-    lines += [f"pvpython {pvpython()}", f"OS {platform.platform()}"]
+    lines += [f"pvpython {pvpython()}", f"MYSTRAN {mystran()}", f"OS {platform.platform()}"]
     return "\n".join(lines)

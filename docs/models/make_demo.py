@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import argparse
 import math
-import subprocess
+import sys
 from pathlib import Path
 
 from pyNastran.bdf.bdf import BDF
@@ -230,19 +230,18 @@ def write_bush_check(path) -> Path:
 
 
 def solve(bdf, mystran) -> Path:
-    """Run MYSTRAN on ``bdf`` in its folder; return the OP2 it writes (case-insensitive name)."""
-    bdf, mystran = Path(bdf).resolve(), Path(mystran).resolve()
-    for old in bdf.parent.glob(bdf.stem + ".*"):
-        if old.suffix.lower() in (".op2", ".f06"):
-            old.unlink()
-    subprocess.run([str(mystran), bdf.name], cwd=bdf.parent, check=False,
-                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    for cand in bdf.parent.glob(bdf.stem + ".*"):
-        if cand.suffix.lower() == ".op2" and cand.stat().st_size > 0:
-            return cand
-    f06 = next((c for c in bdf.parent.glob(bdf.stem + ".*") if c.suffix.lower() == ".f06"), None)
-    tail = f06.read_text(errors="replace")[-2000:] if f06 else "(no F06 written)"
-    raise RuntimeError(f"MYSTRAN wrote no OP2 for {bdf.name}:\n{tail}")
+    """Run MYSTRAN on ``bdf`` in its folder (``nastran_pv.solve.run_mystran``, what
+    ``nastran-pv solve`` runs); return the OP2 it writes. A failed run raises RuntimeError with
+    MYSTRAN's error lines."""
+    src = str(HERE.parents[1] / "src")
+    if src not in sys.path:
+        sys.path.insert(0, src)
+    from nastran_pv.solve import run_mystran
+
+    res = run_mystran(bdf, mystran)
+    if not res.ok:
+        raise RuntimeError(f"MYSTRAN did not solve {Path(bdf).name}:\n" + "\n".join(res.errors))
+    return res.op2
 
 
 DECKS = {"demo": (write_demo, "demo.bdf"), "static": (write_demo_static, "demo_static.bdf"),

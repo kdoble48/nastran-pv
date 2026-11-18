@@ -52,7 +52,8 @@ from .sections import sweep
 class Step:
     """One result step: ``label`` (the root ``ResultLabel``, e.g. ``Subcase 1 mode 3 (45.2 Hz)``),
     ``kind`` (``displacement`` for a static step, ``eigenvector``, ``transient``, ``frequency`` or
-    ``complex_eigenvector``), and the ``frequency`` (Hz) or ``time`` value it has."""
+    ``complex_eigenvector``), the ``frequency`` (Hz) or ``time`` value it has, its ``subcase``
+    (0 when the source has none) and, for a mode, the solver's ``mode`` number."""
 
     label: str
     kind: str  # "displacement" | "eigenvector" | "transient" | "frequency" | "complex_eigenvector"
@@ -61,6 +62,8 @@ class Step:
     frequency: float = float("nan")
     time: float = float("nan")  # OP2 time/load/mode/frequency value, used to pair stress tables
     table: str = ""  # the step-defining table it comes from (OP2 result name or HDF5 dataset)
+    subcase: int = 0
+    mode: int | None = None  # of an eigenvector or complex eigenvector step
 
     @property
     def is_complex(self) -> bool:
@@ -456,7 +459,7 @@ class Op2Results(_Results):
                 else:
                     freq = float("nan")
                 label = step_label(kind, sc, t, ntimes, mode, freq)
-                steps.append(Step(label, kind, key, it, freq, t, name))
+                steps.append(Step(label, kind, key, it, freq, t, name, int(sc), mode))
         return steps
 
     # ------------------------------------------------------------ values
